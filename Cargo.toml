@@ -4,10 +4,18 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-gettext-rs = { version = "0.7", features = ["gettext-system"] }
-gtk = { version = "0.9", package = "gtk4", features = ["gnome_47"] }
 
-[dependencies.adw]
-package = "libadwaita"
-version = "0.7"
-features = ["v1_6"]
+# GTK/GNOME — keep these version-aligned
+gtk = { version = "0.11", features = ["gnome_48"], package = "gtk4" }
+adw = { version = "0.9", features = ["v1_8"], package = "libadwaita" }
+gettext-rs = { version = "0.7", features = ["gettext-system"] }
+
+# Async runtime
+async-trait = "0.1"
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+thiserror = "2"
