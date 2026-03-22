@@ -35,6 +35,10 @@ pub struct ImmichSection {
 }
 
 impl LibraryManifest {
+    /// Static factory — builds a manifest from a [`BackendConfig`].
+    ///
+    /// In Java terms: `public static LibraryManifest fromBackendConfig(BackendConfig backend)`.
+    /// Used by [`Bundle::create`] to write `library.toml` on first run.
     fn from_backend_config(backend: &BackendConfig) -> Self {
         match backend {
             BackendConfig::Local => Self {
@@ -57,6 +61,11 @@ impl LibraryManifest {
     }
 }
 
+/// Implements the standard [`TryFrom`] trait for fallible type conversion —
+/// the Rust equivalent of a typed `fromManifest()` factory.
+///
+/// Implementing `TryFrom<&LibraryManifest> for BackendConfig` also automatically
+/// provides `TryInto<BackendConfig> for &LibraryManifest` for free.
 impl TryFrom<&LibraryManifest> for BackendConfig {
     type Error = LibraryError;
 
@@ -85,19 +94,23 @@ impl TryFrom<&LibraryManifest> for BackendConfig {
 
 /// A validated, open `Moments.library` bundle directory.
 ///
-/// Holds typed paths to every well-known subdirectory. Obtain via
-/// [`Bundle::create`] on first run or [`Bundle::open`] on subsequent runs.
+/// Holds typed paths to every well-known subdirectory. Subdirectories are
+/// created lazily by the feature or backend that first needs them — not
+/// upfront at bundle creation time.
+///
+/// Obtain via [`Bundle::create`] on first run or [`Bundle::open`] on
+/// subsequent runs.
 #[derive(Debug)]
 pub struct Bundle {
     /// Root bundle directory, e.g. `~/Pictures/Moments.library`.
     pub path: PathBuf,
-    /// `<bundle>/originals/` — source files (local backend only).
+    /// `<bundle>/originals/` — source files (local backend; created on first import).
     pub originals: PathBuf,
-    /// `<bundle>/thumbnails/` — generated thumbnails (all backends).
+    /// `<bundle>/thumbnails/` — generated thumbnails (created when thumbnail generation runs).
     pub thumbnails: PathBuf,
-    /// `<bundle>/faces/` — face recognition data (all backends).
+    /// `<bundle>/faces/` — face recognition data (created when face detection runs).
     pub faces: PathBuf,
-    /// `<bundle>/database/` — local SQLite store (all backends).
+    /// `<bundle>/database/` — local SQLite store (created when database is initialised).
     pub database: PathBuf,
 }
 
@@ -106,9 +119,23 @@ impl Bundle {
         bundle_path.join(MANIFEST_FILE)
     }
 
+    /// Private constructor — builds the `Bundle` path fields from a root path.
+    /// Shared by [`Bundle::create`] and [`Bundle::open`] to avoid duplication.
+    fn from_path(path: &Path) -> Self {
+        Self {
+            originals: path.join("originals"),
+            thumbnails: path.join("thumbnails"),
+            faces: path.join("faces"),
+            database: path.join("database"),
+            path: path.to_path_buf(),
+        }
+    }
+
     /// Create a new library bundle at `path`.
     ///
-    /// Creates the root directory, all subdirectories, and writes `library.toml`.
+    /// Creates the root directory and writes `library.toml`. Subdirectories
+    /// are **not** created here — each feature creates its own when first needed.
+    ///
     /// Returns an error if a file or directory already exists at `path`.
     #[instrument(fields(path = %path.display()))]
     pub fn create(path: &Path, backend: &BackendConfig) -> Result<Self, LibraryError> {
@@ -123,12 +150,6 @@ impl Bundle {
 
         fs::create_dir_all(path)?;
 
-        for name in &["originals", "thumbnails", "faces", "database"] {
-            let subdir = path.join(name);
-            debug!(dir = %subdir.display(), "creating subdirectory");
-            fs::create_dir(&subdir)?;
-        }
-
         let manifest = LibraryManifest::from_backend_config(backend);
         let toml_content = toml::to_string(&manifest)
             .map_err(|e| LibraryError::Bundle(format!("failed to serialise manifest: {e}")))?;
@@ -139,21 +160,14 @@ impl Bundle {
 
         info!("library bundle created successfully");
 
-        Ok(Self {
-            originals: path.join("originals"),
-            thumbnails: path.join("thumbnails"),
-            faces: path.join("faces"),
-            database: path.join("database"),
-            path: path.to_path_buf(),
-        })
+        Ok(Self::from_path(path))
     }
 
     /// Open an existing library bundle at `path`.
     ///
-    /// Reads and parses `library.toml`, validates all subdirectories are
-    /// present, and returns the bundle alongside the [`BackendConfig`] stored
-    /// in the manifest so that [`super::factory::LibraryFactory`] can
-    /// construct the correct backend.
+    /// Reads and parses `library.toml`, then returns the bundle alongside the
+    /// [`BackendConfig`] stored in the manifest so that
+    /// [`super::factory::LibraryFactory`] can construct the correct backend.
     #[instrument(fields(path = %path.display()))]
     pub fn open(path: &Path) -> Result<(Self, BackendConfig), LibraryError> {
         if !path.is_dir() {
@@ -178,29 +192,11 @@ impl Bundle {
             "manifest loaded"
         );
 
-        for name in &["originals", "thumbnails", "faces", "database"] {
-            let subdir = path.join(name);
-            if !subdir.is_dir() {
-                return Err(LibraryError::Bundle(format!(
-                    "missing bundle subdirectory: {name}"
-                )));
-            }
-        }
-
         let backend = BackendConfig::try_from(&manifest)?;
 
         info!("library bundle opened successfully");
 
-        Ok((
-            Self {
-                originals: path.join("originals"),
-                thumbnails: path.join("thumbnails"),
-                faces: path.join("faces"),
-                database: path.join("database"),
-                path: path.to_path_buf(),
-            },
-            backend,
-        ))
+        Ok((Self::from_path(path), backend))
     }
 }
 
@@ -211,17 +207,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn create_local_bundle_produces_directories() {
+    fn create_local_bundle_creates_root_directory() {
         let dir = tempfile::tempdir().unwrap();
         let bundle_path = dir.path().join("Test.library");
 
         let bundle = Bundle::create(&bundle_path, &BackendConfig::Local).unwrap();
 
         assert!(bundle.path.is_dir());
-        assert!(bundle.originals.is_dir());
-        assert!(bundle.thumbnails.is_dir());
-        assert!(bundle.faces.is_dir());
-        assert!(bundle.database.is_dir());
+    }
+
+    #[test]
+    fn create_local_bundle_does_not_create_subdirectories() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle_path = dir.path().join("Test.library");
+
+        let bundle = Bundle::create(&bundle_path, &BackendConfig::Local).unwrap();
+
+        assert!(!bundle.originals.exists());
+        assert!(!bundle.thumbnails.exists());
+        assert!(!bundle.faces.exists());
+        assert!(!bundle.database.exists());
     }
 
     #[test]
@@ -285,18 +290,6 @@ mod tests {
     fn open_nonexistent_bundle_fails() {
         let dir = tempfile::tempdir().unwrap();
         let bundle_path = dir.path().join("Missing.library");
-
-        let result = Bundle::open(&bundle_path);
-        assert!(matches!(result, Err(LibraryError::Bundle(_))));
-    }
-
-    #[test]
-    fn open_bundle_with_missing_subdir_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let bundle_path = dir.path().join("Test.library");
-
-        Bundle::create(&bundle_path, &BackendConfig::Local).unwrap();
-        fs::remove_dir(bundle_path.join("thumbnails")).unwrap();
 
         let result = Bundle::open(&bundle_path);
         assert!(matches!(result, Err(LibraryError::Bundle(_))));
