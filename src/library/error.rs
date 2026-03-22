@@ -9,6 +9,9 @@ pub enum LibraryError {
 
     #[error("Backend not supported")]
     BackendNotSupported,
+
+    #[error("unknown backend type '{0}' in library.toml")]
+    InvalidBackend(String),
 }
 
 #[cfg(test)]
@@ -34,5 +37,11 @@ mod tests {
     fn backend_not_supported_message() {
         let err = LibraryError::BackendNotSupported;
         assert!(err.to_string().contains("Backend not supported"));
+    }
+
+    #[test]
+    fn invalid_backend_includes_name() {
+        let err = LibraryError::InvalidBackend("s3".to_string());
+        assert!(err.to_string().contains("s3"));
     }
 }

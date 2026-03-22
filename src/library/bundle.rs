@@ -1,0 +1,353 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use tracing::{debug, info, instrument};
+
+use super::config::BackendConfig;
+use super::error::LibraryError;
+
+/// Current bundle format version written to `library.toml`.
+const BUNDLE_VERSION: u32 = 1;
+
+/// Filename of the bundle manifest inside the library directory.
+const MANIFEST_FILE: &str = "library.toml";
+
+// ── Manifest types ────────────────────────────────────────────────────────────
+
+/// Deserialised representation of `library.toml`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LibraryManifest {
+    pub library: LibrarySection,
+    pub immich: Option<ImmichSection>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LibrarySection {
+    pub version: u32,
+    /// `"local"` or `"immich"`
+    pub backend: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ImmichSection {
+    pub server_url: String,
+}
+
+impl LibraryManifest {
+    fn from_backend_config(backend: &BackendConfig) -> Self {
+        match backend {
+            BackendConfig::Local => Self {
+                library: LibrarySection {
+                    version: BUNDLE_VERSION,
+                    backend: "local".to_string(),
+                },
+                immich: None,
+            },
+            BackendConfig::Immich { server_url, .. } => Self {
+                library: LibrarySection {
+                    version: BUNDLE_VERSION,
+                    backend: "immich".to_string(),
+                },
+                immich: Some(ImmichSection {
+                    server_url: server_url.clone(),
+                }),
+            },
+        }
+    }
+}
+
+impl TryFrom<&LibraryManifest> for BackendConfig {
+    type Error = LibraryError;
+
+    fn try_from(manifest: &LibraryManifest) -> Result<Self, Self::Error> {
+        match manifest.library.backend.as_str() {
+            "local" => Ok(BackendConfig::Local),
+            "immich" => {
+                let immich = manifest.immich.as_ref().ok_or_else(|| {
+                    LibraryError::Bundle(
+                        "[immich] section missing from library.toml".to_string(),
+                    )
+                })?;
+                Ok(BackendConfig::Immich {
+                    server_url: immich.server_url.clone(),
+                    // api_key is never stored in library.toml — fetched from
+                    // the system keyring by the Immich backend on open()
+                    api_key: String::new(),
+                })
+            }
+            other => Err(LibraryError::InvalidBackend(other.to_string())),
+        }
+    }
+}
+
+// ── Bundle ────────────────────────────────────────────────────────────────────
+
+/// A validated, open `Moments.library` bundle directory.
+///
+/// Holds typed paths to every well-known subdirectory. Obtain via
+/// [`Bundle::create`] on first run or [`Bundle::open`] on subsequent runs.
+#[derive(Debug)]
+pub struct Bundle {
+    /// Root bundle directory, e.g. `~/Pictures/Moments.library`.
+    pub path: PathBuf,
+    /// `<bundle>/originals/` — source files (local backend only).
+    pub originals: PathBuf,
+    /// `<bundle>/thumbnails/` — generated thumbnails (all backends).
+    pub thumbnails: PathBuf,
+    /// `<bundle>/faces/` — face recognition data (all backends).
+    pub faces: PathBuf,
+    /// `<bundle>/database/` — local SQLite store (all backends).
+    pub database: PathBuf,
+}
+
+impl Bundle {
+    fn manifest_path(bundle_path: &Path) -> PathBuf {
+        bundle_path.join(MANIFEST_FILE)
+    }
+
+    /// Create a new library bundle at `path`.
+    ///
+    /// Creates the root directory, all subdirectories, and writes `library.toml`.
+    /// Returns an error if a file or directory already exists at `path`.
+    #[instrument(fields(path = %path.display()))]
+    pub fn create(path: &Path, backend: &BackendConfig) -> Result<Self, LibraryError> {
+        if path.exists() {
+            return Err(LibraryError::Bundle(format!(
+                "bundle already exists at {}",
+                path.display()
+            )));
+        }
+
+        info!("creating new library bundle");
+
+        fs::create_dir_all(path)?;
+
+        for name in &["originals", "thumbnails", "faces", "database"] {
+            let subdir = path.join(name);
+            debug!(dir = %subdir.display(), "creating subdirectory");
+            fs::create_dir(&subdir)?;
+        }
+
+        let manifest = LibraryManifest::from_backend_config(backend);
+        let toml_content = toml::to_string(&manifest)
+            .map_err(|e| LibraryError::Bundle(format!("failed to serialise manifest: {e}")))?;
+
+        let manifest_path = Self::manifest_path(path);
+        debug!(path = %manifest_path.display(), "writing library.toml");
+        fs::write(&manifest_path, toml_content)?;
+
+        info!("library bundle created successfully");
+
+        Ok(Self {
+            originals: path.join("originals"),
+            thumbnails: path.join("thumbnails"),
+            faces: path.join("faces"),
+            database: path.join("database"),
+            path: path.to_path_buf(),
+        })
+    }
+
+    /// Open an existing library bundle at `path`.
+    ///
+    /// Reads and parses `library.toml`, validates all subdirectories are
+    /// present, and returns the bundle alongside the [`BackendConfig`] stored
+    /// in the manifest so that [`super::factory::LibraryFactory`] can
+    /// construct the correct backend.
+    #[instrument(fields(path = %path.display()))]
+    pub fn open(path: &Path) -> Result<(Self, BackendConfig), LibraryError> {
+        if !path.is_dir() {
+            return Err(LibraryError::Bundle(format!(
+                "bundle not found at {}",
+                path.display()
+            )));
+        }
+
+        info!("opening library bundle");
+
+        let manifest_path = Self::manifest_path(path);
+        let toml_content = fs::read_to_string(&manifest_path)
+            .map_err(|e| LibraryError::Bundle(format!("failed to read library.toml: {e}")))?;
+
+        let manifest: LibraryManifest = toml::from_str(&toml_content)
+            .map_err(|e| LibraryError::Bundle(format!("failed to parse library.toml: {e}")))?;
+
+        debug!(
+            version = manifest.library.version,
+            backend = %manifest.library.backend,
+            "manifest loaded"
+        );
+
+        for name in &["originals", "thumbnails", "faces", "database"] {
+            let subdir = path.join(name);
+            if !subdir.is_dir() {
+                return Err(LibraryError::Bundle(format!(
+                    "missing bundle subdirectory: {name}"
+                )));
+            }
+        }
+
+        let backend = BackendConfig::try_from(&manifest)?;
+
+        info!("library bundle opened successfully");
+
+        Ok((
+            Self {
+                originals: path.join("originals"),
+                thumbnails: path.join("thumbnails"),
+                faces: path.join("faces"),
+                database: path.join("database"),
+                path: path.to_path_buf(),
+            },
+            backend,
+        ))
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_local_bundle_produces_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle_path = dir.path().join("Test.library");
+
+        let bundle = Bundle::create(&bundle_path, &BackendConfig::Local).unwrap();
+
+        assert!(bundle.path.is_dir());
+        assert!(bundle.originals.is_dir());
+        assert!(bundle.thumbnails.is_dir());
+        assert!(bundle.faces.is_dir());
+        assert!(bundle.database.is_dir());
+    }
+
+    #[test]
+    fn create_local_bundle_writes_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle_path = dir.path().join("Test.library");
+
+        Bundle::create(&bundle_path, &BackendConfig::Local).unwrap();
+
+        let manifest_path = bundle_path.join(MANIFEST_FILE);
+        assert!(manifest_path.exists());
+
+        let content = fs::read_to_string(&manifest_path).unwrap();
+        assert!(content.contains("local"));
+        assert!(content.contains("version"));
+    }
+
+    #[test]
+    fn create_over_existing_path_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle_path = dir.path().join("Test.library");
+
+        Bundle::create(&bundle_path, &BackendConfig::Local).unwrap();
+        let result = Bundle::create(&bundle_path, &BackendConfig::Local);
+
+        assert!(matches!(result, Err(LibraryError::Bundle(_))));
+    }
+
+    #[test]
+    fn open_local_bundle_returns_correct_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle_path = dir.path().join("Test.library");
+
+        Bundle::create(&bundle_path, &BackendConfig::Local).unwrap();
+        let (bundle, backend) = Bundle::open(&bundle_path).unwrap();
+
+        assert_eq!(bundle.path, bundle_path);
+        assert!(matches!(backend, BackendConfig::Local));
+    }
+
+    #[test]
+    fn open_immich_bundle_returns_server_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle_path = dir.path().join("Test.library");
+
+        let backend = BackendConfig::Immich {
+            server_url: "http://immich.local:2283".to_string(),
+            api_key: "secret".to_string(),
+        };
+        Bundle::create(&bundle_path, &backend).unwrap();
+        let (_, restored) = Bundle::open(&bundle_path).unwrap();
+
+        if let BackendConfig::Immich { server_url, .. } = restored {
+            assert_eq!(server_url, "http://immich.local:2283");
+        } else {
+            panic!("expected Immich backend config");
+        }
+    }
+
+    #[test]
+    fn open_nonexistent_bundle_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle_path = dir.path().join("Missing.library");
+
+        let result = Bundle::open(&bundle_path);
+        assert!(matches!(result, Err(LibraryError::Bundle(_))));
+    }
+
+    #[test]
+    fn open_bundle_with_missing_subdir_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle_path = dir.path().join("Test.library");
+
+        Bundle::create(&bundle_path, &BackendConfig::Local).unwrap();
+        fs::remove_dir(bundle_path.join("thumbnails")).unwrap();
+
+        let result = Bundle::open(&bundle_path);
+        assert!(matches!(result, Err(LibraryError::Bundle(_))));
+    }
+
+    #[test]
+    fn manifest_roundtrip_local() {
+        let manifest = LibraryManifest::from_backend_config(&BackendConfig::Local);
+        let backend = BackendConfig::try_from(&manifest).unwrap();
+        assert!(matches!(backend, BackendConfig::Local));
+    }
+
+    #[test]
+    fn manifest_roundtrip_immich() {
+        let backend = BackendConfig::Immich {
+            server_url: "http://test:2283".to_string(),
+            api_key: "key".to_string(),
+        };
+        let manifest = LibraryManifest::from_backend_config(&backend);
+        let restored = BackendConfig::try_from(&manifest).unwrap();
+
+        if let BackendConfig::Immich { server_url, .. } = restored {
+            assert_eq!(server_url, "http://test:2283");
+        } else {
+            panic!("expected Immich config");
+        }
+    }
+
+    #[test]
+    fn manifest_unknown_backend_returns_invalid_backend_error() {
+        let manifest = LibraryManifest {
+            library: LibrarySection {
+                version: 1,
+                backend: "s3".to_string(),
+            },
+            immich: None,
+        };
+        let result = BackendConfig::try_from(&manifest);
+        assert!(matches!(result, Err(LibraryError::InvalidBackend(_))));
+    }
+
+    #[test]
+    fn immich_manifest_missing_section_returns_bundle_error() {
+        let manifest = LibraryManifest {
+            library: LibrarySection {
+                version: 1,
+                backend: "immich".to_string(),
+            },
+            immich: None,
+        };
+        let result = BackendConfig::try_from(&manifest);
+        assert!(matches!(result, Err(LibraryError::Bundle(_))));
+    }
+}
