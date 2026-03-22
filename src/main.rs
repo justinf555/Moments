@@ -21,6 +21,7 @@
 mod application;
 mod config;
 mod window;
+mod library;
 
 use self::application::MomentsApplication;
 use self::window::MomentsWindow;
@@ -29,8 +30,17 @@ use config::{GETTEXT_PACKAGE, LOCALEDIR, PKGDATADIR};
 use gettextrs::{bind_textdomain_codeset, bindtextdomain, textdomain};
 use gtk::{gio, glib};
 use gtk::prelude::*;
+use tracing::info;
+use tracing_subscriber::EnvFilter;
 
 fn main() -> glib::ExitCode {
+    // Initialise tracing — RUST_LOG controls verbosity (e.g. RUST_LOG=moments=debug)
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
+
+    info!(version = config::VERSION, "Moments starting");
+
     // Set up gettext translations
     bindtextdomain(GETTEXT_PACKAGE, LOCALEDIR).expect("Unable to bind the text domain");
     bind_textdomain_codeset(GETTEXT_PACKAGE, "UTF-8")

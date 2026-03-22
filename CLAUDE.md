@@ -53,6 +53,15 @@ All GObject types follow the split `imp` module pattern:
 
 `Library` (in `library.rs`) and `LibraryStorage` (in `library/storage.rs`) are async traits designed to be implemented by multiple backends (local filesystem, Immich, etc.). `LibraryStorage` handles the raw persistence layer; `Library` will sit above it. All backend I/O must be async and run off the GTK main thread, bridging back via `glib::idle_add`.
 
+## Tracing / logging
+
+All log output uses the `tracing` crate — never `println!` or `eprintln!`.
+
+- `tracing_subscriber` is initialised in `main()` with `EnvFilter::from_default_env()`; control verbosity with `RUST_LOG=moments=debug`
+- Use `#[instrument]` on every function worth timing (async backend methods, factory calls, bundle open/create)
+- Use `#[instrument(skip(field))]` to omit large or sensitive parameters from spans
+- Level guidance: `error!` — unrecoverable; `warn!` — degraded but continuing; `info!` — lifecycle milestones (start, open, close); `debug!` — per-operation detail
+
 ## Code conventions
 
 - Use Rust 2018+ module naming: place submodules in `src/foo/bar.rs`, never `src/foo/bar/mod.rs`
