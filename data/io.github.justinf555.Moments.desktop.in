@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=moments
+Exec=moments
+Icon=io.github.justinf555.Moments
+Terminal=false
+Type=Application
+Categories=Utility;
+Keywords=GTK;
+StartupNotify=true
+DBusActivatable=true

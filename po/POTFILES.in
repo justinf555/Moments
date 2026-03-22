@@ -1,0 +1,6 @@
+# List of source files containing translatable strings.
+# Please keep this file sorted alphabetically.
+data/io.github.justinf555.Moments.desktop.in
+data/io.github.justinf555.Moments.metainfo.xml.in
+data/io.github.justinf555.Moments.gschema.xml
+src/window.ui
