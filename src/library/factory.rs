@@ -1,8 +1,9 @@
+use std::path::Path;
 use std::sync::mpsc::Sender;
 
 use tracing::instrument;
 
-use super::config::{BackendConfig, LibraryConfig};
+use super::config::LibraryConfig;
 use super::error::LibraryError;
 use super::event::LibraryEvent;
 use super::Library;
@@ -15,22 +16,25 @@ use super::Library;
 pub struct LibraryFactory;
 
 impl LibraryFactory {
-    /// Construct and open the appropriate backend from `config`.
+    /// Construct and open the appropriate backend.
     ///
-    /// The `events` sender is stored inside the backend for its lifetime.
-    /// The caller holds the corresponding `Receiver<LibraryEvent>` and polls
-    /// it via `glib::idle_add` to receive updates on the GTK main thread.
-    #[instrument(skip(_events), fields(bundle_path = %config.bundle_path.display()))]
+    /// `bundle_path` is the path to the `Moments.library` directory.
+    /// `config` identifies the backend and its connection details.
+    /// `events` is stored inside the backend for its lifetime — the caller
+    /// holds the corresponding `Receiver<LibraryEvent>` and polls it via
+    /// `glib::idle_add` on the GTK main thread.
+    #[instrument(skip(_events), fields(bundle_path = %bundle_path.display()))]
     pub async fn create(
+        bundle_path: &Path,
         config: LibraryConfig,
         _events: Sender<LibraryEvent>,
     ) -> Result<Box<dyn Library>, LibraryError> {
-        match config.backend {
-            BackendConfig::Local => {
+        match config {
+            LibraryConfig::Local => {
                 // Implemented in issue #5 — local backend
                 todo!("Local backend not yet implemented")
             }
-            BackendConfig::Immich { .. } => {
+            LibraryConfig::Immich { .. } => {
                 // Implemented in issue #14 — Immich backend
                 todo!("Immich backend not yet implemented")
             }

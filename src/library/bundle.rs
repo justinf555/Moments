@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument};
 
-use super::config::BackendConfig;
+use super::config::LibraryConfig;
 use super::error::LibraryError;
 
 /// Current bundle format version written to `library.toml`.
@@ -35,20 +35,17 @@ pub struct ImmichSection {
 }
 
 impl LibraryManifest {
-    /// Static factory — builds a manifest from a [`BackendConfig`].
-    ///
-    /// In Java terms: `public static LibraryManifest fromBackendConfig(BackendConfig backend)`.
-    /// Used by [`Bundle::create`] to write `library.toml` on first run.
-    fn from_backend_config(backend: &BackendConfig) -> Self {
-        match backend {
-            BackendConfig::Local => Self {
+    /// Build a manifest from a [`LibraryConfig`], ready to be written to `library.toml`.
+    fn new(config: &LibraryConfig) -> Self {
+        match config {
+            LibraryConfig::Local => Self {
                 library: LibrarySection {
                     version: BUNDLE_VERSION,
                     backend: "local".to_string(),
                 },
                 immich: None,
             },
-            BackendConfig::Immich { server_url, .. } => Self {
+            LibraryConfig::Immich { server_url, .. } => Self {
                 library: LibrarySection {
                     version: BUNDLE_VERSION,
                     backend: "immich".to_string(),
@@ -61,24 +58,21 @@ impl LibraryManifest {
     }
 }
 
-/// Implements the standard [`TryFrom`] trait for fallible type conversion —
-/// the Rust equivalent of a typed `fromManifest()` factory.
-///
-/// Implementing `TryFrom<&LibraryManifest> for BackendConfig` also automatically
-/// provides `TryInto<BackendConfig> for &LibraryManifest` for free.
-impl TryFrom<&LibraryManifest> for BackendConfig {
-    type Error = LibraryError;
-
-    fn try_from(manifest: &LibraryManifest) -> Result<Self, Self::Error> {
+impl LibraryConfig {
+    /// Parse a [`LibraryConfig`] from a manifest read out of `library.toml`.
+    ///
+    /// Returns an error if the backend type is unrecognised or required fields
+    /// are missing.
+    fn from_manifest(manifest: &LibraryManifest) -> Result<Self, LibraryError> {
         match manifest.library.backend.as_str() {
-            "local" => Ok(BackendConfig::Local),
+            "local" => Ok(LibraryConfig::Local),
             "immich" => {
                 let immich = manifest.immich.as_ref().ok_or_else(|| {
                     LibraryError::Bundle(
                         "[immich] section missing from library.toml".to_string(),
                     )
                 })?;
-                Ok(BackendConfig::Immich {
+                Ok(LibraryConfig::Immich {
                     server_url: immich.server_url.clone(),
                     // api_key is never stored in library.toml — fetched from
                     // the system keyring by the Immich backend on open()
@@ -119,7 +113,7 @@ impl Bundle {
         bundle_path.join(MANIFEST_FILE)
     }
 
-    /// Private constructor — builds the `Bundle` path fields from a root path.
+    /// Private constructor — builds path fields from a root path.
     /// Shared by [`Bundle::create`] and [`Bundle::open`] to avoid duplication.
     fn from_path(path: &Path) -> Self {
         Self {
@@ -138,7 +132,7 @@ impl Bundle {
     ///
     /// Returns an error if a file or directory already exists at `path`.
     #[instrument(fields(path = %path.display()))]
-    pub fn create(path: &Path, backend: &BackendConfig) -> Result<Self, LibraryError> {
+    pub fn create(path: &Path, config: &LibraryConfig) -> Result<Self, LibraryError> {
         if path.exists() {
             return Err(LibraryError::Bundle(format!(
                 "bundle already exists at {}",
@@ -150,7 +144,7 @@ impl Bundle {
 
         fs::create_dir_all(path)?;
 
-        let manifest = LibraryManifest::from_backend_config(backend);
+        let manifest = LibraryManifest::new(config);
         let toml_content = toml::to_string(&manifest)
             .map_err(|e| LibraryError::Bundle(format!("failed to serialise manifest: {e}")))?;
 
@@ -166,10 +160,10 @@ impl Bundle {
     /// Open an existing library bundle at `path`.
     ///
     /// Reads and parses `library.toml`, then returns the bundle alongside the
-    /// [`BackendConfig`] stored in the manifest so that
+    /// [`LibraryConfig`] stored in the manifest so that
     /// [`super::factory::LibraryFactory`] can construct the correct backend.
     #[instrument(fields(path = %path.display()))]
-    pub fn open(path: &Path) -> Result<(Self, BackendConfig), LibraryError> {
+    pub fn open(path: &Path) -> Result<(Self, LibraryConfig), LibraryError> {
         if !path.is_dir() {
             return Err(LibraryError::Bundle(format!(
                 "bundle not found at {}",
@@ -192,11 +186,11 @@ impl Bundle {
             "manifest loaded"
         );
 
-        let backend = BackendConfig::try_from(&manifest)?;
+        let config = LibraryConfig::from_manifest(&manifest)?;
 
         info!("library bundle opened successfully");
 
-        Ok((Self::from_path(path), backend))
+        Ok((Self::from_path(path), config))
     }
 }
 
@@ -211,7 +205,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bundle_path = dir.path().join("Test.library");
 
-        let bundle = Bundle::create(&bundle_path, &BackendConfig::Local).unwrap();
+        let bundle = Bundle::create(&bundle_path, &LibraryConfig::Local).unwrap();
 
         assert!(bundle.path.is_dir());
     }
@@ -221,7 +215,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bundle_path = dir.path().join("Test.library");
 
-        let bundle = Bundle::create(&bundle_path, &BackendConfig::Local).unwrap();
+        let bundle = Bundle::create(&bundle_path, &LibraryConfig::Local).unwrap();
 
         assert!(!bundle.originals.exists());
         assert!(!bundle.thumbnails.exists());
@@ -234,7 +228,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bundle_path = dir.path().join("Test.library");
 
-        Bundle::create(&bundle_path, &BackendConfig::Local).unwrap();
+        Bundle::create(&bundle_path, &LibraryConfig::Local).unwrap();
 
         let manifest_path = bundle_path.join(MANIFEST_FILE);
         assert!(manifest_path.exists());
@@ -249,8 +243,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bundle_path = dir.path().join("Test.library");
 
-        Bundle::create(&bundle_path, &BackendConfig::Local).unwrap();
-        let result = Bundle::create(&bundle_path, &BackendConfig::Local);
+        Bundle::create(&bundle_path, &LibraryConfig::Local).unwrap();
+        let result = Bundle::create(&bundle_path, &LibraryConfig::Local);
 
         assert!(matches!(result, Err(LibraryError::Bundle(_))));
     }
@@ -260,11 +254,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bundle_path = dir.path().join("Test.library");
 
-        Bundle::create(&bundle_path, &BackendConfig::Local).unwrap();
-        let (bundle, backend) = Bundle::open(&bundle_path).unwrap();
+        Bundle::create(&bundle_path, &LibraryConfig::Local).unwrap();
+        let (bundle, config) = Bundle::open(&bundle_path).unwrap();
 
         assert_eq!(bundle.path, bundle_path);
-        assert!(matches!(backend, BackendConfig::Local));
+        assert!(matches!(config, LibraryConfig::Local));
     }
 
     #[test]
@@ -272,17 +266,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bundle_path = dir.path().join("Test.library");
 
-        let backend = BackendConfig::Immich {
+        let config = LibraryConfig::Immich {
             server_url: "http://immich.local:2283".to_string(),
             api_key: "secret".to_string(),
         };
-        Bundle::create(&bundle_path, &backend).unwrap();
+        Bundle::create(&bundle_path, &config).unwrap();
         let (_, restored) = Bundle::open(&bundle_path).unwrap();
 
-        if let BackendConfig::Immich { server_url, .. } = restored {
+        if let LibraryConfig::Immich { server_url, .. } = restored {
             assert_eq!(server_url, "http://immich.local:2283");
         } else {
-            panic!("expected Immich backend config");
+            panic!("expected Immich config");
         }
     }
 
@@ -297,21 +291,21 @@ mod tests {
 
     #[test]
     fn manifest_roundtrip_local() {
-        let manifest = LibraryManifest::from_backend_config(&BackendConfig::Local);
-        let backend = BackendConfig::try_from(&manifest).unwrap();
-        assert!(matches!(backend, BackendConfig::Local));
+        let manifest = LibraryManifest::new(&LibraryConfig::Local);
+        let config = LibraryConfig::from_manifest(&manifest).unwrap();
+        assert!(matches!(config, LibraryConfig::Local));
     }
 
     #[test]
     fn manifest_roundtrip_immich() {
-        let backend = BackendConfig::Immich {
+        let config = LibraryConfig::Immich {
             server_url: "http://test:2283".to_string(),
             api_key: "key".to_string(),
         };
-        let manifest = LibraryManifest::from_backend_config(&backend);
-        let restored = BackendConfig::try_from(&manifest).unwrap();
+        let manifest = LibraryManifest::new(&config);
+        let restored = LibraryConfig::from_manifest(&manifest).unwrap();
 
-        if let BackendConfig::Immich { server_url, .. } = restored {
+        if let LibraryConfig::Immich { server_url, .. } = restored {
             assert_eq!(server_url, "http://test:2283");
         } else {
             panic!("expected Immich config");
@@ -327,7 +321,7 @@ mod tests {
             },
             immich: None,
         };
-        let result = BackendConfig::try_from(&manifest);
+        let result = LibraryConfig::from_manifest(&manifest);
         assert!(matches!(result, Err(LibraryError::InvalidBackend(_))));
     }
 
@@ -340,7 +334,7 @@ mod tests {
             },
             immich: None,
         };
-        let result = BackendConfig::try_from(&manifest);
+        let result = LibraryConfig::from_manifest(&manifest);
         assert!(matches!(result, Err(LibraryError::Bundle(_))));
     }
 }
