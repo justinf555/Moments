@@ -3,7 +3,6 @@ pub mod error;
 pub mod event;
 pub mod factory;
 pub mod storage;
-pub mod types;
 
 pub use error::LibraryError;
 pub use event::LibraryEvent;
