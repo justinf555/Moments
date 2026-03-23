@@ -68,12 +68,44 @@ pub enum MediaType {
     Video = 1,
 }
 
+/// The read model returned by [`LibraryMedia::list_media`].
+///
+/// Contains everything the photo grid needs to display a cell — id for
+/// thumbnail lookup, dimensions for aspect-ratio placeholder, and capture
+/// time for grouping. Full EXIF detail is in `media_metadata` and is
+/// fetched separately when the detail view needs it.
+#[derive(Debug, Clone)]
+pub struct MediaItem {
+    pub id: MediaId,
+    /// EXIF capture timestamp (UTC Unix seconds). `None` if unavailable.
+    pub taken_at: Option<i64>,
+    pub imported_at: i64,
+    pub original_filename: String,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    /// EXIF orientation tag (1–8).
+    pub orientation: u8,
+    pub media_type: MediaType,
+}
+
+/// Opaque cursor for keyset pagination in [`LibraryMedia::list_media`].
+///
+/// Encodes the position of the last item seen so the next page continues
+/// exactly where the previous one left off — no `OFFSET` scans.
+///
+/// `sort_key` is `COALESCE(taken_at, 0)` so items without EXIF dates
+/// sort to the end of the timeline.
+#[derive(Debug, Clone)]
+pub struct MediaCursor {
+    /// `COALESCE(taken_at, 0)` of the last seen item.
+    pub sort_key: i64,
+    /// `id` of the last seen item — tiebreaker within the same timestamp.
+    pub id: MediaId,
+}
+
 /// Feature trait for media asset persistence.
 ///
-/// Implemented by every backend that stores media records. Exposes the
-/// operations needed by the import pipeline today and will grow to include
-/// query methods (e.g. `list_media`, `get_media`) when the photo grid
-/// (issue #8) needs them.
+/// Implemented by every backend that stores media records.
 ///
 /// `Database` implements this trait with the SQL logic. `LocalLibrary`
 /// delegates to its `Database`. The GTK layer calls these methods through
@@ -91,6 +123,18 @@ pub trait LibraryMedia: Send + Sync {
         &self,
         record: &MediaMetadataRecord,
     ) -> Result<(), LibraryError>;
+
+    /// Return a page of [`MediaItem`]s in reverse chronological order.
+    ///
+    /// Pass `cursor: None` for the first page. Pass the cursor from a previous
+    /// result to fetch the next page. Returns an empty `Vec` when exhausted.
+    ///
+    /// Items without a `taken_at` date sort to the end (treated as timestamp 0).
+    async fn list_media(
+        &self,
+        cursor: Option<&MediaCursor>,
+        limit: u32,
+    ) -> Result<Vec<MediaItem>, LibraryError>;
 }
 
 /// A row in the `media` table.

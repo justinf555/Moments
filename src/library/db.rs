@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 use tracing::{info, instrument};
 
 use super::error::LibraryError;
-use super::media::{LibraryMedia, MediaId, MediaMetadataRecord, MediaRecord};
+use super::media::{LibraryMedia, MediaCursor, MediaId, MediaItem, MediaMetadataRecord, MediaRecord, MediaType};
 use super::thumbnail::ThumbnailStatus;
 
 /// Manages the library's SQLite database.
@@ -51,6 +51,38 @@ impl Database {
 
         info!("database ready");
         Ok(Self { pool })
+    }
+}
+
+/// Internal row type for `list_media` — maps SQLite columns to Rust types.
+#[derive(sqlx::FromRow)]
+struct MediaRow {
+    id: String,
+    taken_at: Option<i64>,
+    imported_at: i64,
+    original_filename: String,
+    width: Option<i64>,
+    height: Option<i64>,
+    orientation: i64,
+    media_type: i64,
+}
+
+impl MediaRow {
+    fn into_item(self) -> MediaItem {
+        MediaItem {
+            id: MediaId::new(self.id),
+            taken_at: self.taken_at,
+            imported_at: self.imported_at,
+            original_filename: self.original_filename,
+            width: self.width,
+            height: self.height,
+            orientation: self.orientation as u8,
+            media_type: if self.media_type == 1 {
+                MediaType::Video
+            } else {
+                MediaType::Image
+            },
+        }
     }
 }
 
@@ -149,6 +181,48 @@ impl LibraryMedia for Database {
         Ok(())
     }
 
+    async fn list_media(
+        &self,
+        cursor: Option<&MediaCursor>,
+        limit: u32,
+    ) -> Result<Vec<MediaItem>, LibraryError> {
+        let rows = match cursor {
+            None => {
+                sqlx::query_as::<_, MediaRow>(
+                    "SELECT id, taken_at, imported_at, original_filename,
+                            width, height, orientation, media_type
+                     FROM media
+                     ORDER BY COALESCE(taken_at, 0) DESC, id DESC
+                     LIMIT ?",
+                )
+                .bind(limit as i64)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(LibraryError::Db)?
+            }
+            Some(cur) => {
+                sqlx::query_as::<_, MediaRow>(
+                    "SELECT id, taken_at, imported_at, original_filename,
+                            width, height, orientation, media_type
+                     FROM media
+                     WHERE COALESCE(taken_at, 0) < ?
+                        OR (COALESCE(taken_at, 0) = ? AND id < ?)
+                     ORDER BY COALESCE(taken_at, 0) DESC, id DESC
+                     LIMIT ?",
+                )
+                .bind(cur.sort_key)
+                .bind(cur.sort_key)
+                .bind(cur.id.as_str())
+                .bind(limit as i64)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(LibraryError::Db)?
+            }
+        };
+
+        Ok(rows.into_iter().map(MediaRow::into_item).collect())
+    }
+
     async fn insert_media_metadata(
         &self,
         record: &MediaMetadataRecord,
@@ -243,5 +317,132 @@ mod tests {
 
         db.insert_media(&record).await.unwrap();
         assert!(db.insert_media(&record).await.is_err());
+    }
+
+    // ── list_media tests ──────────────────────────────────────────────────────
+
+    fn record_with_taken_at(id: MediaId, path: &str, taken_at: Option<i64>) -> MediaRecord {
+        MediaRecord {
+            id,
+            relative_path: path.to_string(),
+            original_filename: path.split('/').last().unwrap_or("photo.jpg").to_string(),
+            file_size: 512,
+            imported_at: 1_700_000_000,
+            media_type: MediaType::Image,
+            taken_at,
+            width: Some(1920),
+            height: Some(1080),
+            orientation: 1,
+        }
+    }
+
+    #[tokio::test]
+    async fn list_media_empty_returns_empty_vec() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let result = db.list_media(None, 50).await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_media_first_page_ordered_reverse_chronological() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+
+        // Insert three items with different taken_at values.
+        let id_a = MediaId::new("a".repeat(64));
+        let id_b = MediaId::new("b".repeat(64));
+        let id_c = MediaId::new("c".repeat(64));
+
+        db.insert_media(&record_with_taken_at(id_a.clone(), "2025/01/01/a.jpg", Some(1_000))).await.unwrap();
+        db.insert_media(&record_with_taken_at(id_b.clone(), "2025/01/02/b.jpg", Some(3_000))).await.unwrap();
+        db.insert_media(&record_with_taken_at(id_c.clone(), "2025/01/03/c.jpg", Some(2_000))).await.unwrap();
+
+        let items = db.list_media(None, 50).await.unwrap();
+
+        assert_eq!(items.len(), 3);
+        // Newest first: b (3000) → c (2000) → a (1000)
+        assert_eq!(items[0].id, id_b);
+        assert_eq!(items[1].id, id_c);
+        assert_eq!(items[2].id, id_a);
+    }
+
+    #[tokio::test]
+    async fn list_media_null_taken_at_sorts_to_end() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+
+        let id_dated = MediaId::new("d".repeat(64));
+        let id_undated = MediaId::new("e".repeat(64));
+
+        db.insert_media(&record_with_taken_at(id_dated.clone(), "2025/01/01/dated.jpg", Some(5_000))).await.unwrap();
+        db.insert_media(&record_with_taken_at(id_undated.clone(), "2025/01/01/undated.jpg", None)).await.unwrap();
+
+        let items = db.list_media(None, 50).await.unwrap();
+        assert_eq!(items.len(), 2);
+        // Dated item first, undated last.
+        assert_eq!(items[0].id, id_dated);
+        assert_eq!(items[1].id, id_undated);
+    }
+
+    #[tokio::test]
+    async fn list_media_cursor_returns_next_page() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+
+        // Insert 5 items with descending timestamps.
+        let ids: Vec<MediaId> = (1..=5)
+            .map(|i| MediaId::new(format!("{:0>64}", i)))
+            .collect();
+
+        for (i, id) in ids.iter().enumerate() {
+            let ts = (5 - i as i64) * 1000; // 5000, 4000, 3000, 2000, 1000
+            db.insert_media(&record_with_taken_at(
+                id.clone(),
+                &format!("2025/01/0{}/photo.jpg", i + 1),
+                Some(ts),
+            ))
+            .await
+            .unwrap();
+        }
+
+        // First page: 3 items (newest 3: ids[0]=5000, ids[1]=4000, ids[2]=3000)
+        let page1 = db.list_media(None, 3).await.unwrap();
+        assert_eq!(page1.len(), 3);
+        assert_eq!(page1[0].taken_at, Some(5000));
+        assert_eq!(page1[2].taken_at, Some(3000));
+
+        // Build cursor from last item of page 1.
+        let last = &page1[2];
+        let cursor = MediaCursor {
+            sort_key: last.taken_at.unwrap_or(0),
+            id: last.id.clone(),
+        };
+
+        // Second page: remaining 2 items (ids[3]=2000, ids[4]=1000)
+        let page2 = db.list_media(Some(&cursor), 3).await.unwrap();
+        assert_eq!(page2.len(), 2);
+        assert_eq!(page2[0].taken_at, Some(2000));
+        assert_eq!(page2[1].taken_at, Some(1000));
+    }
+
+    #[tokio::test]
+    async fn list_media_respects_limit() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+
+        for i in 0..10u64 {
+            let id = MediaId::new(format!("{i:0>64}"));
+            db.insert_media(&record_with_taken_at(
+                id,
+                &format!("2025/01/{i:02}/photo.jpg"),
+                Some(i as i64 * 1000),
+            ))
+            .await
+            .unwrap();
+        }
+
+        let items = db.list_media(None, 4).await.unwrap();
+        assert_eq!(items.len(), 4);
     }
 }
