@@ -229,7 +229,6 @@ impl PhotoGridView {
             .build();
         zoom_in_btn.add_css_class("flat");
         let zoom_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        zoom_box.add_css_class("linked");
         zoom_box.append(&zoom_out_btn);
         zoom_box.append(&zoom_in_btn);
 
