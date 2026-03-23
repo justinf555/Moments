@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use tracing::{debug, info, instrument, warn};
@@ -8,7 +9,8 @@ use super::db::Database;
 use super::error::LibraryError;
 use super::event::LibraryEvent;
 use super::exif::extract_exif;
-use super::import::{ImportSummary, SkipReason, SUPPORTED_EXTENSIONS};
+use super::format::FormatRegistry;
+use super::import::{ImportSummary, SkipReason};
 use super::media::{LibraryMedia, MediaId, MediaMetadataRecord, MediaRecord, MediaType};
 use super::thumbnailer::ThumbnailJob;
 
@@ -27,6 +29,8 @@ pub struct ImportJob {
     db: Database,
     /// Shared event sender for the lifetime of the backend.
     events: Sender<LibraryEvent>,
+    /// Format registry — drives extension filtering and thumbnail decode dispatch.
+    formats: Arc<FormatRegistry>,
 }
 
 impl ImportJob {
@@ -35,12 +39,14 @@ impl ImportJob {
         thumbnails_dir: PathBuf,
         db: Database,
         events: Sender<LibraryEvent>,
+        formats: Arc<FormatRegistry>,
     ) -> Self {
         Self {
             originals_dir,
             thumbnails_dir,
             db,
             events,
+            formats,
         }
     }
 
@@ -113,7 +119,7 @@ impl ImportJob {
             .map(|e| e.to_lowercase())
             .unwrap_or_default();
 
-        if !SUPPORTED_EXTENSIONS.contains(&ext.as_str()) {
+        if !self.formats.is_supported(&ext) {
             return Ok(Some(SkipReason::UnsupportedFormat));
         }
 
@@ -218,6 +224,7 @@ impl ImportJob {
             self.thumbnails_dir.clone(),
             self.db.clone(),
             self.events.clone(),
+            Arc::clone(&self.formats),
         );
         tokio::spawn(async move { thumb_job.generate(media_id, target).await });
 
@@ -332,6 +339,7 @@ fn resolve_collision(base: PathBuf) -> PathBuf {
 mod tests {
     use super::*;
     use crate::library::event::LibraryEvent;
+    use crate::library::format::StandardHandler;
     use std::sync::mpsc;
     use tempfile::tempdir;
 
@@ -347,6 +355,12 @@ mod tests {
             .unwrap()
     }
 
+    fn test_registry() -> Arc<FormatRegistry> {
+        let mut reg = FormatRegistry::new();
+        reg.register(Arc::new(StandardHandler));
+        Arc::new(reg)
+    }
+
     #[tokio::test]
     async fn import_copies_jpeg_into_originals() {
         let src_dir = tempdir().unwrap();
@@ -358,7 +372,7 @@ mod tests {
         let photo = make_file(src_dir.path(), "photo.jpg", b"fake jpeg");
 
         let (tx, rx) = mpsc::channel();
-        ImportJob::new(originals, thumbnails, db, tx).run(vec![photo]).await;
+        ImportJob::new(originals, thumbnails, db, tx, test_registry()).run(vec![photo]).await;
 
         let events: Vec<_> = rx.try_iter().collect();
         assert!(events
@@ -389,7 +403,7 @@ mod tests {
         let file = make_file(src_dir.path(), "document.pdf", b"not a photo");
 
         let (tx, rx) = mpsc::channel();
-        ImportJob::new(originals, thumbnails, db, tx).run(vec![file]).await;
+        ImportJob::new(originals, thumbnails, db, tx, test_registry()).run(vec![file]).await;
 
         let events: Vec<_> = rx.try_iter().collect();
         let summary = events
@@ -418,13 +432,13 @@ mod tests {
         // First import
         let thumbnails = bundle_dir.path().join("thumbnails");
         let (tx, rx) = mpsc::channel();
-        ImportJob::new(originals.clone(), thumbnails.clone(), db.clone(), tx.clone())
+        ImportJob::new(originals.clone(), thumbnails.clone(), db.clone(), tx.clone(), test_registry())
             .run(vec![photo.clone()])
             .await;
 
         // Second import — same content, even if renamed
         let photo2 = make_file(src_dir.path(), "dup_renamed.jpg", b"fake jpeg content");
-        ImportJob::new(originals, thumbnails, db, tx).run(vec![photo2]).await;
+        ImportJob::new(originals, thumbnails, db, tx, test_registry()).run(vec![photo2]).await;
 
         let events: Vec<_> = rx.try_iter().collect();
         let summaries: Vec<_> = events
@@ -458,7 +472,7 @@ mod tests {
         let db = open_test_db(bundle_dir.path()).await;
 
         let (tx, rx) = mpsc::channel();
-        ImportJob::new(originals, thumbnails, db, tx)
+        ImportJob::new(originals, thumbnails, db, tx, test_registry())
             .run(vec![src_dir.path().to_path_buf()])
             .await;
 

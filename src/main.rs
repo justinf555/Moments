@@ -33,6 +33,10 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 fn main() -> glib::ExitCode {
+    // Register libheif-rs as a decoder plugin for the `image` crate so that
+    // image::open() transparently handles HEIC and HEIF files throughout the app.
+    libheif_rs::integration::image::register_all_decoding_hooks();
+
     // Initialise tracing — RUST_LOG controls verbosity (e.g. RUST_LOG=moments=debug)
     tracing_subscriber::fmt()
         .with_env_filter(

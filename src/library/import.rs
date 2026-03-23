@@ -4,14 +4,6 @@ use async_trait::async_trait;
 
 use super::error::LibraryError;
 
-/// File extensions recognised as importable media.
-///
-/// Checked case-insensitively. Files with other extensions are skipped and
-/// counted in [`ImportSummary::skipped_unsupported`].
-pub const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "png", "heic", "heif", "tiff", "tif", "webp", "mp4", "mov",
-];
-
 /// Reason a source file was skipped without being imported.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SkipReason {
@@ -59,13 +51,6 @@ pub trait LibraryImport: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn supported_extensions_are_lowercase() {
-        for ext in SUPPORTED_EXTENSIONS {
-            assert_eq!(*ext, ext.to_lowercase(), "extension should be lowercase: {ext}");
-        }
-    }
 
     #[test]
     fn import_summary_default_is_zero() {
