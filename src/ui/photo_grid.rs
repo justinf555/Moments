@@ -1,9 +1,13 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
-use gtk::{gio, glib, prelude::*, subclass::prelude::*};
+use adw::prelude::*;
+use gtk::{gio, glib, subclass::prelude::*};
 use tracing::instrument;
 
+use crate::library::Library;
+use crate::ui::viewer::PhotoViewer;
 use crate::ui::ContentView;
 
 pub mod cell;
@@ -85,8 +89,15 @@ impl PhotoGrid {
     /// Wires the model's `ListStore` to `GridView` via `MultiSelection`, builds
     /// the cell factory, triggers the initial page load, and connects
     /// scroll-based lazy loading for subsequent pages.
+    ///
+    /// `on_activate` is called with `(items, position)` when the user
+    /// double-clicks or presses Enter on a grid item.
     #[instrument(skip_all)]
-    pub fn set_model(&self, model: Rc<PhotoGridModel>) {
+    pub fn set_model(
+        &self,
+        model: Rc<PhotoGridModel>,
+        on_activate: impl Fn(Vec<item::MediaItemObject>, usize) + 'static,
+    ) {
         let imp = self.imp();
         let grid_view = imp.grid_view.get().unwrap();
         let scrolled = imp.scrolled.get().unwrap();
@@ -110,22 +121,40 @@ impl PhotoGrid {
                 }
             });
 
+        // Wire item activation — snapshot all items, then call on_activate.
+        let selection_ref = selection.clone();
+        grid_view.connect_activate(move |_, position| {
+            let n = selection_ref.n_items();
+            let items: Vec<item::MediaItemObject> = (0..n)
+                .filter_map(|i| {
+                    selection_ref
+                        .item(i)
+                        .and_then(|obj| obj.downcast::<item::MediaItemObject>().ok())
+                })
+                .collect();
+            on_activate(items, position as usize);
+        });
+
         *imp.model.borrow_mut() = Some(model);
     }
 }
 
-/// Wraps `PhotoGrid` in an `AdwToolbarView` + `AdwHeaderBar` so it can be
-/// registered as a `ContentView` in the main shell.
+/// Wraps `PhotoGrid` in an `AdwNavigationView` so that activating a grid item
+/// pushes a [`PhotoViewer`] page without leaving the main shell.
+///
+/// The root page of the `NavigationView` contains the grid's `AdwToolbarView`.
+/// The viewer page is pushed on activation and popped by the back button.
 pub struct PhotoGridView {
-    /// Kept alive so the widget tree stays valid for the lifetime of the view.
-    _toolbar_view: adw::ToolbarView,
+    /// The `NavigationView` is the outermost widget returned by `widget()`.
+    nav_view: adw::NavigationView,
     photo_grid: PhotoGrid,
+    viewer: Rc<PhotoViewer>,
     widget: gtk::Widget,
 }
 
 impl PhotoGridView {
-    pub fn new() -> Self {
-        let toolbar_view = adw::ToolbarView::new();
+    pub fn new(library: Arc<dyn Library>, tokio: tokio::runtime::Handle) -> Self {
+        // ── Grid header bar ──────────────────────────────────────────────────
         let header = adw::HeaderBar::new();
 
         let import_button = gtk::Button::builder()
@@ -141,7 +170,6 @@ impl PhotoGridView {
             .icon_name("open-menu-symbolic")
             .tooltip_text("Main Menu")
             .build();
-
         let menu = gio::Menu::new();
         let section = gio::Menu::new();
         section.append(Some("_Preferences"), Some("app.preferences"));
@@ -151,22 +179,52 @@ impl PhotoGridView {
         menu_button.set_menu_model(Some(&menu));
         header.pack_end(&menu_button);
 
-        toolbar_view.add_top_bar(&header);
-
+        // ── Grid toolbar view (root nav page content) ────────────────────────
         let photo_grid = PhotoGrid::new();
+        let toolbar_view = adw::ToolbarView::new();
+        toolbar_view.add_top_bar(&header);
         toolbar_view.set_content(Some(&photo_grid));
 
-        let widget = toolbar_view.clone().upcast::<gtk::Widget>();
+        let grid_page = adw::NavigationPage::builder()
+            .tag("grid")
+            .title("Photos")
+            .child(&toolbar_view)
+            .build();
+
+        // ── NavigationView wraps both grid and viewer ────────────────────────
+        let nav_view = adw::NavigationView::new();
+        nav_view.push(&grid_page);
+
+        // ── Viewer (reused across activations) ───────────────────────────────
+        let viewer = Rc::new(PhotoViewer::new(library, tokio));
+
+        let widget = nav_view.clone().upcast::<gtk::Widget>();
 
         Self {
-            _toolbar_view: toolbar_view,
+            nav_view,
             photo_grid,
+            viewer,
             widget,
         }
     }
 
     pub fn set_model(&self, model: Rc<PhotoGridModel>) {
-        self.photo_grid.set_model(model);
+        let nav_view = self.nav_view.clone();
+        let viewer = Rc::clone(&self.viewer);
+        let viewer_nav_page = self.viewer.nav_page().clone();
+
+        self.photo_grid.set_model(model, move |items, index| {
+            viewer.show(items, index);
+
+            // Push viewer page if it isn't already the visible page.
+            let visible_tag = nav_view
+                .visible_page()
+                .and_then(|p| p.tag())
+                .unwrap_or_default();
+            if visible_tag != "viewer" {
+                nav_view.push(&viewer_nav_page);
+            }
+        });
     }
 }
 

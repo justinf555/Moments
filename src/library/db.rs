@@ -5,7 +5,9 @@ use sqlx::SqlitePool;
 use tracing::{info, instrument};
 
 use super::error::LibraryError;
-use super::media::{LibraryMedia, MediaCursor, MediaId, MediaItem, MediaMetadataRecord, MediaRecord, MediaType};
+use super::media::{
+    LibraryMedia, MediaCursor, MediaId, MediaItem, MediaMetadataRecord, MediaRecord, MediaType,
+};
 use super::thumbnail::ThumbnailStatus;
 
 /// Manages the library's SQLite database.
@@ -52,6 +54,22 @@ impl Database {
         info!("database ready");
         Ok(Self { pool })
     }
+}
+
+/// Internal row type for `media_metadata` queries.
+#[derive(sqlx::FromRow)]
+struct MetadataRow {
+    camera_make: Option<String>,
+    camera_model: Option<String>,
+    lens_model: Option<String>,
+    aperture: Option<f32>,
+    shutter_str: Option<String>,
+    iso: Option<i64>,
+    focal_length: Option<f32>,
+    gps_lat: Option<f64>,
+    gps_lon: Option<f64>,
+    gps_alt: Option<f64>,
+    color_space: Option<String>,
 }
 
 /// Internal row type for `list_media` — maps SQLite columns to Rust types.
@@ -129,6 +147,23 @@ impl Database {
             .await
             .map_err(LibraryError::Db)?;
         Ok(())
+    }
+
+    /// Return the `relative_path` column for `id`, or `None` if no row exists.
+    ///
+    /// Used by `LocalLibrary` to construct the absolute original-file path.
+    pub async fn media_relative_path(
+        &self,
+        id: &MediaId,
+    ) -> Result<Option<String>, LibraryError> {
+        let id_str = id.as_str();
+        let row: Option<String> =
+            sqlx::query_scalar("SELECT relative_path FROM media WHERE id = ?")
+                .bind(id_str)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(LibraryError::Db)?;
+        Ok(row)
     }
 
     /// Return the stored [`ThumbnailStatus`] for `id`, or `None` if no row exists.
@@ -221,6 +256,36 @@ impl LibraryMedia for Database {
         };
 
         Ok(rows.into_iter().map(MediaRow::into_item).collect())
+    }
+
+    async fn media_metadata(
+        &self,
+        id: &MediaId,
+    ) -> Result<Option<MediaMetadataRecord>, LibraryError> {
+        let row: Option<MetadataRow> = sqlx::query_as::<_, MetadataRow>(
+            "SELECT camera_make, camera_model, lens_model, aperture, shutter_str,
+                    iso, focal_length, gps_lat, gps_lon, gps_alt, color_space
+             FROM media_metadata WHERE media_id = ?",
+        )
+        .bind(id.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(LibraryError::Db)?;
+
+        Ok(row.map(|r| MediaMetadataRecord {
+            media_id: id.clone(),
+            camera_make: r.camera_make,
+            camera_model: r.camera_model,
+            lens_model: r.lens_model,
+            aperture: r.aperture,
+            shutter_str: r.shutter_str,
+            iso: r.iso.map(|v| v as u32),
+            focal_length: r.focal_length,
+            gps_lat: r.gps_lat,
+            gps_lon: r.gps_lon,
+            gps_alt: r.gps_alt,
+            color_space: r.color_space,
+        }))
     }
 
     async fn insert_media_metadata(

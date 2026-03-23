@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
-use gtk::{glib, gio};
+use gtk::glib;
 use tracing::{debug, instrument};
 
 mod imp {

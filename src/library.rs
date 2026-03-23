@@ -13,11 +13,13 @@ pub mod providers;
 pub mod storage;
 pub mod thumbnail;
 pub mod thumbnailer;
+pub mod viewer;
 
 use import::LibraryImport;
 use media::LibraryMedia;
 use storage::LibraryStorage;
 use thumbnail::LibraryThumbnail;
+use viewer::LibraryViewer;
 
 /// The public interface for a Moments library backend.
 ///
@@ -30,8 +32,22 @@ use thumbnail::LibraryThumbnail;
 /// - [`LibraryImport`]    — photo / video import (issue #5)
 /// - [`LibraryMedia`]     — media asset persistence (issue #25)
 /// - [`LibraryThumbnail`] — thumbnail generation and path resolution (issue #6)
+/// - [`LibraryViewer`]    — detail-view data access (issue #10)
 ///
 /// `close()` is inherited from `LibraryStorage` and is not duplicated here.
-pub trait Library: LibraryStorage + LibraryImport + LibraryMedia + LibraryThumbnail + Send + Sync {}
+pub trait Library:
+    LibraryStorage + LibraryImport + LibraryMedia + LibraryThumbnail + LibraryViewer + Send + Sync
+{
+}
 
-impl<T: LibraryStorage + LibraryImport + LibraryMedia + LibraryThumbnail + Send + Sync> Library for T {}
+impl<
+    T: LibraryStorage
+        + LibraryImport
+        + LibraryMedia
+        + LibraryThumbnail
+        + LibraryViewer
+        + Send
+        + Sync,
+> Library for T
+{
+}

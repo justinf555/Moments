@@ -20,11 +20,14 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gtk::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gio, glib};
 use tracing::debug;
+
+use crate::library::Library;
 
 use crate::ui::coordinator::ContentCoordinator;
 use crate::ui::photo_grid::{PhotoGridModel, PhotoGridView};
@@ -86,7 +89,12 @@ impl MomentsWindow {
     ///
     /// Builds the sidebar, registers all content views with the coordinator,
     /// then switches `main_stack` from "loading" to "content".
-    pub fn setup(&self, model: Rc<PhotoGridModel>) {
+    pub fn setup(
+        &self,
+        model: Rc<PhotoGridModel>,
+        library: Arc<dyn Library>,
+        tokio: tokio::runtime::Handle,
+    ) {
         let imp = self.imp();
 
         // Build sidebar — MomentsSidebar is already an AdwNavigationPage subclass.
@@ -98,7 +106,7 @@ impl MomentsWindow {
         let mut coordinator = ContentCoordinator::new(content_stack.clone());
 
         // Register the Photos view.
-        let photos_view = Rc::new(PhotoGridView::new());
+        let photos_view = Rc::new(PhotoGridView::new(library, tokio));
         photos_view.set_model(model);
         coordinator.register("photos", photos_view);
 

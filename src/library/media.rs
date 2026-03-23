@@ -135,6 +135,15 @@ pub trait LibraryMedia: Send + Sync {
         cursor: Option<&MediaCursor>,
         limit: u32,
     ) -> Result<Vec<MediaItem>, LibraryError>;
+
+    /// Fetch the full EXIF metadata record for `id`.
+    ///
+    /// Returns `None` if no metadata row was stored (e.g. the asset has no EXIF
+    /// data, or metadata extraction failed silently at import time).
+    async fn media_metadata(
+        &self,
+        id: &MediaId,
+    ) -> Result<Option<MediaMetadataRecord>, LibraryError>;
 }
 
 /// A row in the `media` table.
