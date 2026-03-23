@@ -36,6 +36,7 @@ libheif-rs = { version = "2.7.0", default-features = false, features = ["image",
 # Utilities
 thiserror = "2"
 chrono = "0.4"
+rawler = "0.7.2"
 
 [dev-dependencies]
 tempfile = "3"
