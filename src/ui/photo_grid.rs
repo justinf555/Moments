@@ -397,6 +397,7 @@ impl PhotoGridView {
             .and_then(|p| p.tag())
             .unwrap_or_default();
         if visible_tag == "viewer" {
+            tracing::debug!("pop_to_grid: popping viewer");
             self.nav_view.pop();
         }
     }
@@ -432,6 +433,7 @@ impl ContentView for PhotoGridView {
     }
 
     fn on_navigate(&self, route_id: &str) {
+        tracing::debug!(route_id, "PhotoGridView::on_navigate");
         self.pop_to_grid();
 
         let filter = match route_id {
