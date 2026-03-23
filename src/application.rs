@@ -53,6 +53,12 @@ mod imp {
         /// Held while an import is in flight so the idle loop can update it.
         /// Cleared when `ImportComplete` arrives or the user dismisses it.
         pub import_dialog: RefCell<Option<ImportDialog>>,
+        /// The GLib source ID of the library-event idle loop.
+        ///
+        /// Stored so `shutdown()` can remove it explicitly, which frees the
+        /// closure and releases the `Rc<PhotoGridModel>` (→ `Arc<dyn Library>`
+        /// → `SqlitePool`) before the Tokio runtime is dropped in `main()`.
+        pub idle_source: RefCell<Option<glib::SourceId>>,
     }
 
     #[glib::object_subclass]
@@ -72,6 +78,26 @@ mod imp {
     }
 
     impl ApplicationImpl for MomentsApplication {
+        fn shutdown(&self) {
+            info!("application shutting down");
+
+            // Remove the idle source first — this frees the closure and
+            // releases Rc<PhotoGridModel> while the Tokio runtime is still
+            // alive so the SqlitePool background task can exit cleanly.
+            if let Some(source_id) = self.idle_source.borrow_mut().take() {
+                source_id.remove();
+            }
+
+            // Drop all library-related state so the Arc<dyn Library>
+            // (and the SqlitePool it wraps) is freed before drop(tokio)
+            // in main() tries to shut down the runtime.
+            self.photo_grid_model.borrow_mut().take();
+            self.import_dialog.borrow_mut().take();
+            self.library.borrow_mut().take();
+
+            self.parent_shutdown();
+        }
+
         fn activate(&self) {
             let app = self.obj();
 
@@ -331,7 +357,7 @@ impl MomentsApplication {
                             .expect("receiver set above");
 
                         let app_for_idle = app.downgrade();
-                        glib::idle_add_local(move || {
+                        let source_id = glib::idle_add_local(move || {
                             let app = match app_for_idle.upgrade() {
                                 Some(a) => a,
                                 None => return glib::ControlFlow::Break,
@@ -367,6 +393,7 @@ impl MomentsApplication {
                             }
                             glib::ControlFlow::Continue
                         });
+                        *app.imp().idle_source.borrow_mut() = Some(source_id);
                     }
                     Err(e) => {
                         error!("failed to open library: {e}");
