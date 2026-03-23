@@ -66,12 +66,16 @@ pub fn build_factory(
                 .and_downcast::<MediaItemObject>()
                 .expect("item is MediaItemObject");
 
+            // Configure cell for the view type before binding.
+            let is_trash = filter == MediaFilter::Trashed;
+            cell.imp().show_star.set(!is_trash);
+
             cell.bind(&item);
 
-            // In Trash view: hide star, days label is already shown by bind.
+            // In Trash view: days label is shown by bind.
             // In other views: wire star button, hide days label.
-            if filter == MediaFilter::Trashed {
-                cell.imp().star_btn.set_visible(false);
+            if is_trash {
+                // Star already hidden via show_star flag.
             } else {
                 cell.imp().days_label.set_visible(false);
 

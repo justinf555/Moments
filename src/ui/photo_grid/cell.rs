@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use gtk::{glib, prelude::*, subclass::prelude::*};
 
@@ -25,6 +25,8 @@ mod imp {
         pub days_label: gtk::Label,
         pub overlay: gtk::Overlay,
         pub bindings: RefCell<Option<CellBindings>>,
+        /// Whether to show the star button (false in Trash view).
+        pub show_star: Cell<bool>,
         /// Click handler for the star button — connected in factory `bind`,
         /// disconnected in factory `unbind`.
         pub star_click_handler: RefCell<Option<glib::SignalHandlerId>>,
@@ -148,7 +150,12 @@ impl PhotoGridCell {
             let now = chrono::Utc::now().timestamp();
             let elapsed_days = (now - trashed_at) / (24 * 60 * 60);
             let remaining = (30 - elapsed_days).max(0);
-            imp.days_label.set_text(&format!("{remaining}d"));
+            let text = if remaining == 1 {
+                " 1 day ".to_string()
+            } else {
+                format!(" {remaining} days ")
+            };
+            imp.days_label.set_text(&text);
             imp.days_label.set_visible(true);
         } else {
             imp.days_label.set_visible(false);
@@ -171,7 +178,7 @@ impl PhotoGridCell {
             imp.picture.set_visible(true);
             imp.spinner.set_visible(false);
             imp.spinner.set_spinning(false);
-            imp.star_btn.set_visible(true);
+            imp.star_btn.set_visible(imp.show_star.get());
         } else {
             imp.picture.set_paintable(None::<&gtk::gdk::Texture>);
             imp.picture.set_visible(false);
