@@ -127,6 +127,20 @@ impl PhotoGrid {
         imp.zoom_level.get() > 0
     }
 
+    /// Set the zoom level directly (e.g. from a saved setting).
+    ///
+    /// Clamps to valid bounds. Does not rebuild the factory — call before
+    /// `set_model` so the initial factory uses the correct size.
+    pub fn set_zoom_level(&self, level: usize) {
+        let clamped = level.min(ZOOM_SIZES.len() - 1);
+        self.imp().zoom_level.set(clamped);
+    }
+
+    /// Current zoom level index.
+    pub fn zoom_level(&self) -> usize {
+        self.imp().zoom_level.get()
+    }
+
     /// Rebuild the cell factory with the current zoom size.
     fn apply_zoom(&self) {
         let imp = self.imp();
@@ -203,7 +217,11 @@ pub struct PhotoGridView {
 }
 
 impl PhotoGridView {
-    pub fn new(library: Arc<dyn Library>, tokio: tokio::runtime::Handle) -> Self {
+    pub fn new(
+        library: Arc<dyn Library>,
+        tokio: tokio::runtime::Handle,
+        settings: gio::Settings,
+    ) -> Self {
         // ── Grid header bar ──────────────────────────────────────────────────
         let header = adw::HeaderBar::new();
 
@@ -262,6 +280,7 @@ impl PhotoGridView {
 
         // ── Grid toolbar view (root nav page content) ────────────────────────
         let photo_grid = PhotoGrid::new();
+        photo_grid.set_zoom_level(settings.uint("zoom-level") as usize);
         let toolbar_view = adw::ToolbarView::new();
         toolbar_view.add_top_bar(&header);
         toolbar_view.set_content(Some(&photo_grid));
@@ -295,10 +314,12 @@ impl PhotoGridView {
             let grid = photo_grid.clone();
             let zi = zoom_in_action.clone();
             let zo = zoom_out_action.clone();
+            let s = settings.clone();
             zoom_in_action.connect_activate(move |_, _| {
                 let can_zoom_more = grid.zoom_in();
                 zi.set_enabled(can_zoom_more);
                 zo.set_enabled(true);
+                let _ = s.set_uint("zoom-level", grid.zoom_level() as u32);
             });
         }
         {
@@ -309,6 +330,7 @@ impl PhotoGridView {
                 let can_zoom_more = grid.zoom_out();
                 zo.set_enabled(can_zoom_more);
                 zi.set_enabled(true);
+                let _ = settings.set_uint("zoom-level", grid.zoom_level() as u32);
             });
         }
 

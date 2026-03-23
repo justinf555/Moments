@@ -9,5 +9,13 @@
 				no library has been configured yet (first run).
 			</description>
 		</key>
+		<key name="zoom-level" type="u">
+			<default>2</default>
+			<summary>Photo grid zoom level</summary>
+			<description>
+				Index into the zoom sizes array (0–5). Controls thumbnail
+				density in the photo grid.
+			</description>
+		</key>
 	</schema>
 </schemalist>

@@ -94,6 +94,7 @@ impl MomentsWindow {
         model: Rc<PhotoGridModel>,
         library: Arc<dyn Library>,
         tokio: tokio::runtime::Handle,
+        settings: gio::Settings,
     ) {
         let imp = self.imp();
 
@@ -106,7 +107,7 @@ impl MomentsWindow {
         let mut coordinator = ContentCoordinator::new(content_stack.clone());
 
         // Register the Photos view.
-        let photos_view = Rc::new(PhotoGridView::new(library, tokio));
+        let photos_view = Rc::new(PhotoGridView::new(library, tokio, settings));
         photos_view.set_model(model);
         coordinator.register("photos", photos_view);
 
