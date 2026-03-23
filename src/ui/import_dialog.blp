@@ -1,0 +1,54 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $MomentsImportDialog : Adw.Dialog {
+  title: _("Import Photos");
+  content-width: 420;
+  content-height: 260;
+
+  child: Adw.ToolbarView {
+    [top]
+    Adw.HeaderBar {}
+
+    Gtk.Box {
+      orientation: vertical;
+      valign: center;
+      halign: center;
+      spacing: 16;
+      margin-top: 24;
+      margin-bottom: 24;
+      margin-start: 32;
+      margin-end: 32;
+
+      Gtk.Image {
+        icon-name: "folder-download-symbolic";
+        pixel-size: 48;
+      }
+
+      Gtk.Label phase_label {
+        label: _("Preparing…");
+
+        styles ["title-3"]
+      }
+
+      Gtk.ProgressBar progress_bar {
+        width-request: 300;
+        pulse-step: 0.1;
+      }
+
+      Gtk.Label counts_label {
+        label: "";
+
+        styles ["dim-label", "caption"]
+      }
+
+      Gtk.Button action_button {
+        label: _("Cancel");
+        halign: center;
+        margin-top: 8;
+
+        styles ["pill"]
+      }
+    }
+  };
+}

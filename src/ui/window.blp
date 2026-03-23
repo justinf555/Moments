@@ -1,0 +1,72 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $MomentsWindow : Adw.ApplicationWindow {
+  title: _("Moments");
+  default-width: 800;
+  default-height: 600;
+
+  content: Gtk.Stack main_stack {
+    Gtk.StackPage {
+      name: "loading";
+
+      child: Adw.StatusPage {
+        icon-name: "image-x-generic-symbolic";
+        title: _("Loading Library…");
+
+        Gtk.Spinner {
+          spinning: true;
+          width-request: 32;
+          height-request: 32;
+        }
+      };
+    }
+
+    Gtk.StackPage {
+      name: "content";
+
+      child: Adw.ToolbarView {
+        [top]
+        Adw.HeaderBar {
+          [start]
+          Gtk.Button {
+            icon-name: "list-add-symbolic";
+            tooltip-text: _("Import Photos");
+            action-name: "app.import";
+
+            styles ["flat"]
+          }
+
+          [end]
+          Gtk.MenuButton {
+            primary: true;
+            icon-name: "open-menu-symbolic";
+            tooltip-text: _("Main Menu");
+            menu-model: primary_menu;
+          }
+        }
+
+        content: $MomentsPhotoGrid photo_grid {};
+      };
+    }
+  };
+}
+
+menu primary_menu {
+  section {
+    item {
+      label: _("_Preferences");
+      action: "app.preferences";
+    }
+
+    item {
+      label: _("_Keyboard Shortcuts");
+      action: "app.shortcuts";
+    }
+
+    item {
+      label: _("_About Moments");
+      action: "app.about";
+    }
+  }
+}
