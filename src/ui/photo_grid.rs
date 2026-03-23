@@ -259,6 +259,8 @@ pub struct PhotoGridView {
     library: Arc<dyn Library>,
     tokio: tokio::runtime::Handle,
     trash_btn: gtk::Button,
+    restore_btn: gtk::Button,
+    delete_btn: gtk::Button,
     widget: gtk::Widget,
     /// Zoom actions — must be installed on the window so accelerators work
     /// regardless of which widget has focus.
@@ -314,7 +316,27 @@ impl PhotoGridView {
 
         header.pack_start(&zoom_box);
 
-        // ── Trash button (enabled when items are selected) ──────────────
+        // ── Selection action buttons (right side, before menu) ─────────
+        // Trash view gets Restore + Delete; other views get Trash.
+        let restore_btn = gtk::Button::builder()
+            .icon_name("edit-undo-symbolic")
+            .tooltip_text("Restore")
+            .sensitive(false)
+            .visible(false)
+            .build();
+        restore_btn.add_css_class("flat");
+        header.pack_end(&restore_btn);
+
+        let delete_btn = gtk::Button::builder()
+            .icon_name("edit-delete-symbolic")
+            .tooltip_text("Delete Permanently")
+            .sensitive(false)
+            .visible(false)
+            .build();
+        delete_btn.add_css_class("flat");
+        delete_btn.add_css_class("error");
+        header.pack_end(&delete_btn);
+
         let trash_btn = gtk::Button::builder()
             .icon_name("user-trash-symbolic")
             .tooltip_text("Move to Trash")
@@ -405,6 +427,8 @@ impl PhotoGridView {
             library,
             tokio,
             trash_btn,
+            restore_btn,
+            delete_btn,
             widget,
             view_actions: action_group,
         }
@@ -444,62 +468,173 @@ impl PhotoGridView {
             },
         );
 
-        // Wire trash toolbar button to selection.
         let selection = self.photo_grid.imp().selection.borrow().clone().unwrap();
-        let trash_btn = self.trash_btn.clone();
-        selection.connect_selection_changed(move |sel, _, _| {
-            let has_selection = sel.selection().size() > 0;
-            trash_btn.set_sensitive(has_selection);
-        });
+        let is_trash_view = filter == crate::library::media::MediaFilter::Trashed;
 
-        // Trash button click → trash all selected items.
-        let selection = self.photo_grid.imp().selection.borrow().clone().unwrap();
-        let lib = Arc::clone(&self.library);
-        let tk = self.tokio.clone();
-        let trash_btn = self.trash_btn.clone();
-        trash_btn.connect_clicked(move |btn| {
-            let bitset = selection.selection();
-            let n = bitset.size();
-            if n == 0 {
-                return;
-            }
+        // Show the right buttons for this view.
+        self.trash_btn.set_visible(!is_trash_view);
+        self.restore_btn.set_visible(is_trash_view);
+        self.delete_btn.set_visible(is_trash_view);
 
-            // Collect selected item IDs.
-            let mut ids = Vec::with_capacity(n as usize);
-            for i in 0..n {
-                let pos = bitset.nth(i as u32);
-                if let Some(obj) = selection
-                    .item(pos)
-                    .and_then(|o| o.downcast::<item::MediaItemObject>().ok())
-                {
-                    ids.push(obj.item().id.clone());
-                }
-            }
-
-            // Clear selection and disable button.
-            selection.unselect_all();
-            btn.set_sensitive(false);
-
-            let lib = Arc::clone(&lib);
-            let tk = tk.clone();
-            let reg = Rc::clone(&registry);
-            glib::MainContext::default().spawn_local(async move {
-                let ids_for_broadcast = ids.clone();
-                let result = tk
-                    .spawn(async move { lib.trash(&ids).await })
-                    .await;
-                match result {
-                    Ok(Ok(())) => {
-                        for id in &ids_for_broadcast {
-                            reg.on_trashed(id, true);
-                        }
-                    }
-                    Ok(Err(e)) => tracing::error!("trash failed: {e}"),
-                    Err(e) => tracing::error!("trash join failed: {e}"),
-                }
+        // Enable/disable action buttons based on selection.
+        {
+            let trash_btn = self.trash_btn.clone();
+            let restore_btn = self.restore_btn.clone();
+            let delete_btn = self.delete_btn.clone();
+            selection.connect_selection_changed(move |sel, _, _| {
+                let has_selection = sel.selection().size() > 0;
+                trash_btn.set_sensitive(has_selection);
+                restore_btn.set_sensitive(has_selection);
+                delete_btn.set_sensitive(has_selection);
             });
-        });
+        }
+
+        if is_trash_view {
+            // ── Restore button ──────────────────────────────────────────
+            {
+                let selection = selection.clone();
+                let lib = Arc::clone(&self.library);
+                let tk = self.tokio.clone();
+                let reg = Rc::clone(&registry);
+                let restore_btn = self.restore_btn.clone();
+                restore_btn.connect_clicked(move |btn| {
+                    let ids = collect_selected_ids(&selection);
+                    if ids.is_empty() { return; }
+                    selection.unselect_all();
+                    btn.set_sensitive(false);
+
+                    let lib = Arc::clone(&lib);
+                    let tk = tk.clone();
+                    let reg = Rc::clone(&reg);
+                    glib::MainContext::default().spawn_local(async move {
+                        let ids_bc = ids.clone();
+                        let result = tk
+                            .spawn(async move { lib.restore(&ids).await })
+                            .await;
+                        match result {
+                            Ok(Ok(())) => {
+                                for id in &ids_bc {
+                                    reg.on_trashed(id, false);
+                                }
+                            }
+                            Ok(Err(e)) => tracing::error!("restore failed: {e}"),
+                            Err(e) => tracing::error!("restore join failed: {e}"),
+                        }
+                    });
+                });
+            }
+
+            // ── Delete permanently button ───────────────────────────────
+            {
+                let selection = selection.clone();
+                let lib = Arc::clone(&self.library);
+                let tk = self.tokio.clone();
+                let reg = Rc::clone(&registry);
+                let delete_btn = self.delete_btn.clone();
+                let nav_view = self.nav_view.clone();
+                delete_btn.connect_clicked(move |btn| {
+                    let ids = collect_selected_ids(&selection);
+                    if ids.is_empty() { return; }
+
+                    // Confirmation dialog.
+                    let count = ids.len();
+                    let dialog = adw::AlertDialog::builder()
+                        .heading("Delete Permanently?")
+                        .body(format!(
+                            "This will permanently delete {count} {} and cannot be undone.",
+                            if count == 1 { "photo" } else { "photos" }
+                        ))
+                        .build();
+                    dialog.add_response("cancel", "Cancel");
+                    dialog.add_response("delete", "Delete");
+                    dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+                    dialog.set_default_response(Some("cancel"));
+                    dialog.set_close_response("cancel");
+
+                    let selection = selection.clone();
+                    let lib = Arc::clone(&lib);
+                    let tk = tk.clone();
+                    let reg = Rc::clone(&reg);
+                    let btn = btn.clone();
+                    dialog.connect_response(None, move |_, response| {
+                        if response != "delete" { return; }
+
+                        let ids = ids.clone();
+                        selection.unselect_all();
+                        btn.set_sensitive(false);
+
+                        let lib = Arc::clone(&lib);
+                        let tk = tk.clone();
+                        let reg = Rc::clone(&reg);
+                        glib::MainContext::default().spawn_local(async move {
+                            let ids_bc = ids.clone();
+                            let result = tk
+                                .spawn(async move { lib.delete_permanently(&ids).await })
+                                .await;
+                            match result {
+                                Ok(Ok(())) => {
+                                    for id in &ids_bc {
+                                        reg.on_deleted(id);
+                                    }
+                                }
+                                Ok(Err(e)) => tracing::error!("delete_permanently failed: {e}"),
+                                Err(e) => tracing::error!("delete_permanently join failed: {e}"),
+                            }
+                        });
+                    });
+                    dialog.present(nav_view.root().as_ref().and_then(|r| r.downcast_ref::<gtk::Window>()));
+                });
+            }
+        } else {
+            // ── Trash button ────────────────────────────────────────────
+            let selection = selection.clone();
+            let lib = Arc::clone(&self.library);
+            let tk = self.tokio.clone();
+            let trash_btn = self.trash_btn.clone();
+            trash_btn.connect_clicked(move |btn| {
+                let ids = collect_selected_ids(&selection);
+                if ids.is_empty() { return; }
+                selection.unselect_all();
+                btn.set_sensitive(false);
+
+                let lib = Arc::clone(&lib);
+                let tk = tk.clone();
+                let reg = Rc::clone(&registry);
+                glib::MainContext::default().spawn_local(async move {
+                    let ids_bc = ids.clone();
+                    let result = tk
+                        .spawn(async move { lib.trash(&ids).await })
+                        .await;
+                    match result {
+                        Ok(Ok(())) => {
+                            for id in &ids_bc {
+                                reg.on_trashed(id, true);
+                            }
+                        }
+                        Ok(Err(e)) => tracing::error!("trash failed: {e}"),
+                        Err(e) => tracing::error!("trash join failed: {e}"),
+                    }
+                });
+            });
+        }
     }
+}
+
+/// Collect media IDs from the current selection.
+fn collect_selected_ids(selection: &gtk::MultiSelection) -> Vec<crate::library::media::MediaId> {
+    let bitset = selection.selection();
+    let n = bitset.size();
+    let mut ids = Vec::with_capacity(n as usize);
+    for i in 0..n {
+        let pos = bitset.nth(i as u32);
+        if let Some(obj) = selection
+            .item(pos)
+            .and_then(|o| o.downcast::<item::MediaItemObject>().ok())
+        {
+            ids.push(obj.item().id.clone());
+        }
+    }
+    ids
 }
 
 impl ContentView for PhotoGridView {
