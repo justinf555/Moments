@@ -169,7 +169,7 @@ impl MomentsApplication {
         // Pass setup_win into start_library so it can be closed *after* the main
         // window is presented — closing it here would leave a windowless app, causing
         // GTK to begin shutdown before the async factory future runs.
-        self.start_library(bundle, LibraryConfig::Local, Some(setup_win.clone()));
+        self.start_library(bundle, LibraryConfig::Local, Some(setup_win.clone().upcast::<gtk::Window>()));
     }
 
     /// Open an existing library from a saved path.
@@ -192,7 +192,7 @@ impl MomentsApplication {
         &self,
         bundle: Bundle,
         config: LibraryConfig,
-        outgoing_window: Option<impl IsA<gtk::Window> + 'static>,
+        outgoing_window: Option<gtk::Window>,
     ) {
         let (sender, receiver) = std::sync::mpsc::channel::<LibraryEvent>();
         *self.imp().library_events.borrow_mut() = Some(receiver);
