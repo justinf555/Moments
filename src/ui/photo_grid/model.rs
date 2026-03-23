@@ -51,6 +51,20 @@ impl PhotoGridModel {
         }
     }
 
+    /// Clear all items and reload from the first page.
+    ///
+    /// Called after an import completes so newly arrived photos appear at the
+    /// top of the grid without requiring a restart.
+    pub fn reload(self: &Rc<Self>) {
+        self.store.remove_all();
+        self.id_index.borrow_mut().clear();
+        *self.cursor.borrow_mut() = None;
+        self.loading.set(false);
+        self.has_more.set(true);
+        debug!("reloading grid from first page");
+        self.load_more();
+    }
+
     /// Fetch the next page of media items from the library.
     ///
     /// No-op if a load is already in flight or there are no more pages.
