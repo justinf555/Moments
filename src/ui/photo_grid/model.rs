@@ -57,6 +57,11 @@ impl PhotoGridModel {
         }
     }
 
+    /// The filter this model was constructed with.
+    pub fn filter(&self) -> MediaFilter {
+        self.filter.get()
+    }
+
     /// Clear all items and reload from the first page.
     ///
     /// Called after an import completes so newly arrived photos appear at the
@@ -140,6 +145,19 @@ impl PhotoGridModel {
     ///
     /// For filtered models (`Favorites`): reloads from the database since
     /// items need to be added or removed from the filtered set.
+    /// Remove a single item from the store by ID.
+    fn remove_item(&self, id: &MediaId) {
+        let pos = self.store.find_with_equal_func(|obj| {
+            obj.downcast_ref::<MediaItemObject>()
+                .map(|m| m.item().id == *id)
+                .unwrap_or(false)
+        });
+        if let Some(pos) = pos {
+            self.id_index.borrow_mut().remove(id);
+            self.store.remove(pos);
+        }
+    }
+
     pub fn on_favorite_changed(self: &Rc<Self>, id: &MediaId, is_favorite: bool) {
         match self.filter.get() {
             MediaFilter::All => {
@@ -150,20 +168,35 @@ impl PhotoGridModel {
             }
             MediaFilter::Favorites => {
                 if is_favorite {
-                    // New favourite — reload to fetch and insert in sort order.
                     self.reload();
                 } else {
-                    // Un-favourited — remove the single item from the store
-                    // instead of reloading the entire grid.
-                    let pos = self.store.find_with_equal_func(|obj| {
-                        obj.downcast_ref::<MediaItemObject>()
-                            .map(|m| m.item().id == *id)
-                            .unwrap_or(false)
-                    });
-                    if let Some(pos) = pos {
-                        self.id_index.borrow_mut().remove(id);
-                        self.store.remove(pos);
-                    }
+                    self.remove_item(id);
+                }
+            }
+            // Trashed items can't be favourited — no action needed.
+            MediaFilter::Trashed => {}
+        }
+    }
+
+    /// Called when an item is trashed or restored in any view.
+    pub fn on_trashed(self: &Rc<Self>, id: &MediaId, is_trashed: bool) {
+        match self.filter.get() {
+            MediaFilter::All | MediaFilter::Favorites => {
+                if is_trashed {
+                    // Item moved to trash — remove from this view.
+                    self.remove_item(id);
+                } else {
+                    // Item restored — reload to add it back in sort order.
+                    self.reload();
+                }
+            }
+            MediaFilter::Trashed => {
+                if is_trashed {
+                    // Item just trashed — reload to add it.
+                    self.reload();
+                } else {
+                    // Item restored — remove from trash view.
+                    self.remove_item(id);
                 }
             }
         }

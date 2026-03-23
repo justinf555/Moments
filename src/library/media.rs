@@ -87,16 +87,21 @@ pub struct MediaItem {
     pub orientation: u8,
     pub media_type: MediaType,
     pub is_favorite: bool,
+    pub is_trashed: bool,
+    /// Unix timestamp when the item was trashed. `None` if not trashed.
+    pub trashed_at: Option<i64>,
 }
 
 /// Filter for [`LibraryMedia::list_media`] queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MediaFilter {
-    /// All media items (no filter).
+    /// All media items (excludes trashed).
     #[default]
     All,
-    /// Only items marked as favourite.
+    /// Only items marked as favourite (excludes trashed).
     Favorites,
+    /// Only trashed items.
+    Trashed,
 }
 
 /// Opaque cursor for keyset pagination in [`LibraryMedia::list_media`].
@@ -163,6 +168,22 @@ pub trait LibraryMedia: Send + Sync {
         ids: &[MediaId],
         favorite: bool,
     ) -> Result<(), LibraryError>;
+
+    /// Move assets to the trash (soft delete).
+    ///
+    /// Sets `is_trashed = 1` and records the current timestamp in `trashed_at`.
+    async fn trash(&self, ids: &[MediaId]) -> Result<(), LibraryError>;
+
+    /// Restore trashed assets back to the library.
+    async fn restore(&self, ids: &[MediaId]) -> Result<(), LibraryError>;
+
+    /// Permanently delete assets: removes the DB row, original file, and thumbnail.
+    ///
+    /// This is irreversible. Callers should confirm with the user before calling.
+    async fn delete_permanently(&self, ids: &[MediaId]) -> Result<(), LibraryError>;
+
+    /// Return IDs of items trashed longer than `max_age_secs` ago.
+    async fn expired_trash(&self, max_age_secs: i64) -> Result<Vec<MediaId>, LibraryError>;
 }
 
 /// A row in the `media` table.

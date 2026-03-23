@@ -22,4 +22,9 @@ pub const ROUTES: &[SidebarRoute] = &[
         label: "Favorites",
         icon: "starred-symbolic",
     },
+    SidebarRoute {
+        id: "trash",
+        label: "Trash",
+        icon: "user-trash-symbolic",
+    },
 ];

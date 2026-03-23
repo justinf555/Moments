@@ -30,6 +30,7 @@ struct ViewerInner {
     prev_btn: gtk::Button,
     next_btn: gtk::Button,
     star_btn: gtk::Button,
+    trash_btn: gtk::Button,
     info_split: adw::OverlaySplitView,
     info_panel: InfoPanel,
     /// Snapshot of the grid's item list taken at activation time.
@@ -283,6 +284,13 @@ impl PhotoViewer {
         star_btn.add_css_class("flat");
         header.pack_end(&star_btn);
 
+        let trash_btn = gtk::Button::builder()
+            .icon_name("user-trash-symbolic")
+            .tooltip_text("Move to Trash")
+            .build();
+        trash_btn.add_css_class("flat");
+        header.pack_start(&trash_btn);
+
         // ── Picture ──────────────────────────────────────────────────────────
         let picture = gtk::Picture::builder()
             .content_fit(gtk::ContentFit::Contain)
@@ -368,6 +376,7 @@ impl PhotoViewer {
             prev_btn,
             next_btn,
             star_btn,
+            trash_btn,
             info_split,
             info_panel,
             items: RefCell::new(Vec::new()),
@@ -449,6 +458,44 @@ impl PhotoViewer {
                         Ok(Ok(id)) => reg.on_favorite_changed(&id, new_fav),
                         Ok(Err(e)) => error!("set_favorite failed: {e}"),
                         Err(e) => error!("set_favorite join failed: {e}"),
+                    }
+                });
+            });
+        }
+
+        // Trash button — persist then broadcast, pop back to grid.
+        {
+            let i = Rc::downgrade(&inner);
+            inner.trash_btn.connect_clicked(move |_| {
+                let Some(inner) = i.upgrade() else { return };
+                let id = {
+                    let items = inner.items.borrow();
+                    let idx = inner.current_index.get();
+                    items.get(idx).map(|obj| obj.item().id.clone())
+                };
+                let Some(id) = id else { return };
+
+                let lib = Arc::clone(&inner.library);
+                let tk = inner.tokio.clone();
+                let reg = Rc::clone(&inner.registry);
+                let nav = inner.nav_page.clone();
+                glib::MainContext::default().spawn_local(async move {
+                    let result = tk
+                        .spawn(async move { lib.trash(&[id.clone()]).await.map(|_| id) })
+                        .await;
+                    match result {
+                        Ok(Ok(id)) => {
+                            reg.on_trashed(&id, true);
+                            // Pop back to grid since the item is gone.
+                            if let Some(nav_view) = nav
+                                .parent()
+                                .and_then(|p| p.downcast::<adw::NavigationView>().ok())
+                            {
+                                nav_view.pop();
+                            }
+                        }
+                        Ok(Err(e)) => error!("trash failed: {e}"),
+                        Err(e) => error!("trash join failed: {e}"),
                     }
                 });
             });
