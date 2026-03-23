@@ -188,6 +188,11 @@ impl MomentsApplication {
     ///
     /// `outgoing_window` is an optional window to close *after* the main window is
     /// presented, preventing a windowless state that would trigger GTK shutdown.
+    ///
+    /// For the returning-user path there is no outgoing window, so we call
+    /// `app.hold()` before spawning to prevent GApplication from treating the
+    /// zero-window gap as a signal to shut down. The hold is released once a
+    /// window is visible (or on error).
     fn start_library(
         &self,
         bundle: Bundle,
@@ -196,6 +201,9 @@ impl MomentsApplication {
     ) {
         let (sender, receiver) = std::sync::mpsc::channel::<LibraryEvent>();
         *self.imp().library_events.borrow_mut() = Some(receiver);
+
+        // Hold prevents auto-shutdown while there are no live windows.
+        self.hold();
 
         glib::MainContext::default().spawn_local(glib::clone!(
             #[weak(rename_to = app)]
@@ -216,6 +224,8 @@ impl MomentsApplication {
                         error!("failed to open library: {e}");
                     }
                 }
+                // Release the hold regardless of success or failure.
+                app.release();
             }
         ));
     }
