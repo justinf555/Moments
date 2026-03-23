@@ -23,6 +23,7 @@ toml = "0.8"
 
 # Utilities
 thiserror = "2"
+chrono = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
