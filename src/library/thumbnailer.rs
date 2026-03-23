@@ -1,0 +1,229 @@
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use tracing::{debug, instrument, warn};
+
+use super::db::Database;
+use super::error::LibraryError;
+use super::event::LibraryEvent;
+use super::media::MediaId;
+use super::thumbnail::sharded_thumbnail_path;
+
+/// Longest edge in pixels for the grid thumbnail.
+const GRID_SIZE: u32 = 360;
+
+/// Drives thumbnail generation for a single imported asset.
+///
+/// `ThumbnailJob::generate` is **async** and must be spawned on the Tokio
+/// runtime. The CPU-bound decode/resize/encode step runs on a blocking
+/// thread via [`tokio::task::spawn_blocking`] so the async executor stays
+/// free. Results flow back through [`LibraryEvent::ThumbnailReady`].
+pub struct ThumbnailJob {
+    thumbnails_dir: PathBuf,
+    db: Database,
+    events: std::sync::mpsc::Sender<LibraryEvent>,
+}
+
+impl ThumbnailJob {
+    pub fn new(
+        thumbnails_dir: PathBuf,
+        db: Database,
+        events: std::sync::mpsc::Sender<LibraryEvent>,
+    ) -> Self {
+        Self {
+            thumbnails_dir,
+            db,
+            events,
+        }
+    }
+
+    /// Generate and persist the grid thumbnail for `source`.
+    ///
+    /// 1. Insert a `Pending` DB row (idempotent).
+    /// 2. Decode the source image on a blocking thread.
+    /// 3. Resize to [`GRID_SIZE`] on the longest edge, preserving aspect ratio.
+    /// 4. Encode as WebP and write atomically (temp file → rename).
+    /// 5. Mark the DB row `Ready` and emit [`LibraryEvent::ThumbnailReady`].
+    ///
+    /// On any failure the DB row is marked `Failed` and the error is logged
+    /// but not propagated — a thumbnail failure must not abort an import.
+    #[instrument(skip(self), fields(media_id = %media_id))]
+    pub async fn generate(self, media_id: MediaId, source: PathBuf) {
+        if let Err(e) = self.try_generate(&media_id, &source).await {
+            warn!(%media_id, error = %e, "thumbnail generation failed");
+            let _ = self.db.set_thumbnail_failed(&media_id).await;
+        }
+    }
+
+    async fn try_generate(&self, media_id: &MediaId, source: &Path) -> Result<(), LibraryError> {
+        // ── 1. Mark pending ───────────────────────────────────────────────────
+        self.db.insert_thumbnail_pending(media_id).await?;
+
+        // ── 2. Compute paths ──────────────────────────────────────────────────
+        let final_path = sharded_thumbnail_path(&self.thumbnails_dir, media_id);
+        let tmp_path = self
+            .thumbnails_dir
+            .join("tmp")
+            .join(format!("{}.webp", media_id.as_str()));
+
+        if let Some(p) = tmp_path.parent() {
+            tokio::fs::create_dir_all(p)
+                .await
+                .map_err(LibraryError::Io)?;
+        }
+        if let Some(p) = final_path.parent() {
+            tokio::fs::create_dir_all(p)
+                .await
+                .map_err(LibraryError::Io)?;
+        }
+
+        // ── 3. Decode, resize, encode — blocking ──────────────────────────────
+        let source = source.to_path_buf();
+        let tmp_clone = tmp_path.clone();
+        tokio::task::spawn_blocking(move || {
+            generate_thumbnail(&source, &tmp_clone, GRID_SIZE)
+        })
+        .await
+        .map_err(|e| LibraryError::Runtime(e.to_string()))??;
+
+        // ── 4. Atomic rename to final path ────────────────────────────────────
+        tokio::fs::rename(&tmp_path, &final_path)
+            .await
+            .map_err(LibraryError::Io)?;
+
+        // ── 5. Update DB and emit event ───────────────────────────────────────
+        let relative = final_path
+            .strip_prefix(&self.thumbnails_dir)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| final_path.to_string_lossy().into_owned());
+
+        let generated_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        self.db
+            .set_thumbnail_ready(media_id, &relative, generated_at)
+            .await?;
+
+        debug!(%media_id, "thumbnail ready");
+        self.events
+            .send(LibraryEvent::ThumbnailReady {
+                media_id: media_id.clone(),
+            })
+            .ok();
+
+        Ok(())
+    }
+}
+
+/// Decode `source`, resize to `max_edge` on the longest side, encode as WebP.
+///
+/// Runs on a blocking thread — never call from an async context directly.
+fn generate_thumbnail(source: &Path, dest: &Path, max_edge: u32) -> Result<(), LibraryError> {
+    let img = decode_image_file(source)?;
+    let thumb = img.thumbnail(max_edge, max_edge);
+    thumb
+        .save_with_format(dest, image::ImageFormat::WebP)
+        .map_err(|e| LibraryError::Thumbnail(e.to_string()))?;
+    Ok(())
+}
+
+/// Decode an image file to a [`image::DynamicImage`].
+///
+/// Dispatches by file extension. Currently handles all formats supported by
+/// the `image` crate (JPEG, PNG, WebP, TIFF, BMP, GIF). Additional format
+/// support (HEIC, RAW, video) will be added in issue #7.
+fn decode_image_file(path: &Path) -> Result<image::DynamicImage, LibraryError> {
+    image::open(path).map_err(|e| LibraryError::Thumbnail(e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::library::db::Database;
+    use crate::library::media::{LibraryMedia, MediaRecord};
+    use std::sync::mpsc;
+    use tempfile::tempdir;
+
+    async fn open_test_db(dir: &Path) -> Database {
+        Database::open(&dir.join("db").join("test.db"))
+            .await
+            .unwrap()
+    }
+
+    fn write_test_jpeg(path: &Path) {
+        // Minimal valid 1×1 white JPEG.
+        let img = image::RgbImage::new(1, 1);
+        image::DynamicImage::ImageRgb8(img)
+            .save_with_format(path, image::ImageFormat::Jpeg)
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn generate_creates_webp_thumbnail() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let thumbnails_dir = dir.path().join("thumbnails");
+        let src_path = dir.path().join("photo.jpg");
+        write_test_jpeg(&src_path);
+
+        let id = MediaId::from_file(&src_path).await.unwrap();
+
+        // Insert media record so FK constraint is satisfied.
+        db.insert_media(&MediaRecord {
+            id: id.clone(),
+            relative_path: "2025/01/01/photo.jpg".to_string(),
+            original_filename: "photo.jpg".to_string(),
+            file_size: 100,
+            imported_at: 0,
+        })
+        .await
+        .unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        ThumbnailJob::new(thumbnails_dir.clone(), db.clone(), tx)
+            .generate(id.clone(), src_path)
+            .await;
+
+        // Thumbnail file exists.
+        let thumb_path = sharded_thumbnail_path(&thumbnails_dir, &id);
+        assert!(thumb_path.exists(), "thumbnail file not found at {thumb_path:?}");
+
+        // Event was emitted.
+        let events: Vec<_> = rx.try_iter().collect();
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, LibraryEvent::ThumbnailReady { .. })));
+    }
+
+    #[tokio::test]
+    async fn generate_marks_failed_on_corrupt_source() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let thumbnails_dir = dir.path().join("thumbnails");
+        let src_path = dir.path().join("bad.jpg");
+        std::fs::write(&src_path, b"not an image").unwrap();
+
+        let id = MediaId::from_file(&src_path).await.unwrap();
+
+        db.insert_media(&MediaRecord {
+            id: id.clone(),
+            relative_path: "2025/01/01/bad.jpg".to_string(),
+            original_filename: "bad.jpg".to_string(),
+            file_size: 12,
+            imported_at: 0,
+        })
+        .await
+        .unwrap();
+
+        let (tx, _rx) = mpsc::channel();
+        ThumbnailJob::new(thumbnails_dir, db.clone(), tx)
+            .generate(id.clone(), src_path)
+            .await;
+
+        // DB row should be marked Failed.
+        let status = db.thumbnail_status(&id).await.unwrap();
+        assert_eq!(status, Some(crate::library::thumbnail::ThumbnailStatus::Failed));
+    }
+}

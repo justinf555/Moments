@@ -13,6 +13,7 @@ use crate::library::import::LibraryImport;
 use crate::library::importer::ImportJob;
 use crate::library::media::{LibraryMedia, MediaId, MediaRecord};
 use crate::library::storage::LibraryStorage;
+use crate::library::thumbnail::{sharded_thumbnail_path, LibraryThumbnail};
 
 /// Local filesystem backend.
 ///
@@ -78,6 +79,7 @@ impl LibraryImport for LocalLibrary {
         info!("starting import");
         let job = ImportJob::new(
             self.bundle.originals.clone(),
+            self.bundle.thumbnails.clone(),
             self.db.clone(),
             self.events.clone(),
         );
@@ -94,6 +96,37 @@ impl LibraryMedia for LocalLibrary {
 
     async fn insert_media(&self, record: &MediaRecord) -> Result<(), LibraryError> {
         self.db.insert_media(record).await
+    }
+}
+
+#[async_trait]
+impl LibraryThumbnail for LocalLibrary {
+    fn thumbnail_path(&self, id: &MediaId) -> std::path::PathBuf {
+        sharded_thumbnail_path(&self.bundle.thumbnails, id)
+    }
+
+    async fn insert_thumbnail_pending(&self, id: &MediaId) -> Result<(), LibraryError> {
+        self.db.insert_thumbnail_pending(id).await
+    }
+
+    async fn set_thumbnail_ready(
+        &self,
+        id: &MediaId,
+        file_path: &str,
+        generated_at: i64,
+    ) -> Result<(), LibraryError> {
+        self.db.set_thumbnail_ready(id, file_path, generated_at).await
+    }
+
+    async fn set_thumbnail_failed(&self, id: &MediaId) -> Result<(), LibraryError> {
+        self.db.set_thumbnail_failed(id).await
+    }
+
+    async fn thumbnail_status(
+        &self,
+        id: &MediaId,
+    ) -> Result<Option<crate::library::thumbnail::ThumbnailStatus>, LibraryError> {
+        self.db.thumbnail_status(id).await
     }
 }
 
