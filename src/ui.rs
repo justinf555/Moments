@@ -1,6 +1,7 @@
 use gtk;
 
 pub mod coordinator;
+pub mod empty_library;
 pub mod import_dialog;
 pub mod photo_grid;
 pub mod setup_window;
