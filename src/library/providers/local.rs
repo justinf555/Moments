@@ -11,7 +11,9 @@ use crate::library::error::LibraryError;
 use crate::library::event::LibraryEvent;
 use crate::library::import::LibraryImport;
 use crate::library::importer::ImportJob;
-use crate::library::media::{LibraryMedia, MediaId, MediaMetadataRecord, MediaRecord};
+use crate::library::media::{
+    LibraryMedia, MediaCursor, MediaId, MediaItem, MediaMetadataRecord, MediaRecord,
+};
 use crate::library::storage::LibraryStorage;
 use crate::library::thumbnail::{sharded_thumbnail_path, LibraryThumbnail};
 
@@ -103,6 +105,14 @@ impl LibraryMedia for LocalLibrary {
         record: &MediaMetadataRecord,
     ) -> Result<(), LibraryError> {
         self.db.insert_media_metadata(record).await
+    }
+
+    async fn list_media(
+        &self,
+        cursor: Option<&MediaCursor>,
+        limit: u32,
+    ) -> Result<Vec<MediaItem>, LibraryError> {
+        self.db.list_media(cursor, limit).await
     }
 }
 
