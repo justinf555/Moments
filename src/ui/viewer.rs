@@ -426,24 +426,29 @@ impl PhotoViewer {
                 let Some(obj) = items.get(idx) else { return };
 
                 let new_fav = !obj.is_favorite();
+
+                // Optimistic: update icon and current item immediately.
                 btn.set_icon_name(if new_fav {
                     "starred-symbolic"
                 } else {
                     "non-starred-symbolic"
                 });
+                obj.set_is_favorite(new_fav);
 
-                // Broadcast to all models so filtered views update.
+                // Persist to DB, then broadcast to all models so filtered
+                // views reload with the committed data.
                 let id = obj.item().id.clone();
-                inner.registry.on_favorite_changed(&id, new_fav);
-
                 let lib = Arc::clone(&inner.library);
                 let tk = inner.tokio.clone();
+                let reg = Rc::clone(&inner.registry);
                 glib::MainContext::default().spawn_local(async move {
                     let result = tk
-                        .spawn(async move { lib.set_favorite(&[id], new_fav).await })
+                        .spawn(async move { lib.set_favorite(&[id.clone()], new_fav).await.map(|_| id) })
                         .await;
-                    if let Ok(Err(e)) = result {
-                        error!("set_favorite failed: {e}");
+                    match result {
+                        Ok(Ok(id)) => reg.on_favorite_changed(&id, new_fav),
+                        Ok(Err(e)) => error!("set_favorite failed: {e}"),
+                        Err(e) => error!("set_favorite join failed: {e}"),
                     }
                 });
             });

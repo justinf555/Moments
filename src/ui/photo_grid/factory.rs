@@ -74,18 +74,23 @@ pub fn build_factory(
                 let Some(item) = item_weak.upgrade() else { return };
                 let new_fav = !item.is_favorite();
 
-                // Broadcast to all models so filtered views update.
-                let id = item.item().id.clone();
-                reg.on_favorite_changed(&id, new_fav);
+                // Optimistic: update the current item immediately.
+                item.set_is_favorite(new_fav);
 
+                // Persist to DB, then broadcast to all models so filtered
+                // views reload with the committed data.
+                let id = item.item().id.clone();
                 let lib = Arc::clone(&lib);
                 let tk = tk.clone();
+                let reg = Rc::clone(&reg);
                 glib::MainContext::default().spawn_local(async move {
                     let result = tk
-                        .spawn(async move { lib.set_favorite(&[id], new_fav).await })
+                        .spawn(async move { lib.set_favorite(&[id.clone()], new_fav).await.map(|_| id) })
                         .await;
-                    if let Ok(Err(e)) = result {
-                        error!("set_favorite failed: {e}");
+                    match result {
+                        Ok(Ok(id)) => reg.on_favorite_changed(&id, new_fav),
+                        Ok(Err(e)) => error!("set_favorite failed: {e}"),
+                        Err(e) => error!("set_favorite join failed: {e}"),
                     }
                 });
             });
