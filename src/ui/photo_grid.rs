@@ -228,6 +228,12 @@ impl PhotoGrid {
 ///
 /// The root page of the `NavigationView` contains the grid's `AdwToolbarView`.
 /// The viewer page is pushed on activation and popped by the back button.
+impl std::fmt::Debug for PhotoGridView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PhotoGridView").finish_non_exhaustive()
+    }
+}
+
 pub struct PhotoGridView {
     /// The `NavigationView` is the outermost widget returned by `widget()`.
     nav_view: adw::NavigationView,
@@ -381,6 +387,18 @@ impl PhotoGridView {
     /// regardless of focus.
     pub fn view_actions(&self) -> &gio::SimpleActionGroup {
         &self.view_actions
+    }
+
+    /// Pop back to the grid page if the viewer is currently visible.
+    pub fn pop_to_grid(&self) {
+        let visible_tag = self
+            .nav_view
+            .visible_page()
+            .and_then(|p| p.tag())
+            .unwrap_or_default();
+        if visible_tag == "viewer" {
+            self.nav_view.pop();
+        }
     }
 
     pub fn set_model(&self, model: Rc<PhotoGridModel>) {

@@ -49,6 +49,9 @@ mod imp {
 
         /// Set up once in `setup()` — holds live references to all registered views.
         pub coordinator: OnceCell<Rc<RefCell<ContentCoordinator>>>,
+        /// The photos/favourites grid view — stored so sidebar navigation can
+        /// pop back to the grid when the viewer is open.
+        pub photos_view: OnceCell<Rc<PhotoGridView>>,
     }
 
     #[glib::object_subclass]
@@ -116,6 +119,9 @@ impl MomentsWindow {
         let photos_view = Rc::new(PhotoGridView::new(library, tokio, settings));
         photos_view.set_model(Rc::clone(&model));
         self.insert_action_group("view", Some(photos_view.view_actions()));
+        imp.photos_view
+            .set(Rc::clone(&photos_view))
+            .expect("photos_view set once");
         coordinator.register("photos", photos_view);
 
         // Wrap the content stack in a NavigationPage for the split view.
@@ -155,6 +161,11 @@ impl MomentsWindow {
         let model_for_sidebar = Rc::clone(&model);
         sidebar.connect_route_selected(move |id| {
             let Some(win) = obj_weak.upgrade() else { return };
+
+            // Pop back to the grid if the viewer is open.
+            if let Some(pv) = win.imp().photos_view.get() {
+                pv.pop_to_grid();
+            }
 
             // Set the appropriate filter on the model.
             let filter = match id {
