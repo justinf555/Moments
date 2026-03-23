@@ -85,6 +85,8 @@ struct MediaRow {
     orientation: i64,
     media_type: i64,
     is_favorite: i64,
+    is_trashed: i64,
+    trashed_at: Option<i64>,
 }
 
 impl MediaRow {
@@ -103,6 +105,8 @@ impl MediaRow {
                 MediaType::Image
             },
             is_favorite: self.is_favorite != 0,
+            is_trashed: self.is_trashed != 0,
+            trashed_at: self.trashed_at,
         }
     }
 }
@@ -226,15 +230,17 @@ impl LibraryMedia for Database {
         limit: u32,
     ) -> Result<Vec<MediaItem>, LibraryError> {
         let filter_clause = match filter {
-            MediaFilter::All => "",
-            MediaFilter::Favorites => " AND is_favorite = 1",
+            MediaFilter::All => " AND is_trashed = 0",
+            MediaFilter::Favorites => " AND is_trashed = 0 AND is_favorite = 1",
+            MediaFilter::Trashed => " AND is_trashed = 1",
         };
 
         let rows = match cursor {
             None => {
                 let sql = format!(
                     "SELECT id, taken_at, imported_at, original_filename,
-                            width, height, orientation, media_type, is_favorite
+                            width, height, orientation, media_type, is_favorite,
+                            is_trashed, trashed_at
                      FROM media
                      WHERE 1=1{filter_clause}
                      ORDER BY COALESCE(taken_at, 0) DESC, id DESC
@@ -249,7 +255,8 @@ impl LibraryMedia for Database {
             Some(cur) => {
                 let sql = format!(
                     "SELECT id, taken_at, imported_at, original_filename,
-                            width, height, orientation, media_type, is_favorite
+                            width, height, orientation, media_type, is_favorite,
+                            is_trashed, trashed_at
                      FROM media
                      WHERE (COALESCE(taken_at, 0) < ?
                         OR (COALESCE(taken_at, 0) = ? AND id < ?)){filter_clause}
@@ -315,6 +322,64 @@ impl LibraryMedia for Database {
                 .map_err(LibraryError::Db)?;
         }
         Ok(())
+    }
+
+    async fn trash(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
+        let now = chrono::Utc::now().timestamp();
+        for id in ids {
+            sqlx::query("UPDATE media SET is_trashed = 1, trashed_at = ? WHERE id = ?")
+                .bind(now)
+                .bind(id.as_str())
+                .execute(&self.pool)
+                .await
+                .map_err(LibraryError::Db)?;
+        }
+        Ok(())
+    }
+
+    async fn restore(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
+        for id in ids {
+            sqlx::query("UPDATE media SET is_trashed = 0, trashed_at = NULL WHERE id = ?")
+                .bind(id.as_str())
+                .execute(&self.pool)
+                .await
+                .map_err(LibraryError::Db)?;
+        }
+        Ok(())
+    }
+
+    async fn delete_permanently(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
+        for id in ids {
+            // Delete metadata, thumbnail row, then media row (FK order).
+            sqlx::query("DELETE FROM media_metadata WHERE media_id = ?")
+                .bind(id.as_str())
+                .execute(&self.pool)
+                .await
+                .map_err(LibraryError::Db)?;
+            sqlx::query("DELETE FROM thumbnails WHERE media_id = ?")
+                .bind(id.as_str())
+                .execute(&self.pool)
+                .await
+                .map_err(LibraryError::Db)?;
+            sqlx::query("DELETE FROM media WHERE id = ?")
+                .bind(id.as_str())
+                .execute(&self.pool)
+                .await
+                .map_err(LibraryError::Db)?;
+        }
+        Ok(())
+    }
+
+    async fn expired_trash(&self, max_age_secs: i64) -> Result<Vec<MediaId>, LibraryError> {
+        let cutoff = chrono::Utc::now().timestamp() - max_age_secs;
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT id FROM media WHERE is_trashed = 1 AND trashed_at < ?",
+        )
+        .bind(cutoff)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(LibraryError::Db)?;
+        Ok(rows.into_iter().map(|(id,)| MediaId::new(id)).collect())
     }
 
     async fn insert_media_metadata(
@@ -611,5 +676,84 @@ mod tests {
         let favs = db.list_media(MediaFilter::Favorites, None, 10).await.unwrap();
         assert_eq!(favs.len(), 1);
         assert_eq!(favs[0].id, id1);
+    }
+
+    // ── trash tests ──────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn trash_and_restore_roundtrip() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let id = MediaId::new("t".repeat(64));
+        db.insert_media(&test_record(id.clone())).await.unwrap();
+
+        // Initially visible in All.
+        assert_eq!(db.list_media(MediaFilter::All, None, 10).await.unwrap().len(), 1);
+
+        // Trash it.
+        db.trash(&[id.clone()]).await.unwrap();
+        assert_eq!(db.list_media(MediaFilter::All, None, 10).await.unwrap().len(), 0);
+        let trashed = db.list_media(MediaFilter::Trashed, None, 10).await.unwrap();
+        assert_eq!(trashed.len(), 1);
+        assert!(trashed[0].is_trashed);
+        assert!(trashed[0].trashed_at.is_some());
+
+        // Restore it.
+        db.restore(&[id]).await.unwrap();
+        assert_eq!(db.list_media(MediaFilter::All, None, 10).await.unwrap().len(), 1);
+        assert_eq!(db.list_media(MediaFilter::Trashed, None, 10).await.unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn trash_excludes_from_favorites() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let id = MediaId::new("u".repeat(64));
+        db.insert_media(&test_record(id.clone())).await.unwrap();
+        db.set_favorite(&[id.clone()], true).await.unwrap();
+
+        assert_eq!(db.list_media(MediaFilter::Favorites, None, 10).await.unwrap().len(), 1);
+
+        db.trash(&[id]).await.unwrap();
+        assert_eq!(db.list_media(MediaFilter::Favorites, None, 10).await.unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn delete_permanently_removes_row() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let id = MediaId::new("v".repeat(64));
+        db.insert_media(&test_record(id.clone())).await.unwrap();
+
+        db.delete_permanently(&[id.clone()]).await.unwrap();
+        assert!(!db.media_exists(&id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn expired_trash_returns_old_items() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let id = MediaId::new("w".repeat(64));
+        db.insert_media(&test_record(id.clone())).await.unwrap();
+
+        db.trash(&[id.clone()]).await.unwrap();
+
+        // Item was just trashed — not expired with any positive max_age.
+        let expired = db.expired_trash(30 * 24 * 60 * 60).await.unwrap();
+        assert!(expired.is_empty());
+
+        // Manually backdate trashed_at to 31 days ago.
+        let old_ts = chrono::Utc::now().timestamp() - (31 * 24 * 60 * 60);
+        sqlx::query("UPDATE media SET trashed_at = ? WHERE id = ?")
+            .bind(old_ts)
+            .bind(id.as_str())
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        // Now it's expired with a 30-day window.
+        let expired = db.expired_trash(30 * 24 * 60 * 60).await.unwrap();
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0], id);
     }
 }

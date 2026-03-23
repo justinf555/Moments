@@ -66,6 +66,36 @@ impl LibraryStorage for LocalLibrary {
             tokio,
             formats,
         };
+        // Fire-and-forget: purge items trashed > 30 days on background thread.
+        {
+            let db = library.db.clone();
+            let originals = library.bundle.originals.clone();
+            let thumbnails = library.bundle.thumbnails.clone();
+            library.tokio.spawn(async move {
+                const THIRTY_DAYS: i64 = 30 * 24 * 60 * 60;
+                match db.expired_trash(THIRTY_DAYS).await {
+                    Ok(ids) if !ids.is_empty() => {
+                        info!(count = ids.len(), "auto-purging expired trash");
+                        for id in &ids {
+                            // Remove original file.
+                            if let Ok(Some(rel)) = db.media_relative_path(id).await {
+                                let path = originals.join(&rel);
+                                let _ = tokio::fs::remove_file(&path).await;
+                            }
+                            // Remove thumbnail file.
+                            let thumb = crate::library::thumbnail::sharded_thumbnail_path(&thumbnails, id);
+                            let _ = tokio::fs::remove_file(&thumb).await;
+                        }
+                        if let Err(e) = db.delete_permanently(&ids).await {
+                            tracing::error!("auto-purge DB cleanup failed: {e}");
+                        }
+                    }
+                    Ok(_) => debug!("no expired trash to purge"),
+                    Err(e) => tracing::error!("auto-purge query failed: {e}"),
+                }
+            });
+        }
+
         library
             .events
             .send(LibraryEvent::Ready)
@@ -140,6 +170,37 @@ impl LibraryMedia for LocalLibrary {
         favorite: bool,
     ) -> Result<(), LibraryError> {
         self.db.set_favorite(ids, favorite).await
+    }
+
+    async fn trash(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
+        self.db.trash(ids).await
+    }
+
+    async fn restore(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
+        self.db.restore(ids).await
+    }
+
+    async fn delete_permanently(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
+        // Remove files from disk before deleting DB rows.
+        for id in ids {
+            // Remove original file.
+            if let Ok(Some(rel)) = self.db.media_relative_path(id).await {
+                let path = self.bundle.originals.join(rel);
+                if let Err(e) = tokio::fs::remove_file(&path).await {
+                    tracing::warn!(id = %id, path = %path.display(), "failed to remove original: {e}");
+                }
+            }
+            // Remove thumbnail file.
+            let thumb = self.thumbnail_path(id);
+            if let Err(e) = tokio::fs::remove_file(&thumb).await {
+                tracing::debug!(id = %id, "thumbnail not on disk or already removed: {e}");
+            }
+        }
+        self.db.delete_permanently(ids).await
+    }
+
+    async fn expired_trash(&self, max_age_secs: i64) -> Result<Vec<MediaId>, LibraryError> {
+        self.db.expired_trash(max_age_secs).await
     }
 }
 
