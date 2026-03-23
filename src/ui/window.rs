@@ -30,6 +30,7 @@ use tracing::debug;
 use crate::library::Library;
 
 use crate::ui::coordinator::ContentCoordinator;
+use crate::ui::empty_library::EmptyLibraryView;
 use crate::ui::photo_grid::{PhotoGridModel, PhotoGridView};
 use crate::ui::sidebar::MomentsSidebar;
 
@@ -46,7 +47,7 @@ mod imp {
         pub split_view: TemplateChild<adw::NavigationSplitView>,
 
         /// Set up once in `setup()` — holds live references to all registered views.
-        pub coordinator: OnceCell<RefCell<ContentCoordinator>>,
+        pub coordinator: OnceCell<Rc<RefCell<ContentCoordinator>>>,
     }
 
     #[glib::object_subclass]
@@ -104,11 +105,15 @@ impl MomentsWindow {
 
         // Build content stack + coordinator.
         let content_stack = gtk::Stack::new();
+        content_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
         let mut coordinator = ContentCoordinator::new(content_stack.clone());
+
+        // Register the empty-library view.
+        coordinator.register("empty", Rc::new(EmptyLibraryView::new()));
 
         // Register the Photos view.
         let photos_view = Rc::new(PhotoGridView::new(library, tokio, settings));
-        photos_view.set_model(model);
+        photos_view.set_model(Rc::clone(&model));
         self.insert_action_group("view", Some(photos_view.view_actions()));
         coordinator.register("photos", photos_view);
 
@@ -119,21 +124,42 @@ impl MomentsWindow {
             .build();
         imp.split_view.set_content(Some(&content_nav_page));
 
-        let coordinator = RefCell::new(coordinator);
+        let coordinator = Rc::new(RefCell::new(coordinator));
 
-        // Navigate to the first route immediately.
-        coordinator.borrow().navigate("photos");
+        // Toggle between empty and photos based on store item count.
+        // Connected before sidebar.select_first() so the initial load
+        // (triggered by set_model → load_more) will fire the switch.
+        {
+            let coord = Rc::clone(&coordinator);
+            model.store.connect_items_changed(move |store, _, _, _| {
+                let target = if store.n_items() > 0 { "photos" } else { "empty" };
+                coord.borrow().navigate(target);
+            });
+        }
+
+        // Start on "empty" — items-changed will switch to "photos" once
+        // the first page arrives. This must come after the signal is
+        // connected but before select_first triggers sidebar navigation.
+        coordinator.borrow().navigate("empty");
 
         imp.coordinator
             .set(coordinator)
             .expect("coordinator set once in setup()");
 
         // Wire sidebar selection → coordinator navigation.
+        // Only navigates to routes the sidebar knows about (e.g. "photos");
+        // the empty/photos toggle is driven by the store signal above.
         let obj_weak = self.downgrade();
+        let store_for_sidebar = model.store.clone();
         sidebar.connect_route_selected(move |id| {
             let Some(win) = obj_weak.upgrade() else { return };
             if let Some(coordinator) = win.imp().coordinator.get() {
-                coordinator.borrow().navigate(id);
+                // If the library is empty, stay on the empty page.
+                if store_for_sidebar.n_items() == 0 {
+                    coordinator.borrow().navigate("empty");
+                } else {
+                    coordinator.borrow().navigate(id);
+                }
             }
         });
 
