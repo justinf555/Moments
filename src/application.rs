@@ -75,8 +75,8 @@ mod imp {
             obj.setup_gactions();
             obj.set_accels_for_action("app.quit", &["<control>q"]);
             obj.set_accels_for_action("win.toggle-sidebar", &["F9"]);
-            obj.set_accels_for_action("view.zoom-in", &["<control>equal"]);
-            obj.set_accels_for_action("view.zoom-out", &["<control>minus"]);
+            obj.set_accels_for_action("view.zoom-in", &["<control>equal", "<control>plus", "<control>KP_Add"]);
+            obj.set_accels_for_action("view.zoom-out", &["<control>minus", "<control>KP_Subtract"]);
         }
     }
 
