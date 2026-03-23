@@ -10,7 +10,7 @@ use crate::library::bundle::Bundle;
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
 use crate::library::event::LibraryEvent;
-use crate::library::format::{FormatRegistry, StandardHandler};
+use crate::library::format::{FormatRegistry, RawHandler, StandardHandler};
 use crate::library::import::LibraryImport;
 use crate::library::importer::ImportJob;
 use crate::library::media::{
@@ -55,6 +55,7 @@ impl LibraryStorage for LocalLibrary {
 
         let mut registry = FormatRegistry::new();
         registry.register(Arc::new(StandardHandler));
+        registry.register(Arc::new(RawHandler));
         let formats = Arc::new(registry);
 
         let library = Self {

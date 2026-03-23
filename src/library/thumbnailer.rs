@@ -125,6 +125,7 @@ impl ThumbnailJob {
 
 /// Decode `source`, resize to `max_edge` on the longest side, encode as WebP.
 ///
+/// Applies EXIF orientation before resizing so thumbnails are always upright.
 /// Runs on a blocking thread — never call from an async context directly.
 fn generate_thumbnail(
     source: &Path,
@@ -133,11 +134,34 @@ fn generate_thumbnail(
     formats: &FormatRegistry,
 ) -> Result<(), LibraryError> {
     let img = formats.decode(source)?;
+    let orientation = crate::library::exif::extract_exif(source)
+        .orientation
+        .unwrap_or(1);
+    let img = apply_orientation(img, orientation);
     let thumb = img.thumbnail(max_edge, max_edge);
     thumb
         .save_with_format(dest, image::ImageFormat::WebP)
         .map_err(|e| LibraryError::Thumbnail(e.to_string()))?;
     Ok(())
+}
+
+/// Rotate/flip `img` to match the EXIF orientation tag value (1–8).
+///
+/// EXIF orientation defines how the sensor data maps to the upright image.
+/// Value 1 means the pixel data is already correct; values 2–8 require a
+/// combination of rotation and/or mirror to produce a visually upright image.
+fn apply_orientation(img: image::DynamicImage, orientation: u8) -> image::DynamicImage {
+    use image::imageops;
+    match orientation {
+        2 => image::DynamicImage::from(imageops::flip_horizontal(&img)),
+        3 => image::DynamicImage::from(imageops::rotate180(&img)),
+        4 => image::DynamicImage::from(imageops::flip_vertical(&img)),
+        5 => image::DynamicImage::from(imageops::flip_horizontal(&imageops::rotate90(&img))),
+        6 => image::DynamicImage::from(imageops::rotate90(&img)),
+        7 => image::DynamicImage::from(imageops::flip_horizontal(&imageops::rotate270(&img))),
+        8 => image::DynamicImage::from(imageops::rotate270(&img)),
+        _ => img, // 1 or unknown — already upright
+    }
 }
 
 #[cfg(test)]
@@ -213,6 +237,37 @@ mod tests {
         assert!(events
             .iter()
             .any(|e| matches!(e, LibraryEvent::ThumbnailReady { .. })));
+    }
+
+    #[test]
+    fn apply_orientation_1_is_identity() {
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(4, 2));
+        let out = apply_orientation(img, 1);
+        assert_eq!((out.width(), out.height()), (4, 2));
+    }
+
+    #[test]
+    fn apply_orientation_6_swaps_dimensions() {
+        // Orientation 6 = rotate 90° CW: a 4×2 image becomes 2×4.
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(4, 2));
+        let out = apply_orientation(img, 6);
+        assert_eq!((out.width(), out.height()), (2, 4));
+    }
+
+    #[test]
+    fn apply_orientation_8_swaps_dimensions() {
+        // Orientation 8 = rotate 90° CCW: a 4×2 image becomes 2×4.
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(4, 2));
+        let out = apply_orientation(img, 8);
+        assert_eq!((out.width(), out.height()), (2, 4));
+    }
+
+    #[test]
+    fn apply_orientation_3_preserves_dimensions() {
+        // Orientation 3 = rotate 180°: dimensions stay the same.
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(4, 2));
+        let out = apply_orientation(img, 3);
+        assert_eq!((out.width(), out.height()), (4, 2));
     }
 
     #[tokio::test]
