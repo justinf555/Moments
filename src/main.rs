@@ -20,11 +20,11 @@
 
 mod application;
 mod config;
-mod window;
 mod library;
+mod ui;
 
 use self::application::MomentsApplication;
-use self::window::MomentsWindow;
+use self::ui::MomentsWindow;
 
 use config::{GETTEXT_PACKAGE, LOCALEDIR, PKGDATADIR};
 use gettextrs::{bind_textdomain_codeset, bindtextdomain, textdomain};

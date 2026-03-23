@@ -26,7 +26,7 @@ mod imp {
     use super::*;
 
     #[derive(Debug, Default, gtk::CompositeTemplate)]
-    #[template(resource = "/io/github/justinf555/Moments/window.ui")]
+    #[template(resource = "/io/github/justinf555/Moments/ui/window.ui")]
     pub struct MomentsWindow {
         // Template widgets
         #[template_child]
@@ -57,7 +57,9 @@ mod imp {
 
 glib::wrapper! {
     pub struct MomentsWindow(ObjectSubclass<imp::MomentsWindow>)
-        @extends gtk::Widget, gtk::Window, gtk::ApplicationWindow, adw::ApplicationWindow,        @implements gio::ActionGroup, gio::ActionMap;
+        @extends gtk::Widget, gtk::Window, gtk::ApplicationWindow, adw::ApplicationWindow,
+        @implements gio::ActionGroup, gio::ActionMap, gtk::Accessible, gtk::Buildable,
+                    gtk::ConstraintTarget, gtk::Native, gtk::Root, gtk::ShortcutManager;
 }
 
 impl MomentsWindow {

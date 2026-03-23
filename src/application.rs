@@ -24,7 +24,7 @@ use adw::subclass::prelude::*;
 use gtk::{gio, glib};
 
 use crate::config::VERSION;
-use crate::MomentsWindow;
+use crate::ui::MomentsWindow;
 
 mod imp {
     use super::*;
