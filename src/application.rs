@@ -26,7 +26,6 @@ use gettextrs::gettext;
 use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gio, glib};
-use gio::prelude::ApplicationExtManual as _;
 use tracing::{error, info, instrument};
 
 use crate::config::VERSION;
@@ -149,7 +148,10 @@ impl MomentsApplication {
 
     /// Called when the user completes the setup wizard.
     ///
-    /// Creates the bundle, persists the path to GSettings, then opens the library.
+    /// Creates the bundle, persists the path to GSettings, presents the main
+    /// window, closes the setup window, then loads the library asynchronously.
+    /// The main window is created before the setup window closes so there is
+    /// never a windowless state.
     #[instrument(skip(self, setup_win), fields(path = %path))]
     fn on_setup_complete(&self, setup_win: &MomentsSetupWindow, path: String) {
         let bundle_path = PathBuf::from(&path);
@@ -167,13 +169,19 @@ impl MomentsApplication {
             error!("failed to save library path to GSettings: {e}");
         }
 
-        // Pass setup_win into start_library so it can be closed *after* the main
-        // window is presented — closing it here would leave a windowless app, causing
-        // GTK to begin shutdown before the async factory future runs.
-        self.start_library(bundle, LibraryConfig::Local, Some(setup_win.clone().upcast::<gtk::Window>()));
+        // Present the main window first, then close setup — ensures there is
+        // always at least one window alive during the transition.
+        let window = MomentsWindow::new(self);
+        window.present();
+        setup_win.close();
+
+        self.load_library_async(bundle, LibraryConfig::Local, window);
     }
 
     /// Open an existing library from a saved path.
+    ///
+    /// Creates and presents the main window immediately (loading page) so
+    /// there is no windowless gap while the async factory runs.
     fn open_library(&self, path: PathBuf) {
         let (bundle, config) = match Bundle::open(&path) {
             Ok(result) => result,
@@ -182,52 +190,36 @@ impl MomentsApplication {
                 return;
             }
         };
-        self.start_library(bundle, config, None);
+
+        let window = MomentsWindow::new(self);
+        window.present();
+
+        self.load_library_async(bundle, config, window);
     }
 
-    /// Async-start the library via the factory and present the main window on success.
+    /// Spawn the async factory call on the glib main context.
     ///
-    /// `outgoing_window` is an optional window to close *after* the main window is
-    /// presented, preventing a windowless state that would trigger GTK shutdown.
-    ///
-    /// For the returning-user path there is no outgoing window, so we call
-    /// `app.hold()` before spawning to prevent GApplication from treating the
-    /// zero-window gap as a signal to shut down. The hold is released once a
-    /// window is visible (or on error).
-    fn start_library(
-        &self,
-        bundle: Bundle,
-        config: LibraryConfig,
-        outgoing_window: Option<gtk::Window>,
-    ) {
+    /// On success, stores the library and switches `window` to its content page.
+    fn load_library_async(&self, bundle: Bundle, config: LibraryConfig, window: MomentsWindow) {
         let (sender, receiver) = std::sync::mpsc::channel::<LibraryEvent>();
         *self.imp().library_events.borrow_mut() = Some(receiver);
-
-        // Hold prevents auto-shutdown while there are no live windows.
-        // Upcast to gio::Application to avoid ambiguity with PermissionExt::release.
-        self.upcast_ref::<gio::Application>().hold();
 
         glib::MainContext::default().spawn_local(glib::clone!(
             #[weak(rename_to = app)]
             self,
+            #[weak]
+            window,
             async move {
                 match LibraryFactory::create(bundle, config, sender).await {
                     Ok(library) => {
-                        info!("library ready, presenting main window");
+                        info!("library ready");
                         *app.imp().library.borrow_mut() = Some(library);
-                        let window = MomentsWindow::new(&app);
-                        window.present();
-                        // Safe to close the outgoing window now that a new one is visible.
-                        if let Some(ref w) = outgoing_window {
-                            w.close();
-                        }
+                        window.set_library_ready();
                     }
                     Err(e) => {
                         error!("failed to open library: {e}");
                     }
                 }
-                // Release the hold regardless of success or failure.
-                app.upcast_ref::<gio::Application>().release();
             }
         ));
     }

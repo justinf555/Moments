@@ -21,6 +21,7 @@
 use gtk::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gio, glib};
+use tracing::debug;
 
 mod imp {
     use super::*;
@@ -28,7 +29,8 @@ mod imp {
     #[derive(Debug, Default, gtk::CompositeTemplate)]
     #[template(resource = "/io/github/justinf555/Moments/ui/window.ui")]
     pub struct MomentsWindow {
-        // Template widgets
+        #[template_child]
+        pub main_stack: TemplateChild<gtk::Stack>,
         #[template_child]
         pub label: TemplateChild<gtk::Label>,
     }
@@ -67,5 +69,11 @@ impl MomentsWindow {
         glib::Object::builder()
             .property("application", application)
             .build()
+    }
+
+    /// Switch from the loading page to the content page once the library is ready.
+    pub fn set_library_ready(&self) {
+        debug!("switching main window to content page");
+        self.imp().main_stack.set_visible_child_name("content");
     }
 }
