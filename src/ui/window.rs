@@ -48,9 +48,6 @@ mod imp {
 
         /// Set up once in `setup()` — holds live references to all registered views.
         pub coordinator: OnceCell<Rc<RefCell<ContentCoordinator>>>,
-        /// The photos/favourites grid view — stored so sidebar navigation can
-        /// pop back to the grid when the viewer is open.
-        pub photos_view: OnceCell<Rc<PhotoGridView>>,
     }
 
     #[glib::object_subclass]
@@ -93,14 +90,19 @@ impl MomentsWindow {
     ///
     /// Builds the sidebar, registers all content views with the coordinator,
     /// then switches `main_stack` from "loading" to "content".
+    /// Wire the library into the shell and switch to the content page.
+    ///
+    /// Creates a separate `PhotoGridModel` + `PhotoGridView` for each sidebar
+    /// route. Returns all models so the caller can forward library events
+    /// (thumbnails, import completion) to them.
     pub fn setup(
         &self,
-        model: Rc<PhotoGridModel>,
         library: Arc<dyn Library>,
         tokio: tokio::runtime::Handle,
         settings: gio::Settings,
-    ) {
+    ) -> Vec<Rc<PhotoGridModel>> {
         let imp = self.imp();
+        use crate::library::media::MediaFilter;
 
         // Build sidebar — MomentsSidebar is already an AdwNavigationPage subclass.
         let sidebar = MomentsSidebar::new();
@@ -115,14 +117,33 @@ impl MomentsWindow {
         coordinator.register("empty", Rc::new(EmptyLibraryView::new()));
 
         // Register the Photos view.
-        let photos_view = Rc::new(PhotoGridView::new(library, tokio, settings));
-        photos_view.set_model(Rc::clone(&model));
+        let photos_model = Rc::new(PhotoGridModel::new(
+            Arc::clone(&library),
+            tokio.clone(),
+            MediaFilter::All,
+        ));
+        let photos_view = Rc::new(PhotoGridView::new(
+            Arc::clone(&library),
+            tokio.clone(),
+            settings.clone(),
+        ));
+        photos_view.set_model(Rc::clone(&photos_model));
         self.insert_action_group("view", Some(photos_view.view_actions()));
-        imp.photos_view
-            .set(Rc::clone(&photos_view))
-            .expect("photos_view set once");
         coordinator.register("photos", photos_view);
-        coordinator.register_alias("favorites", "photos");
+
+        // Register the Favorites view.
+        let favorites_model = Rc::new(PhotoGridModel::new(
+            Arc::clone(&library),
+            tokio.clone(),
+            MediaFilter::Favorites,
+        ));
+        let favorites_view = Rc::new(PhotoGridView::new(
+            Arc::clone(&library),
+            tokio.clone(),
+            settings,
+        ));
+        favorites_view.set_model(Rc::clone(&favorites_model));
+        coordinator.register("favorites", favorites_view);
 
         // Wrap the content stack in a NavigationPage for the split view.
         let content_nav_page = adw::NavigationPage::builder()
@@ -133,51 +154,30 @@ impl MomentsWindow {
 
         let coordinator = Rc::new(RefCell::new(coordinator));
 
-        // Toggle between empty and photos based on store item count.
-        // Only switches the stack page — does NOT call navigate() which
-        // would trigger on_navigate → set_filter → reload and cause a
-        // re-entrant RefCell borrow panic during on_page_loaded.
+        // Start on "empty" — items-changed will switch to "photos" once
+        // the first page arrives.
+        coordinator.borrow().navigate("empty");
+
+        // Toggle between empty and content based on store item count.
+        // Connected to the photos store (the default view).
         {
             let stack = content_stack.clone();
-            model.store.connect_items_changed(move |store, _, _, _| {
+            photos_model.store.connect_items_changed(move |store, _, _, _| {
                 let target = if store.n_items() > 0 { "photos" } else { "empty" };
                 stack.set_visible_child_name(target);
             });
         }
-
-        // Start on "empty" — items-changed will switch to "photos" once
-        // the first page arrives. This must come after the signal is
-        // connected but before select_first triggers sidebar navigation.
-        coordinator.borrow().navigate("empty");
 
         imp.coordinator
             .set(coordinator)
             .expect("coordinator set once in setup()");
 
         // Wire sidebar selection → coordinator navigation.
-        // The coordinator calls on_navigate() on the target view, which
-        // handles filter changes and popping back to the grid.
-        // Track the current route to avoid re-navigating when GTK re-emits
-        // row-selected for the same row (e.g. on focus changes).
         let obj_weak = self.downgrade();
-        let store_for_sidebar = model.store.clone();
-        let current_route: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
         sidebar.connect_route_selected(move |id| {
-            {
-                let current = current_route.borrow();
-                if *current == id {
-                    return;
-                }
-            }
-            *current_route.borrow_mut() = id.to_owned();
-
             let Some(win) = obj_weak.upgrade() else { return };
             if let Some(coordinator) = win.imp().coordinator.get() {
-                if store_for_sidebar.n_items() == 0 {
-                    coordinator.borrow().navigate("empty");
-                } else {
-                    coordinator.borrow().navigate(id);
-                }
+                coordinator.borrow().navigate(id);
             }
         });
 
@@ -188,6 +188,8 @@ impl MomentsWindow {
 
         debug!("switching main window to content page");
         imp.main_stack.set_visible_child_name("content");
+
+        vec![photos_model, favorites_model]
     }
 
     /// Install a `win.toggle-sidebar` boolean action wired to the split view.

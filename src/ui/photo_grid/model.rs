@@ -40,28 +40,21 @@ pub struct PhotoGridModel {
 }
 
 impl PhotoGridModel {
-    pub fn new(library: Arc<dyn Library>, tokio: tokio::runtime::Handle) -> Self {
+    pub fn new(
+        library: Arc<dyn Library>,
+        tokio: tokio::runtime::Handle,
+        filter: MediaFilter,
+    ) -> Self {
         Self {
             store: gio::ListStore::new::<MediaItemObject>(),
             library,
             tokio,
-            filter: Cell::new(MediaFilter::All),
+            filter: Cell::new(filter),
             cursor: RefCell::new(None),
             loading: Cell::new(false),
             has_more: Cell::new(true),
             id_index: RefCell::new(HashMap::new()),
         }
-    }
-
-    /// Change the active filter and reload from the first page.
-    ///
-    /// No-op if the filter is already the requested value.
-    pub fn set_filter(self: &Rc<Self>, filter: MediaFilter) {
-        if self.filter.get() == filter {
-            return;
-        }
-        self.filter.set(filter);
-        self.reload();
     }
 
     /// Clear all items and reload from the first page.
