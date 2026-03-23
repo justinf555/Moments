@@ -34,5 +34,14 @@ jobs:
           key: fedora43-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: fedora43-cargo-
 
+      - name: Generate config.rs stub
+        run: |
+          cat > src/config.rs <<'EOF'
+          pub static VERSION: &str = env!("CARGO_PKG_VERSION");
+          pub static GETTEXT_PACKAGE: &str = "moments";
+          pub static LOCALEDIR: &str = "/usr/share/locale";
+          pub static PKGDATADIR: &str = "/usr/share/moments";
+          EOF
+
       - name: Run tests
         run: cargo test
