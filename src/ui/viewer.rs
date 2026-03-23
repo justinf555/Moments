@@ -8,6 +8,7 @@ use tracing::{debug, error};
 
 use crate::library::media::MediaMetadataRecord;
 use crate::library::Library;
+use crate::ui::model_registry::ModelRegistry;
 use crate::ui::photo_grid::item::MediaItemObject;
 
 pub mod info_panel;
@@ -46,6 +47,7 @@ struct ViewerInner {
     current_metadata: RefCell<Option<MediaMetadataRecord>>,
     library: Arc<dyn Library>,
     tokio: tokio::runtime::Handle,
+    registry: Rc<ModelRegistry>,
 }
 
 impl ViewerInner {
@@ -265,7 +267,7 @@ pub struct PhotoViewer {
 }
 
 impl PhotoViewer {
-    pub fn new(library: Arc<dyn Library>, tokio: tokio::runtime::Handle) -> Self {
+    pub fn new(library: Arc<dyn Library>, tokio: tokio::runtime::Handle, registry: Rc<ModelRegistry>) -> Self {
         // ── Header bar ───────────────────────────────────────────────────────
         let header = adw::HeaderBar::new();
         let info_toggle = gtk::ToggleButton::builder()
@@ -375,6 +377,7 @@ impl PhotoViewer {
             current_metadata: RefCell::new(None),
             library,
             tokio,
+            registry,
         });
 
         // ── Signal handlers ───────────────────────────────────────────────────
@@ -423,14 +426,16 @@ impl PhotoViewer {
                 let Some(obj) = items.get(idx) else { return };
 
                 let new_fav = !obj.is_favorite();
-                obj.set_is_favorite(new_fav);
                 btn.set_icon_name(if new_fav {
                     "starred-symbolic"
                 } else {
                     "non-starred-symbolic"
                 });
 
+                // Broadcast to all models so filtered views update.
                 let id = obj.item().id.clone();
+                inner.registry.on_favorite_changed(&id, new_fav);
+
                 let lib = Arc::clone(&inner.library);
                 let tk = inner.tokio.clone();
                 glib::MainContext::default().spawn_local(async move {
