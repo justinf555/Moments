@@ -574,7 +574,7 @@ impl PhotoGridView {
                             match result {
                                 Ok(Ok(())) => {
                                     for id in &ids_bc {
-                                        reg.on_trashed(id, false);
+                                        reg.on_deleted(id);
                                     }
                                 }
                                 Ok(Err(e)) => tracing::error!("delete_permanently failed: {e}"),

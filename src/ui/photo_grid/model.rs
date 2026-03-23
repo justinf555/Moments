@@ -202,6 +202,12 @@ impl PhotoGridModel {
         }
     }
 
+    /// Called when an item is permanently deleted.
+    /// Removes from all views — no reload needed.
+    pub fn on_deleted(self: &Rc<Self>, id: &MediaId) {
+        self.remove_item(id);
+    }
+
     fn on_page_loaded(&self, items: Vec<MediaItem>) {
         let count = items.len();
         debug!("page loaded: {count} items");

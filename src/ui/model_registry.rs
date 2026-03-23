@@ -52,6 +52,14 @@ impl ModelRegistry {
         }
     }
 
+    /// Broadcast a permanent deletion to all registered models.
+    /// Removes the item from all views — no reload.
+    pub fn on_deleted(&self, id: &MediaId) {
+        for model in self.models.borrow().iter() {
+            model.on_deleted(id);
+        }
+    }
+
     /// Reload all registered models (e.g. after import completes).
     pub fn reload_all(&self) {
         for model in self.models.borrow().iter() {
