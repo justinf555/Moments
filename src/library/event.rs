@@ -34,6 +34,11 @@ pub enum LibraryEvent {
 
     /// Import pipeline finished (successfully or with per-file failures).
     ImportComplete(ImportSummary),
+
+    // ── Thumbnail events ───────────────────────────────────────────────────────
+
+    /// The grid thumbnail for an asset has been generated and written to disk.
+    ThumbnailReady { media_id: MediaId },
 }
 
 #[cfg(test)]

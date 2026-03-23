@@ -18,6 +18,9 @@ pub enum LibraryError {
 
     #[error("runtime error: {0}")]
     Runtime(String),
+
+    #[error("thumbnail error: {0}")]
+    Thumbnail(String),
 }
 
 #[cfg(test)]

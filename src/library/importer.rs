@@ -9,6 +9,7 @@ use super::error::LibraryError;
 use super::event::LibraryEvent;
 use super::import::{ImportSummary, SkipReason, SUPPORTED_EXTENSIONS};
 use super::media::{LibraryMedia, MediaId, MediaRecord};
+use super::thumbnailer::ThumbnailJob;
 
 /// Drives a single import run for the local backend.
 ///
@@ -19,16 +20,24 @@ use super::media::{LibraryMedia, MediaId, MediaRecord};
 pub struct ImportJob {
     /// Root `originals/` directory inside the bundle.
     originals_dir: PathBuf,
-    /// Open database — used for hash-based duplicate detection.
+    /// Root `thumbnails/` directory inside the bundle.
+    thumbnails_dir: PathBuf,
+    /// Open database — used for hash-based duplicate detection and thumbnail tracking.
     db: Database,
     /// Shared event sender for the lifetime of the backend.
     events: Sender<LibraryEvent>,
 }
 
 impl ImportJob {
-    pub fn new(originals_dir: PathBuf, db: Database, events: Sender<LibraryEvent>) -> Self {
+    pub fn new(
+        originals_dir: PathBuf,
+        thumbnails_dir: PathBuf,
+        db: Database,
+        events: Sender<LibraryEvent>,
+    ) -> Self {
         Self {
             originals_dir,
+            thumbnails_dir,
             db,
             events,
         }
@@ -160,10 +169,18 @@ impl ImportJob {
         debug!(?target, "imported");
         self.events
             .send(LibraryEvent::AssetImported {
-                media_id,
-                path: target,
+                media_id: media_id.clone(),
+                path: target.clone(),
             })
             .ok();
+
+        // ── 8. Spawn thumbnail generation (non-blocking, best-effort) ─────────
+        let thumb_job = ThumbnailJob::new(
+            self.thumbnails_dir.clone(),
+            self.db.clone(),
+            self.events.clone(),
+        );
+        tokio::spawn(async move { thumb_job.generate(media_id, target).await });
 
         // Increment summary via the Ok(None) sentinel — summary is updated
         // by the caller when it sees AssetImported was emitted.
@@ -289,12 +306,13 @@ mod tests {
         let src_dir = tempdir().unwrap();
         let bundle_dir = tempdir().unwrap();
         let originals = bundle_dir.path().join("originals");
+        let thumbnails = bundle_dir.path().join("thumbnails");
         let db = open_test_db(bundle_dir.path()).await;
 
         let photo = make_file(src_dir.path(), "photo.jpg", b"fake jpeg");
 
         let (tx, rx) = mpsc::channel();
-        ImportJob::new(originals, db, tx).run(vec![photo]).await;
+        ImportJob::new(originals, thumbnails, db, tx).run(vec![photo]).await;
 
         let events: Vec<_> = rx.try_iter().collect();
         assert!(events
@@ -319,12 +337,13 @@ mod tests {
         let src_dir = tempdir().unwrap();
         let bundle_dir = tempdir().unwrap();
         let originals = bundle_dir.path().join("originals");
+        let thumbnails = bundle_dir.path().join("thumbnails");
         let db = open_test_db(bundle_dir.path()).await;
 
         let file = make_file(src_dir.path(), "document.pdf", b"not a photo");
 
         let (tx, rx) = mpsc::channel();
-        ImportJob::new(originals, db, tx).run(vec![file]).await;
+        ImportJob::new(originals, thumbnails, db, tx).run(vec![file]).await;
 
         let events: Vec<_> = rx.try_iter().collect();
         let summary = events
@@ -351,14 +370,15 @@ mod tests {
         let photo = make_file(src_dir.path(), "dup.jpg", b"fake jpeg content");
 
         // First import
+        let thumbnails = bundle_dir.path().join("thumbnails");
         let (tx, rx) = mpsc::channel();
-        ImportJob::new(originals.clone(), db.clone(), tx.clone())
+        ImportJob::new(originals.clone(), thumbnails.clone(), db.clone(), tx.clone())
             .run(vec![photo.clone()])
             .await;
 
         // Second import — same content, even if renamed
         let photo2 = make_file(src_dir.path(), "dup_renamed.jpg", b"fake jpeg content");
-        ImportJob::new(originals, db, tx).run(vec![photo2]).await;
+        ImportJob::new(originals, thumbnails, db, tx).run(vec![photo2]).await;
 
         let events: Vec<_> = rx.try_iter().collect();
         let summaries: Vec<_> = events
@@ -388,10 +408,11 @@ mod tests {
 
         let bundle_dir = tempdir().unwrap();
         let originals = bundle_dir.path().join("originals");
+        let thumbnails = bundle_dir.path().join("thumbnails");
         let db = open_test_db(bundle_dir.path()).await;
 
         let (tx, rx) = mpsc::channel();
-        ImportJob::new(originals, db, tx)
+        ImportJob::new(originals, thumbnails, db, tx)
             .run(vec![src_dir.path().to_path_buf()])
             .await;
 
