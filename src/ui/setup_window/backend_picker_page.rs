@@ -7,7 +7,7 @@ mod imp {
     use super::*;
 
     #[derive(Default, gtk::CompositeTemplate)]
-    #[template(resource = "/io/github/justinf555/Moments/ui/backend_picker_page.ui")]
+    #[template(resource = "/io/github/justinf555/Moments/ui/setup_window/backend_picker_page.ui")]
     pub struct MomentsBackendPickerPage {
         #[template_child]
         pub local_row: TemplateChild<adw::ActionRow>,

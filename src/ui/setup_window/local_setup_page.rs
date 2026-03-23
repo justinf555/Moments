@@ -11,7 +11,7 @@ mod imp {
     use super::*;
 
     #[derive(Default, gtk::CompositeTemplate)]
-    #[template(resource = "/io/github/justinf555/Moments/ui/local_setup_page.ui")]
+    #[template(resource = "/io/github/justinf555/Moments/ui/setup_window/local_setup_page.ui")]
     pub struct MomentsLocalSetupPage {
         #[template_child]
         pub path_row: TemplateChild<adw::ActionRow>,
