@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 use tracing::{info, instrument};
 
 use super::error::LibraryError;
-use super::media::{LibraryMedia, MediaId, MediaRecord};
+use super::media::{LibraryMedia, MediaId, MediaMetadataRecord, MediaRecord};
 use super::thumbnail::ThumbnailStatus;
 
 /// Manages the library's SQLite database.
@@ -129,14 +129,51 @@ impl LibraryMedia for Database {
 
     async fn insert_media(&self, record: &MediaRecord) -> Result<(), LibraryError> {
         sqlx::query(
-            "INSERT INTO media (id, relative_path, original_filename, file_size, imported_at)
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO media (id, relative_path, original_filename, file_size, imported_at,
+                                media_type, taken_at, width, height, orientation)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(record.id.as_str())
         .bind(&record.relative_path)
         .bind(&record.original_filename)
         .bind(record.file_size)
         .bind(record.imported_at)
+        .bind(record.media_type as i64)
+        .bind(record.taken_at)
+        .bind(record.width)
+        .bind(record.height)
+        .bind(record.orientation as i64)
+        .execute(&self.pool)
+        .await
+        .map_err(LibraryError::Db)?;
+        Ok(())
+    }
+
+    async fn insert_media_metadata(
+        &self,
+        record: &MediaMetadataRecord,
+    ) -> Result<(), LibraryError> {
+        if !record.has_data() {
+            return Ok(());
+        }
+        sqlx::query(
+            "INSERT INTO media_metadata
+                (media_id, camera_make, camera_model, lens_model, aperture, shutter_str,
+                 iso, focal_length, gps_lat, gps_lon, gps_alt, color_space)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(record.media_id.as_str())
+        .bind(&record.camera_make)
+        .bind(&record.camera_model)
+        .bind(&record.lens_model)
+        .bind(record.aperture)
+        .bind(&record.shutter_str)
+        .bind(record.iso.map(|v| v as i64))
+        .bind(record.focal_length)
+        .bind(record.gps_lat)
+        .bind(record.gps_lon)
+        .bind(record.gps_alt)
+        .bind(&record.color_space)
         .execute(&self.pool)
         .await
         .map_err(LibraryError::Db)?;
@@ -147,11 +184,26 @@ impl LibraryMedia for Database {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::library::media::LibraryMedia;
+    use crate::library::media::{LibraryMedia, MediaType};
     use tempfile::tempdir;
 
     async fn open_test_db(dir: &std::path::Path) -> Database {
         Database::open(&dir.join("test.db")).await.unwrap()
+    }
+
+    fn test_record(id: MediaId) -> MediaRecord {
+        MediaRecord {
+            id,
+            relative_path: "2025/01/15/photo.jpg".to_string(),
+            original_filename: "photo.jpg".to_string(),
+            file_size: 1024,
+            imported_at: 1_700_000_000,
+            media_type: MediaType::Image,
+            taken_at: None,
+            width: None,
+            height: None,
+            orientation: 1,
+        }
     }
 
     #[tokio::test]
@@ -176,15 +228,7 @@ mod tests {
         let db = open_test_db(dir.path()).await;
         let id = MediaId::from_file(std::path::Path::new(file!())).await.unwrap();
 
-        db.insert_media(&MediaRecord {
-            id: id.clone(),
-            relative_path: "2025/01/15/photo.jpg".to_string(),
-            original_filename: "photo.jpg".to_string(),
-            file_size: 1024,
-            imported_at: 1_700_000_000,
-        })
-        .await
-        .unwrap();
+        db.insert_media(&test_record(id.clone())).await.unwrap();
 
         assert!(db.media_exists(&id).await.unwrap());
     }
@@ -195,13 +239,7 @@ mod tests {
         let db = open_test_db(dir.path()).await;
         let id = MediaId::from_file(std::path::Path::new(file!())).await.unwrap();
 
-        let record = MediaRecord {
-            id: id.clone(),
-            relative_path: "2025/01/15/photo.jpg".to_string(),
-            original_filename: "photo.jpg".to_string(),
-            file_size: 1024,
-            imported_at: 1_700_000_000,
-        };
+        let record = test_record(id.clone());
 
         db.insert_media(&record).await.unwrap();
         assert!(db.insert_media(&record).await.is_err());

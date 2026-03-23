@@ -7,8 +7,9 @@ use tracing::{debug, info, instrument, warn};
 use super::db::Database;
 use super::error::LibraryError;
 use super::event::LibraryEvent;
+use super::exif::extract_exif;
 use super::import::{ImportSummary, SkipReason, SUPPORTED_EXTENSIONS};
-use super::media::{LibraryMedia, MediaId, MediaRecord};
+use super::media::{LibraryMedia, MediaId, MediaMetadataRecord, MediaRecord, MediaType};
 use super::thumbnailer::ThumbnailJob;
 
 /// Drives a single import run for the local backend.
@@ -116,8 +117,22 @@ impl ImportJob {
             return Ok(Some(SkipReason::UnsupportedFormat));
         }
 
-        // ── 2. Hash the source file ───────────────────────────────────────────
-        let media_id = MediaId::from_file(source).await?;
+        // ── 2. Hash + EXIF extract (single blocking task, one file read) ─────
+        let source_clone = source.to_path_buf();
+        let (media_id, exif) =
+            tokio::task::spawn_blocking(move || -> Result<_, LibraryError> {
+                let id = {
+                    let file = std::fs::File::open(&source_clone).map_err(LibraryError::Io)?;
+                    let mut reader = std::io::BufReader::new(file);
+                    let mut hasher = blake3::Hasher::new();
+                    std::io::copy(&mut reader, &mut hasher).map_err(LibraryError::Io)?;
+                    MediaId::new(hasher.finalize().to_hex().to_string())
+                };
+                let exif = extract_exif(&source_clone);
+                Ok((id, exif))
+            })
+            .await
+            .map_err(|e| LibraryError::Runtime(e.to_string()))??;
 
         // ── 3. Duplicate check via DB ─────────────────────────────────────────
         if self.db.media_exists(&media_id).await? {
@@ -126,7 +141,9 @@ impl ImportJob {
         }
 
         // ── 4. Compute destination path ───────────────────────────────────────
-        let base_target = compute_base_target(source, &self.originals_dir).await?;
+        // Use EXIF capture time if available; fall back to file mtime.
+        let base_target =
+            compute_base_target(source, &self.originals_dir, exif.captured_at).await?;
         let target = resolve_collision(base_target);
 
         let relative_path = target
@@ -162,6 +179,28 @@ impl ImportJob {
                 original_filename,
                 file_size,
                 imported_at,
+                media_type: MediaType::Image,
+                taken_at: exif.captured_at,
+                width: exif.width.map(|w| w as i64),
+                height: exif.height.map(|h| h as i64),
+                orientation: exif.orientation.unwrap_or(1),
+            })
+            .await?;
+
+        self.db
+            .insert_media_metadata(&MediaMetadataRecord {
+                media_id: media_id.clone(),
+                camera_make: exif.camera_make,
+                camera_model: exif.camera_model,
+                lens_model: exif.lens_model,
+                aperture: exif.aperture,
+                shutter_str: exif.shutter_str,
+                iso: exif.iso,
+                focal_length: exif.focal_length,
+                gps_lat: exif.gps_lat,
+                gps_lon: exif.gps_lon,
+                gps_alt: exif.gps_alt,
+                color_space: exif.color_space,
             })
             .await?;
 
@@ -226,20 +265,27 @@ fn walk_dir(dir: &Path, out: &mut Vec<PathBuf>) {
 // ── Path helpers ───────────────────────────────────────────────────────────────
 
 /// Compute the base destination path (`YYYY/MM/DD/filename.ext`) for `source`
-/// inside `originals_dir` using the file's last-modified timestamp.
+/// inside `originals_dir`.
 ///
-/// Returns the path without collision resolution. EXIF-based dating is
-/// implemented in issue #7.
+/// Uses `exif_captured_at` (UTC Unix seconds) when available; falls back to
+/// the file's last-modified timestamp.
 async fn compute_base_target(
     source: &Path,
     originals_dir: &Path,
+    exif_captured_at: Option<i64>,
 ) -> Result<PathBuf, LibraryError> {
-    let metadata = tokio::fs::metadata(source)
-        .await
-        .map_err(LibraryError::Io)?;
-    let modified = metadata.modified().map_err(LibraryError::Io)?;
+    let datetime: chrono::DateTime<chrono::Local> = if let Some(ts) = exif_captured_at {
+        chrono::DateTime::from_timestamp(ts, 0)
+            .map(|utc| utc.with_timezone(&chrono::Local))
+            .unwrap_or_else(chrono::Local::now)
+    } else {
+        let metadata = tokio::fs::metadata(source)
+            .await
+            .map_err(LibraryError::Io)?;
+        let modified = metadata.modified().map_err(LibraryError::Io)?;
+        modified.into()
+    };
 
-    let datetime: chrono::DateTime<chrono::Local> = modified.into();
     let date_dir = originals_dir
         .join(datetime.format("%Y").to_string())
         .join(datetime.format("%m").to_string())
