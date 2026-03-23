@@ -134,10 +134,22 @@ fn generate_thumbnail(
     formats: &FormatRegistry,
 ) -> Result<(), LibraryError> {
     let img = formats.decode(source)?;
-    let orientation = crate::library::exif::extract_exif(source)
-        .orientation
-        .unwrap_or(1);
-    let img = apply_orientation(img, orientation);
+
+    // Apply EXIF orientation for images only — videos don't have EXIF.
+    let img = if formats.is_video(
+        &source
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase())
+            .unwrap_or_default(),
+    ) {
+        img
+    } else {
+        let orientation = crate::library::exif::extract_exif(source)
+            .orientation
+            .unwrap_or(1);
+        apply_orientation(img, orientation)
+    };
     let thumb = img.thumbnail(max_edge, max_edge);
     thumb
         .save_with_format(dest, image::ImageFormat::WebP)
