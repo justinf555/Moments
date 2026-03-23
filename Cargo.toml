@@ -40,3 +40,18 @@ rawler = "0.7.2"
 
 [dev-dependencies]
 tempfile = "3"
+
+# Optimise image-processing crates in debug builds.
+# Without this, JPEG decode of a large image can take several seconds in
+# unoptimised code. Release builds are always optimised; this only affects
+# local development / GNOME Builder runs.
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.rawler]
+opt-level = 3
+[profile.dev.package.libheif-rs]
+opt-level = 3
