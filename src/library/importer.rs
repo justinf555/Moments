@@ -8,7 +8,7 @@ use super::db::Database;
 use super::error::LibraryError;
 use super::event::LibraryEvent;
 use super::import::{ImportSummary, SkipReason, SUPPORTED_EXTENSIONS};
-use super::media::{MediaId, MediaRecord};
+use super::media::{LibraryMedia, MediaId, MediaRecord};
 
 /// Drives a single import run for the local backend.
 ///

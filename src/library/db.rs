@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 use tracing::{info, instrument};
 
 use super::error::LibraryError;
-use super::media::{MediaId, MediaRecord};
+use super::media::{LibraryMedia, MediaId, MediaRecord};
 
 /// Manages the library's SQLite database.
 ///
@@ -51,9 +51,11 @@ impl Database {
         info!("database ready");
         Ok(Self { pool })
     }
+}
 
-    /// Return `true` if a media asset with this [`MediaId`] is already in the library.
-    pub async fn media_exists(&self, id: &MediaId) -> Result<bool, LibraryError> {
+#[async_trait::async_trait]
+impl LibraryMedia for Database {
+    async fn media_exists(&self, id: &MediaId) -> Result<bool, LibraryError> {
         let id_str = id.as_str();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM media WHERE id = ?")
             .bind(id_str)
@@ -63,8 +65,7 @@ impl Database {
         Ok(count > 0)
     }
 
-    /// Persist a newly imported media asset.
-    pub async fn insert_media(&self, record: &MediaRecord) -> Result<(), LibraryError> {
+    async fn insert_media(&self, record: &MediaRecord) -> Result<(), LibraryError> {
         sqlx::query(
             "INSERT INTO media (id, relative_path, original_filename, file_size, imported_at)
              VALUES (?, ?, ?, ?, ?)",
@@ -84,6 +85,7 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::library::media::LibraryMedia;
     use tempfile::tempdir;
 
     async fn open_test_db(dir: &std::path::Path) -> Database {

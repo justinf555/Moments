@@ -11,6 +11,7 @@ use super::error::LibraryError;
 use super::event::LibraryEvent;
 use super::import::LibraryImport;
 use super::importer::ImportJob;
+use super::media::{LibraryMedia, MediaId, MediaRecord};
 use super::storage::LibraryStorage;
 
 /// Local filesystem backend.
@@ -82,6 +83,17 @@ impl LibraryImport for LocalLibrary {
         );
         self.tokio.spawn(async move { job.run(sources).await });
         Ok(())
+    }
+}
+
+#[async_trait]
+impl LibraryMedia for LocalLibrary {
+    async fn media_exists(&self, id: &MediaId) -> Result<bool, LibraryError> {
+        self.db.media_exists(id).await
+    }
+
+    async fn insert_media(&self, record: &MediaRecord) -> Result<(), LibraryError> {
+        self.db.insert_media(record).await
     }
 }
 

@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use async_trait::async_trait;
 use tracing::instrument;
 
 use super::error::LibraryError;
@@ -49,6 +50,25 @@ impl std::fmt::Display for MediaId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
     }
+}
+
+/// Feature trait for media asset persistence.
+///
+/// Implemented by every backend that stores media records. Exposes the
+/// operations needed by the import pipeline today and will grow to include
+/// query methods (e.g. `list_media`, `get_media`) when the photo grid
+/// (issue #8) needs them.
+///
+/// `Database` implements this trait with the SQL logic. `LocalLibrary`
+/// delegates to its `Database`. The GTK layer calls these methods through
+/// the `Library` supertrait — it never touches `Database` directly.
+#[async_trait]
+pub trait LibraryMedia: Send + Sync {
+    /// Return `true` if an asset with this [`MediaId`] is already stored.
+    async fn media_exists(&self, id: &MediaId) -> Result<bool, LibraryError>;
+
+    /// Persist a newly imported media asset record.
+    async fn insert_media(&self, record: &MediaRecord) -> Result<(), LibraryError>;
 }
 
 /// A row in the `media` table.

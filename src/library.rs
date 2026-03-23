@@ -14,6 +14,7 @@ pub use error::LibraryError;
 pub use event::LibraryEvent;
 
 use import::LibraryImport;
+use media::LibraryMedia;
 use storage::LibraryStorage;
 
 /// The public interface for a Moments library backend.
@@ -25,8 +26,9 @@ use storage::LibraryStorage;
 /// New capabilities are added as additional sub-traits per feature issue:
 /// - [`LibraryStorage`] — lifecycle (open / close)
 /// - [`LibraryImport`]  — photo / video import (issue #5)
+/// - [`LibraryMedia`]   — media asset persistence (issue #25)
 ///
 /// `close()` is inherited from `LibraryStorage` and is not duplicated here.
-pub trait Library: LibraryStorage + LibraryImport {}
+pub trait Library: LibraryStorage + LibraryImport + LibraryMedia {}
 
-impl<T: LibraryStorage + LibraryImport> Library for T {}
+impl<T: LibraryStorage + LibraryImport + LibraryMedia> Library for T {}
