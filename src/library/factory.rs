@@ -1,4 +1,4 @@
-use std::sync::mpsc::Sender;
+use std::sync::{mpsc::Sender, Arc};
 
 use tokio::runtime::Handle;
 use tracing::instrument;
@@ -32,11 +32,11 @@ impl LibraryFactory {
         config: LibraryConfig,
         events: Sender<LibraryEvent>,
         tokio: Handle,
-    ) -> Result<Box<dyn Library>, LibraryError> {
+    ) -> Result<Arc<dyn Library>, LibraryError> {
         match config {
             LibraryConfig::Local => {
                 let library = LocalLibrary::open(bundle, events, tokio).await?;
-                Ok(Box::new(library))
+                Ok(Arc::new(library))
             }
             LibraryConfig::Immich { .. } => {
                 // Implemented in issue #14 — Immich backend

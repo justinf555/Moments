@@ -13,9 +13,6 @@ pub mod storage;
 pub mod thumbnail;
 pub mod thumbnailer;
 
-pub use error::LibraryError;
-pub use event::LibraryEvent;
-
 use import::LibraryImport;
 use media::LibraryMedia;
 use storage::LibraryStorage;
@@ -34,6 +31,6 @@ use thumbnail::LibraryThumbnail;
 /// - [`LibraryThumbnail`] — thumbnail generation and path resolution (issue #6)
 ///
 /// `close()` is inherited from `LibraryStorage` and is not duplicated here.
-pub trait Library: LibraryStorage + LibraryImport + LibraryMedia + LibraryThumbnail {}
+pub trait Library: LibraryStorage + LibraryImport + LibraryMedia + LibraryThumbnail + Send + Sync {}
 
-impl<T: LibraryStorage + LibraryImport + LibraryMedia + LibraryThumbnail> Library for T {}
+impl<T: LibraryStorage + LibraryImport + LibraryMedia + LibraryThumbnail + Send + Sync> Library for T {}

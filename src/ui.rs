@@ -1,3 +1,4 @@
+pub mod photo_grid;
 pub mod setup_window;
 pub mod window;
 

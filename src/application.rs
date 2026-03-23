@@ -20,7 +20,8 @@
 
 use std::cell::{OnceCell, RefCell};
 use std::path::PathBuf;
-use std::sync::mpsc::Receiver;
+use std::rc::Rc;
+use std::sync::{mpsc::Receiver, Arc};
 
 use gettextrs::gettext;
 use adw::prelude::*;
@@ -34,6 +35,7 @@ use crate::library::config::LibraryConfig;
 use crate::library::event::LibraryEvent;
 use crate::library::factory::LibraryFactory;
 use crate::library::Library;
+use crate::ui::photo_grid::PhotoGridModel;
 use crate::ui::MomentsSetupWindow;
 use crate::ui::MomentsWindow;
 
@@ -44,8 +46,9 @@ mod imp {
     pub struct MomentsApplication {
         pub settings: OnceCell<gio::Settings>,
         pub tokio: OnceCell<tokio::runtime::Handle>,
-        pub library: RefCell<Option<Box<dyn Library>>>,
+        pub library: RefCell<Option<Arc<dyn Library>>>,
         pub library_events: RefCell<Option<Receiver<LibraryEvent>>>,
+        pub photo_grid_model: RefCell<Option<Rc<PhotoGridModel>>>,
     }
 
     #[glib::object_subclass]
@@ -209,7 +212,12 @@ impl MomentsApplication {
 
     /// Spawn the async factory call on the glib main context.
     ///
-    /// On success, stores the library and switches `window` to its content page.
+    /// On success:
+    ///  1. Creates a `PhotoGridModel` backed by the new library.
+    ///  2. Wires the model into the window's photo grid.
+    ///  3. Switches the window to its content page.
+    ///  4. Starts polling `LibraryEvent`s via `glib::idle_add_local`, forwarding
+    ///     `ThumbnailReady` events into the model so cells repaint automatically.
     fn load_library_async(&self, bundle: Bundle, config: LibraryConfig, window: MomentsWindow) {
         let (sender, receiver) = std::sync::mpsc::channel::<LibraryEvent>();
         *self.imp().library_events.borrow_mut() = Some(receiver);
@@ -221,11 +229,43 @@ impl MomentsApplication {
             window,
             async move {
                 let tokio = app.imp().tokio.get().expect("tokio handle set").clone();
-                match LibraryFactory::create(bundle, config, sender, tokio).await {
+                match LibraryFactory::create(bundle, config, sender, tokio.clone()).await {
                     Ok(library) => {
                         info!("library ready");
+
+                        let model = Rc::new(PhotoGridModel::new(Arc::clone(&library), tokio));
+
+                        // Store library and model on the application.
                         *app.imp().library.borrow_mut() = Some(library);
+                        *app.imp().photo_grid_model.borrow_mut() = Some(Rc::clone(&model));
+
+                        // Wire the grid before revealing the content page.
+                        window.set_model(Rc::clone(&model));
                         window.set_library_ready();
+
+                        // Poll library events and forward thumbnail notifications.
+                        let receiver = app
+                            .imp()
+                            .library_events
+                            .borrow_mut()
+                            .take()
+                            .expect("receiver set above");
+
+                        glib::idle_add_local(move || {
+                            loop {
+                                match receiver.try_recv() {
+                                    Ok(LibraryEvent::ThumbnailReady { media_id }) => {
+                                        model.on_thumbnail_ready(&media_id);
+                                    }
+                                    Ok(_) => {}
+                                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                        return glib::ControlFlow::Break;
+                                    }
+                                }
+                            }
+                            glib::ControlFlow::Continue
+                        });
                     }
                     Err(e) => {
                         error!("failed to open library: {e}");
