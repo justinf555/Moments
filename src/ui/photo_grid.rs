@@ -27,6 +27,7 @@ mod imp {
     use std::cell::OnceCell;
 
     pub struct PhotoGrid {
+        pub stack: OnceCell<gtk::Stack>,
         pub scrolled: OnceCell<gtk::ScrolledWindow>,
         pub grid_view: OnceCell<gtk::GridView>,
         /// Kept alive so lazy-loading stays wired after `set_model`.
@@ -37,6 +38,7 @@ mod imp {
     impl Default for PhotoGrid {
         fn default() -> Self {
             Self {
+                stack: OnceCell::default(),
                 scrolled: OnceCell::default(),
                 grid_view: OnceCell::default(),
                 model: RefCell::default(),
@@ -62,6 +64,24 @@ mod imp {
             self.parent_constructed();
             let obj = self.obj();
 
+            // ── Empty state ─────────────────────────────────────────────
+            let import_btn = gtk::Button::builder()
+                .label("Import Photos\u{2026}")
+                .halign(gtk::Align::Center)
+                .action_name("app.import")
+                .build();
+            import_btn.add_css_class("suggested-action");
+            import_btn.add_css_class("pill");
+
+            let empty_page = adw::StatusPage::builder()
+                .icon_name("camera-photo-symbolic")
+                .title("No Photos Yet")
+                .description("Import a folder of photos to get started.")
+                .vexpand(true)
+                .child(&import_btn)
+                .build();
+
+            // ── Grid ────────────────────────────────────────────────────
             let grid_view = gtk::GridView::new(
                 None::<gtk::NoSelection>,
                 None::<gtk::SignalListItemFactory>,
@@ -73,8 +93,17 @@ mod imp {
             scrolled.set_hscrollbar_policy(gtk::PolicyType::Never);
             scrolled.set_vexpand(true);
             scrolled.set_child(Some(&grid_view));
-            scrolled.set_parent(&*obj);
 
+            // ── Stack ───────────────────────────────────────────────────
+            let stack = gtk::Stack::new();
+            stack.set_transition_type(gtk::StackTransitionType::Crossfade);
+            stack.set_vexpand(true);
+            stack.add_named(&empty_page, Some("empty"));
+            stack.add_named(&scrolled, Some("grid"));
+            stack.set_visible_child_name("empty");
+            stack.set_parent(&*obj);
+
+            self.stack.set(stack).unwrap();
             self.grid_view.set(grid_view).unwrap();
             self.scrolled.set(scrolled).unwrap();
         }
@@ -197,6 +226,13 @@ impl PhotoGrid {
                 })
                 .collect();
             on_activate(items, position as usize);
+        });
+
+        // Toggle between empty state and grid when items change.
+        let stack = imp.stack.get().unwrap().clone();
+        model.store.connect_items_changed(move |store, _, _, _| {
+            let name = if store.n_items() > 0 { "grid" } else { "empty" };
+            stack.set_visible_child_name(name);
         });
 
         *imp.model.borrow_mut() = Some(model);
