@@ -141,13 +141,32 @@ impl MomentsWindow {
         {
             let lib = Arc::clone(&library);
             let tk = tokio.clone();
-            let s = settings;
+            let s = settings.clone();
             let reg = Rc::clone(&registry);
             coordinator.register_lazy("favorites", move || {
                 let model = Rc::new(PhotoGridModel::new(
                     Arc::clone(&lib),
                     tk.clone(),
                     MediaFilter::Favorites,
+                ));
+                let view = Rc::new(PhotoGridView::new(lib, tk, s, Rc::clone(&reg)));
+                view.set_model(Rc::clone(&model), Rc::clone(&reg));
+                reg.register(&model);
+                view
+            });
+        }
+
+        // Register the Trash view (lazy — created on first click).
+        {
+            let lib = Arc::clone(&library);
+            let tk = tokio.clone();
+            let s = settings;
+            let reg = Rc::clone(&registry);
+            coordinator.register_lazy("trash", move || {
+                let model = Rc::new(PhotoGridModel::new(
+                    Arc::clone(&lib),
+                    tk.clone(),
+                    MediaFilter::Trashed,
                 ));
                 let view = Rc::new(PhotoGridView::new(lib, tk, s, Rc::clone(&reg)));
                 view.set_model(Rc::clone(&model), Rc::clone(&reg));

@@ -45,6 +45,13 @@ impl ModelRegistry {
         }
     }
 
+    /// Broadcast a trash/restore change to all registered models.
+    pub fn on_trashed(&self, id: &MediaId, is_trashed: bool) {
+        for model in self.models.borrow().iter() {
+            model.on_trashed(id, is_trashed);
+        }
+    }
+
     /// Reload all registered models (e.g. after import completes).
     pub fn reload_all(&self) {
         for model in self.models.borrow().iter() {

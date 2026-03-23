@@ -22,11 +22,14 @@ mod imp {
         pub picture: gtk::Picture,
         pub spinner: gtk::Spinner,
         pub star_btn: gtk::Button,
+        pub trash_btn: gtk::Button,
+        pub days_label: gtk::Label,
         pub overlay: gtk::Overlay,
         pub bindings: RefCell<Option<CellBindings>>,
-        /// Click handler for the star button — connected in factory `bind`,
+        /// Click handlers for star/trash — connected in factory `bind`,
         /// disconnected in factory `unbind`.
         pub star_click_handler: RefCell<Option<glib::SignalHandlerId>>,
+        pub trash_click_handler: RefCell<Option<glib::SignalHandlerId>>,
     }
 
     #[glib::object_subclass]
@@ -63,9 +66,26 @@ mod imp {
             self.star_btn.add_css_class("osd");
             self.star_btn.set_visible(false);
 
+            self.trash_btn.set_icon_name("user-trash-symbolic");
+            self.trash_btn.set_halign(gtk::Align::Start);
+            self.trash_btn.set_valign(gtk::Align::End);
+            self.trash_btn.set_margin_start(4);
+            self.trash_btn.set_margin_bottom(4);
+            self.trash_btn.add_css_class("circular");
+            self.trash_btn.add_css_class("osd");
+            self.trash_btn.set_visible(false);
+
+            self.days_label.set_halign(gtk::Align::Center);
+            self.days_label.set_valign(gtk::Align::Center);
+            self.days_label.add_css_class("osd");
+            self.days_label.add_css_class("caption");
+            self.days_label.set_visible(false);
+
             self.overlay.set_child(Some(&self.picture));
             self.overlay.add_overlay(&self.spinner);
             self.overlay.add_overlay(&self.star_btn);
+            self.overlay.add_overlay(&self.trash_btn);
+            self.overlay.add_overlay(&self.days_label);
             self.overlay.set_parent(&*obj);
         }
 
@@ -94,6 +114,7 @@ impl PhotoGridCell {
     pub fn bind(&self, item: &MediaItemObject) {
         self.update_from_item(item);
         self.update_star(item);
+        self.update_days_remaining(item);
 
         let cell = self.clone();
         let texture_handler = item.connect_texture_notify(move |item| {
@@ -126,6 +147,22 @@ impl PhotoGridCell {
         imp.spinner.set_spinning(true);
         imp.spinner.set_visible(true);
         imp.star_btn.set_visible(false);
+        imp.trash_btn.set_visible(false);
+        imp.days_label.set_visible(false);
+    }
+
+    fn update_days_remaining(&self, item: &MediaItemObject) {
+        let imp = self.imp();
+        let trashed_at = item.trashed_at();
+        if trashed_at > 0 {
+            let now = chrono::Utc::now().timestamp();
+            let elapsed_days = (now - trashed_at) / (24 * 60 * 60);
+            let remaining = (30 - elapsed_days).max(0);
+            imp.days_label.set_text(&format!("{remaining}d"));
+            imp.days_label.set_visible(true);
+        } else {
+            imp.days_label.set_visible(false);
+        }
     }
 
     fn update_star(&self, item: &MediaItemObject) {
@@ -145,12 +182,14 @@ impl PhotoGridCell {
             imp.spinner.set_visible(false);
             imp.spinner.set_spinning(false);
             imp.star_btn.set_visible(true);
+            imp.trash_btn.set_visible(true);
         } else {
             imp.picture.set_paintable(None::<&gtk::gdk::Texture>);
             imp.picture.set_visible(false);
             imp.spinner.set_visible(true);
             imp.spinner.set_spinning(true);
             imp.star_btn.set_visible(false);
+            imp.trash_btn.set_visible(false);
         }
     }
 }

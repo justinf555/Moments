@@ -173,6 +173,30 @@ impl PhotoGridModel {
         }
     }
 
+    /// Called when an item is trashed or restored in any view.
+    pub fn on_trashed(self: &Rc<Self>, id: &MediaId, is_trashed: bool) {
+        match self.filter.get() {
+            MediaFilter::All | MediaFilter::Favorites => {
+                if is_trashed {
+                    // Item moved to trash — remove from this view.
+                    self.remove_item(id);
+                } else {
+                    // Item restored — reload to add it back in sort order.
+                    self.reload();
+                }
+            }
+            MediaFilter::Trashed => {
+                if is_trashed {
+                    // Item just trashed — reload to add it.
+                    self.reload();
+                } else {
+                    // Item restored — remove from trash view.
+                    self.remove_item(id);
+                }
+            }
+        }
+    }
+
     fn on_page_loaded(&self, items: Vec<MediaItem>) {
         let count = items.len();
         debug!("page loaded: {count} items");

@@ -28,6 +28,10 @@ mod imp {
         /// Whether this item is marked as a favourite.
         #[property(get, set)]
         pub is_favorite: Cell<bool>,
+
+        /// Unix timestamp when this item was trashed. 0 if not trashed.
+        #[property(get, set)]
+        pub trashed_at: Cell<i64>,
     }
 
     #[glib::object_subclass]
@@ -48,6 +52,7 @@ impl MediaItemObject {
     pub fn new(item: MediaItem) -> Self {
         let obj: Self = glib::Object::new();
         obj.imp().is_favorite.set(item.is_favorite);
+        obj.imp().trashed_at.set(item.trashed_at.unwrap_or(0));
         obj.imp().item.set(item).expect("item set once at construction");
         obj
     }
