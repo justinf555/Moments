@@ -134,13 +134,14 @@ impl MomentsWindow {
         let coordinator = Rc::new(RefCell::new(coordinator));
 
         // Toggle between empty and photos based on store item count.
-        // Connected before sidebar.select_first() so the initial load
-        // (triggered by set_model → load_more) will fire the switch.
+        // Only switches the stack page — does NOT call navigate() which
+        // would trigger on_navigate → set_filter → reload and cause a
+        // re-entrant RefCell borrow panic during on_page_loaded.
         {
-            let coord = Rc::clone(&coordinator);
+            let stack = content_stack.clone();
             model.store.connect_items_changed(move |store, _, _, _| {
                 let target = if store.n_items() > 0 { "photos" } else { "empty" };
-                coord.borrow().navigate(target);
+                stack.set_visible_child_name(target);
             });
         }
 

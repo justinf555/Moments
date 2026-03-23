@@ -148,15 +148,24 @@ impl PhotoGridModel {
             });
         }
 
-        let mut index = self.id_index.borrow_mut();
-        for item in items {
-            let obj = MediaItemObject::new(item);
-            index.insert(obj.item().id.clone(), obj.downgrade());
+        // Build objects and index entries first, then append to the store.
+        // store.append() fires items_changed synchronously, which can trigger
+        // re-entrant borrows of id_index via navigate → reload. So we must
+        // drop the id_index borrow before touching the store.
+        let objects: Vec<MediaItemObject> = {
+            let mut index = self.id_index.borrow_mut();
+            items
+                .into_iter()
+                .map(|item| {
+                    let obj = MediaItemObject::new(item);
+                    index.insert(obj.item().id.clone(), obj.downgrade());
+                    obj
+                })
+                .collect()
+        };
 
+        for obj in &objects {
             // Speculatively load any thumbnail that already exists on disk.
-            // ThumbnailReady events only fire during import; on subsequent app
-            // launches we must try to load existing thumbnails ourselves.
-            // load_texture returns None silently if the file is absent.
             let id = obj.item().id.clone();
             let path = self.library.thumbnail_path(&id);
             let tokio = self.tokio.clone();
@@ -168,7 +177,7 @@ impl PhotoGridModel {
                 }
             });
 
-            self.store.append(&obj);
+            self.store.append(obj);
         }
 
         if count < PAGE_SIZE as usize {
