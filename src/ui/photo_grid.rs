@@ -35,6 +35,7 @@ mod imp {
         /// Library reference for the factory (star button persist).
         pub library: OnceCell<Arc<dyn Library>>,
         pub tokio: OnceCell<tokio::runtime::Handle>,
+        pub registry: OnceCell<Rc<crate::ui::model_registry::ModelRegistry>>,
     }
 
     impl Default for PhotoGrid {
@@ -46,6 +47,7 @@ mod imp {
                 zoom_level: Cell::new(DEFAULT_ZOOM_INDEX),
                 library: OnceCell::default(),
                 tokio: OnceCell::default(),
+                registry: OnceCell::default(),
             }
         }
     }
@@ -152,10 +154,12 @@ impl PhotoGrid {
         let grid_view = imp.grid_view.get().unwrap();
         let library = imp.library.get().unwrap().clone();
         let tokio = imp.tokio.get().unwrap().clone();
+        let registry = imp.registry.get().unwrap().clone();
         grid_view.set_factory(Some(&factory::build_factory(
             self.current_cell_size(),
             library,
             tokio,
+            registry,
         )));
     }
 
@@ -173,11 +177,13 @@ impl PhotoGrid {
         model: Rc<PhotoGridModel>,
         library: Arc<dyn Library>,
         tokio: tokio::runtime::Handle,
+        registry: Rc<crate::ui::model_registry::ModelRegistry>,
         on_activate: impl Fn(Vec<item::MediaItemObject>, usize) + 'static,
     ) {
         let imp = self.imp();
         let _ = imp.library.set(Arc::clone(&library));
         let _ = imp.tokio.set(tokio.clone());
+        let _ = imp.registry.set(Rc::clone(&registry));
 
         let grid_view = imp.grid_view.get().unwrap();
         let scrolled = imp.scrolled.get().unwrap();
@@ -188,6 +194,7 @@ impl PhotoGrid {
             self.current_cell_size(),
             Arc::clone(&library),
             tokio,
+            Rc::clone(&registry),
         )));
 
         // Fetch the first page immediately.
@@ -252,6 +259,7 @@ impl PhotoGridView {
         library: Arc<dyn Library>,
         tokio: tokio::runtime::Handle,
         settings: gio::Settings,
+        registry: Rc<crate::ui::model_registry::ModelRegistry>,
     ) -> Self {
         // ── Grid header bar ──────────────────────────────────────────────────
         let header = adw::HeaderBar::new();
@@ -327,7 +335,7 @@ impl PhotoGridView {
         nav_view.push(&grid_page);
 
         // ── Viewer (reused across activations) ───────────────────────────────
-        let viewer = Rc::new(PhotoViewer::new(Arc::clone(&library), tokio.clone()));
+        let viewer = Rc::new(PhotoViewer::new(Arc::clone(&library), tokio.clone(), Rc::clone(&registry)));
 
         // ── Zoom actions ─────────────────────────────────────────────────────
         let action_group = gio::SimpleActionGroup::new();
@@ -389,7 +397,7 @@ impl PhotoGridView {
         &self.view_actions
     }
 
-    pub fn set_model(&self, model: Rc<PhotoGridModel>) {
+    pub fn set_model(&self, model: Rc<PhotoGridModel>, registry: Rc<crate::ui::model_registry::ModelRegistry>) {
         let nav_view = self.nav_view.clone();
         let viewer = Rc::clone(&self.viewer);
         let viewer_nav_page = self.viewer.nav_page().clone();
@@ -398,6 +406,7 @@ impl PhotoGridView {
             model,
             Arc::clone(&self.library),
             self.tokio.clone(),
+            registry,
             move |items, index| {
                 viewer.show(items, index);
 

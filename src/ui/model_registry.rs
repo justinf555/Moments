@@ -35,6 +35,16 @@ impl ModelRegistry {
         }
     }
 
+    /// Broadcast a favourite change to all registered models.
+    ///
+    /// Unfiltered models update the item's property in place. Filtered
+    /// models (Favorites) reload from the database to add/remove the item.
+    pub fn on_favorite_changed(&self, id: &MediaId, is_favorite: bool) {
+        for model in self.models.borrow().iter() {
+            model.on_favorite_changed(id, is_favorite);
+        }
+    }
+
     /// Reload all registered models (e.g. after import completes).
     pub fn reload_all(&self) {
         for model in self.models.borrow().iter() {

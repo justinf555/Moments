@@ -133,6 +133,42 @@ impl PhotoGridModel {
         });
     }
 
+    /// Called when a favourite toggle occurs in any view.
+    ///
+    /// For unfiltered models (`All`): updates the `is_favorite` property on
+    /// the matching `MediaItemObject` so the star icon repaints.
+    ///
+    /// For filtered models (`Favorites`): reloads from the database since
+    /// items need to be added or removed from the filtered set.
+    pub fn on_favorite_changed(self: &Rc<Self>, id: &MediaId, is_favorite: bool) {
+        match self.filter.get() {
+            MediaFilter::All => {
+                let weak = self.id_index.borrow().get(id).cloned();
+                if let Some(obj) = weak.and_then(|w| w.upgrade()) {
+                    obj.set_is_favorite(is_favorite);
+                }
+            }
+            MediaFilter::Favorites => {
+                if is_favorite {
+                    // New favourite — reload to fetch and insert in sort order.
+                    self.reload();
+                } else {
+                    // Un-favourited — remove the single item from the store
+                    // instead of reloading the entire grid.
+                    let pos = self.store.find_with_equal_func(|obj| {
+                        obj.downcast_ref::<MediaItemObject>()
+                            .map(|m| m.item().id == *id)
+                            .unwrap_or(false)
+                    });
+                    if let Some(pos) = pos {
+                        self.id_index.borrow_mut().remove(id);
+                        self.store.remove(pos);
+                    }
+                }
+            }
+        }
+    }
+
     fn on_page_loaded(&self, items: Vec<MediaItem>) {
         let count = items.len();
         debug!("page loaded: {count} items");

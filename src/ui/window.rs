@@ -130,8 +130,9 @@ impl MomentsWindow {
             Arc::clone(&library),
             tokio.clone(),
             settings.clone(),
+            Rc::clone(&registry),
         ));
-        photos_view.set_model(Rc::clone(&photos_model));
+        photos_view.set_model(Rc::clone(&photos_model), Rc::clone(&registry));
         self.insert_action_group("view", Some(photos_view.view_actions()));
         registry.register(&photos_model);
         coordinator.register("photos", photos_view);
@@ -148,8 +149,8 @@ impl MomentsWindow {
                     tk.clone(),
                     MediaFilter::Favorites,
                 ));
-                let view = Rc::new(PhotoGridView::new(lib, tk, s));
-                view.set_model(Rc::clone(&model));
+                let view = Rc::new(PhotoGridView::new(lib, tk, s, Rc::clone(&reg)));
+                view.set_model(Rc::clone(&model), Rc::clone(&reg));
                 reg.register(&model);
                 view
             });

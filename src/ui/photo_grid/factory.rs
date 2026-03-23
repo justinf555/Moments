@@ -1,9 +1,11 @@
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gtk::{glib, prelude::*, subclass::prelude::*};
 use tracing::error;
 
 use crate::library::Library;
+use crate::ui::model_registry::ModelRegistry;
 
 use super::cell::PhotoGridCell;
 use super::item::MediaItemObject;
@@ -29,6 +31,7 @@ pub fn build_factory(
     cell_size: i32,
     library: Arc<dyn Library>,
     tokio: tokio::runtime::Handle,
+    registry: Rc<ModelRegistry>,
 ) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
 
@@ -46,6 +49,8 @@ pub fn build_factory(
         library,
         #[strong]
         tokio,
+        #[strong]
+        registry,
         move |_, obj| {
             let list_item = obj
                 .downcast_ref::<gtk::ListItem>()
@@ -64,20 +69,28 @@ pub fn build_factory(
             let item_weak = item.downgrade();
             let lib = Arc::clone(&library);
             let tk = tokio.clone();
+            let reg = Rc::clone(&registry);
             let handler_id = star_btn.connect_clicked(move |_| {
                 let Some(item) = item_weak.upgrade() else { return };
                 let new_fav = !item.is_favorite();
+
+                // Optimistic: update the current item immediately.
                 item.set_is_favorite(new_fav);
 
+                // Persist to DB, then broadcast to all models so filtered
+                // views reload with the committed data.
                 let id = item.item().id.clone();
                 let lib = Arc::clone(&lib);
                 let tk = tk.clone();
+                let reg = Rc::clone(&reg);
                 glib::MainContext::default().spawn_local(async move {
                     let result = tk
-                        .spawn(async move { lib.set_favorite(&[id], new_fav).await })
+                        .spawn(async move { lib.set_favorite(&[id.clone()], new_fav).await.map(|_| id) })
                         .await;
-                    if let Ok(Err(e)) = result {
-                        error!("set_favorite failed: {e}");
+                    match result {
+                        Ok(Ok(id)) => reg.on_favorite_changed(&id, new_fav),
+                        Ok(Err(e)) => error!("set_favorite failed: {e}"),
+                        Err(e) => error!("set_favorite join failed: {e}"),
                     }
                 });
             });
