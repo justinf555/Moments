@@ -37,6 +37,7 @@ mod imp {
         pub library: OnceCell<Arc<dyn Library>>,
         pub tokio: OnceCell<tokio::runtime::Handle>,
         pub registry: OnceCell<Rc<crate::ui::model_registry::ModelRegistry>>,
+        pub filter: Cell<crate::library::media::MediaFilter>,
     }
 
     impl Default for PhotoGrid {
@@ -50,6 +51,7 @@ mod imp {
                 library: OnceCell::default(),
                 tokio: OnceCell::default(),
                 registry: OnceCell::default(),
+                filter: Cell::new(crate::library::media::MediaFilter::All),
             }
         }
     }
@@ -157,11 +159,13 @@ impl PhotoGrid {
         let library = imp.library.get().unwrap().clone();
         let tokio = imp.tokio.get().unwrap().clone();
         let registry = imp.registry.get().unwrap().clone();
+        let filter = imp.filter.get();
         grid_view.set_factory(Some(&factory::build_factory(
             self.current_cell_size(),
             library,
             tokio,
             registry,
+            filter,
         )));
     }
 
@@ -180,12 +184,14 @@ impl PhotoGrid {
         library: Arc<dyn Library>,
         tokio: tokio::runtime::Handle,
         registry: Rc<crate::ui::model_registry::ModelRegistry>,
+        filter: crate::library::media::MediaFilter,
         on_activate: impl Fn(Vec<item::MediaItemObject>, usize) + 'static,
     ) {
         let imp = self.imp();
         let _ = imp.library.set(Arc::clone(&library));
         let _ = imp.tokio.set(tokio.clone());
         let _ = imp.registry.set(Rc::clone(&registry));
+        imp.filter.set(filter);
 
         let grid_view = imp.grid_view.get().unwrap();
         let scrolled = imp.scrolled.get().unwrap();
@@ -198,6 +204,7 @@ impl PhotoGrid {
             Arc::clone(&library),
             tokio,
             Rc::clone(&registry),
+            filter,
         )));
 
         // Fetch the first page immediately.
@@ -416,11 +423,13 @@ impl PhotoGridView {
         let viewer = Rc::clone(&self.viewer);
         let viewer_nav_page = self.viewer.nav_page().clone();
 
+        let filter = model.filter();
         self.photo_grid.set_model(
             Rc::clone(&model),
             Arc::clone(&self.library),
             self.tokio.clone(),
             Rc::clone(&registry),
+            filter,
             move |items, index| {
                 viewer.show(items, index);
 

@@ -57,6 +57,11 @@ impl PhotoGridModel {
         }
     }
 
+    /// The filter this model was constructed with.
+    pub fn filter(&self) -> MediaFilter {
+        self.filter.get()
+    }
+
     /// Clear all items and reload from the first page.
     ///
     /// Called after an import completes so newly arrived photos appear at the

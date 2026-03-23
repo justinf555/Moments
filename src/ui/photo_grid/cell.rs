@@ -64,10 +64,13 @@ mod imp {
             self.star_btn.add_css_class("osd");
             self.star_btn.set_visible(false);
 
-            self.days_label.set_halign(gtk::Align::Center);
-            self.days_label.set_valign(gtk::Align::Center);
+            self.days_label.set_halign(gtk::Align::End);
+            self.days_label.set_valign(gtk::Align::End);
+            self.days_label.set_margin_end(4);
+            self.days_label.set_margin_bottom(4);
             self.days_label.add_css_class("osd");
             self.days_label.add_css_class("caption");
+            self.days_label.add_css_class("pill");
             self.days_label.set_visible(false);
 
             self.overlay.set_child(Some(&self.picture));

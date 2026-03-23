@@ -4,6 +4,7 @@ use std::sync::Arc;
 use gtk::{glib, prelude::*, subclass::prelude::*};
 use tracing::error;
 
+use crate::library::media::MediaFilter;
 use crate::library::Library;
 use crate::ui::model_registry::ModelRegistry;
 
@@ -32,6 +33,7 @@ pub fn build_factory(
     library: Arc<dyn Library>,
     tokio: tokio::runtime::Handle,
     registry: Rc<ModelRegistry>,
+    filter: MediaFilter,
 ) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
 
@@ -64,44 +66,51 @@ pub fn build_factory(
                 .and_downcast::<MediaItemObject>()
                 .expect("item is MediaItemObject");
 
-            // Wire star button click → optimistic toggle + async persist.
-            let star_btn = cell.imp().star_btn.clone();
-            let item_weak = item.downgrade();
-            let lib = Arc::clone(&library);
-            let tk = tokio.clone();
-            let reg = Rc::clone(&registry);
-            let handler_id = star_btn.connect_clicked(move |_| {
-                let Some(item) = item_weak.upgrade() else { return };
-                let new_fav = !item.is_favorite();
-
-                // Optimistic: update the current item immediately.
-                item.set_is_favorite(new_fav);
-
-                // Persist to DB, then broadcast to all models so filtered
-                // views reload with the committed data.
-                let id = item.item().id.clone();
-                let lib = Arc::clone(&lib);
-                let tk = tk.clone();
-                let reg = Rc::clone(&reg);
-                glib::MainContext::default().spawn_local(async move {
-                    let result = tk
-                        .spawn(async move { lib.set_favorite(&[id.clone()], new_fav).await.map(|_| id) })
-                        .await;
-                    match result {
-                        Ok(Ok(id)) => reg.on_favorite_changed(&id, new_fav),
-                        Ok(Err(e)) => error!("set_favorite failed: {e}"),
-                        Err(e) => error!("set_favorite join failed: {e}"),
-                    }
-                });
-            });
-
-            // Store the handler ID so unbind can disconnect it.
-            cell.imp()
-                .star_click_handler
-                .borrow_mut()
-                .replace(handler_id);
-
             cell.bind(&item);
+
+            // In Trash view: hide star, days label is already shown by bind.
+            // In other views: wire star button, hide days label.
+            if filter == MediaFilter::Trashed {
+                cell.imp().star_btn.set_visible(false);
+            } else {
+                cell.imp().days_label.set_visible(false);
+
+                // Wire star button click → optimistic toggle + async persist.
+                let star_btn = cell.imp().star_btn.clone();
+                let item_weak = item.downgrade();
+                let lib = Arc::clone(&library);
+                let tk = tokio.clone();
+                let reg = Rc::clone(&registry);
+                let handler_id = star_btn.connect_clicked(move |_| {
+                    let Some(item) = item_weak.upgrade() else { return };
+                    let new_fav = !item.is_favorite();
+
+                    // Optimistic: update the current item immediately.
+                    item.set_is_favorite(new_fav);
+
+                    // Persist to DB, then broadcast to all models so filtered
+                    // views reload with the committed data.
+                    let id = item.item().id.clone();
+                    let lib = Arc::clone(&lib);
+                    let tk = tk.clone();
+                    let reg = Rc::clone(&reg);
+                    glib::MainContext::default().spawn_local(async move {
+                        let result = tk
+                            .spawn(async move { lib.set_favorite(&[id.clone()], new_fav).await.map(|_| id) })
+                            .await;
+                        match result {
+                            Ok(Ok(id)) => reg.on_favorite_changed(&id, new_fav),
+                            Ok(Err(e)) => error!("set_favorite failed: {e}"),
+                            Err(e) => error!("set_favorite join failed: {e}"),
+                        }
+                    });
+                });
+
+                cell.imp()
+                    .star_click_handler
+                    .borrow_mut()
+                    .replace(handler_id);
+            }
         }
     ));
 
