@@ -5,6 +5,10 @@ use super::item::MediaItemObject;
 
 /// Build the `SignalListItemFactory` for the photo grid.
 ///
+/// `cell_size` sets the uniform cell dimensions (px). Each cell is created
+/// as a square of this size; GTK's `GridView` computes column count from the
+/// available width.
+///
 /// In GTK 4.12+, factory callbacks receive `&glib::Object` which may be a
 /// `ListItem` or a `ListHeader`. We downcast to `gtk::ListItem` explicitly.
 ///
@@ -12,14 +16,16 @@ use super::item::MediaItemObject;
 /// `bind`     — connects the cell to its `MediaItemObject`, reflecting current state.
 /// `unbind`   — disconnects signals and resets the cell to its idle state.
 /// `teardown` — removes the child widget so GTK can reclaim the list item slot.
-pub fn build_factory() -> gtk::SignalListItemFactory {
+pub fn build_factory(cell_size: i32) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
 
-    factory.connect_setup(|_, obj| {
+    factory.connect_setup(move |_, obj| {
         let list_item = obj
             .downcast_ref::<gtk::ListItem>()
             .expect("is ListItem");
-        list_item.set_child(Some(&PhotoGridCell::new()));
+        let cell = PhotoGridCell::new();
+        cell.set_size_request(cell_size, cell_size);
+        list_item.set_child(Some(&cell));
     });
 
     factory.connect_bind(|_, obj| {

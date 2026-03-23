@@ -75,6 +75,8 @@ mod imp {
             obj.setup_gactions();
             obj.set_accels_for_action("app.quit", &["<control>q"]);
             obj.set_accels_for_action("win.toggle-sidebar", &["F9"]);
+            obj.set_accels_for_action("view.zoom-in", &["<control>equal", "<control>plus", "<control>KP_Add"]);
+            obj.set_accels_for_action("view.zoom-out", &["<control>minus", "<control>KP_Subtract"]);
         }
     }
 
@@ -355,7 +357,9 @@ impl MomentsApplication {
 
                         // Wire the shell: builds sidebar, registers views,
                         // and switches to the content page.
-                        window.setup(Rc::clone(&model), library, tokio.clone());
+                        let settings = app.imp().settings.get()
+                            .expect("settings initialised").clone();
+                        window.setup(Rc::clone(&model), library, tokio.clone(), settings);
 
                         // Poll library events on every GTK idle tick.
                         // Routes thumbnail and import events to the right consumers.

@@ -40,7 +40,7 @@ mod imp {
         fn constructed(&self) {
             self.parent_constructed();
             let obj = self.obj();
-            // Fixed cell size — GridView will compute column count from window width.
+            // Default cell size — overridden by the factory based on zoom level.
             obj.set_size_request(160, 160);
 
             self.picture.set_content_fit(gtk::ContentFit::Cover);
