@@ -29,6 +29,7 @@ mod imp {
     pub struct PhotoGrid {
         pub scrolled: OnceCell<gtk::ScrolledWindow>,
         pub grid_view: OnceCell<gtk::GridView>,
+        pub selection: RefCell<Option<gtk::MultiSelection>>,
         /// Kept alive so lazy-loading stays wired after `set_model`.
         pub model: RefCell<Option<Rc<PhotoGridModel>>>,
         pub zoom_level: Cell<usize>,
@@ -43,6 +44,7 @@ mod imp {
             Self {
                 scrolled: OnceCell::default(),
                 grid_view: OnceCell::default(),
+                selection: RefCell::default(),
                 model: RefCell::default(),
                 zoom_level: Cell::new(DEFAULT_ZOOM_INDEX),
                 library: OnceCell::default(),
@@ -190,6 +192,7 @@ impl PhotoGrid {
 
         let selection = gtk::MultiSelection::new(Some(model.store.clone()));
         grid_view.set_model(Some(&selection));
+        *imp.selection.borrow_mut() = Some(selection.clone());
         grid_view.set_factory(Some(&factory::build_factory(
             self.current_cell_size(),
             Arc::clone(&library),
@@ -248,6 +251,7 @@ pub struct PhotoGridView {
     viewer: Rc<PhotoViewer>,
     library: Arc<dyn Library>,
     tokio: tokio::runtime::Handle,
+    trash_btn: gtk::Button,
     widget: gtk::Widget,
     /// Zoom actions — must be installed on the window so accelerators work
     /// regardless of which widget has focus.
@@ -302,6 +306,15 @@ impl PhotoGridView {
         zoom_box.add_controller(controller);
 
         header.pack_start(&zoom_box);
+
+        // ── Trash button (enabled when items are selected) ──────────────
+        let trash_btn = gtk::Button::builder()
+            .icon_name("user-trash-symbolic")
+            .tooltip_text("Move to Trash")
+            .sensitive(false)
+            .build();
+        trash_btn.add_css_class("flat");
+        header.pack_end(&trash_btn);
 
         let menu_button = gtk::MenuButton::builder()
             .primary(true)
@@ -384,6 +397,7 @@ impl PhotoGridView {
             viewer,
             library,
             tokio,
+            trash_btn,
             widget,
             view_actions: action_group,
         }
@@ -403,10 +417,10 @@ impl PhotoGridView {
         let viewer_nav_page = self.viewer.nav_page().clone();
 
         self.photo_grid.set_model(
-            model,
+            Rc::clone(&model),
             Arc::clone(&self.library),
             self.tokio.clone(),
-            registry,
+            Rc::clone(&registry),
             move |items, index| {
                 viewer.show(items, index);
 
@@ -420,6 +434,62 @@ impl PhotoGridView {
                 }
             },
         );
+
+        // Wire trash toolbar button to selection.
+        let selection = self.photo_grid.imp().selection.borrow().clone().unwrap();
+        let trash_btn = self.trash_btn.clone();
+        selection.connect_selection_changed(move |sel, _, _| {
+            let has_selection = sel.selection().size() > 0;
+            trash_btn.set_sensitive(has_selection);
+        });
+
+        // Trash button click → trash all selected items.
+        let selection = self.photo_grid.imp().selection.borrow().clone().unwrap();
+        let lib = Arc::clone(&self.library);
+        let tk = self.tokio.clone();
+        let trash_btn = self.trash_btn.clone();
+        trash_btn.connect_clicked(move |btn| {
+            let bitset = selection.selection();
+            let n = bitset.size();
+            if n == 0 {
+                return;
+            }
+
+            // Collect selected item IDs.
+            let mut ids = Vec::with_capacity(n as usize);
+            for i in 0..n {
+                let pos = bitset.nth(i as u32);
+                if let Some(obj) = selection
+                    .item(pos)
+                    .and_then(|o| o.downcast::<item::MediaItemObject>().ok())
+                {
+                    ids.push(obj.item().id.clone());
+                }
+            }
+
+            // Clear selection and disable button.
+            selection.unselect_all();
+            btn.set_sensitive(false);
+
+            let lib = Arc::clone(&lib);
+            let tk = tk.clone();
+            let reg = Rc::clone(&registry);
+            glib::MainContext::default().spawn_local(async move {
+                let ids_for_broadcast = ids.clone();
+                let result = tk
+                    .spawn(async move { lib.trash(&ids).await })
+                    .await;
+                match result {
+                    Ok(Ok(())) => {
+                        for id in &ids_for_broadcast {
+                            reg.on_trashed(id, true);
+                        }
+                    }
+                    Ok(Err(e)) => tracing::error!("trash failed: {e}"),
+                    Err(e) => tracing::error!("trash join failed: {e}"),
+                }
+            });
+        });
     }
 }
 

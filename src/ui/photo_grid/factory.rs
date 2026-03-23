@@ -95,39 +95,11 @@ pub fn build_factory(
                 });
             });
 
-            // Wire trash button click → persist + broadcast.
-            let trash_btn = cell.imp().trash_btn.clone();
-            let item_weak = item.downgrade();
-            let lib = Arc::clone(&library);
-            let tk = tokio.clone();
-            let reg = Rc::clone(&registry);
-            let trash_handler_id = trash_btn.connect_clicked(move |_| {
-                let Some(item) = item_weak.upgrade() else { return };
-                let id = item.item().id.clone();
-                let lib = Arc::clone(&lib);
-                let tk = tk.clone();
-                let reg = Rc::clone(&reg);
-                glib::MainContext::default().spawn_local(async move {
-                    let result = tk
-                        .spawn(async move { lib.trash(&[id.clone()]).await.map(|_| id) })
-                        .await;
-                    match result {
-                        Ok(Ok(id)) => reg.on_trashed(&id, true),
-                        Ok(Err(e)) => error!("trash failed: {e}"),
-                        Err(e) => error!("trash join failed: {e}"),
-                    }
-                });
-            });
-
-            // Store handler IDs so unbind can disconnect them.
+            // Store the handler ID so unbind can disconnect it.
             cell.imp()
                 .star_click_handler
                 .borrow_mut()
                 .replace(handler_id);
-            cell.imp()
-                .trash_click_handler
-                .borrow_mut()
-                .replace(trash_handler_id);
 
             cell.bind(&item);
         }
@@ -141,12 +113,9 @@ pub fn build_factory(
             .child()
             .and_downcast::<PhotoGridCell>()
             .expect("child is PhotoGridCell");
-        // Disconnect button handlers before unbinding signals.
+        // Disconnect star click handler before unbinding signals.
         if let Some(handler) = cell.imp().star_click_handler.borrow_mut().take() {
             cell.imp().star_btn.disconnect(handler);
-        }
-        if let Some(handler) = cell.imp().trash_click_handler.borrow_mut().take() {
-            cell.imp().trash_btn.disconnect(handler);
         }
         cell.unbind();
     });

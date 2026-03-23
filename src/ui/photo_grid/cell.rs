@@ -22,14 +22,12 @@ mod imp {
         pub picture: gtk::Picture,
         pub spinner: gtk::Spinner,
         pub star_btn: gtk::Button,
-        pub trash_btn: gtk::Button,
         pub days_label: gtk::Label,
         pub overlay: gtk::Overlay,
         pub bindings: RefCell<Option<CellBindings>>,
-        /// Click handlers for star/trash — connected in factory `bind`,
+        /// Click handler for the star button — connected in factory `bind`,
         /// disconnected in factory `unbind`.
         pub star_click_handler: RefCell<Option<glib::SignalHandlerId>>,
-        pub trash_click_handler: RefCell<Option<glib::SignalHandlerId>>,
     }
 
     #[glib::object_subclass]
@@ -66,15 +64,6 @@ mod imp {
             self.star_btn.add_css_class("osd");
             self.star_btn.set_visible(false);
 
-            self.trash_btn.set_icon_name("user-trash-symbolic");
-            self.trash_btn.set_halign(gtk::Align::Start);
-            self.trash_btn.set_valign(gtk::Align::End);
-            self.trash_btn.set_margin_start(4);
-            self.trash_btn.set_margin_bottom(4);
-            self.trash_btn.add_css_class("circular");
-            self.trash_btn.add_css_class("osd");
-            self.trash_btn.set_visible(false);
-
             self.days_label.set_halign(gtk::Align::Center);
             self.days_label.set_valign(gtk::Align::Center);
             self.days_label.add_css_class("osd");
@@ -84,7 +73,6 @@ mod imp {
             self.overlay.set_child(Some(&self.picture));
             self.overlay.add_overlay(&self.spinner);
             self.overlay.add_overlay(&self.star_btn);
-            self.overlay.add_overlay(&self.trash_btn);
             self.overlay.add_overlay(&self.days_label);
             self.overlay.set_parent(&*obj);
         }
@@ -147,7 +135,6 @@ impl PhotoGridCell {
         imp.spinner.set_spinning(true);
         imp.spinner.set_visible(true);
         imp.star_btn.set_visible(false);
-        imp.trash_btn.set_visible(false);
         imp.days_label.set_visible(false);
     }
 
@@ -182,14 +169,12 @@ impl PhotoGridCell {
             imp.spinner.set_visible(false);
             imp.spinner.set_spinning(false);
             imp.star_btn.set_visible(true);
-            imp.trash_btn.set_visible(true);
         } else {
             imp.picture.set_paintable(None::<&gtk::gdk::Texture>);
             imp.picture.set_visible(false);
             imp.spinner.set_visible(true);
             imp.spinner.set_spinning(true);
             imp.star_btn.set_visible(false);
-            imp.trash_btn.set_visible(false);
         }
     }
 }
