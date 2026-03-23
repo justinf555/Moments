@@ -126,10 +126,9 @@ impl MomentsWindow {
 
         let coordinator = Rc::new(RefCell::new(coordinator));
 
-        // Start on "empty"; switch to "photos" once items arrive.
-        coordinator.borrow().navigate("empty");
-
         // Toggle between empty and photos based on store item count.
+        // Connected before sidebar.select_first() so the initial load
+        // (triggered by set_model → load_more) will fire the switch.
         {
             let coord = Rc::clone(&coordinator);
             model.store.connect_items_changed(move |store, _, _, _| {
@@ -138,16 +137,29 @@ impl MomentsWindow {
             });
         }
 
+        // Start on "empty" — items-changed will switch to "photos" once
+        // the first page arrives. This must come after the signal is
+        // connected but before select_first triggers sidebar navigation.
+        coordinator.borrow().navigate("empty");
+
         imp.coordinator
             .set(coordinator)
             .expect("coordinator set once in setup()");
 
         // Wire sidebar selection → coordinator navigation.
+        // Only navigates to routes the sidebar knows about (e.g. "photos");
+        // the empty/photos toggle is driven by the store signal above.
         let obj_weak = self.downgrade();
+        let store_for_sidebar = model.store.clone();
         sidebar.connect_route_selected(move |id| {
             let Some(win) = obj_weak.upgrade() else { return };
             if let Some(coordinator) = win.imp().coordinator.get() {
-                coordinator.borrow().navigate(id);
+                // If the library is empty, stay on the empty page.
+                if store_for_sidebar.n_items() == 0 {
+                    coordinator.borrow().navigate("empty");
+                } else {
+                    coordinator.borrow().navigate(id);
+                }
             }
         });
 
