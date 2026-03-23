@@ -203,7 +203,8 @@ impl MomentsApplication {
         *self.imp().library_events.borrow_mut() = Some(receiver);
 
         // Hold prevents auto-shutdown while there are no live windows.
-        <MomentsApplication as gio::prelude::ApplicationExt>::hold(self);
+        // Upcast to gio::Application to avoid ambiguity with PermissionExt::release.
+        self.upcast_ref::<gio::Application>().hold();
 
         glib::MainContext::default().spawn_local(glib::clone!(
             #[weak(rename_to = app)]
@@ -225,7 +226,7 @@ impl MomentsApplication {
                     }
                 }
                 // Release the hold regardless of success or failure.
-                <MomentsApplication as gio::prelude::ApplicationExt>::release(&app);
+                app.upcast_ref::<gio::Application>().release();
             }
         ));
     }
