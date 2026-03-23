@@ -3,6 +3,16 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::library::error::LibraryError;
+use crate::library::media::MediaType;
+
+/// Video file extensions accepted during import.
+///
+/// Videos are recognised by extension but not decoded by `FormatHandler`
+/// (that trait returns `DynamicImage`). Thumbnail generation for videos
+/// requires a separate pipeline (Phase 2 — GStreamer).
+const VIDEO_EXTENSIONS: &[&str] = &[
+    "mp4", "mov", "m4v", "mkv", "webm", "avi", "mts", "m2ts", "3gp",
+];
 
 /// Decodes image files of a specific set of formats into a [`image::DynamicImage`].
 ///
@@ -67,6 +77,26 @@ impl FormatRegistry {
         handler.decode(path)
     }
 
+    /// Returns `true` if `ext` is a recognised video format (case-insensitive).
+    pub fn is_video(&self, ext: &str) -> bool {
+        VIDEO_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
+    }
+
+    /// Determine the [`MediaType`] for a file extension.
+    ///
+    /// Returns `None` if the extension is neither a registered image format
+    /// nor a recognised video format.
+    pub fn media_type(&self, ext: &str) -> Option<MediaType> {
+        let lower = ext.to_ascii_lowercase();
+        if self.handlers.contains_key(&lower) {
+            Some(MediaType::Image)
+        } else if VIDEO_EXTENSIONS.contains(&lower.as_str()) {
+            Some(MediaType::Video)
+        } else {
+            None
+        }
+    }
+
     /// All extensions supported across all registered handlers.
     #[allow(dead_code)]
     pub fn supported_extensions(&self) -> impl Iterator<Item = &str> {
@@ -110,5 +140,24 @@ mod tests {
         let reg = FormatRegistry::new();
         let err = reg.decode(&PathBuf::from("photo.jpg")).unwrap_err();
         assert!(matches!(err, LibraryError::Thumbnail(_)));
+    }
+
+    #[test]
+    fn is_video_recognises_common_formats() {
+        let reg = FormatRegistry::new();
+        assert!(reg.is_video("mp4"));
+        assert!(reg.is_video("MOV"));
+        assert!(reg.is_video("mkv"));
+        assert!(!reg.is_video("jpg"));
+        assert!(!reg.is_video("unknown"));
+    }
+
+    #[test]
+    fn media_type_returns_correct_type() {
+        let mut reg = FormatRegistry::new();
+        reg.register(Arc::new(FakeHandler));
+        assert_eq!(reg.media_type("fake"), Some(MediaType::Image));
+        assert_eq!(reg.media_type("mp4"), Some(MediaType::Video));
+        assert_eq!(reg.media_type("unknown"), None);
     }
 }

@@ -119,12 +119,16 @@ impl ImportJob {
             .map(|e| e.to_lowercase())
             .unwrap_or_default();
 
-        if !self.formats.is_supported(&ext) {
-            return Ok(Some(SkipReason::UnsupportedFormat));
-        }
+        let media_type = match self.formats.media_type(&ext) {
+            Some(mt) => mt,
+            None => return Ok(Some(SkipReason::UnsupportedFormat)),
+        };
+        let is_video = media_type == MediaType::Video;
 
-        // ── 2. Hash + EXIF extract (single blocking task, one file read) ─────
+        // ── 2. Hash + optional EXIF extract ──────────────────────────────────
+        // Videos skip EXIF (no EXIF in video containers); images extract EXIF.
         let source_clone = source.to_path_buf();
+        let extract_exif_flag = !is_video;
         let (media_id, exif) =
             tokio::task::spawn_blocking(move || -> Result<_, LibraryError> {
                 let id = {
@@ -134,7 +138,11 @@ impl ImportJob {
                     std::io::copy(&mut reader, &mut hasher).map_err(LibraryError::Io)?;
                     MediaId::new(hasher.finalize().to_hex().to_string())
                 };
-                let exif = extract_exif(&source_clone);
+                let exif = if extract_exif_flag {
+                    extract_exif(&source_clone)
+                } else {
+                    Default::default()
+                };
                 Ok((id, exif))
             })
             .await
@@ -185,7 +193,7 @@ impl ImportJob {
                 original_filename,
                 file_size,
                 imported_at,
-                media_type: MediaType::Image,
+                media_type,
                 taken_at: exif.captured_at,
                 width: exif.width.map(|w| w as i64),
                 height: exif.height.map(|h| h as i64),
@@ -220,13 +228,16 @@ impl ImportJob {
             .ok();
 
         // ── 8. Spawn thumbnail generation (non-blocking, best-effort) ─────────
-        let thumb_job = ThumbnailJob::new(
-            self.thumbnails_dir.clone(),
-            self.db.clone(),
-            self.events.clone(),
-            Arc::clone(&self.formats),
-        );
-        tokio::spawn(async move { thumb_job.generate(media_id, target).await });
+        // Videos skip thumbnail generation for now (Phase 2 — GStreamer).
+        if !is_video {
+            let thumb_job = ThumbnailJob::new(
+                self.thumbnails_dir.clone(),
+                self.db.clone(),
+                self.events.clone(),
+                Arc::clone(&self.formats),
+            );
+            tokio::spawn(async move { thumb_job.generate(media_id, target).await });
+        }
 
         // Increment summary via the Ok(None) sentinel — summary is updated
         // by the caller when it sees AssetImported was emitted.
@@ -489,5 +500,40 @@ mod tests {
             .unwrap();
         assert_eq!(summary.imported, 2);
         assert_eq!(summary.skipped_unsupported, 1);
+    }
+
+    #[tokio::test]
+    async fn video_file_is_imported_as_video_type() {
+        let src_dir = tempdir().unwrap();
+        let bundle_dir = tempdir().unwrap();
+        let originals = bundle_dir.path().join("originals");
+        let thumbnails = bundle_dir.path().join("thumbnails");
+        let db = open_test_db(bundle_dir.path()).await;
+
+        make_file(src_dir.path(), "clip.mp4", b"fake video");
+
+        let (tx, rx) = mpsc::channel();
+        ImportJob::new(originals, thumbnails, db.clone(), tx, test_registry())
+            .run(vec![src_dir.path().to_path_buf()])
+            .await;
+
+        let events: Vec<_> = rx.try_iter().collect();
+        let summary = events
+            .iter()
+            .find_map(|e| {
+                if let LibraryEvent::ImportComplete(s) = e {
+                    Some(s)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        assert_eq!(summary.imported, 1);
+
+        // Verify it's stored as Video type.
+        use crate::library::media::{LibraryMedia, MediaFilter};
+        let items = db.list_media(MediaFilter::All, None, 10).await.unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].media_type, MediaType::Video);
     }
 }
