@@ -3,7 +3,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use adw::prelude::*;
-use gtk::{gdk, gio, glib};
+use gtk::{gdk, glib};
 use tracing::debug;
 
 use crate::library::media::MediaMetadataRecord;
@@ -96,15 +96,11 @@ impl ViewerInner {
         }
     }
 
-    /// Asynchronously load the original file at full resolution.
+    /// Asynchronously load the original file at full resolution via glycin.
     ///
-    /// Strategy:
-    /// 1. Resolve the original path from the library.
-    /// 2. For standard formats (JPEG, PNG, WebP, TIFF) set the file directly
-    ///    on `gtk::Picture` — GTK loads it natively, no decode overhead.
-    /// 3. For formats GTK can't handle (HEIC, RAW) fall back to decoding via
-    ///    `image::open()` and uploading RGBA bytes as a `gdk::MemoryTexture`.
-    ///    EXIF orientation is applied in both paths.
+    /// glycin decodes in a sandboxed subprocess, applies EXIF orientation
+    /// automatically, and handles all supported formats (JPEG, PNG, WebP,
+    /// TIFF, HEIC, RAW, etc.) without any format-specific branching.
     ///
     /// Falls back silently to the cached thumbnail on any error.
     fn start_full_res_load(
@@ -120,7 +116,7 @@ impl ViewerInner {
         self.spinner.set_visible(true);
 
         glib::MainContext::default().spawn_local(async move {
-            // Resolve path on Tokio (async DB call).
+            // ── 1. Resolve path on Tokio ─────────────────────────────────────
             let path = match tokio
                 .spawn(async move { library.original_path(&id).await })
                 .await
@@ -142,35 +138,22 @@ impl ViewerInner {
                 return;
             }
 
-            // For standard formats GTK loads the file directly — zero copy,
-            // hardware-accelerated, no memory spike.
-            if is_gtk_native(&path) {
-                inner.spinner.set_spinning(false);
-                inner.spinner.set_visible(false);
-                let file = gio::File::for_path(&path);
-                inner.picture.set_file(Some(&file));
-                debug!("full-res via set_file: {}", path.display());
-                return;
-            }
-
-            // For HEIC / RAW: decode via `image` crate (with orientation fix).
-            let pixels: Option<(Vec<u8>, i32, i32)> = tokio
+            // ── 2. Decode with glycin on Tokio ───────────────────────────────
+            // Returns raw pixel bytes + dimensions + memory format so the
+            // gdk::MemoryTexture can be assembled back on the GLib context.
+            type PixelData = Option<(Vec<u8>, u32, u32, u32, glycin::MemoryFormat)>;
+            let pixel_data: PixelData = tokio
                 .spawn(async move {
-                    tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, i32, i32)> {
-                        let img = image::open(&path)
-                            .map_err(|e| debug!("full-res decode failed: {e}"))
-                            .ok()?;
-                        let orientation = crate::library::exif::extract_exif(&path)
-                            .orientation
-                            .unwrap_or(1);
-                        let img =
-                            crate::library::thumbnailer::apply_orientation(img, orientation);
-                        let rgba = img.into_rgba8();
-                        let (w, h) = rgba.dimensions();
-                        Some((rgba.into_raw(), w as i32, h as i32))
-                    })
-                    .await
-                    .ok()?
+                    let file = gtk::gio::File::for_path(&path);
+                    let img = glycin::Loader::new(file).load().await.ok()?;
+                    let frame = img.next_frame().await.ok()?;
+                    let bytes = frame.buf_slice().to_vec();
+                    let width = frame.width();
+                    let height = frame.height();
+                    let stride = frame.stride();
+                    let fmt = frame.memory_format();
+                    debug!("glycin decoded: {width}×{height} {fmt:?}");
+                    Some((bytes, width, height, stride, fmt))
                 })
                 .await
                 .ok()
@@ -183,20 +166,22 @@ impl ViewerInner {
                 return;
             }
 
-            if let Some((raw, width, height)) = pixels {
-                let gbytes = glib::Bytes::from_owned(raw);
+            // ── 3. Assemble gdk::MemoryTexture on the GLib context ───────────
+            if let Some((bytes, width, height, stride, fmt)) = pixel_data {
+                let gdk_fmt = glycin_format_to_gdk(fmt);
+                let gbytes = glib::Bytes::from_owned(bytes);
                 let texture = gdk::MemoryTexture::new(
-                    width,
-                    height,
-                    gdk::MemoryFormat::R8g8b8a8,
+                    width as i32,
+                    height as i32,
+                    gdk_fmt,
                     &gbytes,
-                    (width as usize) * 4,
+                    stride as usize,
                 )
                 .upcast::<gdk::Texture>();
                 inner
                     .picture
                     .set_paintable(Some(texture.upcast_ref::<gdk::Paintable>()));
-                debug!("full-res via MemoryTexture: {width}×{height}");
+                debug!("full-res displayed: {width}×{height}");
             }
         });
     }
@@ -449,18 +434,14 @@ impl PhotoViewer {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Returns `true` if GTK can load `path` natively via `gtk::Picture::set_file`.
-///
-/// GTK's built-in loaders handle JPEG, PNG, WebP, and TIFF well. HEIC and RAW
-/// formats require the `image` crate decode path.
-fn is_gtk_native(path: &std::path::Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase())
-            .as_deref(),
-        Some("jpg" | "jpeg" | "png" | "webp" | "tiff" | "tif")
-    )
+/// Map a glycin pixel format to the equivalent `gdk::MemoryFormat`.
+fn glycin_format_to_gdk(fmt: glycin::MemoryFormat) -> gdk::MemoryFormat {
+    match fmt {
+        glycin::MemoryFormat::R8g8b8 => gdk::MemoryFormat::R8g8b8,
+        glycin::MemoryFormat::R8g8b8a8Premultiplied => gdk::MemoryFormat::R8g8b8a8Premultiplied,
+        // Default to straight RGBA for any other format glycin may return.
+        _ => gdk::MemoryFormat::R8g8b8a8,
+    }
 }
 
 #[cfg(test)]
@@ -468,22 +449,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn is_gtk_native_standard_formats() {
-        use std::path::Path;
-        assert!(is_gtk_native(Path::new("photo.jpg")));
-        assert!(is_gtk_native(Path::new("photo.JPEG")));
-        assert!(is_gtk_native(Path::new("photo.png")));
-        assert!(is_gtk_native(Path::new("photo.webp")));
-        assert!(is_gtk_native(Path::new("photo.tiff")));
-        assert!(is_gtk_native(Path::new("photo.tif")));
+    fn glycin_format_to_gdk_rgb() {
+        assert_eq!(
+            glycin_format_to_gdk(glycin::MemoryFormat::R8g8b8),
+            gdk::MemoryFormat::R8g8b8
+        );
     }
 
     #[test]
-    fn is_gtk_native_non_native_formats() {
-        use std::path::Path;
-        assert!(!is_gtk_native(Path::new("photo.cr2")));
-        assert!(!is_gtk_native(Path::new("photo.arw")));
-        assert!(!is_gtk_native(Path::new("photo.heic")));
-        assert!(!is_gtk_native(Path::new("photo.nef")));
+    fn glycin_format_to_gdk_rgba_premultiplied() {
+        assert_eq!(
+            glycin_format_to_gdk(glycin::MemoryFormat::R8g8b8a8Premultiplied),
+            gdk::MemoryFormat::R8g8b8a8Premultiplied
+        );
+    }
+
+    #[test]
+    fn glycin_format_to_gdk_rgba_straight() {
+        assert_eq!(
+            glycin_format_to_gdk(glycin::MemoryFormat::R8g8b8a8),
+            gdk::MemoryFormat::R8g8b8a8
+        );
     }
 }

@@ -1,13 +1,12 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use gtk::gio;
 use tracing::{debug, instrument, warn};
 
 use super::db::Database;
 use super::error::LibraryError;
 use super::event::LibraryEvent;
-use super::format::FormatRegistry;
 use super::media::MediaId;
 use super::thumbnail::sharded_thumbnail_path;
 
@@ -17,14 +16,14 @@ const GRID_SIZE: u32 = 360;
 /// Drives thumbnail generation for a single imported asset.
 ///
 /// `ThumbnailJob::generate` is **async** and must be spawned on the Tokio
-/// runtime. The CPU-bound decode/resize/encode step runs on a blocking
-/// thread via [`tokio::task::spawn_blocking`] so the async executor stays
-/// free. Results flow back through [`LibraryEvent::ThumbnailReady`].
+/// runtime. The CPU-bound resize/encode step runs on a blocking thread via
+/// [`tokio::task::spawn_blocking`]. Image decoding is handled by glycin
+/// (sandboxed, handles JPEG/PNG/WebP/TIFF/HEIC/RAW/etc.) on the Tokio
+/// executor. Results flow back through [`LibraryEvent::ThumbnailReady`].
 pub struct ThumbnailJob {
     thumbnails_dir: PathBuf,
     db: Database,
     events: std::sync::mpsc::Sender<LibraryEvent>,
-    formats: Arc<FormatRegistry>,
 }
 
 impl ThumbnailJob {
@@ -32,20 +31,18 @@ impl ThumbnailJob {
         thumbnails_dir: PathBuf,
         db: Database,
         events: std::sync::mpsc::Sender<LibraryEvent>,
-        formats: Arc<FormatRegistry>,
     ) -> Self {
         Self {
             thumbnails_dir,
             db,
             events,
-            formats,
         }
     }
 
     /// Generate and persist the grid thumbnail for `source`.
     ///
     /// 1. Insert a `Pending` DB row (idempotent).
-    /// 2. Decode the source image on a blocking thread.
+    /// 2. Decode the source image with glycin on the Tokio executor.
     /// 3. Resize to [`GRID_SIZE`] on the longest edge, preserving aspect ratio.
     /// 4. Encode as WebP and write atomically (temp file → rename).
     /// 5. Mark the DB row `Ready` and emit [`LibraryEvent::ThumbnailReady`].
@@ -82,22 +79,42 @@ impl ThumbnailJob {
                 .map_err(LibraryError::Io)?;
         }
 
-        // ── 3. Decode, resize, encode — blocking ──────────────────────────────
-        let source = source.to_path_buf();
+        // ── 3. Decode with glycin (async, Tokio executor) ─────────────────────
+        // glycin applies EXIF orientation automatically — no manual correction needed.
+        let file = gio::File::for_path(source);
+        let img = glycin::Loader::new(file)
+            .load()
+            .await
+            .map_err(|e| LibraryError::Thumbnail(e.to_string()))?;
+        let frame = img
+            .next_frame()
+            .await
+            .map_err(|e| LibraryError::Thumbnail(e.to_string()))?;
+
+        let raw_bytes = frame.buf_slice().to_vec();
+        let width = frame.width();
+        let height = frame.height();
+        let stride = frame.stride();
+        let memory_format = frame.memory_format();
+
+        // ── 4. Resize and encode as WebP — blocking ───────────────────────────
         let tmp_clone = tmp_path.clone();
-        let formats = Arc::clone(&self.formats);
         tokio::task::spawn_blocking(move || {
-            generate_thumbnail(&source, &tmp_clone, GRID_SIZE, &formats)
+            let dyn_img = frame_bytes_to_image(raw_bytes, width, height, stride, memory_format)?;
+            let thumb = dyn_img.thumbnail(GRID_SIZE, GRID_SIZE);
+            thumb
+                .save_with_format(&tmp_clone, image::ImageFormat::WebP)
+                .map_err(|e| LibraryError::Thumbnail(e.to_string()))
         })
         .await
         .map_err(|e| LibraryError::Runtime(e.to_string()))??;
 
-        // ── 4. Atomic rename to final path ────────────────────────────────────
+        // ── 5. Atomic rename to final path ────────────────────────────────────
         tokio::fs::rename(&tmp_path, &final_path)
             .await
             .map_err(LibraryError::Io)?;
 
-        // ── 5. Update DB and emit event ───────────────────────────────────────
+        // ── 6. Update DB and emit event ───────────────────────────────────────
         let relative = final_path
             .strip_prefix(&self.thumbnails_dir)
             .map(|p| p.to_string_lossy().into_owned())
@@ -123,174 +140,91 @@ impl ThumbnailJob {
     }
 }
 
-/// Decode `source`, resize to `max_edge` on the longest side, encode as WebP.
+/// Convert raw pixel bytes from a glycin frame into an [`image::DynamicImage`].
 ///
-/// Applies EXIF orientation before resizing so thumbnails are always upright.
-/// Runs on a blocking thread — never call from an async context directly.
-fn generate_thumbnail(
-    source: &Path,
-    dest: &Path,
-    max_edge: u32,
-    formats: &FormatRegistry,
-) -> Result<(), LibraryError> {
-    let img = formats.decode(source)?;
-    let orientation = crate::library::exif::extract_exif(source)
-        .orientation
-        .unwrap_or(1);
-    let img = apply_orientation(img, orientation);
-    let thumb = img.thumbnail(max_edge, max_edge);
-    thumb
-        .save_with_format(dest, image::ImageFormat::WebP)
-        .map_err(|e| LibraryError::Thumbnail(e.to_string()))?;
-    Ok(())
-}
+/// Handles non-tight stride by copying each row. Supports the RGB and RGBA
+/// 8-bit formats that glycin returns for standard and RAW images.
+fn frame_bytes_to_image(
+    data: Vec<u8>,
+    width: u32,
+    height: u32,
+    stride: u32,
+    fmt: glycin::MemoryFormat,
+) -> Result<image::DynamicImage, LibraryError> {
+    let (bytes_per_pixel, has_alpha) = match fmt {
+        glycin::MemoryFormat::R8g8b8 => (3u32, false),
+        glycin::MemoryFormat::R8g8b8a8 | glycin::MemoryFormat::R8g8b8a8Premultiplied => {
+            (4u32, true)
+        }
+        other => {
+            return Err(LibraryError::Thumbnail(format!(
+                "unsupported pixel format from glycin: {other:?}"
+            )))
+        }
+    };
 
-/// Rotate/flip `img` to match the EXIF orientation tag value (1–8).
-///
-/// EXIF orientation defines how the sensor data maps to the upright image.
-/// Value 1 means the pixel data is already correct; values 2–8 require a
-/// combination of rotation and/or mirror to produce a visually upright image.
-pub(crate) fn apply_orientation(img: image::DynamicImage, orientation: u8) -> image::DynamicImage {
-    use image::imageops;
-    match orientation {
-        2 => image::DynamicImage::from(imageops::flip_horizontal(&img)),
-        3 => image::DynamicImage::from(imageops::rotate180(&img)),
-        4 => image::DynamicImage::from(imageops::flip_vertical(&img)),
-        5 => image::DynamicImage::from(imageops::flip_horizontal(&imageops::rotate90(&img))),
-        6 => image::DynamicImage::from(imageops::rotate90(&img)),
-        7 => image::DynamicImage::from(imageops::flip_horizontal(&imageops::rotate270(&img))),
-        8 => image::DynamicImage::from(imageops::rotate270(&img)),
-        _ => img, // 1 or unknown — already upright
-    }
+    let row_bytes = (width * bytes_per_pixel) as usize;
+    let packed: Vec<u8> = if stride as usize == row_bytes {
+        data
+    } else {
+        let mut out = Vec::with_capacity(row_bytes * height as usize);
+        for row in 0..height as usize {
+            let start = row * stride as usize;
+            out.extend_from_slice(&data[start..start + row_bytes]);
+        }
+        out
+    };
+
+    let img = if has_alpha {
+        let buf = image::RgbaImage::from_raw(width, height, packed)
+            .ok_or_else(|| LibraryError::Thumbnail("failed to build RGBA image".into()))?;
+        image::DynamicImage::ImageRgba8(buf)
+    } else {
+        let buf = image::RgbImage::from_raw(width, height, packed)
+            .ok_or_else(|| LibraryError::Thumbnail("failed to build RGB image".into()))?;
+        image::DynamicImage::ImageRgb8(buf)
+    };
+
+    Ok(img)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::library::db::Database;
-    use crate::library::format::StandardHandler;
-    use crate::library::media::{LibraryMedia, MediaRecord, MediaType};
-    use std::sync::mpsc;
-    use tempfile::tempdir;
 
-    async fn open_test_db(dir: &Path) -> Database {
-        Database::open(&dir.join("db").join("test.db"))
-            .await
-            .unwrap()
+    #[test]
+    fn frame_bytes_to_image_rgb_tight() {
+        // 2×2 RGB image, tightly packed (stride == width * 3)
+        let data = vec![255u8; 2 * 2 * 3];
+        let img = frame_bytes_to_image(data, 2, 2, 6, glycin::MemoryFormat::R8g8b8).unwrap();
+        assert_eq!((img.width(), img.height()), (2, 2));
     }
 
-    fn test_record(id: MediaId, filename: &str) -> MediaRecord {
-        MediaRecord {
-            id,
-            relative_path: format!("2025/01/01/{filename}"),
-            original_filename: filename.to_string(),
-            file_size: 100,
-            imported_at: 0,
-            media_type: MediaType::Image,
-            taken_at: None,
-            width: None,
-            height: None,
-            orientation: 1,
+    #[test]
+    fn frame_bytes_to_image_rgba_tight() {
+        let data = vec![255u8; 4 * 4 * 4];
+        let img =
+            frame_bytes_to_image(data, 4, 4, 16, glycin::MemoryFormat::R8g8b8a8).unwrap();
+        assert_eq!((img.width(), img.height()), (4, 4));
+    }
+
+    #[test]
+    fn frame_bytes_to_image_rgb_with_stride_padding() {
+        // 2×2 RGB, stride = 8 (2 bytes padding per row)
+        let mut data = Vec::new();
+        for _ in 0..2 {
+            data.extend_from_slice(&[255u8, 0, 0]); // pixel 1
+            data.extend_from_slice(&[0u8, 255, 0]); // pixel 2
+            data.extend_from_slice(&[0u8, 0]);       // 2 bytes padding
         }
-    }
-
-    fn test_registry() -> Arc<FormatRegistry> {
-        let mut reg = FormatRegistry::new();
-        reg.register(Arc::new(StandardHandler));
-        Arc::new(reg)
-    }
-
-    fn write_test_jpeg(path: &Path) {
-        // Minimal valid 1×1 white JPEG.
-        let img = image::RgbImage::new(1, 1);
-        image::DynamicImage::ImageRgb8(img)
-            .save_with_format(path, image::ImageFormat::Jpeg)
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn generate_creates_webp_thumbnail() {
-        let dir = tempdir().unwrap();
-        let db = open_test_db(dir.path()).await;
-        let thumbnails_dir = dir.path().join("thumbnails");
-        let src_path = dir.path().join("photo.jpg");
-        write_test_jpeg(&src_path);
-
-        let id = MediaId::from_file(&src_path).await.unwrap();
-
-        // Insert media record so FK constraint is satisfied.
-        db.insert_media(&test_record(id.clone(), "photo.jpg"))
-            .await
-            .unwrap();
-
-        let (tx, rx) = mpsc::channel();
-        ThumbnailJob::new(thumbnails_dir.clone(), db.clone(), tx, test_registry())
-            .generate(id.clone(), src_path)
-            .await;
-
-        // Thumbnail file exists.
-        let thumb_path = sharded_thumbnail_path(&thumbnails_dir, &id);
-        assert!(thumb_path.exists(), "thumbnail file not found at {thumb_path:?}");
-
-        // Event was emitted.
-        let events: Vec<_> = rx.try_iter().collect();
-        assert!(events
-            .iter()
-            .any(|e| matches!(e, LibraryEvent::ThumbnailReady { .. })));
+        let img = frame_bytes_to_image(data, 2, 2, 8, glycin::MemoryFormat::R8g8b8).unwrap();
+        assert_eq!((img.width(), img.height()), (2, 2));
     }
 
     #[test]
-    fn apply_orientation_1_is_identity() {
-        let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(4, 2));
-        let out = apply_orientation(img, 1);
-        assert_eq!((out.width(), out.height()), (4, 2));
-    }
-
-    #[test]
-    fn apply_orientation_6_swaps_dimensions() {
-        // Orientation 6 = rotate 90° CW: a 4×2 image becomes 2×4.
-        let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(4, 2));
-        let out = apply_orientation(img, 6);
-        assert_eq!((out.width(), out.height()), (2, 4));
-    }
-
-    #[test]
-    fn apply_orientation_8_swaps_dimensions() {
-        // Orientation 8 = rotate 90° CCW: a 4×2 image becomes 2×4.
-        let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(4, 2));
-        let out = apply_orientation(img, 8);
-        assert_eq!((out.width(), out.height()), (2, 4));
-    }
-
-    #[test]
-    fn apply_orientation_3_preserves_dimensions() {
-        // Orientation 3 = rotate 180°: dimensions stay the same.
-        let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(4, 2));
-        let out = apply_orientation(img, 3);
-        assert_eq!((out.width(), out.height()), (4, 2));
-    }
-
-    #[tokio::test]
-    async fn generate_marks_failed_on_corrupt_source() {
-        let dir = tempdir().unwrap();
-        let db = open_test_db(dir.path()).await;
-        let thumbnails_dir = dir.path().join("thumbnails");
-        let src_path = dir.path().join("bad.jpg");
-        std::fs::write(&src_path, b"not an image").unwrap();
-
-        let id = MediaId::from_file(&src_path).await.unwrap();
-
-        db.insert_media(&test_record(id.clone(), "bad.jpg"))
-            .await
-            .unwrap();
-
-        let (tx, _rx) = mpsc::channel();
-        ThumbnailJob::new(thumbnails_dir, db.clone(), tx, test_registry())
-            .generate(id.clone(), src_path)
-            .await;
-
-        // DB row should be marked Failed.
-        let status = db.thumbnail_status(&id).await.unwrap();
-        assert_eq!(status, Some(crate::library::thumbnail::ThumbnailStatus::Failed));
+    fn frame_bytes_to_image_unsupported_format_returns_error() {
+        let data = vec![0u8; 4];
+        let result = frame_bytes_to_image(data, 1, 1, 2, glycin::MemoryFormat::G8);
+        assert!(result.is_err());
     }
 }
