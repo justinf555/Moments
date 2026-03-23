@@ -28,6 +28,7 @@ use gtk::{gio, glib};
 use tracing::debug;
 
 use crate::library::Library;
+use crate::library::media::MediaFilter;
 
 use crate::ui::coordinator::ContentCoordinator;
 use crate::ui::empty_library::EmptyLibraryView;
@@ -147,18 +148,29 @@ impl MomentsWindow {
             .expect("coordinator set once in setup()");
 
         // Wire sidebar selection → coordinator navigation.
-        // Only navigates to routes the sidebar knows about (e.g. "photos");
-        // the empty/photos toggle is driven by the store signal above.
+        // Both "photos" and "favorites" use the same PhotoGridView — the
+        // difference is the MediaFilter applied to the model.
         let obj_weak = self.downgrade();
         let store_for_sidebar = model.store.clone();
+        let model_for_sidebar = Rc::clone(&model);
         sidebar.connect_route_selected(move |id| {
             let Some(win) = obj_weak.upgrade() else { return };
+
+            // Set the appropriate filter on the model.
+            let filter = match id {
+                "favorites" => MediaFilter::Favorites,
+                _ => MediaFilter::All,
+            };
+            model_for_sidebar.set_filter(filter);
+
             if let Some(coordinator) = win.imp().coordinator.get() {
-                // If the library is empty, stay on the empty page.
+                // After setting filter, if the store is empty show the
+                // empty page; the items-changed handler will switch to
+                // "photos" once items arrive from the reload.
                 if store_for_sidebar.n_items() == 0 {
                     coordinator.borrow().navigate("empty");
                 } else {
-                    coordinator.borrow().navigate(id);
+                    coordinator.borrow().navigate("photos");
                 }
             }
         });
