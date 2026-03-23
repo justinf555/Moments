@@ -4,6 +4,28 @@
 **Status:** Proposed
 **Date:** 2026-03-24
 
+## Prior Art: GNOME App Patterns
+
+Research into how other GNOME apps handle sidebar navigation and view lifecycle:
+
+| App | View Creation | View Lifecycle | Approach |
+|-----|--------------|----------------|----------|
+| **Fractal** | Eager — fixed set in GtkStack | Singleton views reconfigured with new data on selection change | Small fixed set of view types, reused across room selections |
+| **Nautilus** | Lazy — per slot/tab | Single view created on first navigation, reused within slot | Views persist with their own back/forward history |
+| **GNOME Settings** | Lazy — on click | Created fresh each time, destroyed on switch | No caching, simplest pattern, minimal memory |
+
+### Why We Chose the Nautilus Pattern
+
+Our design aligns closest with **Nautilus** — lazy creation on first navigation, then the view persists and maintains its own state:
+
+- **Fractal's pattern** (eager singletons reconfigured with new data) is what we had before the separate-instances refactor. We moved away because reconfiguring one shared view lost scroll position, required pop_to_grid hacks, and leaked state between routes.
+- **GNOME Settings' pattern** (create/destroy on every switch) would work but wastes the DB query on every visit and loses scroll position, zoom level, and viewer state.
+- **Nautilus' pattern** (lazy creation, persistent views) fits our needs: views are moderately expensive to create (model + DB query + GridView + factory), and once created they maintain valuable state (scroll position, zoom, viewer page).
+
+### Moments-Specific: ModelRegistry
+
+Our `ModelRegistry` pattern for event broadcasting is specific to Moments. It doesn't appear in Fractal (single shared data model), Nautilus (no equivalent event bus), or GNOME Settings (no persistent models). It's needed because our architecture has multiple independent models that must receive the same library events (`ThumbnailReady`, `ImportComplete`).
+
 ## Problem
 
 All sidebar views are eagerly constructed at startup in `window.rs::setup()`. Each `PhotoGridView` creates a `PhotoGridModel` that immediately calls `load_more()`, firing a database query. With N sidebar routes, that's N queries at startup even if the user only ever looks at Photos.
