@@ -31,7 +31,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 kamadak-exif = "0.5"
 # `image` feature enables the image-crate integration (register_all_decoding_hooks)
 # `default-features = false` avoids the `embedded-libheif` feature (we use system libheif)
-libheif-rs = { version = "2.7.0", default-features = false, features = ["image", "latest"] }
+libheif-rs = { version = "2.7.0", default-features = false, features = ["image", "v1_20"] }
 
 # Utilities
 thiserror = "2"
