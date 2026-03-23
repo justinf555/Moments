@@ -18,10 +18,14 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+use std::rc::Rc;
+
 use gtk::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gio, glib};
 use tracing::debug;
+
+use crate::ui::photo_grid::{PhotoGrid, PhotoGridModel};
 
 mod imp {
     use super::*;
@@ -32,7 +36,7 @@ mod imp {
         #[template_child]
         pub main_stack: TemplateChild<gtk::Stack>,
         #[template_child]
-        pub label: TemplateChild<gtk::Label>,
+        pub photo_grid: TemplateChild<PhotoGrid>,
     }
 
     #[glib::object_subclass]
@@ -42,6 +46,9 @@ mod imp {
         type ParentType = adw::ApplicationWindow;
 
         fn class_init(klass: &mut Self::Class) {
+            // Register MomentsPhotoGrid before binding the template so GTK
+            // can resolve the type name used in window.ui.
+            PhotoGrid::ensure_type();
             klass.bind_template();
         }
 
@@ -69,6 +76,11 @@ impl MomentsWindow {
         glib::Object::builder()
             .property("application", application)
             .build()
+    }
+
+    /// Attach a photo grid model once the library is ready.
+    pub fn set_model(&self, model: Rc<PhotoGridModel>) {
+        self.imp().photo_grid.set_model(model);
     }
 
     /// Switch from the loading page to the content page once the library is ready.
