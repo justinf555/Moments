@@ -134,9 +134,9 @@ impl MomentsLocalSetupPage {
                         if path.extension().and_then(|e| e.to_str()) != Some("library") {
                             path = path.join("Moments.library");
                         }
-                        let display = path.to_string_lossy().to_string();
-                        debug!(path = %display, "folder chosen");
-                        page.imp().path_row.set_subtitle(&display);
+                        let path_str = path.to_string_lossy().to_string();
+                        debug!(path = %path_str, "folder chosen");
+                        page.imp().path_row.set_subtitle(&path_str);
                         page.imp().create_button.set_sensitive(true);
                         *page.imp().chosen_path.borrow_mut() = Some(path);
                     }
