@@ -142,7 +142,7 @@ fn decode_image_file(path: &Path) -> Result<image::DynamicImage, LibraryError> {
 mod tests {
     use super::*;
     use crate::library::db::Database;
-    use crate::library::media::{LibraryMedia, MediaRecord};
+    use crate::library::media::{LibraryMedia, MediaRecord, MediaType};
     use std::sync::mpsc;
     use tempfile::tempdir;
 
@@ -150,6 +150,21 @@ mod tests {
         Database::open(&dir.join("db").join("test.db"))
             .await
             .unwrap()
+    }
+
+    fn test_record(id: MediaId, filename: &str) -> MediaRecord {
+        MediaRecord {
+            id,
+            relative_path: format!("2025/01/01/{filename}"),
+            original_filename: filename.to_string(),
+            file_size: 100,
+            imported_at: 0,
+            media_type: MediaType::Image,
+            taken_at: None,
+            width: None,
+            height: None,
+            orientation: 1,
+        }
     }
 
     fn write_test_jpeg(path: &Path) {
@@ -171,15 +186,9 @@ mod tests {
         let id = MediaId::from_file(&src_path).await.unwrap();
 
         // Insert media record so FK constraint is satisfied.
-        db.insert_media(&MediaRecord {
-            id: id.clone(),
-            relative_path: "2025/01/01/photo.jpg".to_string(),
-            original_filename: "photo.jpg".to_string(),
-            file_size: 100,
-            imported_at: 0,
-        })
-        .await
-        .unwrap();
+        db.insert_media(&test_record(id.clone(), "photo.jpg"))
+            .await
+            .unwrap();
 
         let (tx, rx) = mpsc::channel();
         ThumbnailJob::new(thumbnails_dir.clone(), db.clone(), tx)
@@ -207,15 +216,9 @@ mod tests {
 
         let id = MediaId::from_file(&src_path).await.unwrap();
 
-        db.insert_media(&MediaRecord {
-            id: id.clone(),
-            relative_path: "2025/01/01/bad.jpg".to_string(),
-            original_filename: "bad.jpg".to_string(),
-            file_size: 12,
-            imported_at: 0,
-        })
-        .await
-        .unwrap();
+        db.insert_media(&test_record(id.clone(), "bad.jpg"))
+            .await
+            .unwrap();
 
         let (tx, _rx) = mpsc::channel();
         ThumbnailJob::new(thumbnails_dir, db.clone(), tx)

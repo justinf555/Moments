@@ -38,6 +38,14 @@ impl MediaId {
         &self.0
     }
 
+    /// Construct a `MediaId` from a pre-computed hex string.
+    ///
+    /// Use this inside a `spawn_blocking` closure where hashing is done
+    /// manually with `blake3::Hasher`. For general use, prefer [`MediaId::from_file`].
+    pub(crate) fn new(hex: String) -> Self {
+        Self(hex)
+    }
+
     /// For use in tests only — constructs a `MediaId` from a raw string
     /// without hashing. Prefixed `__test_` to make its purpose obvious.
     #[cfg(test)]
@@ -50,6 +58,14 @@ impl std::fmt::Display for MediaId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
     }
+}
+
+/// Media type stored in the `media.media_type` column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i64)]
+pub enum MediaType {
+    Image = 0,
+    Video = 1,
 }
 
 /// Feature trait for media asset persistence.
@@ -69,6 +85,12 @@ pub trait LibraryMedia: Send + Sync {
 
     /// Persist a newly imported media asset record.
     async fn insert_media(&self, record: &MediaRecord) -> Result<(), LibraryError>;
+
+    /// Persist the full EXIF detail row. No-op if `record.has_data()` is false.
+    async fn insert_media_metadata(
+        &self,
+        record: &MediaMetadataRecord,
+    ) -> Result<(), LibraryError>;
 }
 
 /// A row in the `media` table.
@@ -81,6 +103,49 @@ pub struct MediaRecord {
     pub file_size: i64,
     /// Unix timestamp (seconds since epoch).
     pub imported_at: i64,
+    pub media_type: MediaType,
+    /// Capture timestamp from EXIF (UTC Unix seconds). `None` if unavailable.
+    pub taken_at: Option<i64>,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    /// EXIF orientation tag (1–8). Defaults to 1 (normal).
+    pub orientation: u8,
+}
+
+/// A row in the `media_metadata` table — full EXIF detail, loaded on demand.
+#[derive(Debug, Clone)]
+pub struct MediaMetadataRecord {
+    pub media_id: MediaId,
+    pub camera_make: Option<String>,
+    pub camera_model: Option<String>,
+    pub lens_model: Option<String>,
+    pub aperture: Option<f32>,
+    pub shutter_str: Option<String>,
+    pub iso: Option<u32>,
+    pub focal_length: Option<f32>,
+    pub gps_lat: Option<f64>,
+    pub gps_lon: Option<f64>,
+    pub gps_alt: Option<f64>,
+    pub color_space: Option<String>,
+}
+
+impl MediaMetadataRecord {
+    /// Returns `true` if at least one field is populated.
+    ///
+    /// Used to skip inserting an empty row for assets with no EXIF metadata.
+    pub fn has_data(&self) -> bool {
+        self.camera_make.is_some()
+            || self.camera_model.is_some()
+            || self.lens_model.is_some()
+            || self.aperture.is_some()
+            || self.shutter_str.is_some()
+            || self.iso.is_some()
+            || self.focal_length.is_some()
+            || self.gps_lat.is_some()
+            || self.gps_lon.is_some()
+            || self.gps_alt.is_some()
+            || self.color_space.is_some()
+    }
 }
 
 #[cfg(test)]

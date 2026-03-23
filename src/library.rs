@@ -3,6 +3,7 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod event;
+pub mod exif;
 pub mod factory;
 pub mod import;
 pub mod importer;
