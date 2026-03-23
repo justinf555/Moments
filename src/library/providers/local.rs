@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::runtime::Handle;
@@ -9,6 +10,7 @@ use crate::library::bundle::Bundle;
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
 use crate::library::event::LibraryEvent;
+use crate::library::format::{FormatRegistry, StandardHandler};
 use crate::library::import::LibraryImport;
 use crate::library::importer::ImportJob;
 use crate::library::media::{
@@ -27,6 +29,7 @@ pub struct LocalLibrary {
     events: Sender<LibraryEvent>,
     db: Database,
     tokio: Handle,
+    formats: Arc<FormatRegistry>,
 }
 
 #[async_trait]
@@ -50,11 +53,16 @@ impl LibraryStorage for LocalLibrary {
             .await
             .map_err(|e| LibraryError::Runtime(e.to_string()))??;
 
+        let mut registry = FormatRegistry::new();
+        registry.register(Arc::new(StandardHandler));
+        let formats = Arc::new(registry);
+
         let library = Self {
             bundle,
             events,
             db,
             tokio,
+            formats,
         };
         library
             .events
@@ -84,6 +92,7 @@ impl LibraryImport for LocalLibrary {
             self.bundle.thumbnails.clone(),
             self.db.clone(),
             self.events.clone(),
+            Arc::clone(&self.formats),
         );
         self.tokio.spawn(async move { job.run(sources).await });
         Ok(())

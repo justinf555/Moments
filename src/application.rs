@@ -229,11 +229,20 @@ impl MomentsApplication {
     ///
     /// Creates and presents the main window immediately (loading page) so
     /// there is no windowless gap while the async factory runs.
+    ///
+    /// If the bundle cannot be opened (e.g. the directory was deleted while
+    /// the GSettings path entry still exists) the stale path is cleared and
+    /// the setup window is shown so the user can reconfigure.
     fn open_library(&self, path: PathBuf) {
         let (bundle, config) = match Bundle::open(&path) {
             Ok(result) => result,
             Err(e) => {
                 error!("failed to open library bundle: {e}");
+                let settings = self.imp().settings.get().expect("settings initialised");
+                if let Err(e) = settings.set_string("library-path", "") {
+                    error!("failed to clear stale library path: {e}");
+                }
+                self.show_setup_window();
                 return;
             }
         };

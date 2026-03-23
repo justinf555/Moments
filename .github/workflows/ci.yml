@@ -22,6 +22,7 @@ jobs:
             gtk4-devel \
             libadwaita-devel \
             gettext-devel \
+            libheif-devel \
             pkg-config
 
       - name: Cache cargo registry

@@ -27,8 +27,11 @@ serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 
 # Image processing
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "tiff"] }
 kamadak-exif = "0.5"
+# `image` feature enables the image-crate integration (register_all_decoding_hooks)
+# `default-features = false` avoids the `embedded-libheif` feature (we use system libheif)
+libheif-rs = { version = "2.7.0", default-features = false, features = ["image", "v1_20"] }
 
 # Utilities
 thiserror = "2"
