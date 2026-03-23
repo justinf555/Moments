@@ -149,7 +149,22 @@ impl PhotoGridModel {
                 }
             }
             MediaFilter::Favorites => {
-                self.reload();
+                if is_favorite {
+                    // New favourite — reload to fetch and insert in sort order.
+                    self.reload();
+                } else {
+                    // Un-favourited — remove the single item from the store
+                    // instead of reloading the entire grid.
+                    let pos = self.store.find_with_equal_func(|obj| {
+                        obj.downcast_ref::<MediaItemObject>()
+                            .map(|m| m.item().id == *id)
+                            .unwrap_or(false)
+                    });
+                    if let Some(pos) = pos {
+                        self.id_index.borrow_mut().remove(id);
+                        self.store.remove(pos);
+                    }
+                }
             }
         }
     }
