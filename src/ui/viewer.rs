@@ -125,6 +125,10 @@ impl ViewerInner {
                         let img = image::open(&path)
                             .map_err(|e| debug!("full-res open failed: {e}"))
                             .ok()?;
+                        let orientation = crate::library::exif::extract_exif(&path)
+                            .orientation
+                            .unwrap_or(1);
+                        let img = crate::library::thumbnailer::apply_orientation(img, orientation);
                         let img = scale_to_max(img, MAX_DISPLAY_EDGE);
                         let rgba = img.into_rgba8();
                         let (w, h) = rgba.dimensions();
