@@ -7,7 +7,7 @@ use super::bundle::Bundle;
 use super::config::LibraryConfig;
 use super::error::LibraryError;
 use super::event::LibraryEvent;
-use super::local::LocalLibrary;
+use super::providers::local::LocalLibrary;
 use super::storage::LibraryStorage;
 use super::Library;
 
