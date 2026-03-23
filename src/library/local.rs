@@ -2,9 +2,11 @@ use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 
 use async_trait::async_trait;
+use tokio::runtime::Handle;
 use tracing::{debug, info, instrument};
 
 use super::bundle::Bundle;
+use super::db::Database;
 use super::error::LibraryError;
 use super::event::LibraryEvent;
 use super::import::LibraryImport;
@@ -13,21 +15,43 @@ use super::storage::LibraryStorage;
 
 /// Local filesystem backend.
 ///
-/// Originals are imported into the bundle's `originals/` subdirectory.
+/// Holds a Tokio [`Handle`] (the shared application-level library executor)
+/// and a [`Database`] connection pool. All I/O-bound work is dispatched
+/// through the Tokio handle so it never blocks the GTK main thread.
 pub struct LocalLibrary {
     bundle: Bundle,
     events: Sender<LibraryEvent>,
+    db: Database,
+    tokio: Handle,
 }
 
 #[async_trait]
 impl LibraryStorage for LocalLibrary {
-    #[instrument(skip(events), fields(path = %bundle.path.display()))]
-    async fn open(bundle: Bundle, events: Sender<LibraryEvent>) -> Result<Self, LibraryError>
+    #[instrument(skip(events, tokio), fields(path = %bundle.path.display()))]
+    async fn open(
+        bundle: Bundle,
+        events: Sender<LibraryEvent>,
+        tokio: Handle,
+    ) -> Result<Self, LibraryError>
     where
         Self: Sized,
     {
         info!("opening local library");
-        let library = Self { bundle, events };
+
+        // Initialise the database on the Tokio executor. DB init is fast
+        // (~1ms — schema migration only) so we block briefly here at startup.
+        let db_path = bundle.database.join("moments.db");
+        let db = tokio
+            .spawn(async move { Database::open(&db_path).await })
+            .await
+            .map_err(|e| LibraryError::Runtime(e.to_string()))??;
+
+        let library = Self {
+            bundle,
+            events,
+            db,
+            tokio,
+        };
         library
             .events
             .send(LibraryEvent::Ready)
@@ -51,8 +75,12 @@ impl LibraryImport for LocalLibrary {
     #[instrument(skip(self), fields(source_count = sources.len()))]
     async fn import(&self, sources: Vec<PathBuf>) -> Result<(), LibraryError> {
         info!("starting import");
-        let job = ImportJob::new(self.bundle.originals.clone(), self.events.clone());
-        std::thread::spawn(move || job.run(sources));
+        let job = ImportJob::new(
+            self.bundle.originals.clone(),
+            self.db.clone(),
+            self.events.clone(),
+        );
+        self.tokio.spawn(async move { job.run(sources).await });
         Ok(())
     }
 }
@@ -65,27 +93,32 @@ mod tests {
     use std::sync::mpsc;
     use tempfile::tempdir;
 
-    #[tokio::test]
+    async fn open_test_library(bundle: Bundle, tx: Sender<LibraryEvent>) -> LocalLibrary {
+        let handle = tokio::runtime::Handle::current();
+        LocalLibrary::open(bundle, tx, handle).await.unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn open_sends_ready_event() {
         let dir = tempdir().unwrap();
         let bundle_path = dir.path().join("Test.library");
         let bundle = Bundle::create(&bundle_path, &LibraryConfig::Local).unwrap();
 
         let (tx, rx) = mpsc::channel();
-        let _library = LocalLibrary::open(bundle, tx).await.unwrap();
+        let _library = open_test_library(bundle, tx).await;
 
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, LibraryEvent::Ready));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn close_sends_shutdown_complete() {
         let dir = tempdir().unwrap();
         let bundle_path = dir.path().join("Test.library");
         let bundle = Bundle::create(&bundle_path, &LibraryConfig::Local).unwrap();
 
         let (tx, rx) = mpsc::channel();
-        let library = LocalLibrary::open(bundle, tx).await.unwrap();
+        let library = open_test_library(bundle, tx).await;
         rx.try_recv().unwrap(); // consume Ready
 
         library.close().await.unwrap();
@@ -93,7 +126,7 @@ mod tests {
         assert!(matches!(event, LibraryEvent::ShutdownComplete));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn import_emits_complete_event() {
         let dir = tempdir().unwrap();
         let bundle_path = dir.path().join("Test.library");
@@ -103,7 +136,7 @@ mod tests {
         std::fs::write(src_dir.path().join("img.jpg"), b"fake").unwrap();
 
         let (tx, rx) = mpsc::channel();
-        let library = LocalLibrary::open(bundle, tx).await.unwrap();
+        let library = open_test_library(bundle, tx).await;
         rx.try_recv().unwrap(); // consume Ready
 
         library
@@ -111,7 +144,7 @@ mod tests {
             .await
             .unwrap();
 
-        // import() spawns a background thread; drain events until ImportComplete arrives.
+        // import() spawns on Tokio; drain events until ImportComplete arrives.
         let has_complete = loop {
             match rx.recv().unwrap() {
                 LibraryEvent::ImportComplete(_) => break true,

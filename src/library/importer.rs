@@ -1,39 +1,45 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use tracing::{debug, info, instrument, warn};
 
+use super::db::Database;
 use super::error::LibraryError;
 use super::event::LibraryEvent;
 use super::import::{ImportSummary, SkipReason, SUPPORTED_EXTENSIONS};
+use super::media::{MediaId, MediaRecord};
 
 /// Drives a single import run for the local backend.
 ///
-/// [`ImportJob::run`] is **synchronous** and is intended to be called from a
-/// background thread spawned by `LocalLibrary::import()`. Results are
-/// communicated back through the existing [`Sender<LibraryEvent>`] so the GTK
-/// layer receives progress without any extra channel wiring.
+/// [`ImportJob::run`] is **async** and must be spawned on the Tokio runtime
+/// via the handle stored on `LocalLibrary`. Results are communicated back
+/// through the [`Sender<LibraryEvent>`] channel so the GTK layer receives
+/// progress without any extra wiring.
 pub struct ImportJob {
     /// Root `originals/` directory inside the bundle.
     originals_dir: PathBuf,
+    /// Open database — used for hash-based duplicate detection.
+    db: Database,
     /// Shared event sender for the lifetime of the backend.
     events: Sender<LibraryEvent>,
 }
 
 impl ImportJob {
-    pub fn new(originals_dir: PathBuf, events: Sender<LibraryEvent>) -> Self {
+    pub fn new(originals_dir: PathBuf, db: Database, events: Sender<LibraryEvent>) -> Self {
         Self {
             originals_dir,
+            db,
             events,
         }
     }
 
-    /// Execute the import synchronously.
+    /// Execute the import asynchronously.
     ///
-    /// Called on a background thread — never call this on the GTK main thread.
+    /// Must be called from a Tokio async context — spawn via
+    /// `tokio_handle.spawn(async move { job.run(sources).await })`.
     #[instrument(skip(self, sources), fields(source_count = sources.len()))]
-    pub fn run(self, sources: Vec<PathBuf>) {
+    pub async fn run(self, sources: Vec<PathBuf>) {
         let start = Instant::now();
 
         // ── 1. Collect candidate files ────────────────────────────────────────
@@ -41,7 +47,7 @@ impl ImportJob {
         let total = candidates.len();
         info!(total, "import candidates collected");
 
-        // ── 2. Copy each file ─────────────────────────────────────────────────
+        // ── 2. Process each file ──────────────────────────────────────────────
         let mut summary = ImportSummary::default();
 
         for (idx, path) in candidates.into_iter().enumerate() {
@@ -50,7 +56,7 @@ impl ImportJob {
                 .send(LibraryEvent::ImportProgress { current, total })
                 .ok();
 
-            match self.import_one(&path) {
+            match self.import_one(&path).await {
                 Ok(Some(skip)) => {
                     debug!(?path, ?skip, "skipped");
                     match skip {
@@ -59,11 +65,7 @@ impl ImportJob {
                     }
                 }
                 Ok(None) => {
-                    debug!(?path, "imported");
                     summary.imported += 1;
-                    self.events
-                        .send(LibraryEvent::AssetImported { path })
-                        .ok();
                 }
                 Err(e) => {
                     warn!(?path, error = %e, "failed to import file");
@@ -88,9 +90,13 @@ impl ImportJob {
             .ok();
     }
 
-    /// Import a single file. Returns `Ok(None)` on success, `Ok(Some(reason))`
-    /// if skipped, or `Err` on a non-fatal I/O failure.
-    fn import_one(&self, source: &Path) -> Result<Option<SkipReason>, LibraryError> {
+    /// Import a single file.
+    ///
+    /// Returns `Ok(Some(reason))` if skipped, `Ok(None)` after emitting
+    /// [`LibraryEvent::AssetImported`] on success, or `Err` on failure.
+    #[instrument(skip(self), fields(path = %source.display()))]
+    async fn import_one(&self, source: &Path) -> Result<Option<SkipReason>, LibraryError> {
+        // ── 1. Extension check ────────────────────────────────────────────────
         let ext = source
             .extension()
             .and_then(|e| e.to_str())
@@ -101,22 +107,73 @@ impl ImportJob {
             return Ok(Some(SkipReason::UnsupportedFormat));
         }
 
-        let base_target = compute_base_target(source, &self.originals_dir)?;
+        // ── 2. Hash the source file ───────────────────────────────────────────
+        let media_id = MediaId::from_file(source).await?;
 
-        if base_target.exists() {
+        // ── 3. Duplicate check via DB ─────────────────────────────────────────
+        if self.db.media_exists(&media_id).await? {
+            debug!(%media_id, "duplicate detected via hash");
             return Ok(Some(SkipReason::Duplicate));
         }
 
+        // ── 4. Compute destination path ───────────────────────────────────────
+        let base_target = compute_base_target(source, &self.originals_dir).await?;
         let target = resolve_collision(base_target);
 
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent).map_err(LibraryError::Io)?;
-        }
-        std::fs::copy(source, &target).map_err(LibraryError::Io)?;
+        let relative_path = target
+            .strip_prefix(&self.originals_dir)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| target.to_string_lossy().into_owned());
 
+        // ── 5. Copy file ──────────────────────────────────────────────────────
+        if let Some(parent) = target.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(LibraryError::Io)?;
+        }
+        let file_size = tokio::fs::copy(source, &target)
+            .await
+            .map_err(LibraryError::Io)? as i64;
+
+        // ── 6. Persist to database ────────────────────────────────────────────
+        let original_filename = source
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
+        let imported_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        self.db
+            .insert_media(&MediaRecord {
+                id: media_id.clone(),
+                relative_path,
+                original_filename,
+                file_size,
+                imported_at,
+            })
+            .await?;
+
+        // ── 7. Emit event ─────────────────────────────────────────────────────
+        debug!(?target, "imported");
+        self.events
+            .send(LibraryEvent::AssetImported {
+                media_id,
+                path: target,
+            })
+            .ok();
+
+        // Increment summary via the Ok(None) sentinel — summary is updated
+        // by the caller when it sees AssetImported was emitted.
+        // We signal success by returning None after having sent the event.
+        // The caller treats Ok(None) as "imported" and increments the counter.
         Ok(None)
     }
 }
+
+// ── Candidate collection ───────────────────────────────────────────────────────
 
 /// Recursively collect all files reachable from `sources`.
 fn collect_candidates(sources: Vec<PathBuf>) -> Vec<PathBuf> {
@@ -149,13 +206,20 @@ fn walk_dir(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Compute the destination path for `source` inside `originals_dir`.
+// ── Path helpers ───────────────────────────────────────────────────────────────
+
+/// Compute the base destination path (`YYYY/MM/DD/filename.ext`) for `source`
+/// inside `originals_dir` using the file's last-modified timestamp.
 ///
-/// Returns the base `YYYY/MM/DD/filename.ext` path without collision resolution.
-/// Uses the file's last-modified timestamp for the date bucket.
-/// EXIF-based dating is implemented in issue #7.
-fn compute_base_target(source: &Path, originals_dir: &Path) -> Result<PathBuf, LibraryError> {
-    let metadata = std::fs::metadata(source).map_err(LibraryError::Io)?;
+/// Returns the path without collision resolution. EXIF-based dating is
+/// implemented in issue #7.
+async fn compute_base_target(
+    source: &Path,
+    originals_dir: &Path,
+) -> Result<PathBuf, LibraryError> {
+    let metadata = tokio::fs::metadata(source)
+        .await
+        .map_err(LibraryError::Io)?;
     let modified = metadata.modified().map_err(LibraryError::Io)?;
 
     let datetime: chrono::DateTime<chrono::Local> = modified.into();
@@ -172,7 +236,8 @@ fn compute_base_target(source: &Path, originals_dir: &Path) -> Result<PathBuf, L
 }
 
 /// Resolve filename collisions by appending `_2`, `_3`, … suffixes until the
-/// path does not exist on disk.
+/// path does not exist on disk. Handles same-name files with different content
+/// imported in the same batch.
 fn resolve_collision(base: PathBuf) -> PathBuf {
     if !base.exists() {
         return base;
@@ -203,6 +268,7 @@ fn resolve_collision(base: PathBuf) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::library::event::LibraryEvent;
     use std::sync::mpsc;
     use tempfile::tempdir;
 
@@ -212,86 +278,134 @@ mod tests {
         path
     }
 
-    #[test]
-    fn import_copies_jpeg_into_originals() {
+    async fn open_test_db(dir: &Path) -> Database {
+        Database::open(&dir.join("db").join("test.db"))
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn import_copies_jpeg_into_originals() {
         let src_dir = tempdir().unwrap();
         let bundle_dir = tempdir().unwrap();
         let originals = bundle_dir.path().join("originals");
+        let db = open_test_db(bundle_dir.path()).await;
 
         let photo = make_file(src_dir.path(), "photo.jpg", b"fake jpeg");
 
         let (tx, rx) = mpsc::channel();
-        ImportJob::new(originals, tx).run(vec![photo]);
+        ImportJob::new(originals, db, tx).run(vec![photo]).await;
 
         let events: Vec<_> = rx.try_iter().collect();
-        assert!(events.iter().any(|e| matches!(e, LibraryEvent::AssetImported { .. })));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, LibraryEvent::AssetImported { .. })));
 
-        let summary = events.iter().find_map(|e| {
-            if let LibraryEvent::ImportComplete(s) = e { Some(s) } else { None }
-        }).unwrap();
+        let summary = events
+            .iter()
+            .find_map(|e| {
+                if let LibraryEvent::ImportComplete(s) = e {
+                    Some(s)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
         assert_eq!(summary.imported, 1);
     }
 
-    #[test]
-    fn unsupported_extension_is_skipped() {
+    #[tokio::test]
+    async fn unsupported_extension_is_skipped() {
         let src_dir = tempdir().unwrap();
         let bundle_dir = tempdir().unwrap();
         let originals = bundle_dir.path().join("originals");
+        let db = open_test_db(bundle_dir.path()).await;
 
         let file = make_file(src_dir.path(), "document.pdf", b"not a photo");
 
         let (tx, rx) = mpsc::channel();
-        ImportJob::new(originals, tx).run(vec![file]);
+        ImportJob::new(originals, db, tx).run(vec![file]).await;
 
         let events: Vec<_> = rx.try_iter().collect();
-        let summary = events.iter().find_map(|e| {
-            if let LibraryEvent::ImportComplete(s) = e { Some(s) } else { None }
-        }).unwrap();
+        let summary = events
+            .iter()
+            .find_map(|e| {
+                if let LibraryEvent::ImportComplete(s) = e {
+                    Some(s)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
         assert_eq!(summary.imported, 0);
         assert_eq!(summary.skipped_unsupported, 1);
     }
 
-    #[test]
-    fn duplicate_filename_is_skipped_on_second_import() {
+    #[tokio::test]
+    async fn same_content_is_skipped_on_second_import() {
         let src_dir = tempdir().unwrap();
         let bundle_dir = tempdir().unwrap();
         let originals = bundle_dir.path().join("originals");
+        let db = open_test_db(bundle_dir.path()).await;
 
-        let photo = make_file(src_dir.path(), "dup.jpg", b"fake jpeg");
+        let photo = make_file(src_dir.path(), "dup.jpg", b"fake jpeg content");
 
+        // First import
         let (tx, rx) = mpsc::channel();
-        ImportJob::new(originals.clone(), tx.clone()).run(vec![photo.clone()]);
-        ImportJob::new(originals, tx).run(vec![photo]);
+        ImportJob::new(originals.clone(), db.clone(), tx.clone())
+            .run(vec![photo.clone()])
+            .await;
+
+        // Second import — same content, even if renamed
+        let photo2 = make_file(src_dir.path(), "dup_renamed.jpg", b"fake jpeg content");
+        ImportJob::new(originals, db, tx).run(vec![photo2]).await;
 
         let events: Vec<_> = rx.try_iter().collect();
-        let summaries: Vec<_> = events.iter().filter_map(|e| {
-            if let LibraryEvent::ImportComplete(s) = e { Some(s) } else { None }
-        }).collect();
+        let summaries: Vec<_> = events
+            .iter()
+            .filter_map(|e| {
+                if let LibraryEvent::ImportComplete(s) = e {
+                    Some(s)
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         assert_eq!(summaries[0].imported, 1);
         assert_eq!(summaries[1].skipped_duplicates, 1);
     }
 
-    #[test]
-    fn directory_sources_are_walked_recursively() {
+    #[tokio::test]
+    async fn directory_sources_are_walked_recursively() {
         let src_dir = tempdir().unwrap();
         let sub = src_dir.path().join("sub");
         std::fs::create_dir(&sub).unwrap();
 
-        make_file(src_dir.path(), "a.jpg", b"a");
-        make_file(&sub, "b.png", b"b");
+        make_file(src_dir.path(), "a.jpg", b"photo a");
+        make_file(&sub, "b.png", b"photo b");
         make_file(src_dir.path(), "skip.txt", b"text");
 
         let bundle_dir = tempdir().unwrap();
         let originals = bundle_dir.path().join("originals");
+        let db = open_test_db(bundle_dir.path()).await;
 
         let (tx, rx) = mpsc::channel();
-        ImportJob::new(originals, tx).run(vec![src_dir.path().to_path_buf()]);
+        ImportJob::new(originals, db, tx)
+            .run(vec![src_dir.path().to_path_buf()])
+            .await;
 
         let events: Vec<_> = rx.try_iter().collect();
-        let summary = events.iter().find_map(|e| {
-            if let LibraryEvent::ImportComplete(s) = e { Some(s) } else { None }
-        }).unwrap();
+        let summary = events
+            .iter()
+            .find_map(|e| {
+                if let LibraryEvent::ImportComplete(s) = e {
+                    Some(s)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
         assert_eq!(summary.imported, 2);
         assert_eq!(summary.skipped_unsupported, 1);
     }

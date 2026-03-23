@@ -43,6 +43,7 @@ mod imp {
     #[derive(Default)]
     pub struct MomentsApplication {
         pub settings: OnceCell<gio::Settings>,
+        pub tokio: OnceCell<tokio::runtime::Handle>,
         pub library: RefCell<Option<Box<dyn Library>>>,
         pub library_events: RefCell<Option<Receiver<LibraryEvent>>>,
     }
@@ -100,12 +101,21 @@ glib::wrapper! {
 }
 
 impl MomentsApplication {
-    pub fn new(application_id: &str, flags: &gio::ApplicationFlags) -> Self {
-        glib::Object::builder()
+    pub fn new(
+        application_id: &str,
+        flags: &gio::ApplicationFlags,
+        tokio: tokio::runtime::Handle,
+    ) -> Self {
+        let app: Self = glib::Object::builder()
             .property("application-id", application_id)
             .property("flags", flags)
             .property("resource-base-path", "/io/github/justinf555/Moments")
-            .build()
+            .build();
+        app.imp()
+            .tokio
+            .set(tokio)
+            .expect("tokio handle set once at construction");
+        app
     }
 
     fn setup_gactions(&self) {
@@ -210,7 +220,8 @@ impl MomentsApplication {
             #[weak]
             window,
             async move {
-                match LibraryFactory::create(bundle, config, sender).await {
+                let tokio = app.imp().tokio.get().expect("tokio handle set").clone();
+                match LibraryFactory::create(bundle, config, sender, tokio).await {
                     Ok(library) => {
                         info!("library ready");
                         *app.imp().library.borrow_mut() = Some(library);

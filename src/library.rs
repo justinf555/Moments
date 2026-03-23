@@ -1,11 +1,13 @@
 pub mod bundle;
 pub mod config;
+pub mod db;
 pub mod error;
 pub mod event;
 pub mod factory;
 pub mod import;
 pub mod importer;
 pub mod local;
+pub mod media;
 pub mod storage;
 
 pub use error::LibraryError;
