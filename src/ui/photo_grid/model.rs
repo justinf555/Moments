@@ -164,22 +164,40 @@ impl PhotoGridModel {
     }
 }
 
-/// Load a WebP thumbnail from disk and create a `gdk::Texture`.
+/// Load a thumbnail from disk and create a `gdk::Texture`.
 ///
-/// File I/O runs on the Tokio blocking pool. Texture construction happens on
-/// the GTK main thread (the caller's context) after the bytes arrive.
+/// Decoding runs on the Tokio blocking pool (avoids freezing the GTK thread).
+/// The resulting raw RGBA pixels are handed to `gdk::MemoryTexture` on the
+/// GTK main thread — no gdk-pixbuf loader required, so this works inside the
+/// Flatpak sandbox where the WebP pixbuf loader is absent.
 async fn load_texture(
     handle: tokio::runtime::Handle,
     path: std::path::PathBuf,
 ) -> Option<gdk::Texture> {
-    let bytes = handle
+    let result = handle
         .spawn(async move {
-            tokio::task::spawn_blocking(move || std::fs::read(&path))
-                .await
-                .ok()
+            tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, u32, u32)> {
+                let data = std::fs::read(&path).ok()?;
+                let img = image::load_from_memory(&data).ok()?;
+                let rgba = img.to_rgba8();
+                let (w, h) = rgba.dimensions();
+                Some((rgba.into_raw(), w, h))
+            })
+            .await
+            .ok()
         })
         .await
-        .ok()??;
-    let gbytes = glib::Bytes::from_owned(bytes.ok()?);
-    gdk::Texture::from_bytes(&gbytes).ok()
+        .ok()?;
+    let (pixels, width, height) = result??;
+    let gbytes = glib::Bytes::from_owned(pixels);
+    Some(
+        gdk::MemoryTexture::new(
+            width as i32,
+            height as i32,
+            gdk::MemoryFormat::R8g8b8a8,
+            &gbytes,
+            (width as usize) * 4,
+        )
+        .upcast(),
+    )
 }
