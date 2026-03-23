@@ -5,6 +5,7 @@ pub mod import_dialog;
 pub mod photo_grid;
 pub mod setup_window;
 pub mod sidebar;
+pub mod viewer;
 pub mod window;
 
 pub use setup_window::MomentsSetupWindow;

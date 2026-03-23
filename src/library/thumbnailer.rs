@@ -150,7 +150,7 @@ fn generate_thumbnail(
 /// EXIF orientation defines how the sensor data maps to the upright image.
 /// Value 1 means the pixel data is already correct; values 2–8 require a
 /// combination of rotation and/or mirror to produce a visually upright image.
-fn apply_orientation(img: image::DynamicImage, orientation: u8) -> image::DynamicImage {
+pub(crate) fn apply_orientation(img: image::DynamicImage, orientation: u8) -> image::DynamicImage {
     use image::imageops;
     match orientation {
         2 => image::DynamicImage::from(imageops::flip_horizontal(&img)),

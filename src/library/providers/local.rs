@@ -18,6 +18,7 @@ use crate::library::media::{
 };
 use crate::library::storage::LibraryStorage;
 use crate::library::thumbnail::{sharded_thumbnail_path, LibraryThumbnail};
+use crate::library::viewer::LibraryViewer;
 
 /// Local filesystem backend.
 ///
@@ -123,6 +124,21 @@ impl LibraryMedia for LocalLibrary {
         limit: u32,
     ) -> Result<Vec<MediaItem>, LibraryError> {
         self.db.list_media(cursor, limit).await
+    }
+
+    async fn media_metadata(
+        &self,
+        id: &MediaId,
+    ) -> Result<Option<MediaMetadataRecord>, LibraryError> {
+        self.db.media_metadata(id).await
+    }
+}
+
+#[async_trait]
+impl LibraryViewer for LocalLibrary {
+    async fn original_path(&self, id: &MediaId) -> Result<Option<std::path::PathBuf>, LibraryError> {
+        let relative = self.db.media_relative_path(id).await?;
+        Ok(relative.map(|rel| self.bundle.originals.join(rel)))
     }
 }
 

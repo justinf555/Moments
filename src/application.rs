@@ -347,15 +347,15 @@ impl MomentsApplication {
                     Ok(library) => {
                         info!("library ready");
 
-                        let model = Rc::new(PhotoGridModel::new(Arc::clone(&library), tokio));
+                        let model = Rc::new(PhotoGridModel::new(Arc::clone(&library), tokio.clone()));
 
                         // Store library and model on the application.
-                        *app.imp().library.borrow_mut() = Some(library);
+                        *app.imp().library.borrow_mut() = Some(Arc::clone(&library));
                         *app.imp().photo_grid_model.borrow_mut() = Some(Rc::clone(&model));
 
                         // Wire the shell: builds sidebar, registers views,
                         // and switches to the content page.
-                        window.setup(Rc::clone(&model));
+                        window.setup(Rc::clone(&model), library, tokio.clone());
 
                         // Poll library events on every GTK idle tick.
                         // Routes thumbnail and import events to the right consumers.
