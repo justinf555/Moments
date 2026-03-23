@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -17,16 +17,32 @@ pub mod model;
 
 pub use model::PhotoGridModel;
 
+/// Available cell sizes (px), smallest to largest.
+const ZOOM_SIZES: &[i32] = &[96, 128, 160, 200, 256, 320];
+/// Default zoom level index (160 px).
+const DEFAULT_ZOOM_INDEX: usize = 2;
+
 mod imp {
     use super::*;
     use std::cell::OnceCell;
 
-    #[derive(Default)]
     pub struct PhotoGrid {
         pub scrolled: OnceCell<gtk::ScrolledWindow>,
         pub grid_view: OnceCell<gtk::GridView>,
         /// Kept alive so lazy-loading stays wired after `set_model`.
         pub model: RefCell<Option<Rc<PhotoGridModel>>>,
+        pub zoom_level: Cell<usize>,
+    }
+
+    impl Default for PhotoGrid {
+        fn default() -> Self {
+            Self {
+                scrolled: OnceCell::default(),
+                grid_view: OnceCell::default(),
+                model: RefCell::default(),
+                zoom_level: Cell::new(DEFAULT_ZOOM_INDEX),
+            }
+        }
     }
 
     #[glib::object_subclass]
@@ -84,6 +100,40 @@ impl PhotoGrid {
         glib::Object::new()
     }
 
+    /// Current cell size in pixels based on the active zoom level.
+    pub fn current_cell_size(&self) -> i32 {
+        ZOOM_SIZES[self.imp().zoom_level.get()]
+    }
+
+    /// Increase thumbnail size. Returns `true` if there is still room to zoom in.
+    pub fn zoom_in(&self) -> bool {
+        let imp = self.imp();
+        let level = imp.zoom_level.get();
+        if level + 1 < ZOOM_SIZES.len() {
+            imp.zoom_level.set(level + 1);
+            self.apply_zoom();
+        }
+        imp.zoom_level.get() + 1 < ZOOM_SIZES.len()
+    }
+
+    /// Decrease thumbnail size. Returns `true` if there is still room to zoom out.
+    pub fn zoom_out(&self) -> bool {
+        let imp = self.imp();
+        let level = imp.zoom_level.get();
+        if level > 0 {
+            imp.zoom_level.set(level - 1);
+            self.apply_zoom();
+        }
+        imp.zoom_level.get() > 0
+    }
+
+    /// Rebuild the cell factory with the current zoom size.
+    fn apply_zoom(&self) {
+        let imp = self.imp();
+        let grid_view = imp.grid_view.get().unwrap();
+        grid_view.set_factory(Some(&factory::build_factory(self.current_cell_size())));
+    }
+
     /// Attach a `PhotoGridModel` to the grid.
     ///
     /// Wires the model's `ListStore` to `GridView` via `MultiSelection`, builds
@@ -104,7 +154,7 @@ impl PhotoGrid {
 
         let selection = gtk::MultiSelection::new(Some(model.store.clone()));
         grid_view.set_model(Some(&selection));
-        grid_view.set_factory(Some(&factory::build_factory()));
+        grid_view.set_factory(Some(&factory::build_factory(self.current_cell_size())));
 
         // Fetch the first page immediately.
         model.load_more();
@@ -165,6 +215,23 @@ impl PhotoGridView {
         import_button.add_css_class("flat");
         header.pack_start(&import_button);
 
+        // ── Zoom controls ───────────────────────────────────────────────────
+        let zoom_out_btn = gtk::Button::builder()
+            .icon_name("zoom-out-symbolic")
+            .tooltip_text("Zoom Out")
+            .action_name("view.zoom-out")
+            .build();
+        let zoom_in_btn = gtk::Button::builder()
+            .icon_name("zoom-in-symbolic")
+            .tooltip_text("Zoom In")
+            .action_name("view.zoom-in")
+            .build();
+        let zoom_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        zoom_box.add_css_class("linked");
+        zoom_box.append(&zoom_out_btn);
+        zoom_box.append(&zoom_in_btn);
+        header.pack_start(&zoom_box);
+
         let menu_button = gtk::MenuButton::builder()
             .primary(true)
             .icon_name("open-menu-symbolic")
@@ -197,6 +264,43 @@ impl PhotoGridView {
 
         // ── Viewer (reused across activations) ───────────────────────────────
         let viewer = Rc::new(PhotoViewer::new(library, tokio));
+
+        // ── Zoom actions ─────────────────────────────────────────────────────
+        let action_group = gio::SimpleActionGroup::new();
+
+        let zoom_in_action = gio::SimpleAction::new("zoom-in", None);
+        let zoom_out_action = gio::SimpleAction::new("zoom-out", None);
+
+        // Disable zoom-in at max, zoom-out at min.
+        zoom_in_action.set_enabled(
+            photo_grid.imp().zoom_level.get() + 1 < ZOOM_SIZES.len(),
+        );
+        zoom_out_action.set_enabled(photo_grid.imp().zoom_level.get() > 0);
+
+        {
+            let grid = photo_grid.clone();
+            let zi = zoom_in_action.clone();
+            let zo = zoom_out_action.clone();
+            zoom_in_action.connect_activate(move |_, _| {
+                let can_zoom_more = grid.zoom_in();
+                zi.set_enabled(can_zoom_more);
+                zo.set_enabled(true);
+            });
+        }
+        {
+            let grid = photo_grid.clone();
+            let zi = zoom_in_action.clone();
+            let zo = zoom_out_action.clone();
+            zoom_out_action.connect_activate(move |_, _| {
+                let can_zoom_more = grid.zoom_out();
+                zo.set_enabled(can_zoom_more);
+                zi.set_enabled(true);
+            });
+        }
+
+        action_group.add_action(&zoom_in_action);
+        action_group.add_action(&zoom_out_action);
+        nav_view.insert_action_group("view", Some(&action_group));
 
         let widget = nav_view.clone().upcast::<gtk::Widget>();
 
@@ -231,5 +335,27 @@ impl PhotoGridView {
 impl ContentView for PhotoGridView {
     fn widget(&self) -> &gtk::Widget {
         &self.widget
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zoom_sizes_are_sorted_ascending() {
+        for pair in ZOOM_SIZES.windows(2) {
+            assert!(pair[0] < pair[1], "{} should be < {}", pair[0], pair[1]);
+        }
+    }
+
+    #[test]
+    fn default_zoom_index_in_bounds() {
+        assert!(DEFAULT_ZOOM_INDEX < ZOOM_SIZES.len());
+    }
+
+    #[test]
+    fn default_zoom_size_is_160() {
+        assert_eq!(ZOOM_SIZES[DEFAULT_ZOOM_INDEX], 160);
     }
 }
