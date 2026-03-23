@@ -26,6 +26,7 @@ use gettextrs::gettext;
 use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gio, glib};
+use gio::prelude::ApplicationExtManual as _;
 use tracing::{error, info, instrument};
 
 use crate::config::VERSION;
