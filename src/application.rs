@@ -74,6 +74,7 @@ mod imp {
             let obj = self.obj();
             obj.setup_gactions();
             obj.set_accels_for_action("app.quit", &["<control>q"]);
+            obj.set_accels_for_action("win.toggle-sidebar", &["F9"]);
         }
     }
 
@@ -343,9 +344,9 @@ impl MomentsApplication {
                         *app.imp().library.borrow_mut() = Some(library);
                         *app.imp().photo_grid_model.borrow_mut() = Some(Rc::clone(&model));
 
-                        // Wire the grid before revealing the content page.
-                        window.set_model(Rc::clone(&model));
-                        window.set_library_ready();
+                        // Wire the shell: builds sidebar, registers views,
+                        // and switches to the content page.
+                        window.setup(Rc::clone(&model));
 
                         // Poll library events on every GTK idle tick.
                         // Routes thumbnail and import events to the right consumers.

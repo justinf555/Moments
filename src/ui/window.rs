@@ -18,6 +18,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use gtk::prelude::*;
@@ -25,10 +26,13 @@ use adw::subclass::prelude::*;
 use gtk::{gio, glib};
 use tracing::debug;
 
-use crate::ui::photo_grid::{PhotoGrid, PhotoGridModel};
+use crate::ui::coordinator::ContentCoordinator;
+use crate::ui::photo_grid::{PhotoGridModel, PhotoGridView};
+use crate::ui::sidebar::MomentsSidebar;
 
 mod imp {
     use super::*;
+    use std::cell::OnceCell;
 
     #[derive(Debug, Default, gtk::CompositeTemplate)]
     #[template(resource = "/io/github/justinf555/Moments/ui/window.ui")]
@@ -36,7 +40,10 @@ mod imp {
         #[template_child]
         pub main_stack: TemplateChild<gtk::Stack>,
         #[template_child]
-        pub photo_grid: TemplateChild<PhotoGrid>,
+        pub split_view: TemplateChild<adw::NavigationSplitView>,
+
+        /// Set up once in `setup()` — holds live references to all registered views.
+        pub coordinator: OnceCell<RefCell<ContentCoordinator>>,
     }
 
     #[glib::object_subclass]
@@ -46,9 +53,6 @@ mod imp {
         type ParentType = adw::ApplicationWindow;
 
         fn class_init(klass: &mut Self::Class) {
-            // Register MomentsPhotoGrid before binding the template so GTK
-            // can resolve the type name used in window.ui.
-            PhotoGrid::ensure_type();
             klass.bind_template();
         }
 
@@ -78,14 +82,83 @@ impl MomentsWindow {
             .build()
     }
 
-    /// Attach a photo grid model once the library is ready.
-    pub fn set_model(&self, model: Rc<PhotoGridModel>) {
-        self.imp().photo_grid.set_model(model);
+    /// Wire the library model into the shell and switch to the content page.
+    ///
+    /// Builds the sidebar, registers all content views with the coordinator,
+    /// then switches `main_stack` from "loading" to "content".
+    pub fn setup(&self, model: Rc<PhotoGridModel>) {
+        let imp = self.imp();
+
+        // Build sidebar — MomentsSidebar is already an AdwNavigationPage subclass.
+        let sidebar = MomentsSidebar::new();
+        imp.split_view.set_sidebar(Some(&sidebar));
+
+        // Build content stack + coordinator.
+        let content_stack = gtk::Stack::new();
+        let mut coordinator = ContentCoordinator::new(content_stack.clone());
+
+        // Register the Photos view.
+        let photos_view = Rc::new(PhotoGridView::new());
+        photos_view.set_model(model);
+        coordinator.register("photos", photos_view);
+
+        // Wrap the content stack in a NavigationPage for the split view.
+        let content_nav_page = adw::NavigationPage::builder()
+            .title("Photos")
+            .child(&content_stack)
+            .build();
+        imp.split_view.set_content(Some(&content_nav_page));
+
+        let coordinator = RefCell::new(coordinator);
+
+        // Navigate to the first route immediately.
+        coordinator.borrow().navigate("photos");
+
+        imp.coordinator
+            .set(coordinator)
+            .expect("coordinator set once in setup()");
+
+        // Wire sidebar selection → coordinator navigation.
+        let obj_weak = self.downgrade();
+        sidebar.connect_route_selected(move |id| {
+            let Some(win) = obj_weak.upgrade() else { return };
+            if let Some(coordinator) = win.imp().coordinator.get() {
+                coordinator.borrow().navigate(id);
+            }
+        });
+
+        sidebar.select_first();
+
+        // Add the `win.toggle-sidebar` stateful action.
+        self.install_toggle_sidebar_action();
+
+        debug!("switching main window to content page");
+        imp.main_stack.set_visible_child_name("content");
     }
 
-    /// Switch from the loading page to the content page once the library is ready.
-    pub fn set_library_ready(&self) {
-        debug!("switching main window to content page");
-        self.imp().main_stack.set_visible_child_name("content");
+    /// Install a `win.toggle-sidebar` boolean action wired to the split view.
+    ///
+    /// In collapsed (narrow) mode, toggles between showing the sidebar and
+    /// the content page. In wide mode the split view always shows both and
+    /// the action is a no-op.
+    fn install_toggle_sidebar_action(&self) {
+        let split_view = self.imp().split_view.get();
+
+        // In collapsed mode, `shows_content()` tells us which pane is visible.
+        // We start with the sidebar visible (content hidden).
+        let state = false.to_variant(); // sidebar is visible by default
+        let action = gio::SimpleAction::new_stateful("toggle-sidebar", None, &state);
+
+        let split_weak = split_view.downgrade();
+        action.connect_activate(move |act, _| {
+            let Some(sv) = split_weak.upgrade() else { return };
+            if sv.is_collapsed() {
+                let show_content = !sv.shows_content();
+                sv.set_show_content(show_content);
+                act.set_state(&(!show_content).to_variant()); // state = sidebar visible
+            }
+        });
+
+        self.add_action(&action);
     }
 }
