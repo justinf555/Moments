@@ -1,8 +1,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gtk::{glib, prelude::*, subclass::prelude::*};
+use gtk::{gio, glib, prelude::*, subclass::prelude::*};
 use tracing::instrument;
+
+use crate::ui::ContentView;
 
 pub mod cell;
 pub mod factory;
@@ -109,5 +111,67 @@ impl PhotoGrid {
             });
 
         *imp.model.borrow_mut() = Some(model);
+    }
+}
+
+/// Wraps `PhotoGrid` in an `AdwToolbarView` + `AdwHeaderBar` so it can be
+/// registered as a `ContentView` in the main shell.
+pub struct PhotoGridView {
+    /// Kept alive so the widget tree stays valid for the lifetime of the view.
+    _toolbar_view: adw::ToolbarView,
+    photo_grid: PhotoGrid,
+    widget: gtk::Widget,
+}
+
+impl PhotoGridView {
+    pub fn new() -> Self {
+        let toolbar_view = adw::ToolbarView::new();
+        let header = adw::HeaderBar::new();
+
+        let import_button = gtk::Button::builder()
+            .icon_name("list-add-symbolic")
+            .tooltip_text("Import Photos")
+            .action_name("app.import")
+            .build();
+        import_button.add_css_class("flat");
+        header.pack_start(&import_button);
+
+        let menu_button = gtk::MenuButton::builder()
+            .primary(true)
+            .icon_name("open-menu-symbolic")
+            .tooltip_text("Main Menu")
+            .build();
+
+        let menu = gio::Menu::new();
+        let section = gio::Menu::new();
+        section.append(Some("_Preferences"), Some("app.preferences"));
+        section.append(Some("_Keyboard Shortcuts"), Some("app.shortcuts"));
+        section.append(Some("_About Moments"), Some("app.about"));
+        menu.append_section(None, &section);
+        menu_button.set_menu_model(Some(&menu));
+        header.pack_end(&menu_button);
+
+        toolbar_view.add_top_bar(&header);
+
+        let photo_grid = PhotoGrid::new();
+        toolbar_view.set_content(Some(&photo_grid));
+
+        let widget = toolbar_view.clone().upcast::<gtk::Widget>();
+
+        Self {
+            _toolbar_view: toolbar_view,
+            photo_grid,
+            widget,
+        }
+    }
+
+    pub fn set_model(&self, model: Rc<PhotoGridModel>) {
+        self.photo_grid.set_model(model);
+    }
+}
+
+impl ContentView for PhotoGridView {
+    fn widget(&self) -> &gtk::Widget {
+        &self.widget
     }
 }
