@@ -157,9 +157,20 @@ impl MomentsWindow {
         // Wire sidebar selection → coordinator navigation.
         // The coordinator calls on_navigate() on the target view, which
         // handles filter changes and popping back to the grid.
+        // Track the current route to avoid re-navigating when GTK re-emits
+        // row-selected for the same row (e.g. on focus changes).
         let obj_weak = self.downgrade();
         let store_for_sidebar = model.store.clone();
+        let current_route: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
         sidebar.connect_route_selected(move |id| {
+            {
+                let current = current_route.borrow();
+                if *current == id {
+                    return;
+                }
+            }
+            *current_route.borrow_mut() = id.to_owned();
+
             let Some(win) = obj_weak.upgrade() else { return };
             if let Some(coordinator) = win.imp().coordinator.get() {
                 if store_for_sidebar.n_items() == 0 {
