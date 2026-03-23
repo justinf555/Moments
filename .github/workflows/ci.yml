@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:43
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          dnf install -y \
+            cargo \
+            gtk4-devel \
+            libadwaita-devel \
+            gettext-devel \
+            pkg-config
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: fedora43-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: fedora43-cargo-
+
+      - name: Generate config.rs stub
+        run: |
+          cat > src/config.rs <<'EOF'
+          pub static VERSION: &str = env!("CARGO_PKG_VERSION");
+          pub static GETTEXT_PACKAGE: &str = "moments";
+          pub static LOCALEDIR: &str = "/usr/share/locale";
+          pub static PKGDATADIR: &str = "/usr/share/moments";
+          EOF
+
+      - name: Run tests
+        run: cargo test
