@@ -51,6 +51,20 @@ impl PhotoGridModel {
         }
     }
 
+    /// Clear all items and reload from the first page.
+    ///
+    /// Called after an import completes so newly arrived photos appear at the
+    /// top of the grid without requiring a restart.
+    pub fn reload(self: &Rc<Self>) {
+        self.store.remove_all();
+        self.id_index.borrow_mut().clear();
+        *self.cursor.borrow_mut() = None;
+        self.loading.set(false);
+        self.has_more.set(true);
+        debug!("reloading grid from first page");
+        self.load_more();
+    }
+
     /// Fetch the next page of media items from the library.
     ///
     /// No-op if a load is already in flight or there are no more pages.
@@ -100,10 +114,14 @@ impl PhotoGridModel {
         };
         let path = self.library.thumbnail_path(id);
         let tokio = self.tokio.clone();
+        let id = id.clone();
 
         glib::MainContext::default().spawn_local(async move {
             if let Some(texture) = load_texture(tokio, path).await {
+                debug!(id = %id, "thumbnail ready: texture set");
                 obj.set_texture(Some(texture));
+            } else {
+                debug!(id = %id, "thumbnail ready: texture load failed");
             }
         });
     }
@@ -125,6 +143,22 @@ impl PhotoGridModel {
         for item in items {
             let obj = MediaItemObject::new(item);
             index.insert(obj.item().id.clone(), obj.downgrade());
+
+            // Speculatively load any thumbnail that already exists on disk.
+            // ThumbnailReady events only fire during import; on subsequent app
+            // launches we must try to load existing thumbnails ourselves.
+            // load_texture returns None silently if the file is absent.
+            let id = obj.item().id.clone();
+            let path = self.library.thumbnail_path(&id);
+            let tokio = self.tokio.clone();
+            let obj_ref = obj.clone();
+            glib::MainContext::default().spawn_local(async move {
+                if let Some(texture) = load_texture(tokio, path).await {
+                    debug!(id = %id, "speculative load: texture set");
+                    obj_ref.set_texture(Some(texture));
+                }
+            });
+
             self.store.append(&obj);
         }
 
@@ -136,22 +170,40 @@ impl PhotoGridModel {
     }
 }
 
-/// Load a WebP thumbnail from disk and create a `gdk::Texture`.
+/// Load a thumbnail from disk and create a `gdk::Texture`.
 ///
-/// File I/O runs on the Tokio blocking pool. Texture construction happens on
-/// the GTK main thread (the caller's context) after the bytes arrive.
+/// Decoding runs on the Tokio blocking pool (avoids freezing the GTK thread).
+/// The resulting raw RGBA pixels are handed to `gdk::MemoryTexture` on the
+/// GTK main thread — no gdk-pixbuf loader required, so this works inside the
+/// Flatpak sandbox where the WebP pixbuf loader is absent.
 async fn load_texture(
     handle: tokio::runtime::Handle,
     path: std::path::PathBuf,
 ) -> Option<gdk::Texture> {
-    let bytes = handle
+    let result = handle
         .spawn(async move {
-            tokio::task::spawn_blocking(move || std::fs::read(&path))
-                .await
-                .ok()
+            tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, u32, u32)> {
+                let data = std::fs::read(&path).ok()?;
+                let img = image::load_from_memory(&data).ok()?;
+                let rgba = img.to_rgba8();
+                let (w, h) = rgba.dimensions();
+                Some((rgba.into_raw(), w, h))
+            })
+            .await
+            .ok()
         })
         .await
-        .ok()??;
-    let gbytes = glib::Bytes::from_owned(bytes.ok()?);
-    gdk::Texture::from_bytes(&gbytes).ok()
+        .ok()?;
+    let (pixels, width, height) = result??;
+    let gbytes = glib::Bytes::from_owned(pixels);
+    Some(
+        gdk::MemoryTexture::new(
+            width as i32,
+            height as i32,
+            gdk::MemoryFormat::R8g8b8a8,
+            &gbytes,
+            (width as usize) * 4,
+        )
+        .upcast(),
+    )
 }

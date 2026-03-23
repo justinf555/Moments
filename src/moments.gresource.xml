@@ -2,6 +2,7 @@
 <gresources>
   <gresource prefix="/io/github/justinf555/Moments">
     <file preprocess="xml-stripblanks">ui/window.ui</file>
+    <file preprocess="xml-stripblanks">ui/import_dialog.ui</file>
     <file preprocess="xml-stripblanks">ui/setup_window.ui</file>
     <file preprocess="xml-stripblanks">ui/setup_window/backend_picker_page.ui</file>
     <file preprocess="xml-stripblanks">ui/setup_window/local_setup_page.ui</file>

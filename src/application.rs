@@ -35,6 +35,7 @@ use crate::library::config::LibraryConfig;
 use crate::library::event::LibraryEvent;
 use crate::library::factory::LibraryFactory;
 use crate::library::Library;
+use crate::ui::import_dialog::ImportDialog;
 use crate::ui::photo_grid::PhotoGridModel;
 use crate::ui::MomentsSetupWindow;
 use crate::ui::MomentsWindow;
@@ -49,6 +50,15 @@ mod imp {
         pub library: RefCell<Option<Arc<dyn Library>>>,
         pub library_events: RefCell<Option<Receiver<LibraryEvent>>>,
         pub photo_grid_model: RefCell<Option<Rc<PhotoGridModel>>>,
+        /// Held while an import is in flight so the idle loop can update it.
+        /// Cleared when `ImportComplete` arrives or the user dismisses it.
+        pub import_dialog: RefCell<Option<ImportDialog>>,
+        /// The GLib source ID of the library-event idle loop.
+        ///
+        /// Stored so `shutdown()` can remove it explicitly, which frees the
+        /// closure and releases the `Rc<PhotoGridModel>` (→ `Arc<dyn Library>`
+        /// → `SqlitePool`) before the Tokio runtime is dropped in `main()`.
+        pub idle_source: RefCell<Option<glib::SourceId>>,
     }
 
     #[glib::object_subclass]
@@ -68,6 +78,26 @@ mod imp {
     }
 
     impl ApplicationImpl for MomentsApplication {
+        fn shutdown(&self) {
+            info!("application shutting down");
+
+            // Remove the idle source first — this frees the closure and
+            // releases Rc<PhotoGridModel> while the Tokio runtime is still
+            // alive so the SqlitePool background task can exit cleanly.
+            if let Some(source_id) = self.idle_source.borrow_mut().take() {
+                source_id.remove();
+            }
+
+            // Drop all library-related state so the Arc<dyn Library>
+            // (and the SqlitePool it wraps) is freed before drop(tokio)
+            // in main() tries to shut down the runtime.
+            self.photo_grid_model.borrow_mut().take();
+            self.import_dialog.borrow_mut().take();
+            self.library.borrow_mut().take();
+
+            self.parent_shutdown();
+        }
+
         fn activate(&self) {
             let app = self.obj();
 
@@ -128,7 +158,10 @@ impl MomentsApplication {
         let about_action = gio::ActionEntry::builder("about")
             .activate(move |app: &Self, _, _| app.show_about())
             .build();
-        self.add_action_entries([quit_action, about_action]);
+        let import_action = gio::ActionEntry::builder("import")
+            .activate(move |app: &Self, _, _| app.show_import_dialog())
+            .build();
+        self.add_action_entries([quit_action, about_action, import_action]);
     }
 
     fn show_about(&self) {
@@ -210,6 +243,77 @@ impl MomentsApplication {
         self.load_library_async(bundle, config, window);
     }
 
+    /// Open a folder picker and start importing the selected folder.
+    fn show_import_dialog(&self) {
+        let window = match self.active_window() {
+            Some(w) => w,
+            None => return,
+        };
+
+        let file_dialog = gtk::FileDialog::builder()
+            .title("Select Folder to Import")
+            .modal(true)
+            .build();
+
+        file_dialog.select_folder(
+            Some(&window),
+            gio::Cancellable::NONE,
+            glib::clone!(
+                #[weak(rename_to = app)]
+                self,
+                move |result| match result {
+                    Ok(folder) => {
+                        if let Some(path) = folder.path() {
+                            app.run_import(path);
+                        }
+                    }
+                    Err(_) => {} // user cancelled — nothing to do
+                }
+            ),
+        );
+    }
+
+    /// Create the import progress dialog and kick off the import pipeline.
+    fn run_import(&self, folder: PathBuf) {
+        let library = match self.imp().library.borrow().clone() {
+            Some(l) => l,
+            None => {
+                error!("import requested but no library is open");
+                return;
+            }
+        };
+        let tokio = self.imp().tokio.get().expect("tokio handle set").clone();
+        let window = match self.active_window() {
+            Some(w) => w,
+            None => return,
+        };
+
+        let dialog = ImportDialog::new();
+
+        // Clear our reference when the user dismisses the dialog early so the
+        // idle loop stops trying to forward events to a closed widget.
+        dialog.connect_closed(glib::clone!(
+            #[weak(rename_to = app)]
+            self,
+            move |_| {
+                app.imp().import_dialog.borrow_mut().take();
+            }
+        ));
+
+        dialog.present(Some(&window));
+        *self.imp().import_dialog.borrow_mut() = Some(dialog);
+
+        info!(path = %folder.display(), "starting import");
+        glib::MainContext::default().spawn_local(async move {
+            let result = tokio
+                .spawn(async move { library.import(vec![folder]).await })
+                .await;
+            if let Ok(Err(e)) = result {
+                error!("import pipeline error: {e}");
+            }
+        });
+    }
+
     /// Spawn the async factory call on the glib main context.
     ///
     /// On success:
@@ -243,7 +347,8 @@ impl MomentsApplication {
                         window.set_model(Rc::clone(&model));
                         window.set_library_ready();
 
-                        // Poll library events and forward thumbnail notifications.
+                        // Poll library events on every GTK idle tick.
+                        // Routes thumbnail and import events to the right consumers.
                         let receiver = app
                             .imp()
                             .library_events
@@ -251,11 +356,33 @@ impl MomentsApplication {
                             .take()
                             .expect("receiver set above");
 
-                        glib::idle_add_local(move || {
+                        let app_for_idle = app.downgrade();
+                        let source_id = glib::idle_add_local(move || {
+                            let app = match app_for_idle.upgrade() {
+                                Some(a) => a,
+                                None => return glib::ControlFlow::Break,
+                            };
                             loop {
                                 match receiver.try_recv() {
                                     Ok(LibraryEvent::ThumbnailReady { media_id }) => {
                                         model.on_thumbnail_ready(&media_id);
+                                    }
+                                    Ok(LibraryEvent::ImportProgress { current, total }) => {
+                                        let borrow = app.imp().import_dialog.borrow();
+                                        if let Some(d) = borrow.as_ref() {
+                                            d.set_progress(current, total);
+                                        }
+                                    }
+                                    Ok(LibraryEvent::ImportComplete(summary)) => {
+                                        {
+                                            let borrow = app.imp().import_dialog.borrow();
+                                            if let Some(d) = borrow.as_ref() {
+                                                d.set_complete(&summary);
+                                            }
+                                        }
+                                        // Release strong ref — dialog stays open until user dismisses.
+                                        app.imp().import_dialog.borrow_mut().take();
+                                        model.reload();
                                     }
                                     Ok(_) => {}
                                     Err(std::sync::mpsc::TryRecvError::Empty) => break,
@@ -266,6 +393,7 @@ impl MomentsApplication {
                             }
                             glib::ControlFlow::Continue
                         });
+                        *app.imp().idle_source.borrow_mut() = Some(source_id);
                     }
                     Err(e) => {
                         error!("failed to open library: {e}");
