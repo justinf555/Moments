@@ -109,6 +109,7 @@ impl MomentsWindow {
         // Register the Photos view.
         let photos_view = Rc::new(PhotoGridView::new(library, tokio, settings));
         photos_view.set_model(model);
+        self.insert_action_group("view", Some(photos_view.view_actions()));
         coordinator.register("photos", photos_view);
 
         // Wrap the content stack in a NavigationPage for the split view.

@@ -214,6 +214,9 @@ pub struct PhotoGridView {
     photo_grid: PhotoGrid,
     viewer: Rc<PhotoViewer>,
     widget: gtk::Widget,
+    /// Zoom actions — must be installed on the window so accelerators work
+    /// regardless of which widget has focus.
+    view_actions: gio::SimpleActionGroup,
 }
 
 impl PhotoGridView {
@@ -336,7 +339,6 @@ impl PhotoGridView {
 
         action_group.add_action(&zoom_in_action);
         action_group.add_action(&zoom_out_action);
-        nav_view.insert_action_group("view", Some(&action_group));
 
         let widget = nav_view.clone().upcast::<gtk::Widget>();
 
@@ -345,7 +347,16 @@ impl PhotoGridView {
             photo_grid,
             viewer,
             widget,
+            view_actions: action_group,
         }
+    }
+
+    /// Action group containing `zoom-in` and `zoom-out` actions.
+    ///
+    /// Install on the window with prefix `"view"` so accelerators work
+    /// regardless of focus.
+    pub fn view_actions(&self) -> &gio::SimpleActionGroup {
+        &self.view_actions
     }
 
     pub fn set_model(&self, model: Rc<PhotoGridModel>) {
