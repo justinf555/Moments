@@ -54,7 +54,12 @@ impl PhotoGridModel {
     }
 
     /// Change the active filter and reload from the first page.
+    ///
+    /// No-op if the filter is already the requested value.
     pub fn set_filter(self: &Rc<Self>, filter: MediaFilter) {
+        if self.filter.get() == filter {
+            return;
+        }
         self.filter.set(filter);
         self.reload();
     }
