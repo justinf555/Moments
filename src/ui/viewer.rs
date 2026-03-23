@@ -37,6 +37,11 @@ struct ViewerInner {
     /// Monotonically increasing counter. Async loads compare against this
     /// value captured at launch to discard stale results.
     load_gen: Cell<u64>,
+    /// Set by `show_at` when the viewer is being pushed onto the
+    /// NavigationView. The `shown` signal handler reads this to start
+    /// the full-res load after the slide-in animation completes.
+    /// `None` when no deferred load is pending.
+    pending_load: RefCell<Option<crate::library::media::MediaId>>,
     /// Cached metadata for the currently displayed item.
     current_metadata: RefCell<Option<MediaMetadataRecord>>,
     library: Arc<dyn Library>,
@@ -92,8 +97,16 @@ impl ViewerInner {
         // Collapse info panel to avoid showing stale metadata.
         self.info_split.set_show_sidebar(false);
 
-        self.start_full_res_load(gen, id.clone());
-        self.load_metadata_async(gen, id);
+        // Defer full-res load until the page transition completes (shown
+        // signal) to avoid a stutter as the large image replaces the
+        // thumbnail mid-animation. If the page is already visible (e.g.
+        // prev/next navigation), start immediately.
+        if self.nav_page.is_mapped() {
+            self.start_full_res_load(gen, id.clone());
+            self.load_metadata_async(gen, id);
+        } else {
+            *self.pending_load.borrow_mut() = Some(id);
+        }
     }
 
     fn navigate_prev(self: &Rc<Self>) {
@@ -358,12 +371,27 @@ impl PhotoViewer {
             items: RefCell::new(Vec::new()),
             current_index: Cell::new(0),
             load_gen: Cell::new(0),
+            pending_load: RefCell::new(None),
             current_metadata: RefCell::new(None),
             library,
             tokio,
         });
 
         // ── Signal handlers ───────────────────────────────────────────────────
+
+        // Start deferred full-res load after the slide-in animation completes.
+        {
+            let i = Rc::downgrade(&inner);
+            inner.nav_page.connect_shown(move |_| {
+                let Some(inner) = i.upgrade() else { return };
+                let pending = inner.pending_load.borrow_mut().take();
+                if let Some(id) = pending {
+                    let gen = inner.load_gen.get();
+                    inner.start_full_res_load(gen, id.clone());
+                    inner.load_metadata_async(gen, id);
+                }
+            });
+        }
 
         // Prev button
         {
