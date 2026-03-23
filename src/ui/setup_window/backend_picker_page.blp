@@ -1,0 +1,52 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $MomentsBackendPickerPage : Adw.NavigationPage {
+  title: _("Welcome");
+
+  child: Adw.ToolbarView {
+    [top]
+    Adw.HeaderBar {
+      show-back-button: false;
+    }
+
+    Gtk.Box {
+      orientation: vertical;
+      spacing: 24;
+      valign: center;
+      margin-top: 24;
+      margin-bottom: 48;
+      margin-start: 24;
+      margin-end: 24;
+
+      Adw.StatusPage {
+        icon-name: "image-x-generic-symbolic";
+        title: _("Welcome to Moments");
+        description: _("Choose where to store your photo library.");
+      }
+
+      Gtk.ListBox {
+        selection-mode: none;
+
+        styles ["boxed-list"]
+
+        Adw.ActionRow local_row {
+          title: _("Local Library");
+          subtitle: _("Store your photos on this device");
+          activatable: true;
+
+          [suffix]
+          Gtk.Image {
+            icon-name: "go-next-symbolic";
+          }
+        }
+
+        Adw.ActionRow immich_row {
+          title: _("Immich Server");
+          subtitle: _("Coming soon");
+          sensitive: false;
+        }
+      }
+    }
+  };
+}

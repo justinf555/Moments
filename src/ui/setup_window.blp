@@ -1,0 +1,11 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $MomentsSetupWindow : Adw.Window {
+  title: _("Set Up Moments");
+  default-width: 480;
+  default-height: 500;
+  resizable: false;
+
+  content: Adw.NavigationView navigation_view {};
+}

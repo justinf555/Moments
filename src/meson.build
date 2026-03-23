@@ -1,11 +1,30 @@
 pkgdatadir = get_option('prefix') / get_option('datadir') / meson.project_name()
 gnome = import('gnome')
 
+blueprints = custom_target(
+  'blueprints',
+  input: files(
+    'shortcuts-dialog.blp',
+    'ui/window.blp',
+    'ui/import_dialog.blp',
+    'ui/setup_window.blp',
+    'ui/setup_window/backend_picker_page.blp',
+    'ui/setup_window/local_setup_page.blp',
+  ),
+  output: '.',
+  command: [
+    find_program('blueprint-compiler'),
+    'batch-compile', '@OUTPUT@', '@CURRENT_SOURCE_DIR@',
+    '@INPUT@',
+  ],
+)
+
 gnome.compile_resources('moments',
   'moments.gresource.xml',
   gresource_bundle: true,
   install: true,
   install_dir: pkgdatadir,
+  dependencies: blueprints,
 )
 
 conf = configuration_data()
