@@ -52,7 +52,8 @@ impl LibraryImport for LocalLibrary {
     async fn import(&self, sources: Vec<PathBuf>) -> Result<(), LibraryError> {
         info!("starting import");
         let job = ImportJob::new(self.bundle.originals.clone(), self.events.clone());
-        job.run(sources).await
+        std::thread::spawn(move || job.run(sources));
+        Ok(())
     }
 }
 
@@ -110,10 +111,13 @@ mod tests {
             .await
             .unwrap();
 
-        let events: Vec<_> = rx.try_iter().collect();
-        let has_complete = events
-            .iter()
-            .any(|e| matches!(e, LibraryEvent::ImportComplete(_)));
+        // import() spawns a background thread; drain events until ImportComplete arrives.
+        let has_complete = loop {
+            match rx.recv().unwrap() {
+                LibraryEvent::ImportComplete(_) => break true,
+                _ => continue,
+            }
+        };
         assert!(has_complete);
     }
 }

@@ -10,9 +10,10 @@ use super::import::{ImportSummary, SkipReason, SUPPORTED_EXTENSIONS};
 
 /// Drives a single import run for the local backend.
 ///
-/// Created by `LocalLibrary::import()`, which calls [`ImportJob::run`].
-/// All file I/O is dispatched to a blocking thread via `gio::spawn_blocking`
-/// to avoid stalling the async executor.
+/// [`ImportJob::run`] is **synchronous** and is intended to be called from a
+/// background thread spawned by `LocalLibrary::import()`. Results are
+/// communicated back through the existing [`Sender<LibraryEvent>`] so the GTK
+/// layer receives progress without any extra channel wiring.
 pub struct ImportJob {
     /// Root `originals/` directory inside the bundle.
     originals_dir: PathBuf,
@@ -28,17 +29,15 @@ impl ImportJob {
         }
     }
 
-    /// Execute the import: collect candidates, copy files, emit events.
+    /// Execute the import synchronously.
+    ///
+    /// Called on a background thread — never call this on the GTK main thread.
     #[instrument(skip(self, sources), fields(source_count = sources.len()))]
-    pub async fn run(self, sources: Vec<PathBuf>) -> Result<(), LibraryError> {
+    pub fn run(self, sources: Vec<PathBuf>) {
         let start = Instant::now();
 
-        // ── 1. Collect candidate files (blocking walk) ────────────────────────
-        let originals_dir = self.originals_dir.clone();
-        let candidates = gio::spawn_blocking(move || collect_candidates(sources))
-            .await
-            .map_err(|e| LibraryError::Bundle(format!("candidate collection panicked: {e}")))?;
-
+        // ── 1. Collect candidate files ────────────────────────────────────────
+        let candidates = collect_candidates(sources);
         let total = candidates.len();
         info!(total, "import candidates collected");
 
@@ -47,12 +46,11 @@ impl ImportJob {
 
         for (idx, path) in candidates.into_iter().enumerate() {
             let current = idx + 1;
-
             self.events
                 .send(LibraryEvent::ImportProgress { current, total })
                 .ok();
 
-            match self.import_one(&path, &originals_dir).await {
+            match self.import_one(&path) {
                 Ok(Some(skip)) => {
                     debug!(?path, ?skip, "skipped");
                     match skip {
@@ -88,18 +86,11 @@ impl ImportJob {
         self.events
             .send(LibraryEvent::ImportComplete(summary))
             .ok();
-
-        Ok(())
     }
 
     /// Import a single file. Returns `Ok(None)` on success, `Ok(Some(reason))`
     /// if skipped, or `Err` on a non-fatal I/O failure.
-    async fn import_one(
-        &self,
-        source: &Path,
-        originals_dir: &Path,
-    ) -> Result<Option<SkipReason>, LibraryError> {
-        // Check extension
+    fn import_one(&self, source: &Path) -> Result<Option<SkipReason>, LibraryError> {
         let ext = source
             .extension()
             .and_then(|e| e.to_str())
@@ -110,43 +101,24 @@ impl ImportJob {
             return Ok(Some(SkipReason::UnsupportedFormat));
         }
 
-        // Compute target path (blocking: needs filesystem mtime)
-        let source_owned = source.to_path_buf();
-        let originals_owned = originals_dir.to_path_buf();
+        let base_target = compute_base_target(source, &self.originals_dir)?;
 
-        let target = gio::spawn_blocking(move || {
-            compute_target_path(&source_owned, &originals_owned)
-        })
-        .await
-        .map_err(|e| LibraryError::Bundle(format!("target path computation panicked: {e}")))?;
-
-        let target = target?;
-
-        // Duplicate check
-        if target.exists() {
+        if base_target.exists() {
             return Ok(Some(SkipReason::Duplicate));
         }
 
-        // Copy (blocking)
-        let source_owned = source.to_path_buf();
-        gio::spawn_blocking(move || {
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::copy(&source_owned, &target)?;
-            Ok::<_, std::io::Error>(())
-        })
-        .await
-        .map_err(|e| LibraryError::Bundle(format!("copy task panicked: {e}")))?
-        .map_err(LibraryError::Io)?;
+        let target = resolve_collision(base_target);
+
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(LibraryError::Io)?;
+        }
+        std::fs::copy(source, &target).map_err(LibraryError::Io)?;
 
         Ok(None)
     }
 }
 
 /// Recursively collect all files reachable from `sources`.
-///
-/// Runs on a blocking thread. Ignores entries that cannot be read.
 fn collect_candidates(sources: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for source in sources {
@@ -179,14 +151,12 @@ fn walk_dir(dir: &Path, out: &mut Vec<PathBuf>) {
 
 /// Compute the destination path for `source` inside `originals_dir`.
 ///
-/// Uses the file's last-modified timestamp for the `YYYY/MM/DD` bucket.
+/// Returns the base `YYYY/MM/DD/filename.ext` path without collision resolution.
+/// Uses the file's last-modified timestamp for the date bucket.
 /// EXIF-based dating is implemented in issue #7.
-///
-/// If a file with the same name already exists at the target, appends `_2`,
-/// `_3`, etc. to the stem before the extension.
-fn compute_target_path(source: &Path, originals_dir: &Path) -> Result<PathBuf, LibraryError> {
+fn compute_base_target(source: &Path, originals_dir: &Path) -> Result<PathBuf, LibraryError> {
     let metadata = std::fs::metadata(source).map_err(LibraryError::Io)?;
-    let modified: std::time::SystemTime = metadata.modified().map_err(LibraryError::Io)?;
+    let modified = metadata.modified().map_err(LibraryError::Io)?;
 
     let datetime: chrono::DateTime<chrono::Local> = modified.into();
     let date_dir = originals_dir
@@ -194,35 +164,40 @@ fn compute_target_path(source: &Path, originals_dir: &Path) -> Result<PathBuf, L
         .join(datetime.format("%m").to_string())
         .join(datetime.format("%d").to_string());
 
-    let file_name = source
-        .file_name()
-        .ok_or_else(|| LibraryError::Bundle(format!("source has no filename: {}", source.display())))?;
+    let file_name = source.file_name().ok_or_else(|| {
+        LibraryError::Bundle(format!("source has no filename: {}", source.display()))
+    })?;
 
-    let mut target = date_dir.join(file_name);
+    Ok(date_dir.join(file_name))
+}
 
-    // Resolve filename collisions
-    if target.exists() {
-        let stem = source
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("file");
-        let ext = source
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| format!(".{e}"))
-            .unwrap_or_default();
-
-        let mut counter = 2u32;
-        loop {
-            target = date_dir.join(format!("{stem}_{counter}{ext}"));
-            if !target.exists() {
-                break;
-            }
-            counter += 1;
-        }
+/// Resolve filename collisions by appending `_2`, `_3`, … suffixes until the
+/// path does not exist on disk.
+fn resolve_collision(base: PathBuf) -> PathBuf {
+    if !base.exists() {
+        return base;
     }
 
-    Ok(target)
+    let stem = base
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("file")
+        .to_string();
+    let ext = base
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| format!(".{e}"))
+        .unwrap_or_default();
+    let dir = base.parent().unwrap_or(std::path::Path::new(""));
+
+    let mut counter = 2u32;
+    loop {
+        let candidate = dir.join(format!("{stem}_{counter}{ext}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+        counter += 1;
+    }
 }
 
 #[cfg(test)]
@@ -237,8 +212,8 @@ mod tests {
         path
     }
 
-    #[tokio::test]
-    async fn import_copies_jpeg_into_originals() {
+    #[test]
+    fn import_copies_jpeg_into_originals() {
         let src_dir = tempdir().unwrap();
         let bundle_dir = tempdir().unwrap();
         let originals = bundle_dir.path().join("originals");
@@ -246,25 +221,19 @@ mod tests {
         let photo = make_file(src_dir.path(), "photo.jpg", b"fake jpeg");
 
         let (tx, rx) = mpsc::channel();
-        let job = ImportJob::new(originals.clone(), tx);
-        job.run(vec![photo.clone()]).await.unwrap();
+        ImportJob::new(originals, tx).run(vec![photo]);
 
-        // At least one AssetImported event
         let events: Vec<_> = rx.try_iter().collect();
-        let imported = events
-            .iter()
-            .any(|e| matches!(e, LibraryEvent::AssetImported { .. }));
-        assert!(imported, "expected AssetImported event");
+        assert!(events.iter().any(|e| matches!(e, LibraryEvent::AssetImported { .. })));
 
-        // ImportComplete with imported = 1
-        let complete = events.iter().find_map(|e| {
-            if let LibraryEvent::ImportComplete(s) = e { Some(s.clone()) } else { None }
-        });
-        assert_eq!(complete.unwrap().imported, 1);
+        let summary = events.iter().find_map(|e| {
+            if let LibraryEvent::ImportComplete(s) = e { Some(s) } else { None }
+        }).unwrap();
+        assert_eq!(summary.imported, 1);
     }
 
-    #[tokio::test]
-    async fn unsupported_extension_is_skipped() {
+    #[test]
+    fn unsupported_extension_is_skipped() {
         let src_dir = tempdir().unwrap();
         let bundle_dir = tempdir().unwrap();
         let originals = bundle_dir.path().join("originals");
@@ -272,20 +241,18 @@ mod tests {
         let file = make_file(src_dir.path(), "document.pdf", b"not a photo");
 
         let (tx, rx) = mpsc::channel();
-        let job = ImportJob::new(originals, tx);
-        job.run(vec![file]).await.unwrap();
+        ImportJob::new(originals, tx).run(vec![file]);
 
         let events: Vec<_> = rx.try_iter().collect();
-        let complete = events.iter().find_map(|e| {
-            if let LibraryEvent::ImportComplete(s) = e { Some(s.clone()) } else { None }
-        });
-        let summary = complete.unwrap();
+        let summary = events.iter().find_map(|e| {
+            if let LibraryEvent::ImportComplete(s) = e { Some(s) } else { None }
+        }).unwrap();
         assert_eq!(summary.imported, 0);
         assert_eq!(summary.skipped_unsupported, 1);
     }
 
-    #[tokio::test]
-    async fn duplicate_filename_is_skipped() {
+    #[test]
+    fn duplicate_filename_is_skipped_on_second_import() {
         let src_dir = tempdir().unwrap();
         let bundle_dir = tempdir().unwrap();
         let originals = bundle_dir.path().join("originals");
@@ -293,28 +260,20 @@ mod tests {
         let photo = make_file(src_dir.path(), "dup.jpg", b"fake jpeg");
 
         let (tx, rx) = mpsc::channel();
-        // First import
-        let job = ImportJob::new(originals.clone(), tx.clone());
-        job.run(vec![photo.clone()]).await.unwrap();
-
-        // Second import of same file
-        let job2 = ImportJob::new(originals, tx);
-        job2.run(vec![photo]).await.unwrap();
+        ImportJob::new(originals.clone(), tx.clone()).run(vec![photo.clone()]);
+        ImportJob::new(originals, tx).run(vec![photo]);
 
         let events: Vec<_> = rx.try_iter().collect();
-        let summaries: Vec<_> = events
-            .iter()
-            .filter_map(|e| {
-                if let LibraryEvent::ImportComplete(s) = e { Some(s.clone()) } else { None }
-            })
-            .collect();
+        let summaries: Vec<_> = events.iter().filter_map(|e| {
+            if let LibraryEvent::ImportComplete(s) = e { Some(s) } else { None }
+        }).collect();
 
         assert_eq!(summaries[0].imported, 1);
         assert_eq!(summaries[1].skipped_duplicates, 1);
     }
 
-    #[tokio::test]
-    async fn directory_sources_are_walked_recursively() {
+    #[test]
+    fn directory_sources_are_walked_recursively() {
         let src_dir = tempdir().unwrap();
         let sub = src_dir.path().join("sub");
         std::fs::create_dir(&sub).unwrap();
@@ -327,15 +286,13 @@ mod tests {
         let originals = bundle_dir.path().join("originals");
 
         let (tx, rx) = mpsc::channel();
-        let job = ImportJob::new(originals, tx);
-        job.run(vec![src_dir.path().to_path_buf()]).await.unwrap();
+        ImportJob::new(originals, tx).run(vec![src_dir.path().to_path_buf()]);
 
         let events: Vec<_> = rx.try_iter().collect();
-        let complete = events.iter().find_map(|e| {
-            if let LibraryEvent::ImportComplete(s) = e { Some(s.clone()) } else { None }
-        });
-        let summary = complete.unwrap();
-        assert_eq!(summary.imported, 2);            // a.jpg + b.png
-        assert_eq!(summary.skipped_unsupported, 1); // skip.txt
+        let summary = events.iter().find_map(|e| {
+            if let LibraryEvent::ImportComplete(s) = e { Some(s) } else { None }
+        }).unwrap();
+        assert_eq!(summary.imported, 2);
+        assert_eq!(summary.skipped_unsupported, 1);
     }
 }
