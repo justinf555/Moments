@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <requires lib="gtk" version="4.0"/>
+  <requires lib="Adw" version="1.0"/>
+  <template class="MomentsSetupWindow" parent="AdwWindow">
+    <property name="title" translatable="yes">Set Up Moments</property>
+    <property name="default-width">480</property>
+    <property name="default-height">500</property>
+    <property name="resizable">false</property>
+    <property name="content">
+      <object class="AdwNavigationView" id="navigation_view"/>
+    </property>
+  </template>
+</interface>

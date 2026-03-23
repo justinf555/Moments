@@ -3,6 +3,7 @@ pub mod config;
 pub mod error;
 pub mod event;
 pub mod factory;
+pub mod local;
 pub mod storage;
 
 pub use error::LibraryError;

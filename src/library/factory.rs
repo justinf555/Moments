@@ -1,14 +1,16 @@
-use std::path::Path;
 use std::sync::mpsc::Sender;
 
 use tracing::instrument;
 
+use super::bundle::Bundle;
 use super::config::LibraryConfig;
 use super::error::LibraryError;
 use super::event::LibraryEvent;
+use super::local::LocalLibrary;
+use super::storage::LibraryStorage;
 use super::Library;
 
-/// Creates `Library` instances from a [`LibraryConfig`].
+/// Creates `Library` instances from a [`Bundle`] and [`LibraryConfig`].
 ///
 /// This is the **only** place in the codebase where concrete backend types are
 /// named and constructed. All callers receive a `Box<dyn Library>` and remain
@@ -18,21 +20,23 @@ pub struct LibraryFactory;
 impl LibraryFactory {
     /// Construct and open the appropriate backend.
     ///
-    /// `bundle_path` is the path to the `Moments.library` directory.
-    /// `config` identifies the backend and its connection details.
+    /// `bundle` is the validated, open library directory.
+    /// `config` identifies the backend and its connection details; it is read
+    /// from `library.toml` by [`Bundle::open`] and passed here directly so
+    /// the factory does not need to re-parse the manifest.
     /// `events` is stored inside the backend for its lifetime — the caller
     /// holds the corresponding `Receiver<LibraryEvent>` and polls it via
     /// `glib::idle_add` on the GTK main thread.
-    #[instrument(skip(_events), fields(bundle_path = %bundle_path.display()))]
+    #[instrument(skip(events), fields(backend = ?config))]
     pub async fn create(
-        bundle_path: &Path,
+        bundle: Bundle,
         config: LibraryConfig,
-        _events: Sender<LibraryEvent>,
+        events: Sender<LibraryEvent>,
     ) -> Result<Box<dyn Library>, LibraryError> {
         match config {
             LibraryConfig::Local => {
-                // Implemented in issue #5 — local backend
-                todo!("Local backend not yet implemented")
+                let library = LocalLibrary::open(bundle, events).await?;
+                Ok(Box::new(library))
             }
             LibraryConfig::Immich { .. } => {
                 // Implemented in issue #14 — Immich backend

@@ -18,19 +18,34 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+use std::cell::{OnceCell, RefCell};
+use std::path::PathBuf;
+use std::sync::mpsc::Receiver;
+
 use gettextrs::gettext;
 use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gio, glib};
+use tracing::{error, info, instrument};
 
 use crate::config::VERSION;
-use crate::MomentsWindow;
+use crate::library::bundle::Bundle;
+use crate::library::config::LibraryConfig;
+use crate::library::event::LibraryEvent;
+use crate::library::factory::LibraryFactory;
+use crate::library::Library;
+use crate::ui::MomentsSetupWindow;
+use crate::ui::MomentsWindow;
 
 mod imp {
     use super::*;
 
-    #[derive(Debug, Default)]
-    pub struct MomentsApplication {}
+    #[derive(Default)]
+    pub struct MomentsApplication {
+        pub settings: OnceCell<gio::Settings>,
+        pub library: RefCell<Option<Box<dyn Library>>>,
+        pub library_events: RefCell<Option<Receiver<LibraryEvent>>>,
+    }
 
     #[glib::object_subclass]
     impl ObjectSubclass for MomentsApplication {
@@ -49,20 +64,28 @@ mod imp {
     }
 
     impl ApplicationImpl for MomentsApplication {
-        // We connect to the activate callback to create a window when the application
-        // has been launched. Additionally, this callback notifies us when the user
-        // tries to launch a "second instance" of the application. When they try
-        // to do that, we'll just present any existing window.
         fn activate(&self) {
-            let application = self.obj();
-            // Get the current window or create one if necessary
-            let window = application.active_window().unwrap_or_else(|| {
-                let window = MomentsWindow::new(&*application);
-                window.upcast()
-            });
+            let app = self.obj();
 
-            // Ask the window manager/compositor to present the window
-            window.present();
+            // Present existing window if the app is already running.
+            if let Some(window) = app.active_window() {
+                window.present();
+                return;
+            }
+
+            let settings = self
+                .settings
+                .get_or_init(|| gio::Settings::new("io.github.justinf555.Moments"));
+
+            let library_path = settings.string("library-path");
+
+            if library_path.is_empty() {
+                info!("no library configured, showing setup window");
+                app.show_setup_window();
+            } else {
+                info!(path = %library_path, "opening existing library");
+                app.open_library(PathBuf::from(library_path.as_str()));
+            }
         }
     }
 
@@ -103,11 +126,101 @@ impl MomentsApplication {
             .developer_name("Unknown")
             .version(VERSION)
             .developers(vec!["Unknown"])
-            // Translators: Replace "translator-credits" with your name/username, and optionally an email or URL.
             .translator_credits(&gettext("translator-credits"))
             .copyright("© 2026 Unknown")
             .build();
 
         about.present(Some(&window));
+    }
+
+    /// Show the first-run setup window.
+    fn show_setup_window(&self) {
+        let setup = MomentsSetupWindow::new(self);
+        setup.connect_setup_complete(glib::clone!(
+            #[weak(rename_to = app)]
+            self,
+            move |win, path| {
+                app.on_setup_complete(win, path);
+            }
+        ));
+        setup.present();
+    }
+
+    /// Called when the user completes the setup wizard.
+    ///
+    /// Creates the bundle, persists the path to GSettings, presents the main
+    /// window, closes the setup window, then loads the library asynchronously.
+    /// The main window is created before the setup window closes so there is
+    /// never a windowless state.
+    #[instrument(skip(self, setup_win), fields(path = %path))]
+    fn on_setup_complete(&self, setup_win: &MomentsSetupWindow, path: String) {
+        let bundle_path = PathBuf::from(&path);
+
+        let bundle = match Bundle::create(&bundle_path, &LibraryConfig::Local) {
+            Ok(b) => b,
+            Err(e) => {
+                error!("failed to create library bundle: {e}");
+                return;
+            }
+        };
+
+        let settings = self.imp().settings.get().expect("settings initialised");
+        if let Err(e) = settings.set_string("library-path", &path) {
+            error!("failed to save library path to GSettings: {e}");
+        }
+
+        // Present the main window first, then close setup — ensures there is
+        // always at least one window alive during the transition.
+        let window = MomentsWindow::new(self);
+        window.present();
+        setup_win.close();
+
+        self.load_library_async(bundle, LibraryConfig::Local, window);
+    }
+
+    /// Open an existing library from a saved path.
+    ///
+    /// Creates and presents the main window immediately (loading page) so
+    /// there is no windowless gap while the async factory runs.
+    fn open_library(&self, path: PathBuf) {
+        let (bundle, config) = match Bundle::open(&path) {
+            Ok(result) => result,
+            Err(e) => {
+                error!("failed to open library bundle: {e}");
+                return;
+            }
+        };
+
+        let window = MomentsWindow::new(self);
+        window.present();
+
+        self.load_library_async(bundle, config, window);
+    }
+
+    /// Spawn the async factory call on the glib main context.
+    ///
+    /// On success, stores the library and switches `window` to its content page.
+    fn load_library_async(&self, bundle: Bundle, config: LibraryConfig, window: MomentsWindow) {
+        let (sender, receiver) = std::sync::mpsc::channel::<LibraryEvent>();
+        *self.imp().library_events.borrow_mut() = Some(receiver);
+
+        glib::MainContext::default().spawn_local(glib::clone!(
+            #[weak(rename_to = app)]
+            self,
+            #[weak]
+            window,
+            async move {
+                match LibraryFactory::create(bundle, config, sender).await {
+                    Ok(library) => {
+                        info!("library ready");
+                        *app.imp().library.borrow_mut() = Some(library);
+                        window.set_library_ready();
+                    }
+                    Err(e) => {
+                        error!("failed to open library: {e}");
+                    }
+                }
+            }
+        ));
     }
 }
