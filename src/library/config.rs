@@ -3,7 +3,7 @@
 /// Created during onboarding and written into `library.toml`. On subsequent
 /// launches, [`super::bundle::Bundle::open`] reads it back from the manifest
 /// so [`super::factory::LibraryFactory`] can construct the correct backend.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum LibraryConfig {
     /// Local filesystem backend — originals are imported into the bundle itself.
     Local,
