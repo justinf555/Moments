@@ -221,14 +221,15 @@ impl PhotoGridView {
             .tooltip_text("Zoom Out")
             .action_name("view.zoom-out")
             .build();
+        zoom_out_btn.add_css_class("flat");
         let zoom_in_btn = gtk::Button::builder()
             .icon_name("zoom-in-symbolic")
             .tooltip_text("Zoom In")
             .action_name("view.zoom-in")
             .build();
+        zoom_in_btn.add_css_class("flat");
         let zoom_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         zoom_box.add_css_class("linked");
-        zoom_box.add_css_class("flat");
         zoom_box.append(&zoom_out_btn);
         zoom_box.append(&zoom_in_btn);
 
