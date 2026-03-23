@@ -22,5 +22,9 @@ pub trait ContentView {
     fn widget(&self) -> &gtk::Widget;
 
     /// Called when this view becomes the active (visible) page.
-    fn on_activate(&self) {}
+    ///
+    /// `route_id` is the sidebar route that triggered navigation. Views
+    /// registered under multiple routes can use this to adjust their
+    /// behaviour (e.g. apply a filter).
+    fn on_navigate(&self, _route_id: &str) {}
 }

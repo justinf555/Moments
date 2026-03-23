@@ -32,6 +32,9 @@ mod imp {
         /// Kept alive so lazy-loading stays wired after `set_model`.
         pub model: RefCell<Option<Rc<PhotoGridModel>>>,
         pub zoom_level: Cell<usize>,
+        /// Library reference for the factory (star button persist).
+        pub library: OnceCell<Arc<dyn Library>>,
+        pub tokio: OnceCell<tokio::runtime::Handle>,
     }
 
     impl Default for PhotoGrid {
@@ -41,6 +44,8 @@ mod imp {
                 grid_view: OnceCell::default(),
                 model: RefCell::default(),
                 zoom_level: Cell::new(DEFAULT_ZOOM_INDEX),
+                library: OnceCell::default(),
+                tokio: OnceCell::default(),
             }
         }
     }
@@ -145,7 +150,13 @@ impl PhotoGrid {
     fn apply_zoom(&self) {
         let imp = self.imp();
         let grid_view = imp.grid_view.get().unwrap();
-        grid_view.set_factory(Some(&factory::build_factory(self.current_cell_size())));
+        let library = imp.library.get().unwrap().clone();
+        let tokio = imp.tokio.get().unwrap().clone();
+        grid_view.set_factory(Some(&factory::build_factory(
+            self.current_cell_size(),
+            library,
+            tokio,
+        )));
     }
 
     /// Attach a `PhotoGridModel` to the grid.
@@ -160,15 +171,24 @@ impl PhotoGrid {
     pub fn set_model(
         &self,
         model: Rc<PhotoGridModel>,
+        library: Arc<dyn Library>,
+        tokio: tokio::runtime::Handle,
         on_activate: impl Fn(Vec<item::MediaItemObject>, usize) + 'static,
     ) {
         let imp = self.imp();
+        let _ = imp.library.set(Arc::clone(&library));
+        let _ = imp.tokio.set(tokio.clone());
+
         let grid_view = imp.grid_view.get().unwrap();
         let scrolled = imp.scrolled.get().unwrap();
 
         let selection = gtk::MultiSelection::new(Some(model.store.clone()));
         grid_view.set_model(Some(&selection));
-        grid_view.set_factory(Some(&factory::build_factory(self.current_cell_size())));
+        grid_view.set_factory(Some(&factory::build_factory(
+            self.current_cell_size(),
+            Arc::clone(&library),
+            tokio,
+        )));
 
         // Fetch the first page immediately.
         model.load_more();
@@ -208,11 +228,19 @@ impl PhotoGrid {
 ///
 /// The root page of the `NavigationView` contains the grid's `AdwToolbarView`.
 /// The viewer page is pushed on activation and popped by the back button.
+impl std::fmt::Debug for PhotoGridView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PhotoGridView").finish_non_exhaustive()
+    }
+}
+
 pub struct PhotoGridView {
     /// The `NavigationView` is the outermost widget returned by `widget()`.
     nav_view: adw::NavigationView,
     photo_grid: PhotoGrid,
     viewer: Rc<PhotoViewer>,
+    library: Arc<dyn Library>,
+    tokio: tokio::runtime::Handle,
     widget: gtk::Widget,
     /// Zoom actions — must be installed on the window so accelerators work
     /// regardless of which widget has focus.
@@ -299,7 +327,7 @@ impl PhotoGridView {
         nav_view.push(&grid_page);
 
         // ── Viewer (reused across activations) ───────────────────────────────
-        let viewer = Rc::new(PhotoViewer::new(library, tokio));
+        let viewer = Rc::new(PhotoViewer::new(Arc::clone(&library), tokio.clone()));
 
         // ── Zoom actions ─────────────────────────────────────────────────────
         let action_group = gio::SimpleActionGroup::new();
@@ -346,6 +374,8 @@ impl PhotoGridView {
             nav_view,
             photo_grid,
             viewer,
+            library,
+            tokio,
             widget,
             view_actions: action_group,
         }
@@ -359,29 +389,61 @@ impl PhotoGridView {
         &self.view_actions
     }
 
+    /// Pop back to the grid page if the viewer is currently visible.
+    pub fn pop_to_grid(&self) {
+        let visible_tag = self
+            .nav_view
+            .visible_page()
+            .and_then(|p| p.tag())
+            .unwrap_or_default();
+        if visible_tag == "viewer" {
+            tracing::debug!("pop_to_grid: popping viewer");
+            self.nav_view.pop();
+        }
+    }
+
     pub fn set_model(&self, model: Rc<PhotoGridModel>) {
         let nav_view = self.nav_view.clone();
         let viewer = Rc::clone(&self.viewer);
         let viewer_nav_page = self.viewer.nav_page().clone();
 
-        self.photo_grid.set_model(model, move |items, index| {
-            viewer.show(items, index);
+        self.photo_grid.set_model(
+            model,
+            Arc::clone(&self.library),
+            self.tokio.clone(),
+            move |items, index| {
+                viewer.show(items, index);
 
-            // Push viewer page if it isn't already the visible page.
-            let visible_tag = nav_view
-                .visible_page()
-                .and_then(|p| p.tag())
-                .unwrap_or_default();
-            if visible_tag != "viewer" {
-                nav_view.push(&viewer_nav_page);
-            }
-        });
+                // Push viewer page if it isn't already the visible page.
+                let visible_tag = nav_view
+                    .visible_page()
+                    .and_then(|p| p.tag())
+                    .unwrap_or_default();
+                if visible_tag != "viewer" {
+                    nav_view.push(&viewer_nav_page);
+                }
+            },
+        );
     }
 }
 
 impl ContentView for PhotoGridView {
     fn widget(&self) -> &gtk::Widget {
         &self.widget
+    }
+
+    fn on_navigate(&self, route_id: &str) {
+        tracing::debug!(route_id, "PhotoGridView::on_navigate");
+        self.pop_to_grid();
+
+        let filter = match route_id {
+            "favorites" => crate::library::media::MediaFilter::Favorites,
+            _ => crate::library::media::MediaFilter::All,
+        };
+
+        if let Some(model) = self.photo_grid.imp().model.borrow().as_ref() {
+            model.set_filter(filter);
+        }
     }
 }
 

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use adw::prelude::*;
 use gtk::{gdk, glib};
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::library::media::MediaMetadataRecord;
 use crate::library::Library;
@@ -28,6 +28,7 @@ struct ViewerInner {
     spinner: gtk::Spinner,
     prev_btn: gtk::Button,
     next_btn: gtk::Button,
+    star_btn: gtk::Button,
     info_split: adw::OverlaySplitView,
     info_panel: InfoPanel,
     /// Snapshot of the grid's item list taken at activation time.
@@ -74,6 +75,19 @@ impl ViewerInner {
 
         self.prev_btn.set_visible(index > 0);
         self.next_btn.set_visible(index + 1 < count);
+
+        // Sync star button with the current item's favourite state.
+        {
+            let items = self.items.borrow();
+            if let Some(obj) = items.get(index) {
+                let icon = if obj.is_favorite() {
+                    "starred-symbolic"
+                } else {
+                    "non-starred-symbolic"
+                };
+                self.star_btn.set_icon_name(icon);
+            }
+        }
 
         // Collapse info panel to avoid showing stale metadata.
         self.info_split.set_show_sidebar(false);
@@ -247,6 +261,13 @@ impl PhotoViewer {
             .build();
         header.pack_end(&info_toggle);
 
+        let star_btn = gtk::Button::builder()
+            .icon_name("non-starred-symbolic")
+            .tooltip_text("Toggle Favourite")
+            .build();
+        star_btn.add_css_class("flat");
+        header.pack_end(&star_btn);
+
         // ── Picture ──────────────────────────────────────────────────────────
         let picture = gtk::Picture::builder()
             .content_fit(gtk::ContentFit::Contain)
@@ -331,6 +352,7 @@ impl PhotoViewer {
             spinner,
             prev_btn,
             next_btn,
+            star_btn,
             info_split,
             info_panel,
             items: RefCell::new(Vec::new()),
@@ -360,6 +382,37 @@ impl PhotoViewer {
                 if let Some(i) = i.upgrade() {
                     i.navigate_next();
                 }
+            });
+        }
+
+        // Star (favourite) button
+        {
+            let i = Rc::downgrade(&inner);
+            inner.star_btn.connect_clicked(move |btn| {
+                let Some(inner) = i.upgrade() else { return };
+                let items = inner.items.borrow();
+                let idx = inner.current_index.get();
+                let Some(obj) = items.get(idx) else { return };
+
+                let new_fav = !obj.is_favorite();
+                obj.set_is_favorite(new_fav);
+                btn.set_icon_name(if new_fav {
+                    "starred-symbolic"
+                } else {
+                    "non-starred-symbolic"
+                });
+
+                let id = obj.item().id.clone();
+                let lib = Arc::clone(&inner.library);
+                let tk = inner.tokio.clone();
+                glib::MainContext::default().spawn_local(async move {
+                    let result = tk
+                        .spawn(async move { lib.set_favorite(&[id], new_fav).await })
+                        .await;
+                    if let Ok(Err(e)) = result {
+                        error!("set_favorite failed: {e}");
+                    }
+                });
             });
         }
 

@@ -1,4 +1,4 @@
-use std::cell::{OnceCell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 
 use gtk::{gdk, glib, prelude::*, subclass::prelude::*};
 
@@ -12,6 +12,9 @@ mod imp {
     ///
     /// The `texture` property starts `None` and is set once the thumbnail is
     /// ready on disk. Cells bind to `notify::texture` to repaint without polling.
+    ///
+    /// `is_favorite` is mutable so optimistic UI toggles can update it
+    /// immediately, firing `notify::is-favorite` for bound cells.
     #[derive(Default, Properties)]
     #[properties(wrapper_type = super::MediaItemObject)]
     pub struct MediaItemObject {
@@ -21,6 +24,10 @@ mod imp {
         /// The decoded thumbnail texture, `None` until the thumbnail is ready.
         #[property(get, set, nullable)]
         pub texture: RefCell<Option<gdk::Texture>>,
+
+        /// Whether this item is marked as a favourite.
+        #[property(get, set)]
+        pub is_favorite: Cell<bool>,
     }
 
     #[glib::object_subclass]
@@ -40,6 +47,7 @@ glib::wrapper! {
 impl MediaItemObject {
     pub fn new(item: MediaItem) -> Self {
         let obj: Self = glib::Object::new();
+        obj.imp().is_favorite.set(item.is_favorite);
         obj.imp().item.set(item).expect("item set once at construction");
         obj
     }

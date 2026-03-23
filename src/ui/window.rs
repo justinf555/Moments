@@ -48,6 +48,9 @@ mod imp {
 
         /// Set up once in `setup()` — holds live references to all registered views.
         pub coordinator: OnceCell<Rc<RefCell<ContentCoordinator>>>,
+        /// The photos/favourites grid view — stored so sidebar navigation can
+        /// pop back to the grid when the viewer is open.
+        pub photos_view: OnceCell<Rc<PhotoGridView>>,
     }
 
     #[glib::object_subclass]
@@ -115,7 +118,11 @@ impl MomentsWindow {
         let photos_view = Rc::new(PhotoGridView::new(library, tokio, settings));
         photos_view.set_model(Rc::clone(&model));
         self.insert_action_group("view", Some(photos_view.view_actions()));
+        imp.photos_view
+            .set(Rc::clone(&photos_view))
+            .expect("photos_view set once");
         coordinator.register("photos", photos_view);
+        coordinator.register_alias("favorites", "photos");
 
         // Wrap the content stack in a NavigationPage for the split view.
         let content_nav_page = adw::NavigationPage::builder()
@@ -127,13 +134,14 @@ impl MomentsWindow {
         let coordinator = Rc::new(RefCell::new(coordinator));
 
         // Toggle between empty and photos based on store item count.
-        // Connected before sidebar.select_first() so the initial load
-        // (triggered by set_model → load_more) will fire the switch.
+        // Only switches the stack page — does NOT call navigate() which
+        // would trigger on_navigate → set_filter → reload and cause a
+        // re-entrant RefCell borrow panic during on_page_loaded.
         {
-            let coord = Rc::clone(&coordinator);
+            let stack = content_stack.clone();
             model.store.connect_items_changed(move |store, _, _, _| {
                 let target = if store.n_items() > 0 { "photos" } else { "empty" };
-                coord.borrow().navigate(target);
+                stack.set_visible_child_name(target);
             });
         }
 
@@ -147,14 +155,24 @@ impl MomentsWindow {
             .expect("coordinator set once in setup()");
 
         // Wire sidebar selection → coordinator navigation.
-        // Only navigates to routes the sidebar knows about (e.g. "photos");
-        // the empty/photos toggle is driven by the store signal above.
+        // The coordinator calls on_navigate() on the target view, which
+        // handles filter changes and popping back to the grid.
+        // Track the current route to avoid re-navigating when GTK re-emits
+        // row-selected for the same row (e.g. on focus changes).
         let obj_weak = self.downgrade();
         let store_for_sidebar = model.store.clone();
+        let current_route: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
         sidebar.connect_route_selected(move |id| {
+            {
+                let current = current_route.borrow();
+                if *current == id {
+                    return;
+                }
+            }
+            *current_route.borrow_mut() = id.to_owned();
+
             let Some(win) = obj_weak.upgrade() else { return };
             if let Some(coordinator) = win.imp().coordinator.get() {
-                // If the library is empty, stay on the empty page.
                 if store_for_sidebar.n_items() == 0 {
                     coordinator.borrow().navigate("empty");
                 } else {

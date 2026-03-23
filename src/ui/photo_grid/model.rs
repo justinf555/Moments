@@ -6,7 +6,7 @@ use std::sync::Arc;
 use gtk::{gdk, gio, glib, prelude::*};
 use tracing::{debug, error};
 
-use crate::library::media::{MediaCursor, MediaId, MediaItem};
+use crate::library::media::{MediaCursor, MediaFilter, MediaId, MediaItem};
 use crate::library::Library;
 
 use super::item::MediaItemObject;
@@ -31,6 +31,7 @@ pub struct PhotoGridModel {
     pub store: gio::ListStore,
     library: Arc<dyn Library>,
     tokio: tokio::runtime::Handle,
+    filter: Cell<MediaFilter>,
     cursor: RefCell<Option<MediaCursor>>,
     loading: Cell<bool>,
     has_more: Cell<bool>,
@@ -44,11 +45,23 @@ impl PhotoGridModel {
             store: gio::ListStore::new::<MediaItemObject>(),
             library,
             tokio,
+            filter: Cell::new(MediaFilter::All),
             cursor: RefCell::new(None),
             loading: Cell::new(false),
             has_more: Cell::new(true),
             id_index: RefCell::new(HashMap::new()),
         }
+    }
+
+    /// Change the active filter and reload from the first page.
+    ///
+    /// No-op if the filter is already the requested value.
+    pub fn set_filter(self: &Rc<Self>, filter: MediaFilter) {
+        if self.filter.get() == filter {
+            return;
+        }
+        self.filter.set(filter);
+        self.reload();
     }
 
     /// Clear all items and reload from the first page.
@@ -77,6 +90,7 @@ impl PhotoGridModel {
         self.loading.set(true);
         debug!("loading next page (has_cursor={})", self.cursor.borrow().is_some());
 
+        let filter = self.filter.get();
         let cursor = self.cursor.borrow().clone();
         let library = Arc::clone(&self.library);
         let tokio = self.tokio.clone();
@@ -84,7 +98,7 @@ impl PhotoGridModel {
 
         glib::MainContext::default().spawn_local(async move {
             let result = tokio
-                .spawn(async move { library.list_media(cursor.as_ref(), PAGE_SIZE).await })
+                .spawn(async move { library.list_media(filter, cursor.as_ref(), PAGE_SIZE).await })
                 .await;
 
             match result {
@@ -139,15 +153,24 @@ impl PhotoGridModel {
             });
         }
 
-        let mut index = self.id_index.borrow_mut();
-        for item in items {
-            let obj = MediaItemObject::new(item);
-            index.insert(obj.item().id.clone(), obj.downgrade());
+        // Build objects and index entries first, then append to the store.
+        // store.append() fires items_changed synchronously, which can trigger
+        // re-entrant borrows of id_index via navigate → reload. So we must
+        // drop the id_index borrow before touching the store.
+        let objects: Vec<MediaItemObject> = {
+            let mut index = self.id_index.borrow_mut();
+            items
+                .into_iter()
+                .map(|item| {
+                    let obj = MediaItemObject::new(item);
+                    index.insert(obj.item().id.clone(), obj.downgrade());
+                    obj
+                })
+                .collect()
+        };
 
+        for obj in &objects {
             // Speculatively load any thumbnail that already exists on disk.
-            // ThumbnailReady events only fire during import; on subsequent app
-            // launches we must try to load existing thumbnails ourselves.
-            // load_texture returns None silently if the file is absent.
             let id = obj.item().id.clone();
             let path = self.library.thumbnail_path(&id);
             let tokio = self.tokio.clone();
@@ -159,7 +182,7 @@ impl PhotoGridModel {
                 }
             });
 
-            self.store.append(&obj);
+            self.store.append(obj);
         }
 
         if count < PAGE_SIZE as usize {

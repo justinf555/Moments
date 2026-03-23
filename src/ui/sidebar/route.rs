@@ -11,8 +11,15 @@ pub struct SidebarRoute {
 /// All sidebar routes, in display order.
 ///
 /// Adding a new view is one entry here — no widget code changes required.
-pub const ROUTES: &[SidebarRoute] = &[SidebarRoute {
-    id: "photos",
-    label: "Photos",
-    icon: "image-x-generic-symbolic",
-}];
+pub const ROUTES: &[SidebarRoute] = &[
+    SidebarRoute {
+        id: "photos",
+        label: "Photos",
+        icon: "image-x-generic-symbolic",
+    },
+    SidebarRoute {
+        id: "favorites",
+        label: "Favorites",
+        icon: "starred-symbolic",
+    },
+];
