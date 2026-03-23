@@ -86,6 +86,17 @@ pub struct MediaItem {
     /// EXIF orientation tag (1–8).
     pub orientation: u8,
     pub media_type: MediaType,
+    pub is_favorite: bool,
+}
+
+/// Filter for [`LibraryMedia::list_media`] queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MediaFilter {
+    /// All media items (no filter).
+    #[default]
+    All,
+    /// Only items marked as favourite.
+    Favorites,
 }
 
 /// Opaque cursor for keyset pagination in [`LibraryMedia::list_media`].
@@ -132,6 +143,7 @@ pub trait LibraryMedia: Send + Sync {
     /// Items without a `taken_at` date sort to the end (treated as timestamp 0).
     async fn list_media(
         &self,
+        filter: MediaFilter,
         cursor: Option<&MediaCursor>,
         limit: u32,
     ) -> Result<Vec<MediaItem>, LibraryError>;
@@ -144,6 +156,13 @@ pub trait LibraryMedia: Send + Sync {
         &self,
         id: &MediaId,
     ) -> Result<Option<MediaMetadataRecord>, LibraryError>;
+
+    /// Set or clear the favourite flag on one or more assets.
+    async fn set_favorite(
+        &self,
+        ids: &[MediaId],
+        favorite: bool,
+    ) -> Result<(), LibraryError>;
 }
 
 /// A row in the `media` table.

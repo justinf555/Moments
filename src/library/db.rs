@@ -6,7 +6,8 @@ use tracing::{info, instrument};
 
 use super::error::LibraryError;
 use super::media::{
-    LibraryMedia, MediaCursor, MediaId, MediaItem, MediaMetadataRecord, MediaRecord, MediaType,
+    LibraryMedia, MediaCursor, MediaFilter, MediaId, MediaItem, MediaMetadataRecord, MediaRecord,
+    MediaType,
 };
 use super::thumbnail::ThumbnailStatus;
 
@@ -83,6 +84,7 @@ struct MediaRow {
     height: Option<i64>,
     orientation: i64,
     media_type: i64,
+    is_favorite: i64,
 }
 
 impl MediaRow {
@@ -100,6 +102,7 @@ impl MediaRow {
             } else {
                 MediaType::Image
             },
+            is_favorite: self.is_favorite != 0,
         }
     }
 }
@@ -218,40 +221,49 @@ impl LibraryMedia for Database {
 
     async fn list_media(
         &self,
+        filter: MediaFilter,
         cursor: Option<&MediaCursor>,
         limit: u32,
     ) -> Result<Vec<MediaItem>, LibraryError> {
+        let filter_clause = match filter {
+            MediaFilter::All => "",
+            MediaFilter::Favorites => " AND is_favorite = 1",
+        };
+
         let rows = match cursor {
             None => {
-                sqlx::query_as::<_, MediaRow>(
+                let sql = format!(
                     "SELECT id, taken_at, imported_at, original_filename,
-                            width, height, orientation, media_type
+                            width, height, orientation, media_type, is_favorite
                      FROM media
+                     WHERE 1=1{filter_clause}
                      ORDER BY COALESCE(taken_at, 0) DESC, id DESC
-                     LIMIT ?",
-                )
-                .bind(limit as i64)
-                .fetch_all(&self.pool)
-                .await
-                .map_err(LibraryError::Db)?
+                     LIMIT ?"
+                );
+                sqlx::query_as::<_, MediaRow>(&sql)
+                    .bind(limit as i64)
+                    .fetch_all(&self.pool)
+                    .await
+                    .map_err(LibraryError::Db)?
             }
             Some(cur) => {
-                sqlx::query_as::<_, MediaRow>(
+                let sql = format!(
                     "SELECT id, taken_at, imported_at, original_filename,
-                            width, height, orientation, media_type
+                            width, height, orientation, media_type, is_favorite
                      FROM media
-                     WHERE COALESCE(taken_at, 0) < ?
-                        OR (COALESCE(taken_at, 0) = ? AND id < ?)
+                     WHERE (COALESCE(taken_at, 0) < ?
+                        OR (COALESCE(taken_at, 0) = ? AND id < ?)){filter_clause}
                      ORDER BY COALESCE(taken_at, 0) DESC, id DESC
-                     LIMIT ?",
-                )
-                .bind(cur.sort_key)
-                .bind(cur.sort_key)
-                .bind(cur.id.as_str())
-                .bind(limit as i64)
-                .fetch_all(&self.pool)
-                .await
-                .map_err(LibraryError::Db)?
+                     LIMIT ?"
+                );
+                sqlx::query_as::<_, MediaRow>(&sql)
+                    .bind(cur.sort_key)
+                    .bind(cur.sort_key)
+                    .bind(cur.id.as_str())
+                    .bind(limit as i64)
+                    .fetch_all(&self.pool)
+                    .await
+                    .map_err(LibraryError::Db)?
             }
         };
 
@@ -286,6 +298,23 @@ impl LibraryMedia for Database {
             gps_alt: r.gps_alt,
             color_space: r.color_space,
         }))
+    }
+
+    async fn set_favorite(
+        &self,
+        ids: &[MediaId],
+        favorite: bool,
+    ) -> Result<(), LibraryError> {
+        let value: i64 = if favorite { 1 } else { 0 };
+        for id in ids {
+            sqlx::query("UPDATE media SET is_favorite = ? WHERE id = ?")
+                .bind(value)
+                .bind(id.as_str())
+                .execute(&self.pool)
+                .await
+                .map_err(LibraryError::Db)?;
+        }
+        Ok(())
     }
 
     async fn insert_media_metadata(
@@ -405,7 +434,7 @@ mod tests {
     async fn list_media_empty_returns_empty_vec() {
         let dir = tempdir().unwrap();
         let db = open_test_db(dir.path()).await;
-        let result = db.list_media(None, 50).await.unwrap();
+        let result = db.list_media(MediaFilter::All, None, 50).await.unwrap();
         assert!(result.is_empty());
     }
 
@@ -423,7 +452,7 @@ mod tests {
         db.insert_media(&record_with_taken_at(id_b.clone(), "2025/01/02/b.jpg", Some(3_000))).await.unwrap();
         db.insert_media(&record_with_taken_at(id_c.clone(), "2025/01/03/c.jpg", Some(2_000))).await.unwrap();
 
-        let items = db.list_media(None, 50).await.unwrap();
+        let items = db.list_media(MediaFilter::All, None, 50).await.unwrap();
 
         assert_eq!(items.len(), 3);
         // Newest first: b (3000) → c (2000) → a (1000)
@@ -443,7 +472,7 @@ mod tests {
         db.insert_media(&record_with_taken_at(id_dated.clone(), "2025/01/01/dated.jpg", Some(5_000))).await.unwrap();
         db.insert_media(&record_with_taken_at(id_undated.clone(), "2025/01/01/undated.jpg", None)).await.unwrap();
 
-        let items = db.list_media(None, 50).await.unwrap();
+        let items = db.list_media(MediaFilter::All, None, 50).await.unwrap();
         assert_eq!(items.len(), 2);
         // Dated item first, undated last.
         assert_eq!(items[0].id, id_dated);
@@ -472,7 +501,7 @@ mod tests {
         }
 
         // First page: 3 items (newest 3: ids[0]=5000, ids[1]=4000, ids[2]=3000)
-        let page1 = db.list_media(None, 3).await.unwrap();
+        let page1 = db.list_media(MediaFilter::All, None, 3).await.unwrap();
         assert_eq!(page1.len(), 3);
         assert_eq!(page1[0].taken_at, Some(5000));
         assert_eq!(page1[2].taken_at, Some(3000));
@@ -485,7 +514,7 @@ mod tests {
         };
 
         // Second page: remaining 2 items (ids[3]=2000, ids[4]=1000)
-        let page2 = db.list_media(Some(&cursor), 3).await.unwrap();
+        let page2 = db.list_media(MediaFilter::All, Some(&cursor), 3).await.unwrap();
         assert_eq!(page2.len(), 2);
         assert_eq!(page2[0].taken_at, Some(2000));
         assert_eq!(page2[1].taken_at, Some(1000));
@@ -507,7 +536,80 @@ mod tests {
             .unwrap();
         }
 
-        let items = db.list_media(None, 4).await.unwrap();
+        let items = db.list_media(MediaFilter::All, None, 4).await.unwrap();
         assert_eq!(items.len(), 4);
+    }
+
+    // ── set_favorite tests ───────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn set_favorite_and_read_back() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let id = MediaId::new("f".repeat(64));
+        db.insert_media(&test_record(id.clone())).await.unwrap();
+
+        // Initially not a favourite.
+        let items = db.list_media(MediaFilter::All, None, 10).await.unwrap();
+        assert!(!items[0].is_favorite);
+
+        // Set favourite.
+        db.set_favorite(&[id.clone()], true).await.unwrap();
+        let items = db.list_media(MediaFilter::All, None, 10).await.unwrap();
+        assert!(items[0].is_favorite);
+
+        // Clear favourite.
+        db.set_favorite(&[id], false).await.unwrap();
+        let items = db.list_media(MediaFilter::All, None, 10).await.unwrap();
+        assert!(!items[0].is_favorite);
+    }
+
+    #[tokio::test]
+    async fn set_favorite_multiple_ids() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+
+        let id1 = MediaId::new("1".repeat(64));
+        let id2 = MediaId::new("2".repeat(64));
+        db.insert_media(&record_with_taken_at(id1.clone(), "a.jpg", Some(1000)))
+            .await
+            .unwrap();
+        db.insert_media(&record_with_taken_at(id2.clone(), "b.jpg", Some(2000)))
+            .await
+            .unwrap();
+
+        db.set_favorite(&[id1.clone(), id2.clone()], true)
+            .await
+            .unwrap();
+
+        let items = db.list_media(MediaFilter::All, None, 10).await.unwrap();
+        assert!(items.iter().all(|i| i.is_favorite));
+    }
+
+    #[tokio::test]
+    async fn list_media_favorites_filter() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+
+        let id1 = MediaId::new("1".repeat(64));
+        let id2 = MediaId::new("2".repeat(64));
+        db.insert_media(&record_with_taken_at(id1.clone(), "a.jpg", Some(1000)))
+            .await
+            .unwrap();
+        db.insert_media(&record_with_taken_at(id2.clone(), "b.jpg", Some(2000)))
+            .await
+            .unwrap();
+
+        // Mark only id1 as favourite.
+        db.set_favorite(&[id1.clone()], true).await.unwrap();
+
+        // All filter returns both.
+        let all = db.list_media(MediaFilter::All, None, 10).await.unwrap();
+        assert_eq!(all.len(), 2);
+
+        // Favorites filter returns only id1.
+        let favs = db.list_media(MediaFilter::Favorites, None, 10).await.unwrap();
+        assert_eq!(favs.len(), 1);
+        assert_eq!(favs[0].id, id1);
     }
 }

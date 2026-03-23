@@ -6,7 +6,7 @@ use std::sync::Arc;
 use gtk::{gdk, gio, glib, prelude::*};
 use tracing::{debug, error};
 
-use crate::library::media::{MediaCursor, MediaId, MediaItem};
+use crate::library::media::{MediaCursor, MediaFilter, MediaId, MediaItem};
 use crate::library::Library;
 
 use super::item::MediaItemObject;
@@ -31,6 +31,7 @@ pub struct PhotoGridModel {
     pub store: gio::ListStore,
     library: Arc<dyn Library>,
     tokio: tokio::runtime::Handle,
+    filter: Cell<MediaFilter>,
     cursor: RefCell<Option<MediaCursor>>,
     loading: Cell<bool>,
     has_more: Cell<bool>,
@@ -44,11 +45,18 @@ impl PhotoGridModel {
             store: gio::ListStore::new::<MediaItemObject>(),
             library,
             tokio,
+            filter: Cell::new(MediaFilter::All),
             cursor: RefCell::new(None),
             loading: Cell::new(false),
             has_more: Cell::new(true),
             id_index: RefCell::new(HashMap::new()),
         }
+    }
+
+    /// Change the active filter and reload from the first page.
+    pub fn set_filter(self: &Rc<Self>, filter: MediaFilter) {
+        self.filter.set(filter);
+        self.reload();
     }
 
     /// Clear all items and reload from the first page.
@@ -77,6 +85,7 @@ impl PhotoGridModel {
         self.loading.set(true);
         debug!("loading next page (has_cursor={})", self.cursor.borrow().is_some());
 
+        let filter = self.filter.get();
         let cursor = self.cursor.borrow().clone();
         let library = Arc::clone(&self.library);
         let tokio = self.tokio.clone();
@@ -84,7 +93,7 @@ impl PhotoGridModel {
 
         glib::MainContext::default().spawn_local(async move {
             let result = tokio
-                .spawn(async move { library.list_media(cursor.as_ref(), PAGE_SIZE).await })
+                .spawn(async move { library.list_media(filter, cursor.as_ref(), PAGE_SIZE).await })
                 .await;
 
             match result {

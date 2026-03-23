@@ -14,7 +14,7 @@ use crate::library::format::{FormatRegistry, RawHandler, StandardHandler};
 use crate::library::import::LibraryImport;
 use crate::library::importer::ImportJob;
 use crate::library::media::{
-    LibraryMedia, MediaCursor, MediaId, MediaItem, MediaMetadataRecord, MediaRecord,
+    LibraryMedia, MediaCursor, MediaFilter, MediaId, MediaItem, MediaMetadataRecord, MediaRecord,
 };
 use crate::library::storage::LibraryStorage;
 use crate::library::thumbnail::{sharded_thumbnail_path, LibraryThumbnail};
@@ -120,10 +120,11 @@ impl LibraryMedia for LocalLibrary {
 
     async fn list_media(
         &self,
+        filter: MediaFilter,
         cursor: Option<&MediaCursor>,
         limit: u32,
     ) -> Result<Vec<MediaItem>, LibraryError> {
-        self.db.list_media(cursor, limit).await
+        self.db.list_media(filter, cursor, limit).await
     }
 
     async fn media_metadata(
@@ -131,6 +132,14 @@ impl LibraryMedia for LocalLibrary {
         id: &MediaId,
     ) -> Result<Option<MediaMetadataRecord>, LibraryError> {
         self.db.media_metadata(id).await
+    }
+
+    async fn set_favorite(
+        &self,
+        ids: &[MediaId],
+        favorite: bool,
+    ) -> Result<(), LibraryError> {
+        self.db.set_favorite(ids, favorite).await
     }
 }
 
