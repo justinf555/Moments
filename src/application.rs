@@ -349,20 +349,23 @@ impl MomentsApplication {
                     Ok(library) => {
                         info!("library ready");
 
-                        let model = Rc::new(PhotoGridModel::new(Arc::clone(&library), tokio.clone()));
-
-                        // Store library and model on the application.
+                        // Store library on the application.
                         *app.imp().library.borrow_mut() = Some(Arc::clone(&library));
-                        *app.imp().photo_grid_model.borrow_mut() = Some(Rc::clone(&model));
 
                         // Wire the shell: builds sidebar, registers views,
-                        // and switches to the content page.
+                        // and switches to the content page. Returns all
+                        // models so we can forward library events to them.
                         let settings = app.imp().settings.get()
                             .expect("settings initialised").clone();
-                        window.setup(Rc::clone(&model), library, tokio.clone(), settings);
+                        let models = window.setup(library, tokio.clone(), settings);
+
+                        // Store the first model for shutdown cleanup.
+                        if let Some(first) = models.first() {
+                            *app.imp().photo_grid_model.borrow_mut() = Some(Rc::clone(first));
+                        }
 
                         // Poll library events on every GTK idle tick.
-                        // Routes thumbnail and import events to the right consumers.
+                        // Routes thumbnail and import events to all models.
                         let receiver = app
                             .imp()
                             .library_events
@@ -379,7 +382,9 @@ impl MomentsApplication {
                             loop {
                                 match receiver.try_recv() {
                                     Ok(LibraryEvent::ThumbnailReady { media_id }) => {
-                                        model.on_thumbnail_ready(&media_id);
+                                        for m in &models {
+                                            m.on_thumbnail_ready(&media_id);
+                                        }
                                     }
                                     Ok(LibraryEvent::ImportProgress { current, total }) => {
                                         let borrow = app.imp().import_dialog.borrow();
@@ -396,7 +401,9 @@ impl MomentsApplication {
                                         }
                                         // Release strong ref — dialog stays open until user dismisses.
                                         app.imp().import_dialog.borrow_mut().take();
-                                        model.reload();
+                                        for m in &models {
+                                            m.reload();
+                                        }
                                     }
                                     Ok(_) => {}
                                     Err(std::sync::mpsc::TryRecvError::Empty) => break,

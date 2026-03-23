@@ -389,19 +389,6 @@ impl PhotoGridView {
         &self.view_actions
     }
 
-    /// Pop back to the grid page if the viewer is currently visible.
-    pub fn pop_to_grid(&self) {
-        let visible_tag = self
-            .nav_view
-            .visible_page()
-            .and_then(|p| p.tag())
-            .unwrap_or_default();
-        if visible_tag == "viewer" {
-            tracing::debug!("pop_to_grid: popping viewer");
-            self.nav_view.pop();
-        }
-    }
-
     pub fn set_model(&self, model: Rc<PhotoGridModel>) {
         let nav_view = self.nav_view.clone();
         let viewer = Rc::clone(&self.viewer);
@@ -430,20 +417,6 @@ impl PhotoGridView {
 impl ContentView for PhotoGridView {
     fn widget(&self) -> &gtk::Widget {
         &self.widget
-    }
-
-    fn on_navigate(&self, route_id: &str) {
-        tracing::debug!(route_id, "PhotoGridView::on_navigate");
-        self.pop_to_grid();
-
-        let filter = match route_id {
-            "favorites" => crate::library::media::MediaFilter::Favorites,
-            _ => crate::library::media::MediaFilter::All,
-        };
-
-        if let Some(model) = self.photo_grid.imp().model.borrow().as_ref() {
-            model.set_filter(filter);
-        }
     }
 }
 
