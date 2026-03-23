@@ -230,6 +230,19 @@ impl PhotoGridView {
         zoom_box.add_css_class("linked");
         zoom_box.append(&zoom_out_btn);
         zoom_box.append(&zoom_in_btn);
+
+        // Stop button clicks from propagating to the HeaderBar's
+        // drag/maximize gesture.
+        let controller = gtk::EventControllerLegacy::new();
+        controller.connect_event(|_, event| {
+            use gtk::gdk::EventType;
+            match event.event_type() {
+                EventType::ButtonPress | EventType::ButtonRelease => glib::Propagation::Stop,
+                _ => glib::Propagation::Proceed,
+            }
+        });
+        zoom_box.add_controller(controller);
+
         header.pack_start(&zoom_box);
 
         let menu_button = gtk::MenuButton::builder()
