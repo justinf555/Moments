@@ -3,7 +3,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use adw::prelude::*;
-use gtk::{gdk, glib};
+use gtk::{gdk, gio, glib};
 use tracing::debug;
 
 use crate::library::media::MediaMetadataRecord;
@@ -13,10 +13,6 @@ use crate::ui::photo_grid::item::MediaItemObject;
 pub mod info_panel;
 
 use info_panel::InfoPanel;
-
-/// Longest edge in pixels for display. Prevents excessive VRAM usage on large
-/// monitors while keeping the image sharp enough for full-screen viewing.
-const MAX_DISPLAY_EDGE: u32 = 2048;
 
 // ── Inner state ───────────────────────────────────────────────────────────────
 
@@ -100,10 +96,17 @@ impl ViewerInner {
         }
     }
 
-    /// Asynchronously decode the original file and replace the thumbnail.
+    /// Asynchronously load the original file at full resolution.
     ///
-    /// Falls back silently to the cached thumbnail if the file cannot be
-    /// decoded (e.g. missing file or unsupported RAW format).
+    /// Strategy:
+    /// 1. Resolve the original path from the library.
+    /// 2. For standard formats (JPEG, PNG, WebP, TIFF) set the file directly
+    ///    on `gtk::Picture` — GTK loads it natively, no decode overhead.
+    /// 3. For formats GTK can't handle (HEIC, RAW) fall back to decoding via
+    ///    `image::open()` and uploading RGBA bytes as a `gdk::MemoryTexture`.
+    ///    EXIF orientation is applied in both paths.
+    ///
+    /// Falls back silently to the cached thumbnail on any error.
     fn start_full_res_load(
         self: &Rc<Self>,
         gen: u64,
@@ -117,19 +120,51 @@ impl ViewerInner {
         self.spinner.set_visible(true);
 
         glib::MainContext::default().spawn_local(async move {
-            // Heavy work runs on Tokio; only `Send` types cross the boundary.
+            // Resolve path on Tokio (async DB call).
+            let path = match tokio
+                .spawn(async move { library.original_path(&id).await })
+                .await
+                .ok()
+                .and_then(|r| r.ok())
+                .flatten()
+            {
+                Some(p) => p,
+                None => {
+                    inner.spinner.set_spinning(false);
+                    inner.spinner.set_visible(false);
+                    return;
+                }
+            };
+
+            if inner.load_gen.get() != gen {
+                inner.spinner.set_spinning(false);
+                inner.spinner.set_visible(false);
+                return;
+            }
+
+            // For standard formats GTK loads the file directly — zero copy,
+            // hardware-accelerated, no memory spike.
+            if is_gtk_native(&path) {
+                inner.spinner.set_spinning(false);
+                inner.spinner.set_visible(false);
+                let file = gio::File::for_path(&path);
+                inner.picture.set_file(Some(&file));
+                debug!("full-res via set_file: {}", path.display());
+                return;
+            }
+
+            // For HEIC / RAW: decode via `image` crate (with orientation fix).
             let pixels: Option<(Vec<u8>, i32, i32)> = tokio
                 .spawn(async move {
-                    let path = library.original_path(&id).await.ok()??;
                     tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, i32, i32)> {
                         let img = image::open(&path)
-                            .map_err(|e| debug!("full-res open failed: {e}"))
+                            .map_err(|e| debug!("full-res decode failed: {e}"))
                             .ok()?;
                         let orientation = crate::library::exif::extract_exif(&path)
                             .orientation
                             .unwrap_or(1);
-                        let img = crate::library::thumbnailer::apply_orientation(img, orientation);
-                        let img = scale_to_max(img, MAX_DISPLAY_EDGE);
+                        let img =
+                            crate::library::thumbnailer::apply_orientation(img, orientation);
                         let rgba = img.into_rgba8();
                         let (w, h) = rgba.dimensions();
                         Some((rgba.into_raw(), w as i32, h as i32))
@@ -141,12 +176,11 @@ impl ViewerInner {
                 .ok()
                 .flatten();
 
-            // Back on GTK thread.
             inner.spinner.set_spinning(false);
             inner.spinner.set_visible(false);
 
             if inner.load_gen.get() != gen {
-                return; // user navigated away — discard
+                return;
             }
 
             if let Some((raw, width, height)) = pixels {
@@ -162,7 +196,7 @@ impl ViewerInner {
                 inner
                     .picture
                     .set_paintable(Some(texture.upcast_ref::<gdk::Paintable>()));
-                debug!("full-res loaded: {width}×{height}");
+                debug!("full-res via MemoryTexture: {width}×{height}");
             }
         });
     }
@@ -415,17 +449,18 @@ impl PhotoViewer {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Scale `img` so its longest edge is at most `max_edge`, preserving aspect
-/// ratio. Returns `img` unchanged if it already fits within `max_edge`.
-fn scale_to_max(img: image::DynamicImage, max_edge: u32) -> image::DynamicImage {
-    let (w, h) = (img.width(), img.height());
-    if w <= max_edge && h <= max_edge {
-        return img;
-    }
-    let scale = max_edge as f32 / w.max(h) as f32;
-    let nw = ((w as f32 * scale) as u32).max(1);
-    let nh = ((h as f32 * scale) as u32).max(1);
-    img.resize(nw, nh, image::imageops::FilterType::Lanczos3)
+/// Returns `true` if GTK can load `path` natively via `gtk::Picture::set_file`.
+///
+/// GTK's built-in loaders handle JPEG, PNG, WebP, and TIFF well. HEIC and RAW
+/// formats require the `image` crate decode path.
+fn is_gtk_native(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
+        Some("jpg" | "jpeg" | "png" | "webp" | "tiff" | "tif")
+    )
 }
 
 #[cfg(test)]
@@ -433,25 +468,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn scale_to_max_no_op_when_fits() {
-        let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(800, 600));
-        let out = scale_to_max(img, 2048);
-        assert_eq!((out.width(), out.height()), (800, 600));
+    fn is_gtk_native_standard_formats() {
+        use std::path::Path;
+        assert!(is_gtk_native(Path::new("photo.jpg")));
+        assert!(is_gtk_native(Path::new("photo.JPEG")));
+        assert!(is_gtk_native(Path::new("photo.png")));
+        assert!(is_gtk_native(Path::new("photo.webp")));
+        assert!(is_gtk_native(Path::new("photo.tiff")));
+        assert!(is_gtk_native(Path::new("photo.tif")));
     }
 
     #[test]
-    fn scale_to_max_landscape() {
-        let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(4000, 2000));
-        let out = scale_to_max(img, 2048);
-        assert_eq!(out.width(), 2048);
-        assert!(out.height() <= 2048);
-    }
-
-    #[test]
-    fn scale_to_max_portrait() {
-        let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(1000, 4000));
-        let out = scale_to_max(img, 2048);
-        assert_eq!(out.height(), 2048);
-        assert!(out.width() <= 2048);
+    fn is_gtk_native_non_native_formats() {
+        use std::path::Path;
+        assert!(!is_gtk_native(Path::new("photo.cr2")));
+        assert!(!is_gtk_native(Path::new("photo.arw")));
+        assert!(!is_gtk_native(Path::new("photo.heic")));
+        assert!(!is_gtk_native(Path::new("photo.nef")));
     }
 }
