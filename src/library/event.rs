@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use super::error::LibraryError;
 use super::import::ImportSummary;
+use super::media::MediaId;
 
 /// Events emitted by the library backend and delivered to the GTK application.
 ///
@@ -26,7 +27,7 @@ pub enum LibraryEvent {
     // ── Import events ─────────────────────────────────────────────────────────
 
     /// One asset was successfully copied into the library.
-    AssetImported { path: PathBuf },
+    AssetImported { media_id: MediaId, path: PathBuf },
 
     /// Periodic progress update during a batch import.
     ImportProgress { current: usize, total: usize },
@@ -60,6 +61,7 @@ mod tests {
     #[test]
     fn asset_imported_contains_path() {
         let event = LibraryEvent::AssetImported {
+            media_id: MediaId::__test_new("abc123"),
             path: PathBuf::from("/tmp/photo.jpg"),
         };
         assert!(format!("{event:?}").contains("AssetImported"));

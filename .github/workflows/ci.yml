@@ -44,4 +44,6 @@ jobs:
           EOF
 
       - name: Run tests
+        env:
+          SQLX_OFFLINE: "true"
         run: cargo test

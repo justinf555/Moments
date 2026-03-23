@@ -52,14 +52,27 @@ fn main() -> glib::ExitCode {
         .expect("Could not load resources");
     gio::resources_register(&resources);
 
-    // Create a new GtkApplication. The application manages our main loop,
-    // application windows, integration with the window manager/compositor, and
-    // desktop features such as file opening and single-instance applications.
-    let app = MomentsApplication::new("io.github.justinf555.Moments", &gio::ApplicationFlags::empty());
+    // Build the Tokio runtime — the library executor for all backend async
+    // work (database, file I/O, future Immich HTTP). It is created before the
+    // GTK main loop and dropped after it exits, so it outlives every library
+    // operation. All backends share this single runtime via a Handle.
+    let tokio = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .thread_name("moments-library")
+        .enable_all()
+        .build()
+        .expect("failed to build Tokio runtime");
 
-    // Run the application. This function will block until the application
-    // exits. Upon return, we have our exit code to return to the shell. (This
-    // is the code you see when you do `echo $?` after running a command in a
-    // terminal.
-    app.run()
+    let app = MomentsApplication::new(
+        "io.github.justinf555.Moments",
+        &gio::ApplicationFlags::empty(),
+        tokio.handle().clone(),
+    );
+
+    let exit_code = app.run();
+
+    // Explicitly drop the Tokio runtime after the GTK main loop exits so any
+    // in-flight async tasks are cleanly shut down before the process ends.
+    drop(tokio);
+    exit_code
 }

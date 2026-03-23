@@ -25,7 +25,8 @@ Moments is a GNOME/GTK4 photo management app written in Rust, targeting GNOME Ci
 - **GTK4** (`gtk4` crate) + **libadwaita** (`libadwaita` crate) for the UI
 - **GLib/GObject** subclassing pattern throughout — every widget and application type uses the `mod imp {}` pattern with `#[glib::object_subclass]`
 - **`gettextrs`** for i18n
-- **`async-trait`** for async trait definitions (no Tokio runtime yet — async will bridge to GTK's main loop via `glib::idle_add`)
+- **`async-trait`** for async trait definitions
+- **Tokio** (`tokio` crate) as the library executor — created in `main()`, shared across all backends via `tokio::runtime::Handle`
 - **`thiserror`** for error types
 
 ### Module structure
@@ -49,9 +50,36 @@ All GObject types follow the split `imp` module pattern:
 - The outer `glib::wrapper!` macro creates the public Rust type
 - UI templates are declared with `#[template(resource = "...")]` and bound in `class_init`/`instance_init`
 
+### Two-executor model
+
+The app has two distinct async executors that must never be confused:
+
+- **GTK executor** (`glib::MainContext`) — UI thread only. Runs widget updates, signal handlers, and calls into library traits via `glib::MainContext::default().spawn_local()`.
+- **Library executor** (Tokio runtime) — all backend I/O: database queries, file ops, future Immich HTTP calls. Created in `main()` before `app.run()` and held for the process lifetime. All backends share it via `tokio::runtime::Handle` stored on `MomentsApplication`.
+
+Results flow back from Tokio → GTK via `Sender<LibraryEvent>` (a `std::sync::mpsc` channel, which is `Send`).
+
 ### Library abstraction layer
 
-`Library` (in `library.rs`) and `LibraryStorage` (in `library/storage.rs`) are async traits designed to be implemented by multiple backends (local filesystem, Immich, etc.). `LibraryStorage` handles the raw persistence layer; `Library` will sit above it. All backend I/O must be async and run off the GTK main thread, bridging back via `glib::idle_add`.
+`Library` (in `library.rs`) is a blanket-impl composition of feature sub-traits: `LibraryStorage + LibraryImport`. All backend work runs on the Tokio executor. `LibraryStorage::open()` receives a `tokio::runtime::Handle` which is stored for the backend's lifetime.
+
+### Database
+
+`src/library/db.rs` — backend-agnostic `Database` struct wrapping an `sqlx::SqlitePool`. Used by all backends that need persistence. Migrations live at `src/library/db/migrations/` and are embedded via `sqlx::migrate!()`. **Every schema change must be a numbered migration — no ad-hoc `CREATE TABLE IF NOT EXISTS` in code.**
+
+After any schema change, regenerate the offline query snapshot:
+```bash
+# Requires DATABASE_URL pointing at a database with the current schema
+cargo sqlx database create
+cargo sqlx migrate run
+cargo sqlx prepare    # regenerates .sqlx/ — commit this directory
+```
+
+CI sets `SQLX_OFFLINE=true` and uses the committed `.sqlx/` snapshot.
+
+### MediaId
+
+`src/library/media.rs` — `MediaId` is the content-addressable identity for every asset (64-char lowercase hex BLAKE3 hash). It is the primary key in the `media` table and will key thumbnails. Hashing uses `tokio::task::spawn_blocking` with a streaming hasher — safe for large video files.
 
 ## Tracing / logging
 

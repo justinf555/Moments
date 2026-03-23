@@ -12,6 +12,12 @@ pub enum LibraryError {
 
     #[error("unknown backend type '{0}' in library.toml")]
     InvalidBackend(String),
+
+    #[error("database error: {0}")]
+    Db(#[from] sqlx::Error),
+
+    #[error("runtime error: {0}")]
+    Runtime(String),
 }
 
 #[cfg(test)]
