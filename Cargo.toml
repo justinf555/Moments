@@ -26,17 +26,29 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 
-# Image processing
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "tiff"] }
+# Image processing — `image` kept for WebP thumbnail encoding only.
+# Decoding is handled by glycin (sandboxed, handles all formats including HEIC and RAW).
+image = { version = "0.25", default-features = false, features = ["webp"] }
 kamadak-exif = "0.5"
-# `image` feature enables the image-crate integration (register_all_decoding_hooks)
-# `default-features = false` avoids the `embedded-libheif` feature (we use system libheif)
-libheif-rs = { version = "2.7.0", default-features = false, features = ["image", "v1_20"] }
+
+# Sandboxed image loading — replaces image/rawler/libheif decode stack.
+# tokio: run on the Tokio executor; gdk4: Frame::texture() returns gdk::Texture.
+# default-features = false: skip the async-io executor (we use tokio instead).
+glycin = { version = "3", default-features = false, features = ["tokio", "gdk4"] }
 
 # Utilities
 thiserror = "2"
 chrono = "0.4"
-rawler = "0.7.2"
 
 [dev-dependencies]
 tempfile = "3"
+
+# Optimise image-processing crates in debug builds.
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.gstreamer]
+opt-level = 3
+[profile.dev.package.gstreamer-app]
+opt-level = 3
+[profile.dev.package.gstreamer-video]
+opt-level = 3

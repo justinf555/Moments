@@ -5,7 +5,6 @@ pub mod error;
 pub mod event;
 pub mod exif;
 pub mod factory;
-pub mod format;
 pub mod import;
 pub mod importer;
 pub mod media;
