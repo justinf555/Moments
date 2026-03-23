@@ -36,7 +36,8 @@ impl FormatHandler for RawHandler {
 
         let params = RawDecodeParams::default();
 
-        // Prefer the smaller thumbnail; fall back to the larger preview.
+        // Prefer the smallest embedded preview; fall back through larger previews
+        // and finally full demosaicing if no embedded JPEG is present.
         if let Some(img) = decoder
             .thumbnail_image(&source, &params)
             .map_err(|e| LibraryError::Thumbnail(format!("RAW thumbnail extraction failed: {e}")))?
@@ -51,8 +52,17 @@ impl FormatHandler for RawHandler {
             return Ok(img);
         }
 
+        // Last resort: full demosaicing. Slower and memory-intensive, but ensures
+        // every supported RAW file gets a thumbnail rather than silently failing.
+        if let Some(img) = decoder
+            .full_image(&source, &params)
+            .map_err(|e| LibraryError::Thumbnail(format!("RAW full decode failed: {e}")))?
+        {
+            return Ok(img);
+        }
+
         Err(LibraryError::Thumbnail(
-            "RAW file contains no embedded preview".to_string(),
+            "RAW decoder returned no image".to_string(),
         ))
     }
 }
