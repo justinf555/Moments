@@ -35,7 +35,10 @@ use tracing_subscriber::EnvFilter;
 fn main() -> glib::ExitCode {
     // Initialise tracing — RUST_LOG controls verbosity (e.g. RUST_LOG=moments=debug)
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("moments=debug")),
+        )
         .init();
 
     info!(version = config::VERSION, "Moments starting");

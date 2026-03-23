@@ -139,6 +139,20 @@ impl PhotoGridModel {
         for item in items {
             let obj = MediaItemObject::new(item);
             index.insert(obj.item().id.clone(), obj.downgrade());
+
+            // Speculatively load any thumbnail that already exists on disk.
+            // ThumbnailReady events only fire during import; on subsequent app
+            // launches we must try to load existing thumbnails ourselves.
+            // load_texture returns None silently if the file is absent.
+            let path = self.library.thumbnail_path(&obj.item().id);
+            let tokio = self.tokio.clone();
+            let obj_ref = obj.clone();
+            glib::MainContext::default().spawn_local(async move {
+                if let Some(texture) = load_texture(tokio, path).await {
+                    obj_ref.set_texture(Some(texture));
+                }
+            });
+
             self.store.append(&obj);
         }
 
