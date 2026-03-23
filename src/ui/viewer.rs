@@ -3,7 +3,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use adw::prelude::*;
-use gtk::{gdk, gio, glib};
+use gtk::{gdk, glib};
 use tracing::debug;
 
 use crate::library::media::MediaMetadataRecord;
@@ -100,11 +100,9 @@ impl ViewerInner {
     ///
     /// Strategy:
     /// 1. Resolve the original path from the library.
-    /// 2. For standard formats (JPEG, PNG, WebP, TIFF) set the file directly
-    ///    on `gtk::Picture` — GTK loads it natively, no decode overhead.
-    /// 3. For formats GTK can't handle (HEIC, RAW) fall back to decoding via
-    ///    `image::open()` and uploading RGBA bytes as a `gdk::MemoryTexture`.
-    ///    EXIF orientation is applied in both paths.
+    /// 2. Decode via `image::open()` on a blocking thread and upload RGBA
+    ///    bytes as a `gdk::MemoryTexture`.
+    /// 3. EXIF orientation is always applied before display.
     ///
     /// Falls back silently to the cached thumbnail on any error.
     fn start_full_res_load(
@@ -142,18 +140,7 @@ impl ViewerInner {
                 return;
             }
 
-            // For standard formats GTK loads the file directly — zero copy,
-            // hardware-accelerated, no memory spike.
-            if is_gtk_native(&path) {
-                inner.spinner.set_spinning(false);
-                inner.spinner.set_visible(false);
-                let file = gio::File::for_path(&path);
-                inner.picture.set_file(Some(&file));
-                debug!("full-res via set_file: {}", path.display());
-                return;
-            }
-
-            // For HEIC / RAW: decode via `image` crate (with orientation fix).
+            // Decode via `image` crate with EXIF orientation applied.
             let pixels: Option<(Vec<u8>, i32, i32)> = tokio
                 .spawn(async move {
                     tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, i32, i32)> {
@@ -447,43 +434,3 @@ impl PhotoViewer {
     }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/// Returns `true` if GTK can load `path` natively via `gtk::Picture::set_file`.
-///
-/// GTK's built-in loaders handle JPEG, PNG, WebP, and TIFF well. HEIC and RAW
-/// formats require the `image` crate decode path.
-fn is_gtk_native(path: &std::path::Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase())
-            .as_deref(),
-        Some("jpg" | "jpeg" | "png" | "webp" | "tiff" | "tif")
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn is_gtk_native_standard_formats() {
-        use std::path::Path;
-        assert!(is_gtk_native(Path::new("photo.jpg")));
-        assert!(is_gtk_native(Path::new("photo.JPEG")));
-        assert!(is_gtk_native(Path::new("photo.png")));
-        assert!(is_gtk_native(Path::new("photo.webp")));
-        assert!(is_gtk_native(Path::new("photo.tiff")));
-        assert!(is_gtk_native(Path::new("photo.tif")));
-    }
-
-    #[test]
-    fn is_gtk_native_non_native_formats() {
-        use std::path::Path;
-        assert!(!is_gtk_native(Path::new("photo.cr2")));
-        assert!(!is_gtk_native(Path::new("photo.arw")));
-        assert!(!is_gtk_native(Path::new("photo.heic")));
-        assert!(!is_gtk_native(Path::new("photo.nef")));
-    }
-}
