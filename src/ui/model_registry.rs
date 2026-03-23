@@ -1,0 +1,52 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use crate::library::media::MediaId;
+use crate::ui::photo_grid::PhotoGridModel;
+
+/// Shared registry of all active [`PhotoGridModel`] instances.
+///
+/// The application's idle loop calls [`on_thumbnail_ready`](Self::on_thumbnail_ready)
+/// and [`reload_all`](Self::reload_all) to broadcast library events. Models
+/// register themselves at creation time — either during startup (eager) or on
+/// first navigation (lazy).
+///
+/// See `docs/design-lazy-view-loading.md` for the full design rationale.
+pub struct ModelRegistry {
+    models: RefCell<Vec<Rc<PhotoGridModel>>>,
+}
+
+impl ModelRegistry {
+    pub fn new() -> Rc<Self> {
+        Rc::new(Self {
+            models: RefCell::new(Vec::new()),
+        })
+    }
+
+    /// Add a model to the registry. Called when a view is created.
+    pub fn register(&self, model: &Rc<PhotoGridModel>) {
+        self.models.borrow_mut().push(Rc::clone(model));
+    }
+
+    /// Forward a `ThumbnailReady` event to all registered models.
+    pub fn on_thumbnail_ready(&self, id: &MediaId) {
+        for model in self.models.borrow().iter() {
+            model.on_thumbnail_ready(id);
+        }
+    }
+
+    /// Reload all registered models (e.g. after import completes).
+    pub fn reload_all(&self) {
+        for model in self.models.borrow().iter() {
+            model.reload();
+        }
+    }
+}
+
+impl std::fmt::Debug for ModelRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ModelRegistry")
+            .field("count", &self.models.borrow().len())
+            .finish()
+    }
+}

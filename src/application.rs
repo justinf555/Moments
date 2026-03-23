@@ -36,7 +36,7 @@ use crate::library::event::LibraryEvent;
 use crate::library::factory::LibraryFactory;
 use crate::library::Library;
 use crate::ui::import_dialog::ImportDialog;
-use crate::ui::photo_grid::PhotoGridModel;
+use crate::ui::model_registry::ModelRegistry;
 use crate::ui::MomentsSetupWindow;
 use crate::ui::MomentsWindow;
 
@@ -49,7 +49,7 @@ mod imp {
         pub tokio: OnceCell<tokio::runtime::Handle>,
         pub library: RefCell<Option<Arc<dyn Library>>>,
         pub library_events: RefCell<Option<Receiver<LibraryEvent>>>,
-        pub photo_grid_model: RefCell<Option<Rc<PhotoGridModel>>>,
+        pub model_registry: RefCell<Option<Rc<ModelRegistry>>>,
         /// Held while an import is in flight so the idle loop can update it.
         /// Cleared when `ImportComplete` arrives or the user dismisses it.
         pub import_dialog: RefCell<Option<ImportDialog>>,
@@ -85,7 +85,7 @@ mod imp {
             info!("application shutting down");
 
             // Remove the idle source first — this frees the closure and
-            // releases Rc<PhotoGridModel> while the Tokio runtime is still
+            // releases the ModelRegistry while the Tokio runtime is still
             // alive so the SqlitePool background task can exit cleanly.
             if let Some(source_id) = self.idle_source.borrow_mut().take() {
                 source_id.remove();
@@ -94,7 +94,7 @@ mod imp {
             // Drop all library-related state so the Arc<dyn Library>
             // (and the SqlitePool it wraps) is freed before drop(tokio)
             // in main() tries to shut down the runtime.
-            self.photo_grid_model.borrow_mut().take();
+            self.model_registry.borrow_mut().take();
             self.import_dialog.borrow_mut().take();
             self.library.borrow_mut().take();
 
@@ -353,19 +353,17 @@ impl MomentsApplication {
                         *app.imp().library.borrow_mut() = Some(Arc::clone(&library));
 
                         // Wire the shell: builds sidebar, registers views,
-                        // and switches to the content page. Returns all
-                        // models so we can forward library events to them.
+                        // and switches to the content page. Returns a
+                        // ModelRegistry for broadcasting library events.
                         let settings = app.imp().settings.get()
                             .expect("settings initialised").clone();
-                        let models = window.setup(library, tokio.clone(), settings);
+                        let registry = window.setup(library, tokio.clone(), settings);
 
-                        // Store the first model for shutdown cleanup.
-                        if let Some(first) = models.first() {
-                            *app.imp().photo_grid_model.borrow_mut() = Some(Rc::clone(first));
-                        }
+                        // Store registry for shutdown cleanup.
+                        *app.imp().model_registry.borrow_mut() = Some(Rc::clone(&registry));
 
                         // Poll library events on every GTK idle tick.
-                        // Routes thumbnail and import events to all models.
+                        // Routes thumbnail and import events via the registry.
                         let receiver = app
                             .imp()
                             .library_events
@@ -382,9 +380,7 @@ impl MomentsApplication {
                             loop {
                                 match receiver.try_recv() {
                                     Ok(LibraryEvent::ThumbnailReady { media_id }) => {
-                                        for m in &models {
-                                            m.on_thumbnail_ready(&media_id);
-                                        }
+                                        registry.on_thumbnail_ready(&media_id);
                                     }
                                     Ok(LibraryEvent::ImportProgress { current, total }) => {
                                         let borrow = app.imp().import_dialog.borrow();
@@ -401,9 +397,7 @@ impl MomentsApplication {
                                         }
                                         // Release strong ref — dialog stays open until user dismisses.
                                         app.imp().import_dialog.borrow_mut().take();
-                                        for m in &models {
-                                            m.reload();
-                                        }
+                                        registry.reload_all();
                                     }
                                     Ok(_) => {}
                                     Err(std::sync::mpsc::TryRecvError::Empty) => break,
