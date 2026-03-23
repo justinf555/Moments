@@ -430,6 +430,19 @@ impl ContentView for PhotoGridView {
     fn widget(&self) -> &gtk::Widget {
         &self.widget
     }
+
+    fn on_navigate(&self, route_id: &str) {
+        self.pop_to_grid();
+
+        let filter = match route_id {
+            "favorites" => crate::library::media::MediaFilter::Favorites,
+            _ => crate::library::media::MediaFilter::All,
+        };
+
+        if let Some(model) = self.photo_grid.imp().model.borrow().as_ref() {
+            model.set_filter(filter);
+        }
+    }
 }
 
 #[cfg(test)]

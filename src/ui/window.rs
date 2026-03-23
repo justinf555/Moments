@@ -28,7 +28,6 @@ use gtk::{gio, glib};
 use tracing::debug;
 
 use crate::library::Library;
-use crate::library::media::MediaFilter;
 
 use crate::ui::coordinator::ContentCoordinator;
 use crate::ui::empty_library::EmptyLibraryView;
@@ -123,6 +122,7 @@ impl MomentsWindow {
             .set(Rc::clone(&photos_view))
             .expect("photos_view set once");
         coordinator.register("photos", photos_view);
+        coordinator.register_alias("favorites", "photos");
 
         // Wrap the content stack in a NavigationPage for the split view.
         let content_nav_page = adw::NavigationPage::builder()
@@ -154,34 +154,17 @@ impl MomentsWindow {
             .expect("coordinator set once in setup()");
 
         // Wire sidebar selection → coordinator navigation.
-        // Both "photos" and "favorites" use the same PhotoGridView — the
-        // difference is the MediaFilter applied to the model.
+        // The coordinator calls on_navigate() on the target view, which
+        // handles filter changes and popping back to the grid.
         let obj_weak = self.downgrade();
         let store_for_sidebar = model.store.clone();
-        let model_for_sidebar = Rc::clone(&model);
         sidebar.connect_route_selected(move |id| {
             let Some(win) = obj_weak.upgrade() else { return };
-
-            // Pop back to the grid if the viewer is open.
-            if let Some(pv) = win.imp().photos_view.get() {
-                pv.pop_to_grid();
-            }
-
-            // Set the appropriate filter on the model.
-            let filter = match id {
-                "favorites" => MediaFilter::Favorites,
-                _ => MediaFilter::All,
-            };
-            model_for_sidebar.set_filter(filter);
-
             if let Some(coordinator) = win.imp().coordinator.get() {
-                // After setting filter, if the store is empty show the
-                // empty page; the items-changed handler will switch to
-                // "photos" once items arrive from the reload.
                 if store_for_sidebar.n_items() == 0 {
                     coordinator.borrow().navigate("empty");
                 } else {
-                    coordinator.borrow().navigate("photos");
+                    coordinator.borrow().navigate(id);
                 }
             }
         });
