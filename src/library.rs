@@ -1,3 +1,4 @@
+pub mod album;
 pub mod bundle;
 pub mod config;
 pub mod db;
@@ -16,6 +17,7 @@ pub mod thumbnailer;
 pub mod video_meta;
 pub mod viewer;
 
+use album::LibraryAlbums;
 use import::LibraryImport;
 use media::LibraryMedia;
 use storage::LibraryStorage;
@@ -34,10 +36,18 @@ use viewer::LibraryViewer;
 /// - [`LibraryMedia`]     — media asset persistence (issue #25)
 /// - [`LibraryThumbnail`] — thumbnail generation and path resolution (issue #6)
 /// - [`LibraryViewer`]    — detail-view data access (issue #10)
+/// - [`LibraryAlbums`]    — album management (issue #11)
 ///
 /// `close()` is inherited from `LibraryStorage` and is not duplicated here.
 pub trait Library:
-    LibraryStorage + LibraryImport + LibraryMedia + LibraryThumbnail + LibraryViewer + Send + Sync
+    LibraryStorage
+    + LibraryImport
+    + LibraryMedia
+    + LibraryThumbnail
+    + LibraryViewer
+    + LibraryAlbums
+    + Send
+    + Sync
 {
 }
 
@@ -47,6 +57,7 @@ impl<
         + LibraryMedia
         + LibraryThumbnail
         + LibraryViewer
+        + LibraryAlbums
         + Send
         + Sync,
 > Library for T
