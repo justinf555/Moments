@@ -72,6 +72,45 @@ pub fn build_factory(
 
             cell.bind(&item);
 
+            // Load thumbnail from disk if not already set.
+            // This is the primary texture loading path — replaces speculative
+            // loading to bound GPU memory to visible cells only.
+            if item.texture().is_none() {
+                let id = item.item().id.clone();
+                let path = library.thumbnail_path(&id);
+                let tk = tokio.clone();
+                let item_weak = item.downgrade();
+                glib::MainContext::default().spawn_local(async move {
+                    let result = tk
+                        .spawn(async move {
+                            tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, u32, u32)> {
+                                let data = std::fs::read(&path).ok()?;
+                                let img = image::load_from_memory(&data).ok()?;
+                                let rgba = img.to_rgba8();
+                                let (w, h) = rgba.dimensions();
+                                Some((rgba.into_raw(), w, h))
+                            })
+                            .await
+                            .ok()
+                        })
+                        .await
+                        .ok();
+                    if let Some(Some(Some((pixels, width, height)))) = result {
+                        if let Some(item) = item_weak.upgrade() {
+                            let gbytes = glib::Bytes::from_owned(pixels);
+                            let texture = gtk::gdk::MemoryTexture::new(
+                                width as i32,
+                                height as i32,
+                                gtk::gdk::MemoryFormat::R8g8b8a8,
+                                &gbytes,
+                                (width as usize) * 4,
+                            );
+                            item.set_texture(Some(texture.upcast::<gtk::gdk::Texture>()));
+                        }
+                    }
+                });
+            }
+
             // In Trash view: days label is shown by bind.
             // In other views: wire star button, hide days label.
             if is_trash {
