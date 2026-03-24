@@ -17,5 +17,26 @@
 				density in the photo grid.
 			</description>
 		</key>
+		<key name="window-width" type="i">
+			<default>800</default>
+			<summary>Window width</summary>
+			<description>
+				The last-used width of the main window in pixels.
+			</description>
+		</key>
+		<key name="window-height" type="i">
+			<default>600</default>
+			<summary>Window height</summary>
+			<description>
+				The last-used height of the main window in pixels.
+			</description>
+		</key>
+		<key name="is-maximized" type="b">
+			<default>false</default>
+			<summary>Window maximized state</summary>
+			<description>
+				Whether the main window was maximized when last closed.
+			</description>
+		</key>
 	</schema>
 </schemalist>

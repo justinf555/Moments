@@ -25,7 +25,7 @@ use std::sync::Arc;
 use gtk::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gio, glib};
-use tracing::debug;
+use tracing::{debug, instrument};
 
 use crate::library::Library;
 
@@ -49,6 +49,9 @@ mod imp {
 
         /// Set up once in `setup()` — holds live references to all registered views.
         pub coordinator: OnceCell<Rc<RefCell<ContentCoordinator>>>,
+
+        /// GSettings instance for persisting window geometry.
+        pub settings: OnceCell<gio::Settings>,
     }
 
     #[glib::object_subclass]
@@ -68,7 +71,31 @@ mod imp {
 
     impl ObjectImpl for MomentsWindow {}
     impl WidgetImpl for MomentsWindow {}
-    impl WindowImpl for MomentsWindow {}
+    impl WindowImpl for MomentsWindow {
+        fn close_request(&self) -> glib::Propagation {
+            if let Some(settings) = self.settings.get() {
+                let win = self.obj();
+                let is_maximized = win.is_maximized();
+                settings
+                    .set_boolean("is-maximized", is_maximized)
+                    .expect("failed to save is-maximized");
+
+                // Only save dimensions when not maximized, so we preserve
+                // the pre-maximized size for next launch.
+                if !is_maximized {
+                    let (width, height) = win.default_size();
+                    settings
+                        .set_int("window-width", width)
+                        .expect("failed to save window-width");
+                    settings
+                        .set_int("window-height", height)
+                        .expect("failed to save window-height");
+                }
+                debug!(is_maximized, "saved window state on close");
+            }
+            self.parent_close_request()
+        }
+    }
     impl ApplicationWindowImpl for MomentsWindow {}
     impl AdwApplicationWindowImpl for MomentsWindow {}
 }
@@ -81,10 +108,32 @@ glib::wrapper! {
 }
 
 impl MomentsWindow {
-    pub fn new<P: IsA<gtk::Application>>(application: &P) -> Self {
-        glib::Object::builder()
+    pub fn new<P: IsA<gtk::Application>>(application: &P, settings: &gio::Settings) -> Self {
+        let win: Self = glib::Object::builder()
             .property("application", application)
-            .build()
+            .build();
+        win.restore_window_state(settings);
+        win
+    }
+
+    /// Restore window size and maximized state from GSettings.
+    #[instrument(skip(self, settings))]
+    fn restore_window_state(&self, settings: &gio::Settings) {
+        let width = settings.int("window-width");
+        let height = settings.int("window-height");
+        let is_maximized = settings.boolean("is-maximized");
+
+        self.set_default_size(width, height);
+        if is_maximized {
+            self.maximize();
+        }
+
+        self.imp()
+            .settings
+            .set(settings.clone())
+            .expect("settings set once in restore_window_state");
+
+        debug!(width, height, is_maximized, "restored window state");
     }
 
     /// Wire the library model into the shell and switch to the content page.
