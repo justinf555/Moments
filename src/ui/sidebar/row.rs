@@ -71,4 +71,13 @@ impl MomentsSidebarRow {
             label.set_text(text);
         }
     }
+
+    /// Get the current label text.
+    pub fn label_text(&self) -> String {
+        self.imp()
+            .label
+            .get()
+            .map(|l| l.text().to_string())
+            .unwrap_or_default()
+    }
 }

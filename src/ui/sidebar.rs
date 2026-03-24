@@ -11,11 +11,16 @@ use tracing::debug;
 use route::{TOP_ROUTES, BOTTOM_ROUTES};
 use row::MomentsSidebarRow;
 
+/// Stored callbacks for album row right-click menus.
+struct AlbumContextMenu {
+    on_rename: std::rc::Rc<dyn Fn(String, String)>,
+    on_delete: std::rc::Rc<dyn Fn(String, String)>,
+}
+
 mod imp {
     use super::*;
     use std::cell::OnceCell;
 
-    #[derive(Default)]
     pub struct MomentsSidebar {
         pub list_box: OnceCell<gtk::ListBox>,
         /// Maps album_id → ListBoxRow for dynamic add/remove.
@@ -26,6 +31,21 @@ mod imp {
         pub bottom_separator: OnceCell<gtk::ListBoxRow>,
         /// The "+" button for creating albums.
         pub add_button: OnceCell<gtk::Button>,
+        /// Stored context menu callbacks (set once via set_album_context_callbacks).
+        pub(super) context_menu: RefCell<Option<AlbumContextMenu>>,
+    }
+
+    impl Default for MomentsSidebar {
+        fn default() -> Self {
+            Self {
+                list_box: OnceCell::new(),
+                album_rows: RefCell::new(HashMap::new()),
+                albums_header: OnceCell::new(),
+                bottom_separator: OnceCell::new(),
+                add_button: OnceCell::new(),
+                context_menu: RefCell::new(None),
+            }
+        }
     }
 
     #[glib::object_subclass]
@@ -208,6 +228,9 @@ impl MomentsSidebar {
         // Insert before the bottom separator.
         list_box.insert(&list_row, bottom_sep.index());
 
+        // Attach right-click context menu if callbacks are set.
+        self.attach_row_context_menu(&list_row, album_id, name);
+
         imp.album_rows
             .borrow_mut()
             .insert(album_id.to_owned(), list_row);
@@ -251,5 +274,88 @@ impl MomentsSidebar {
         if let Some(btn) = self.imp().add_button.get() {
             btn.connect_clicked(move |_| f());
         }
+    }
+
+    /// Store callbacks for album context menu actions.
+    ///
+    /// When `add_album` creates a row, it attaches a right-click gesture
+    /// that shows a popover with Rename/Delete using these callbacks.
+    pub fn set_album_context_callbacks(
+        &self,
+        on_rename: impl Fn(String, String) + 'static,
+        on_delete: impl Fn(String, String) + 'static,
+    ) {
+        *self.imp().context_menu.borrow_mut() = Some(AlbumContextMenu {
+            on_rename: std::rc::Rc::new(on_rename),
+            on_delete: std::rc::Rc::new(on_delete),
+        });
+    }
+
+    /// Attach a right-click gesture to an individual album row.
+    fn attach_row_context_menu(&self, list_row: &gtk::ListBoxRow, album_id: &str, name: &str) {
+        let ctx = self.imp().context_menu.borrow();
+        let Some(ctx) = ctx.as_ref() else { return };
+
+        let gesture = gtk::GestureClick::new();
+        gesture.set_button(3);
+
+        let on_rename = ctx.on_rename.clone();
+        let on_delete = ctx.on_delete.clone();
+        let aid = album_id.to_owned();
+        let aname = name.to_owned();
+        let row_weak = list_row.downgrade();
+
+        gesture.connect_pressed(move |gesture, _, x, _y| {
+            let Some(row) = row_weak.upgrade() else { return };
+
+            let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            vbox.add_css_class("menu");
+
+            let rename_btn = gtk::Button::with_label("Rename");
+            rename_btn.add_css_class("flat");
+            vbox.append(&rename_btn);
+
+            let delete_btn = gtk::Button::with_label("Delete");
+            delete_btn.add_css_class("flat");
+            delete_btn.add_css_class("error");
+            vbox.append(&delete_btn);
+
+            let popover = gtk::Popover::new();
+            popover.set_child(Some(&vbox));
+            popover.set_parent(&row);
+            popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, 0, 1, 1)));
+            popover.set_has_arrow(true);
+
+            let rename_cb = on_rename.clone();
+            let aid_r = aid.clone();
+            let aname_r = aname.clone();
+            let pop_weak = popover.downgrade();
+            rename_btn.connect_clicked(move |_| {
+                if let Some(p) = pop_weak.upgrade() {
+                    p.popdown();
+                }
+                rename_cb(aid_r.clone(), aname_r.clone());
+            });
+
+            let delete_cb = on_delete.clone();
+            let aid_d = aid.clone();
+            let aname_d = aname.clone();
+            let pop_weak = popover.downgrade();
+            delete_btn.connect_clicked(move |_| {
+                if let Some(p) = pop_weak.upgrade() {
+                    p.popdown();
+                }
+                delete_cb(aid_d.clone(), aname_d.clone());
+            });
+
+            popover.connect_closed(move |p| {
+                p.unparent();
+            });
+
+            popover.popup();
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+        });
+
+        list_row.add_controller(gesture);
     }
 }
