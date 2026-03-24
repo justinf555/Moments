@@ -7,6 +7,8 @@ use super::bundle::Bundle;
 use super::config::LibraryConfig;
 use super::error::LibraryError;
 use super::event::LibraryEvent;
+use super::immich_client::ImmichClient;
+use super::providers::immich::ImmichLibrary;
 use super::providers::local::LocalLibrary;
 use super::storage::LibraryStorage;
 use super::Library;
@@ -38,9 +40,10 @@ impl LibraryFactory {
                 let library = LocalLibrary::open(bundle, events, tokio).await?;
                 Ok(Arc::new(library))
             }
-            LibraryConfig::Immich { .. } => {
-                // Implemented in issue #14 — Immich backend
-                todo!("Immich backend not yet implemented")
+            LibraryConfig::Immich { server_url, api_key } => {
+                let client = ImmichClient::new(&server_url, &api_key)?;
+                let library = ImmichLibrary::open(bundle, client, events, tokio).await?;
+                Ok(Arc::new(library))
             }
         }
     }
