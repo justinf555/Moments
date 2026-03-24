@@ -11,6 +11,7 @@ use tracing::{debug, error, info, instrument, warn};
 
 use super::db::Database;
 use super::error::LibraryError;
+use super::album::{AlbumId, LibraryAlbums};
 use super::event::LibraryEvent;
 use super::immich_client::ImmichClient;
 use super::media::{LibraryMedia, MediaId, MediaItem, MediaMetadataRecord, MediaRecord, MediaType};
@@ -132,6 +133,8 @@ impl SyncManager {
             types: vec![
                 "AssetsV1".to_string(),
                 "AssetExifsV1".to_string(),
+                "AlbumsV1".to_string(),
+                "AlbumToAssetsV1".to_string(),
             ],
         };
 
@@ -151,6 +154,7 @@ impl SyncManager {
         let mut asset_count: usize = 0;
         let mut exif_count: usize = 0;
         let mut delete_count: usize = 0;
+        let mut album_count: usize = 0;
         let mut is_reset = false;
         let mut existing_ids: Option<HashSet<String>> = None;
         let mut line_number: usize = 0;
@@ -228,11 +232,49 @@ impl SyncManager {
                     exif_count += 1;
                     acks.push(sync_line.ack);
                 }
+                "AlbumV1" => {
+                    let album: SyncAlbumV1 = serde_json::from_value(sync_line.data)
+                        .map_err(|e| {
+                            error!(line_number, "failed to deserialize AlbumV1: {e}");
+                            LibraryError::Immich(format!("invalid AlbumV1 at line {line_number}: {e}"))
+                        })?;
+                    self.handle_album(album).await?;
+                    album_count += 1;
+                    acks.push(sync_line.ack);
+                }
+                "AlbumDeleteV1" => {
+                    let delete: SyncAlbumDeleteV1 = serde_json::from_value(sync_line.data)
+                        .map_err(|e| {
+                            error!(line_number, "failed to deserialize AlbumDeleteV1: {e}");
+                            LibraryError::Immich(format!("invalid AlbumDeleteV1 at line {line_number}: {e}"))
+                        })?;
+                    self.handle_album_delete(&delete.album_id).await?;
+                    acks.push(sync_line.ack);
+                }
+                "AlbumToAssetV1" => {
+                    let assoc: SyncAlbumToAssetV1 = serde_json::from_value(sync_line.data)
+                        .map_err(|e| {
+                            error!(line_number, "failed to deserialize AlbumToAssetV1: {e}");
+                            LibraryError::Immich(format!("invalid AlbumToAssetV1 at line {line_number}: {e}"))
+                        })?;
+                    self.handle_album_asset(assoc).await?;
+                    acks.push(sync_line.ack);
+                }
+                "AlbumToAssetDeleteV1" => {
+                    let assoc: SyncAlbumToAssetDeleteV1 = serde_json::from_value(sync_line.data)
+                        .map_err(|e| {
+                            error!(line_number, "failed to deserialize AlbumToAssetDeleteV1: {e}");
+                            LibraryError::Immich(format!("invalid AlbumToAssetDeleteV1 at line {line_number}: {e}"))
+                        })?;
+                    self.handle_album_asset_delete(assoc).await?;
+                    acks.push(sync_line.ack);
+                }
                 "SyncCompleteV1" => {
                     info!(
                         assets = asset_count,
                         exifs = exif_count,
                         deletes = delete_count,
+                        albums = album_count,
                         lines = line_number,
                         "sync stream complete"
                     );
@@ -386,6 +428,65 @@ impl SyncManager {
     async fn handle_asset_delete(&self, asset_id: &str) -> Result<(), LibraryError> {
         let id = MediaId::new(asset_id.to_owned());
         self.db.delete_permanently(&[id]).await?;
+        Ok(())
+    }
+
+    /// Upsert an album from the sync stream.
+    #[instrument(skip(self, album), fields(album_id = %album.id, name = %album.name))]
+    async fn handle_album(&self, album: SyncAlbumV1) -> Result<(), LibraryError> {
+        let created_at = parse_datetime(&Some(album.created_at)).unwrap_or(0);
+        let updated_at = parse_datetime(&Some(album.updated_at)).unwrap_or(0);
+
+        self.db
+            .upsert_album(&album.id, &album.name, created_at, updated_at)
+            .await?;
+
+        let _ = self.events.send(LibraryEvent::AlbumCreated {
+            id: AlbumId::from_raw(album.id),
+            name: album.name,
+        });
+
+        Ok(())
+    }
+
+    /// Delete an album from the local cache.
+    #[instrument(skip(self))]
+    async fn handle_album_delete(&self, album_id: &str) -> Result<(), LibraryError> {
+        let id = AlbumId::from_raw(album_id.to_owned());
+        self.db.delete_album(&id).await?;
+
+        let _ = self.events.send(LibraryEvent::AlbumDeleted { id });
+
+        Ok(())
+    }
+
+    /// Add an asset to an album from the sync stream.
+    async fn handle_album_asset(&self, assoc: SyncAlbumToAssetV1) -> Result<(), LibraryError> {
+        let now = chrono::Utc::now().timestamp();
+        self.db
+            .upsert_album_media(&assoc.album_id, &assoc.asset_id, now)
+            .await?;
+
+        let _ = self.events.send(LibraryEvent::AlbumMediaChanged {
+            album_id: AlbumId::from_raw(assoc.album_id),
+        });
+
+        Ok(())
+    }
+
+    /// Remove an asset from an album from the sync stream.
+    async fn handle_album_asset_delete(
+        &self,
+        assoc: SyncAlbumToAssetDeleteV1,
+    ) -> Result<(), LibraryError> {
+        self.db
+            .delete_album_media_entry(&assoc.album_id, &assoc.asset_id)
+            .await?;
+
+        let _ = self.events.send(LibraryEvent::AlbumMediaChanged {
+            album_id: AlbumId::from_raw(assoc.album_id),
+        });
+
         Ok(())
     }
 }
@@ -551,6 +652,38 @@ struct SyncAssetExifV1 {
     longitude: Option<f64>,
     #[serde(rename = "profileDescription")]
     profile_description: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SyncAlbumV1 {
+    id: String,
+    name: String,
+    #[serde(rename = "createdAt")]
+    created_at: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SyncAlbumDeleteV1 {
+    #[serde(rename = "albumId")]
+    album_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SyncAlbumToAssetV1 {
+    #[serde(rename = "albumId")]
+    album_id: String,
+    #[serde(rename = "assetId")]
+    asset_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SyncAlbumToAssetDeleteV1 {
+    #[serde(rename = "albumId")]
+    album_id: String,
+    #[serde(rename = "assetId")]
+    asset_id: String,
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

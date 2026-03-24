@@ -739,6 +739,61 @@ impl Database {
         Ok(())
     }
 
+    /// Upsert an album record from the sync stream.
+    pub async fn upsert_album(
+        &self,
+        id: &str,
+        name: &str,
+        created_at: i64,
+        updated_at: i64,
+    ) -> Result<(), LibraryError> {
+        sqlx::query(
+            "INSERT OR REPLACE INTO albums (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(created_at)
+        .bind(updated_at)
+        .execute(&self.pool)
+        .await
+        .map_err(LibraryError::Db)?;
+        Ok(())
+    }
+
+    /// Upsert an album-media association from the sync stream.
+    pub async fn upsert_album_media(
+        &self,
+        album_id: &str,
+        media_id: &str,
+        added_at: i64,
+    ) -> Result<(), LibraryError> {
+        sqlx::query(
+            "INSERT OR IGNORE INTO album_media (album_id, media_id, added_at) VALUES (?, ?, ?)",
+        )
+        .bind(album_id)
+        .bind(media_id)
+        .bind(added_at)
+        .execute(&self.pool)
+        .await
+        .map_err(LibraryError::Db)?;
+        Ok(())
+    }
+
+    /// Delete a single album-media association.
+    pub async fn delete_album_media_entry(
+        &self,
+        album_id: &str,
+        media_id: &str,
+    ) -> Result<(), LibraryError> {
+        sqlx::query("DELETE FROM album_media WHERE album_id = ? AND media_id = ?")
+            .bind(album_id)
+            .bind(media_id)
+            .execute(&self.pool)
+            .await
+            .map_err(LibraryError::Db)?;
+        Ok(())
+    }
+
     /// Load all media IDs into a HashSet (for reset sync deletion detection).
     pub async fn all_media_ids(&self) -> Result<std::collections::HashSet<String>, LibraryError> {
         let rows: Vec<(String,)> = sqlx::query_as("SELECT id FROM media")
