@@ -6,7 +6,9 @@ use adw::prelude::*;
 use gtk::{gio, glib, subclass::prelude::*};
 use tracing::instrument;
 
+use crate::library::media::MediaType;
 use crate::library::Library;
+use crate::ui::video_viewer::VideoViewer;
 use crate::ui::viewer::PhotoViewer;
 use crate::ui::ContentView;
 
@@ -255,7 +257,8 @@ pub struct PhotoGridView {
     /// The `NavigationView` is the outermost widget returned by `widget()`.
     nav_view: adw::NavigationView,
     photo_grid: PhotoGrid,
-    viewer: Rc<PhotoViewer>,
+    photo_viewer: Rc<PhotoViewer>,
+    video_viewer: Rc<VideoViewer>,
     library: Arc<dyn Library>,
     tokio: tokio::runtime::Handle,
     trash_btn: gtk::Button,
@@ -376,8 +379,9 @@ impl PhotoGridView {
         let nav_view = adw::NavigationView::new();
         nav_view.push(&grid_page);
 
-        // ── Viewer (reused across activations) ───────────────────────────────
-        let viewer = Rc::new(PhotoViewer::new(Arc::clone(&library), tokio.clone(), Rc::clone(&registry)));
+        // ── Viewers (reused across activations) ──────────────────────────────
+        let photo_viewer = Rc::new(PhotoViewer::new(Arc::clone(&library), tokio.clone(), Rc::clone(&registry)));
+        let video_viewer = Rc::new(VideoViewer::new(Arc::clone(&library), tokio.clone(), Rc::clone(&registry)));
 
         // ── Zoom actions ─────────────────────────────────────────────────────
         let action_group = gio::SimpleActionGroup::new();
@@ -423,7 +427,8 @@ impl PhotoGridView {
         Self {
             nav_view,
             photo_grid,
-            viewer,
+            photo_viewer,
+            video_viewer,
             library,
             tokio,
             trash_btn,
@@ -444,8 +449,10 @@ impl PhotoGridView {
 
     pub fn set_model(&self, model: Rc<PhotoGridModel>, registry: Rc<crate::ui::model_registry::ModelRegistry>) {
         let nav_view = self.nav_view.clone();
-        let viewer = Rc::clone(&self.viewer);
-        let viewer_nav_page = self.viewer.nav_page().clone();
+        let photo_viewer = Rc::clone(&self.photo_viewer);
+        let photo_nav_page = self.photo_viewer.nav_page().clone();
+        let video_viewer = Rc::clone(&self.video_viewer);
+        let video_nav_page = self.video_viewer.nav_page().clone();
 
         let filter = model.filter();
         self.photo_grid.set_model(
@@ -455,15 +462,27 @@ impl PhotoGridView {
             Rc::clone(&registry),
             filter,
             move |items, index| {
-                viewer.show(items, index);
+                // Choose viewer based on media type.
+                let is_video = items
+                    .get(index)
+                    .map(|obj| obj.item().media_type == MediaType::Video)
+                    .unwrap_or(false);
+
+                let (tag, nav_page) = if is_video {
+                    video_viewer.show(items, index);
+                    ("video-viewer", &video_nav_page)
+                } else {
+                    photo_viewer.show(items, index);
+                    ("viewer", &photo_nav_page)
+                };
 
                 // Push viewer page if it isn't already the visible page.
                 let visible_tag = nav_view
                     .visible_page()
                     .and_then(|p| p.tag())
                     .unwrap_or_default();
-                if visible_tag != "viewer" {
-                    nav_view.push(&viewer_nav_page);
+                if visible_tag != tag {
+                    nav_view.push(nav_page);
                 }
             },
         );
