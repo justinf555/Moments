@@ -11,6 +11,8 @@ mod imp {
     pub struct MomentsBackendPickerPage {
         #[template_child]
         pub local_row: TemplateChild<adw::ActionRow>,
+        #[template_child]
+        pub immich_row: TemplateChild<adw::ActionRow>,
     }
 
     #[glib::object_subclass]
@@ -32,7 +34,10 @@ mod imp {
         fn signals() -> &'static [glib::subclass::Signal] {
             static SIGNALS: OnceLock<Vec<glib::subclass::Signal>> = OnceLock::new();
             SIGNALS.get_or_init(|| {
-                vec![glib::subclass::Signal::builder("local-selected").build()]
+                vec![
+                    glib::subclass::Signal::builder("local-selected").build(),
+                    glib::subclass::Signal::builder("immich-selected").build(),
+                ]
             })
         }
 
@@ -44,6 +49,13 @@ mod imp {
                 obj,
                 move |_| {
                     obj.emit_by_name::<()>("local-selected", &[]);
+                }
+            ));
+            self.immich_row.connect_activated(glib::clone!(
+                #[weak]
+                obj,
+                move |_| {
+                    obj.emit_by_name::<()>("immich-selected", &[]);
                 }
             ));
         }
@@ -67,6 +79,16 @@ impl MomentsBackendPickerPage {
     pub fn connect_local_selected<F: Fn(&Self) + 'static>(&self, f: F) -> glib::SignalHandlerId {
         self.connect_closure(
             "local-selected",
+            false,
+            glib::closure_local!(move |obj: &Self| {
+                f(obj);
+            }),
+        )
+    }
+
+    pub fn connect_immich_selected<F: Fn(&Self) + 'static>(&self, f: F) -> glib::SignalHandlerId {
+        self.connect_closure(
+            "immich-selected",
             false,
             glib::closure_local!(move |obj: &Self| {
                 f(obj);

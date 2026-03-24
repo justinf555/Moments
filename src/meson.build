@@ -10,6 +10,7 @@ blueprints = custom_target(
     'ui/setup_window.blp',
     'ui/setup_window/backend_picker_page.blp',
     'ui/setup_window/local_setup_page.blp',
+    'ui/setup_window/immich_setup_page.blp',
   ),
   output: '.',
   command: [

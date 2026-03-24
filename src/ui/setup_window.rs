@@ -1,4 +1,5 @@
 pub mod backend_picker_page;
+pub mod immich_setup_page;
 pub mod local_setup_page;
 
 use std::sync::OnceLock;
@@ -9,6 +10,7 @@ use gtk::glib;
 use tracing::debug;
 
 use backend_picker_page::MomentsBackendPickerPage;
+use immich_setup_page::MomentsImmichSetupPage;
 use local_setup_page::MomentsLocalSetupPage;
 
 mod imp {
@@ -30,6 +32,7 @@ mod imp {
         fn class_init(klass: &mut Self::Class) {
             MomentsBackendPickerPage::ensure_type();
             MomentsLocalSetupPage::ensure_type();
+            MomentsImmichSetupPage::ensure_type();
             klass.bind_template();
         }
 
@@ -68,6 +71,23 @@ mod imp {
                         }
                     ));
                     win.imp().navigation_view.push(&local_page);
+                }
+            ));
+
+            picker.connect_immich_selected(glib::clone!(
+                #[weak]
+                win,
+                move |_| {
+                    debug!("immich backend selected, pushing setup page");
+                    let immich_page = MomentsImmichSetupPage::new();
+                    immich_page.connect_create_requested(glib::clone!(
+                        #[weak]
+                        win,
+                        move |_, path| {
+                            win.emit_by_name::<()>("setup-complete", &[&path]);
+                        }
+                    ));
+                    win.imp().navigation_view.push(&immich_page);
                 }
             ));
 

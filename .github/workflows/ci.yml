@@ -25,6 +25,7 @@ jobs:
             libheif-devel \
             gstreamer1-devel \
             gstreamer1-plugins-base-devel \
+            libsecret-devel \
             pkg-config
 
       - name: Cache cargo registry
