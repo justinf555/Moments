@@ -27,8 +27,10 @@ use adw::subclass::prelude::*;
 use gtk::{gio, glib};
 use tracing::{debug, instrument};
 
+use crate::library::album::AlbumId;
 use crate::library::Library;
 
+use crate::ui::album_dialogs;
 use crate::ui::coordinator::ContentCoordinator;
 use crate::ui::empty_library::EmptyLibraryView;
 use crate::ui::model_registry::ModelRegistry;
@@ -180,6 +182,105 @@ impl MomentsWindow {
                     }
                 }
             });
+        }
+
+        // Wire "+" button → create album dialog.
+        {
+            let win_weak = self.downgrade();
+            let lib = Arc::clone(&library);
+            let tk = tokio.clone();
+            let sb = sidebar.clone();
+            sidebar.connect_album_add_clicked(move || {
+                let Some(win) = win_weak.upgrade() else { return };
+                let lib = Arc::clone(&lib);
+                let tk = tk.clone();
+                let sb = sb.clone();
+                album_dialogs::show_create_album_dialog(&win, move |name| {
+                    let lib = Arc::clone(&lib);
+                    let tk = tk.clone();
+                    let sb = sb.clone();
+                    glib::MainContext::default().spawn_local(async move {
+                        let n = name.clone();
+                        match tk.spawn(async move { lib.create_album(&n).await }).await {
+                            Ok(Ok(id)) => {
+                                debug!(album_id = %id, name = %name, "album created");
+                                sb.add_album(id.as_str(), &name);
+                            }
+                            Ok(Err(e)) => tracing::error!("failed to create album: {e}"),
+                            Err(e) => tracing::error!("tokio join error: {e}"),
+                        }
+                    });
+                });
+            });
+        }
+
+        // Wire right-click context menu on album rows.
+        {
+            let menu = album_dialogs::album_context_menu();
+            let win_weak = self.downgrade();
+            let lib_rename = Arc::clone(&library);
+            let tk_rename = tokio.clone();
+            let sb_rename = sidebar.clone();
+
+            let win_weak2 = self.downgrade();
+            let lib_delete = Arc::clone(&library);
+            let tk_delete = tokio.clone();
+            let sb_delete = sidebar.clone();
+
+            sidebar.setup_album_context_menu(
+                menu,
+                // on_rename callback
+                move |album_id, album_name| {
+                    let Some(win) = win_weak.upgrade() else { return };
+                    let lib = Arc::clone(&lib_rename);
+                    let tk = tk_rename.clone();
+                    let sb = sb_rename.clone();
+                    let aid = album_id.clone();
+                    album_dialogs::show_rename_album_dialog(&win, &album_name, move |new_name| {
+                        let lib = Arc::clone(&lib);
+                        let tk = tk.clone();
+                        let sb = sb.clone();
+                        let aid = aid.clone();
+                        glib::MainContext::default().spawn_local(async move {
+                            let n = new_name.clone();
+                            let id = AlbumId::from_raw(aid.clone());
+                            match tk.spawn(async move { lib.rename_album(&id, &n).await }).await {
+                                Ok(Ok(())) => {
+                                    debug!(album_id = %aid, name = %new_name, "album renamed");
+                                    sb.rename_album(&aid, &new_name);
+                                }
+                                Ok(Err(e)) => tracing::error!("failed to rename album: {e}"),
+                                Err(e) => tracing::error!("tokio join error: {e}"),
+                            }
+                        });
+                    });
+                },
+                // on_delete callback
+                move |album_id, album_name| {
+                    let Some(win) = win_weak2.upgrade() else { return };
+                    let lib = Arc::clone(&lib_delete);
+                    let tk = tk_delete.clone();
+                    let sb = sb_delete.clone();
+                    let aid = album_id.clone();
+                    album_dialogs::show_delete_album_dialog(&win, &album_name, move || {
+                        let lib = Arc::clone(&lib);
+                        let tk = tk.clone();
+                        let sb = sb.clone();
+                        let aid = aid.clone();
+                        glib::MainContext::default().spawn_local(async move {
+                            let id = AlbumId::from_raw(aid.clone());
+                            match tk.spawn(async move { lib.delete_album(&id).await }).await {
+                                Ok(Ok(())) => {
+                                    debug!(album_id = %aid, "album deleted");
+                                    sb.remove_album(&aid);
+                                }
+                                Ok(Err(e)) => tracing::error!("failed to delete album: {e}"),
+                                Err(e) => tracing::error!("tokio join error: {e}"),
+                            }
+                        });
+                    });
+                },
+            );
         }
 
         // Build content stack + coordinator.

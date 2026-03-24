@@ -1,5 +1,6 @@
 use gtk;
 
+pub mod album_dialogs;
 pub mod coordinator;
 pub mod empty_library;
 pub mod import_dialog;
