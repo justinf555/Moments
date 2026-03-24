@@ -105,7 +105,8 @@ mod imp {
             let is_favorited = self.is_favorited.clone();
             let motion = gtk::EventControllerMotion::new();
             motion.set_propagation_phase(gtk::PropagationPhase::Capture);
-            motion.connect_enter(move |_, _, _| {
+            motion.connect_enter(move |_, x, y| {
+                tracing::debug!(x, y, show_star = show_star.get(), has_texture = has_texture.get(), "cell hover ENTER");
                 if show_star.get() && has_texture.get() {
                     star.set_visible(true);
                 }
@@ -113,6 +114,7 @@ mod imp {
             let star = self.star_btn.clone();
             let is_favorited2 = self.is_favorited.clone();
             motion.connect_leave(move |_| {
+                tracing::debug!(is_favorited = is_favorited2.get(), "cell hover LEAVE");
                 // Keep visible if item is favourited (visual indicator).
                 if !is_favorited2.get() {
                     star.set_visible(false);
