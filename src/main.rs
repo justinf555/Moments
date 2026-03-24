@@ -37,6 +37,9 @@ fn main() -> glib::ExitCode {
     // image::open() transparently handles HEIC and HEIF files throughout the app.
     libheif_rs::integration::image::register_all_decoding_hooks();
 
+    // Initialise GStreamer for video poster-frame extraction.
+    gstreamer::init().expect("failed to initialise GStreamer");
+
     // Initialise tracing — RUST_LOG controls verbosity (e.g. RUST_LOG=moments=debug)
     tracing_subscriber::fmt()
         .with_env_filter(

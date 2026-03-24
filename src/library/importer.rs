@@ -228,16 +228,15 @@ impl ImportJob {
             .ok();
 
         // ── 8. Spawn thumbnail generation (non-blocking, best-effort) ─────────
-        // Videos skip thumbnail generation for now (Phase 2 — GStreamer).
-        if !is_video {
-            let thumb_job = ThumbnailJob::new(
-                self.thumbnails_dir.clone(),
-                self.db.clone(),
-                self.events.clone(),
-                Arc::clone(&self.formats),
-            );
-            tokio::spawn(async move { thumb_job.generate(media_id, target).await });
-        }
+        // Images use image-crate decode; videos use GStreamer poster frame.
+        // Both go through the same FormatRegistry → resize → WebP pipeline.
+        let thumb_job = ThumbnailJob::new(
+            self.thumbnails_dir.clone(),
+            self.db.clone(),
+            self.events.clone(),
+            Arc::clone(&self.formats),
+        );
+        tokio::spawn(async move { thumb_job.generate(media_id, target).await });
 
         // Increment summary via the Ok(None) sentinel — summary is updated
         // by the caller when it sees AssetImported was emitted.

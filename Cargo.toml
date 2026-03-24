@@ -33,6 +33,11 @@ kamadak-exif = "0.5"
 # `default-features = false` avoids the `embedded-libheif` feature (we use system libheif)
 libheif-rs = { version = "2.7.0", default-features = false, features = ["image", "v1_20"] }
 
+# Video — poster-frame extraction for thumbnails
+gstreamer = "0.23"
+gstreamer-app = "0.23"
+gstreamer-video = "0.23"
+
 # Utilities
 thiserror = "2"
 chrono = "0.4"

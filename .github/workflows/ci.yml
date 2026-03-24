@@ -23,6 +23,8 @@ jobs:
             libadwaita-devel \
             gettext-devel \
             libheif-devel \
+            gstreamer1-devel \
+            gstreamer1-plugins-base-devel \
             pkg-config
 
       - name: Cache cargo registry
