@@ -395,6 +395,7 @@ impl ImmichClient {
         file_path: &std::path::Path,
         device_asset_id: &str,
         file_created_at: &str,
+        file_modified_at: &str,
         checksum: Option<&str>,
     ) -> Result<UploadResponse, LibraryError> {
         let url = self.url("/assets");
@@ -418,7 +419,8 @@ impl ImmichClient {
             .part("assetData", file_part)
             .text("deviceAssetId", device_asset_id.to_owned())
             .text("deviceId", "moments".to_owned())
-            .text("fileCreatedAt", file_created_at.to_owned());
+            .text("fileCreatedAt", file_created_at.to_owned())
+            .text("fileModifiedAt", file_modified_at.to_owned());
 
         let mut request = self.client.post(&url).multipart(form);
 

@@ -512,16 +512,25 @@ impl ImmichImportJob {
         let _ = self.db.set_upload_hash(&path_str, &sha1_hex).await;
 
         // Get file created time for the upload.
-        let file_created_at = std::fs::metadata(source)
-            .ok()
+        let meta = std::fs::metadata(source).ok();
+        let to_rfc3339 = |t: std::time::SystemTime| {
+            t.duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .and_then(|d| chrono::DateTime::from_timestamp(d.as_secs() as i64, 0))
+                .map(|dt| dt.to_rfc3339())
+                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339())
+        };
+        let now_rfc3339 = chrono::Utc::now().to_rfc3339();
+        let file_created_at = meta
+            .as_ref()
+            .and_then(|m| m.created().ok())
+            .map(&to_rfc3339)
+            .unwrap_or_else(|| now_rfc3339.clone());
+        let file_modified_at = meta
+            .as_ref()
             .and_then(|m| m.modified().ok())
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| {
-                chrono::DateTime::from_timestamp(d.as_secs() as i64, 0)
-                    .unwrap_or_default()
-                    .to_rfc3339()
-            })
-            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+            .map(&to_rfc3339)
+            .unwrap_or(now_rfc3339);
 
         let filename = source
             .file_name()
@@ -532,7 +541,7 @@ impl ImmichImportJob {
         // Upload to Immich.
         let resp = self
             .client
-            .upload_asset(source, &device_asset_id, &file_created_at, Some(&sha1_hex))
+            .upload_asset(source, &device_asset_id, &file_created_at, &file_modified_at, Some(&sha1_hex))
             .await?;
 
         if resp.status == "duplicate" {
