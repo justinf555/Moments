@@ -17,6 +17,14 @@
 				density in the photo grid.
 			</description>
 		</key>
+		<key name="recent-imports-days" type="u">
+			<default>30</default>
+			<summary>Number of days to show in Recent Imports</summary>
+			<description>
+				Items imported within this many days appear in the Recent
+				Imports view. Set to 0 to show all imports.
+			</description>
+		</key>
 		<key name="window-width" type="i">
 			<default>800</default>
 			<summary>Window width</summary>

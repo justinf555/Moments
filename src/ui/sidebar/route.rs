@@ -23,6 +23,11 @@ pub const ROUTES: &[SidebarRoute] = &[
         icon: "starred-symbolic",
     },
     SidebarRoute {
+        id: "recent",
+        label: "Recent Imports",
+        icon: "document-open-recent-symbolic",
+    },
+    SidebarRoute {
         id: "trash",
         label: "Trash",
         icon: "user-trash-symbolic",

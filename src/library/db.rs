@@ -232,45 +232,65 @@ impl LibraryMedia for Database {
         cursor: Option<&MediaCursor>,
         limit: u32,
     ) -> Result<Vec<MediaItem>, LibraryError> {
-        let filter_clause = match filter {
-            MediaFilter::All => " AND is_trashed = 0",
-            MediaFilter::Favorites => " AND is_trashed = 0 AND is_favorite = 1",
-            MediaFilter::Trashed => " AND is_trashed = 1",
+        // Each filter defines its own WHERE clause and sort expression.
+        // RecentImports sorts by imported_at; all others by taken_at.
+        let (filter_clause, sort_expr) = match filter {
+            MediaFilter::All => (" AND is_trashed = 0", "COALESCE(taken_at, 0)"),
+            MediaFilter::Favorites => (
+                " AND is_trashed = 0 AND is_favorite = 1",
+                "COALESCE(taken_at, 0)",
+            ),
+            MediaFilter::Trashed => (" AND is_trashed = 1", "COALESCE(taken_at, 0)"),
+            MediaFilter::RecentImports { .. } => (
+                " AND is_trashed = 0 AND imported_at > ?",
+                "imported_at",
+            ),
         };
+
+        let since_bind = match filter {
+            MediaFilter::RecentImports { since } => Some(since),
+            _ => None,
+        };
+
+        let columns = "id, taken_at, imported_at, original_filename,
+                        width, height, orientation, media_type, is_favorite,
+                        is_trashed, trashed_at, duration_ms";
 
         let rows = match cursor {
             None => {
                 let sql = format!(
-                    "SELECT id, taken_at, imported_at, original_filename,
-                            width, height, orientation, media_type, is_favorite,
-                            is_trashed, trashed_at, duration_ms
+                    "SELECT {columns}
                      FROM media
                      WHERE 1=1{filter_clause}
-                     ORDER BY COALESCE(taken_at, 0) DESC, id DESC
+                     ORDER BY {sort_expr} DESC, id DESC
                      LIMIT ?"
                 );
-                sqlx::query_as::<_, MediaRow>(&sql)
-                    .bind(limit as i64)
+                let mut q = sqlx::query_as::<_, MediaRow>(&sql);
+                if let Some(since) = since_bind {
+                    q = q.bind(since);
+                }
+                q.bind(limit as i64)
                     .fetch_all(&self.pool)
                     .await
                     .map_err(LibraryError::Db)?
             }
             Some(cur) => {
                 let sql = format!(
-                    "SELECT id, taken_at, imported_at, original_filename,
-                            width, height, orientation, media_type, is_favorite,
-                            is_trashed, trashed_at, duration_ms
+                    "SELECT {columns}
                      FROM media
-                     WHERE (COALESCE(taken_at, 0) < ?
-                        OR (COALESCE(taken_at, 0) = ? AND id < ?)){filter_clause}
-                     ORDER BY COALESCE(taken_at, 0) DESC, id DESC
+                     WHERE ({sort_expr} < ?
+                        OR ({sort_expr} = ? AND id < ?)){filter_clause}
+                     ORDER BY {sort_expr} DESC, id DESC
                      LIMIT ?"
                 );
-                sqlx::query_as::<_, MediaRow>(&sql)
+                let mut q = sqlx::query_as::<_, MediaRow>(&sql)
                     .bind(cur.sort_key)
                     .bind(cur.sort_key)
-                    .bind(cur.id.as_str())
-                    .bind(limit as i64)
+                    .bind(cur.id.as_str());
+                if let Some(since) = since_bind {
+                    q = q.bind(since);
+                }
+                q.bind(limit as i64)
                     .fetch_all(&self.pool)
                     .await
                     .map_err(LibraryError::Db)?
@@ -760,5 +780,102 @@ mod tests {
         let expired = db.expired_trash(30 * 24 * 60 * 60).await.unwrap();
         assert_eq!(expired.len(), 1);
         assert_eq!(expired[0], id);
+    }
+
+    // ── recent imports tests ─────────────────────────────────────────────────
+
+    fn record_with_imported_at(id: MediaId, path: &str, imported_at: i64) -> MediaRecord {
+        MediaRecord {
+            id,
+            relative_path: path.to_string(),
+            original_filename: path.split('/').last().unwrap_or("photo.jpg").to_string(),
+            file_size: 512,
+            imported_at,
+            media_type: MediaType::Image,
+            taken_at: Some(1_000),
+            width: Some(1920),
+            height: Some(1080),
+            orientation: 1,
+            duration_ms: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn list_media_recent_imports_filter() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+
+        let now = chrono::Utc::now().timestamp();
+        let recent = now - 3600; // 1 hour ago
+        let old = now - 90 * 86400; // 90 days ago
+
+        let id_recent = MediaId::new("r".repeat(64));
+        let id_old = MediaId::new("o".repeat(64));
+
+        db.insert_media(&record_with_imported_at(id_recent.clone(), "recent.jpg", recent))
+            .await
+            .unwrap();
+        db.insert_media(&record_with_imported_at(id_old.clone(), "old.jpg", old))
+            .await
+            .unwrap();
+
+        let since = now - 30 * 86400; // last 30 days
+        let items = db
+            .list_media(MediaFilter::RecentImports { since }, None, 50)
+            .await
+            .unwrap();
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, id_recent);
+    }
+
+    #[tokio::test]
+    async fn list_media_recent_imports_excludes_trashed() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+
+        let now = chrono::Utc::now().timestamp();
+        let id = MediaId::new("x".repeat(64));
+        db.insert_media(&record_with_imported_at(id.clone(), "trashed.jpg", now - 3600))
+            .await
+            .unwrap();
+        db.trash(&[id]).await.unwrap();
+
+        let since = now - 30 * 86400;
+        let items = db
+            .list_media(MediaFilter::RecentImports { since }, None, 50)
+            .await
+            .unwrap();
+
+        assert!(items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_media_recent_imports_sorted_by_imported_at() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+
+        let now = chrono::Utc::now().timestamp();
+        let id_first = MediaId::new("1".repeat(64));
+        let id_second = MediaId::new("2".repeat(64));
+
+        // id_first imported earlier, id_second imported later
+        db.insert_media(&record_with_imported_at(id_first.clone(), "first.jpg", now - 7200))
+            .await
+            .unwrap();
+        db.insert_media(&record_with_imported_at(id_second.clone(), "second.jpg", now - 3600))
+            .await
+            .unwrap();
+
+        let since = now - 30 * 86400;
+        let items = db
+            .list_media(MediaFilter::RecentImports { since }, None, 50)
+            .await
+            .unwrap();
+
+        assert_eq!(items.len(), 2);
+        // Most recently imported first
+        assert_eq!(items[0].id, id_second);
+        assert_eq!(items[1].id, id_first);
     }
 }

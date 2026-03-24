@@ -160,7 +160,7 @@ impl PhotoGridModel {
 
     pub fn on_favorite_changed(self: &Rc<Self>, id: &MediaId, is_favorite: bool) {
         match self.filter.get() {
-            MediaFilter::All => {
+            MediaFilter::All | MediaFilter::RecentImports { .. } => {
                 let weak = self.id_index.borrow().get(id).cloned();
                 if let Some(obj) = weak.and_then(|w| w.upgrade()) {
                     obj.set_is_favorite(is_favorite);
@@ -181,7 +181,7 @@ impl PhotoGridModel {
     /// Called when an item is trashed or restored in any view.
     pub fn on_trashed(self: &Rc<Self>, id: &MediaId, is_trashed: bool) {
         match self.filter.get() {
-            MediaFilter::All | MediaFilter::Favorites => {
+            MediaFilter::All | MediaFilter::Favorites | MediaFilter::RecentImports { .. } => {
                 if is_trashed {
                     // Item moved to trash — remove from this view.
                     self.remove_item(id);
@@ -215,8 +215,12 @@ impl PhotoGridModel {
         // Advance the cursor to the last item so the next page continues
         // exactly where this one left off (keyset pagination).
         if let Some(last) = items.last() {
+            let sort_key = match self.filter.get() {
+                MediaFilter::RecentImports { .. } => last.imported_at,
+                _ => last.taken_at.unwrap_or(0),
+            };
             *self.cursor.borrow_mut() = Some(MediaCursor {
-                sort_key: last.taken_at.unwrap_or(0),
+                sort_key,
                 id: last.id.clone(),
             });
         }
