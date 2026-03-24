@@ -214,6 +214,12 @@ pub struct MediaRecord {
     pub orientation: u8,
     /// Video duration in milliseconds. `None` for images.
     pub duration_ms: Option<u64>,
+    /// Whether the asset is marked as favourite.
+    pub is_favorite: bool,
+    /// Whether the asset is trashed.
+    pub is_trashed: bool,
+    /// Unix timestamp when the item was trashed. `None` if not trashed.
+    pub trashed_at: Option<i64>,
 }
 
 /// A row in the `media_metadata` table — full EXIF detail, loaded on demand.

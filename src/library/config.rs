@@ -3,7 +3,7 @@
 /// Created during onboarding and written into `library.toml`. On subsequent
 /// launches, [`super::bundle::Bundle::open`] reads it back from the manifest
 /// so [`super::factory::LibraryFactory`] can construct the correct backend.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum LibraryConfig {
     /// Local filesystem backend — originals are imported into the bundle itself.
     Local,
@@ -16,6 +16,19 @@ pub enum LibraryConfig {
         /// Keyring, never in the bundle manifest.
         access_token: String,
     },
+}
+
+impl std::fmt::Debug for LibraryConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Local => write!(f, "Local"),
+            Self::Immich { server_url, .. } => f
+                .debug_struct("Immich")
+                .field("server_url", server_url)
+                .field("access_token", &"[REDACTED]")
+                .finish(),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -207,6 +207,9 @@ mod tests {
             height: None,
             orientation: 1,
             duration_ms: None,
+            is_favorite: false,
+            is_trashed: false,
+            trashed_at: None,
         }
     }
 
