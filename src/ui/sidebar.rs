@@ -58,10 +58,6 @@ mod imp {
                 list_box.append(&list_row);
             }
 
-            // ── First separator ─────────────────────────────────────────
-            let sep1 = Self::make_separator_row();
-            list_box.append(&sep1);
-
             // ── Albums header row ───────────────────────────────────────
             let (header_row, add_button) = Self::make_albums_header();
             list_box.append(&header_row);
@@ -72,18 +68,25 @@ mod imp {
                 .set(add_button)
                 .expect("add_button set once");
 
-            // ── Second separator (albums are inserted before this) ──────
-            let sep2 = Self::make_separator_row();
-            list_box.append(&sep2);
+            // ── Bottom spacer (albums are inserted before this) ─────────
+            // Non-visible spacer row used as an insertion anchor.
+            let spacer = gtk::ListBoxRow::new();
+            spacer.set_selectable(false);
+            spacer.set_activatable(false);
+            spacer.set_visible(false);
+            list_box.append(&spacer);
             self.bottom_separator
-                .set(sep2)
+                .set(spacer)
                 .expect("bottom_separator set once");
 
             // ── Bottom routes (Trash) ───────────────────────────────────
-            for route in BOTTOM_ROUTES {
+            for (i, route) in BOTTOM_ROUTES.iter().enumerate() {
                 let row = MomentsSidebarRow::new(route.id, route.label, route.icon);
                 let list_row = gtk::ListBoxRow::new();
                 list_row.set_child(Some(&row));
+                if i == 0 {
+                    list_row.set_margin_top(12); // visual gap from Albums section
+                }
                 list_box.append(&list_row);
             }
 
@@ -100,23 +103,16 @@ mod imp {
     }
 
     impl imp::MomentsSidebar {
-        /// Create a non-selectable separator row.
-        fn make_separator_row() -> gtk::ListBoxRow {
-            let sep = gtk::Separator::new(gtk::Orientation::Horizontal);
-            let row = gtk::ListBoxRow::new();
-            row.set_child(Some(&sep));
-            row.set_selectable(false);
-            row.set_activatable(false);
-            row
-        }
-
         /// Create the "Albums" header row with a "+" button.
+        ///
+        /// Uses top margin for visual separation from the routes above —
+        /// no hard separator lines, following the GNOME spacing convention.
         fn make_albums_header() -> (gtk::ListBoxRow, gtk::Button) {
             let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             hbox.set_margin_start(12);
             hbox.set_margin_end(6);
-            hbox.set_margin_top(6);
-            hbox.set_margin_bottom(6);
+            hbox.set_margin_top(2);
+            hbox.set_margin_bottom(2);
 
             let label = gtk::Label::new(Some("Albums"));
             label.set_xalign(0.0);
@@ -134,6 +130,7 @@ mod imp {
             row.set_child(Some(&hbox));
             row.set_selectable(false);
             row.set_activatable(false);
+            row.set_margin_top(12); // visual gap from top routes
 
             (row, add_btn)
         }
