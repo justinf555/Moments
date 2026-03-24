@@ -23,6 +23,7 @@ mod imp {
         pub spinner: gtk::Spinner,
         pub star_btn: gtk::Button,
         pub days_label: gtk::Label,
+        pub duration_label: gtk::Label,
         pub overlay: gtk::Overlay,
         pub bindings: RefCell<Option<CellBindings>>,
         /// Whether to show the star button (false in Trash view).
@@ -75,10 +76,20 @@ mod imp {
             self.days_label.add_css_class("pill");
             self.days_label.set_visible(false);
 
+            self.duration_label.set_halign(gtk::Align::Start);
+            self.duration_label.set_valign(gtk::Align::End);
+            self.duration_label.set_margin_start(4);
+            self.duration_label.set_margin_bottom(4);
+            self.duration_label.add_css_class("osd");
+            self.duration_label.add_css_class("caption");
+            self.duration_label.add_css_class("pill");
+            self.duration_label.set_visible(false);
+
             self.overlay.set_child(Some(&self.picture));
             self.overlay.add_overlay(&self.spinner);
             self.overlay.add_overlay(&self.star_btn);
             self.overlay.add_overlay(&self.days_label);
+            self.overlay.add_overlay(&self.duration_label);
             self.overlay.set_parent(&*obj);
         }
 
@@ -108,6 +119,7 @@ impl PhotoGridCell {
         self.update_from_item(item);
         self.update_star(item);
         self.update_days_remaining(item);
+        self.update_duration(item);
 
         let cell = self.clone();
         let texture_handler = item.connect_texture_notify(move |item| {
@@ -141,6 +153,18 @@ impl PhotoGridCell {
         imp.spinner.set_visible(true);
         imp.star_btn.set_visible(false);
         imp.days_label.set_visible(false);
+        imp.duration_label.set_visible(false);
+    }
+
+    fn update_duration(&self, item: &MediaItemObject) {
+        let imp = self.imp();
+        let ms = item.duration_ms();
+        if ms > 0 {
+            imp.duration_label.set_text(&format!(" {} ", format_duration(ms)));
+            imp.duration_label.set_visible(true);
+        } else {
+            imp.duration_label.set_visible(false);
+        }
     }
 
     fn update_days_remaining(&self, item: &MediaItemObject) {
@@ -186,5 +210,37 @@ impl PhotoGridCell {
             imp.spinner.set_spinning(true);
             imp.star_btn.set_visible(false);
         }
+    }
+}
+
+/// Format a duration in milliseconds as `m:ss` or `h:mm:ss`.
+fn format_duration(ms: u64) -> String {
+    let total_secs = ms / 1000;
+    let h = total_secs / 3600;
+    let m = (total_secs % 3600) / 60;
+    let s = total_secs % 60;
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_duration_short() {
+        assert_eq!(format_duration(0), "0:00");
+        assert_eq!(format_duration(5_000), "0:05");
+        assert_eq!(format_duration(65_000), "1:05");
+        assert_eq!(format_duration(600_000), "10:00");
+    }
+
+    #[test]
+    fn format_duration_long() {
+        assert_eq!(format_duration(3_661_000), "1:01:01");
+        assert_eq!(format_duration(7_200_000), "2:00:00");
     }
 }

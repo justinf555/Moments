@@ -13,6 +13,7 @@ pub mod providers;
 pub mod storage;
 pub mod thumbnail;
 pub mod thumbnailer;
+pub mod video_meta;
 pub mod viewer;
 
 use import::LibraryImport;

@@ -125,11 +125,10 @@ impl ImportJob {
         };
         let is_video = media_type == MediaType::Video;
 
-        // ── 2. Hash + optional EXIF extract ──────────────────────────────────
-        // Videos skip EXIF (no EXIF in video containers); images extract EXIF.
+        // ── 2. Hash + metadata extract ───────────────────────────────────────
+        // Images: extract EXIF. Videos: extract duration via GStreamer.
         let source_clone = source.to_path_buf();
-        let extract_exif_flag = !is_video;
-        let (media_id, exif) =
+        let (media_id, exif, duration_ms) =
             tokio::task::spawn_blocking(move || -> Result<_, LibraryError> {
                 let id = {
                     let file = std::fs::File::open(&source_clone).map_err(LibraryError::Io)?;
@@ -138,12 +137,23 @@ impl ImportJob {
                     std::io::copy(&mut reader, &mut hasher).map_err(LibraryError::Io)?;
                     MediaId::new(hasher.finalize().to_hex().to_string())
                 };
-                let exif = if extract_exif_flag {
-                    extract_exif(&source_clone)
-                } else {
+                let ext = source_clone
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.to_lowercase())
+                    .unwrap_or_default();
+                let is_vid = super::format::registry::VIDEO_EXTENSIONS.contains(&ext.as_str());
+                let exif = if is_vid {
                     Default::default()
+                } else {
+                    extract_exif(&source_clone)
                 };
-                Ok((id, exif))
+                let duration_ms = if is_vid {
+                    super::video_meta::extract_video_metadata(&source_clone).duration_ms
+                } else {
+                    None
+                };
+                Ok((id, exif, duration_ms))
             })
             .await
             .map_err(|e| LibraryError::Runtime(e.to_string()))??;
@@ -198,6 +208,7 @@ impl ImportJob {
                 width: exif.width.map(|w| w as i64),
                 height: exif.height.map(|h| h as i64),
                 orientation: exif.orientation.unwrap_or(1),
+                duration_ms,
             })
             .await?;
 

@@ -32,6 +32,10 @@ mod imp {
         /// Unix timestamp when this item was trashed. 0 if not trashed.
         #[property(get, set)]
         pub trashed_at: Cell<i64>,
+
+        /// Video duration in milliseconds. 0 for images.
+        #[property(get, set)]
+        pub duration_ms: Cell<u64>,
     }
 
     #[glib::object_subclass]
@@ -53,6 +57,7 @@ impl MediaItemObject {
         let obj: Self = glib::Object::new();
         obj.imp().is_favorite.set(item.is_favorite);
         obj.imp().trashed_at.set(item.trashed_at.unwrap_or(0));
+        obj.imp().duration_ms.set(item.duration_ms.unwrap_or(0));
         obj.imp().item.set(item).expect("item set once at construction");
         obj
     }

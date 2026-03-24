@@ -206,6 +206,7 @@ mod tests {
             width: None,
             height: None,
             orientation: 1,
+            duration_ms: None,
         }
     }
 
