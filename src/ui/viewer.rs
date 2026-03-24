@@ -113,16 +113,31 @@ impl ViewerInner {
     }
 
     fn navigate_prev(self: &Rc<Self>) {
-        let idx = self.current_index.get();
-        if idx > 0 {
-            self.show_at(idx - 1);
+        let items = self.items.borrow();
+        let mut idx = self.current_index.get();
+        // Skip video items — they belong in VideoViewer.
+        while idx > 0 {
+            idx -= 1;
+            if items.get(idx).map(|o| o.item().media_type != crate::library::media::MediaType::Video).unwrap_or(false) {
+                drop(items);
+                self.show_at(idx);
+                return;
+            }
         }
     }
 
     fn navigate_next(self: &Rc<Self>) {
-        let idx = self.current_index.get();
-        if idx + 1 < self.items.borrow().len() {
-            self.show_at(idx + 1);
+        let items = self.items.borrow();
+        let len = items.len();
+        let mut idx = self.current_index.get();
+        // Skip video items — they belong in VideoViewer.
+        while idx + 1 < len {
+            idx += 1;
+            if items.get(idx).map(|o| o.item().media_type != crate::library::media::MediaType::Video).unwrap_or(false) {
+                drop(items);
+                self.show_at(idx);
+                return;
+            }
         }
     }
 
