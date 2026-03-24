@@ -32,16 +32,22 @@ struct VideoViewerInner {
 }
 
 impl VideoViewerInner {
+    #[tracing::instrument(skip(self), fields(index))]
     fn show_at(self: &Rc<Self>, index: usize) {
         let (id, filename, count) = {
             let items = self.items.borrow();
-            let Some(obj) = items.get(index) else { return };
+            let Some(obj) = items.get(index) else {
+                tracing::warn!(index, "show_at: index out of bounds");
+                return;
+            };
             (
                 obj.item().id.clone(),
                 obj.item().original_filename.clone(),
                 items.len(),
             )
         };
+
+        debug!(index, %id, %filename, count, "VideoViewer::show_at");
 
         self.current_index.set(index);
         *self.current_metadata.borrow_mut() = None;
@@ -74,6 +80,8 @@ impl VideoViewerInner {
         let library = Arc::clone(&self.library);
         let tokio = self.tokio.clone();
 
+        debug!(%id, "load_video: resolving path");
+
         // Stop any current playback.
         self.video.set_file(None::<&gio::File>);
 
@@ -86,12 +94,16 @@ impl VideoViewerInner {
                 .flatten()
             {
                 Some(p) => p,
-                None => return,
+                None => {
+                    tracing::warn!("load_video: could not resolve original path");
+                    return;
+                }
             };
 
+            debug!(path = %path.display(), exists = path.exists(), "load_video: setting file on GtkVideo");
             let file = gio::File::for_path(&path);
             inner.video.set_file(Some(&file));
-            debug!(path = %path.display(), "video loaded");
+            debug!("load_video: file set, playback should start (autoplay=true)");
         });
     }
 
@@ -408,6 +420,7 @@ impl VideoViewer {
     }
 
     pub fn show(&self, items: Vec<MediaItemObject>, index: usize) {
+        debug!(index, item_count = items.len(), "VideoViewer::show");
         // Stop any previous playback.
         self.inner.video.set_file(None::<&gio::File>);
         *self.inner.items.borrow_mut() = items;

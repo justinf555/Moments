@@ -463,12 +463,24 @@ impl PhotoGridView {
             filter,
             move |items, index| {
                 // Choose viewer based on media type.
-                let is_video = items
+                let media_type = items
                     .get(index)
-                    .map(|obj| obj.item().media_type == MediaType::Video)
-                    .unwrap_or(false);
+                    .map(|obj| obj.item().media_type)
+                    .unwrap_or(MediaType::Image);
 
-                let (tag, nav_page) = if is_video {
+                let filename = items
+                    .get(index)
+                    .map(|obj| obj.item().original_filename.clone())
+                    .unwrap_or_default();
+
+                tracing::debug!(
+                    index,
+                    ?media_type,
+                    %filename,
+                    "grid item activated"
+                );
+
+                let (tag, nav_page) = if media_type == MediaType::Video {
                     video_viewer.show(items, index);
                     ("video-viewer", &video_nav_page)
                 } else {
@@ -481,6 +493,7 @@ impl PhotoGridView {
                     .visible_page()
                     .and_then(|p| p.tag())
                     .unwrap_or_default();
+                tracing::debug!(target_tag = tag, %visible_tag, "pushing viewer page");
                 if visible_tag != tag {
                     nav_view.push(nav_page);
                 }
