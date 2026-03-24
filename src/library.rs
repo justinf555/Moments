@@ -9,6 +9,7 @@ pub mod factory;
 pub mod format;
 pub mod immich_client;
 pub mod import;
+pub mod keyring;
 pub mod importer;
 pub mod media;
 pub mod providers;

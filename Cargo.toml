@@ -42,6 +42,9 @@ gstreamer-video = "0.23"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde_json = "1"
 
+# Credential storage (GNOME Keyring)
+libsecret = "0.9"
+
 # Utilities
 thiserror = "2"
 chrono = "0.4"

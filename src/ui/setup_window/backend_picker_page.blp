@@ -43,8 +43,13 @@ template $MomentsBackendPickerPage : Adw.NavigationPage {
 
         Adw.ActionRow immich_row {
           title: _("Immich Server");
-          subtitle: _("Coming soon");
-          sensitive: false;
+          subtitle: _("Connect to a self-hosted Immich instance");
+          activatable: true;
+
+          [suffix]
+          Gtk.Image {
+            icon-name: "go-next-symbolic";
+          }
         }
       }
     }

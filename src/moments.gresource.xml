@@ -6,6 +6,7 @@
     <file preprocess="xml-stripblanks">ui/setup_window.ui</file>
     <file preprocess="xml-stripblanks">ui/setup_window/backend_picker_page.ui</file>
     <file preprocess="xml-stripblanks">ui/setup_window/local_setup_page.ui</file>
+    <file preprocess="xml-stripblanks">ui/setup_window/immich_setup_page.ui</file>
     <file preprocess="xml-stripblanks">shortcuts-dialog.ui</file>
   </gresource>
 </gresources>

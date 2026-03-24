@@ -205,12 +205,41 @@ impl MomentsApplication {
     fn on_setup_complete(&self, setup_win: &MomentsSetupWindow, path: String) {
         let bundle_path = PathBuf::from(&path);
 
-        let bundle = match Bundle::create(&bundle_path, &LibraryConfig::Local) {
-            Ok(b) => b,
-            Err(e) => {
-                error!("failed to create library bundle: {e}");
-                return;
+        // Determine config from the bundle manifest (works for both local and Immich).
+        // For new bundles, we create first then open to read the config back.
+        // For Immich, the ImmichSetupPage already called Bundle::create before emitting
+        // setup-complete. For Local, we create here.
+        let (bundle, config) = if bundle_path.exists() {
+            // Immich path: bundle was created by ImmichSetupPage.
+            match Bundle::open(&bundle_path) {
+                Ok(result) => result,
+                Err(e) => {
+                    error!("failed to open bundle: {e}");
+                    return;
+                }
             }
+        } else {
+            // Local path: create the bundle now.
+            let bundle = match Bundle::create(&bundle_path, &LibraryConfig::Local) {
+                Ok(b) => b,
+                Err(e) => {
+                    error!("failed to create library bundle: {e}");
+                    return;
+                }
+            };
+            (bundle, LibraryConfig::Local)
+        };
+
+        // For Immich configs, inject the API key from the keyring.
+        let config = match config {
+            LibraryConfig::Immich { server_url, .. } => {
+                let api_key = crate::library::keyring::lookup_api_key(&server_url)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+                LibraryConfig::Immich { server_url, api_key }
+            }
+            other => other,
         };
 
         let settings = self.imp().settings.get().expect("settings initialised");
@@ -224,7 +253,7 @@ impl MomentsApplication {
         window.present();
         setup_win.close();
 
-        self.load_library_async(bundle, LibraryConfig::Local, window);
+        self.load_library_async(bundle, config, window);
     }
 
     /// Open an existing library from a saved path.
@@ -247,6 +276,18 @@ impl MomentsApplication {
                 self.show_setup_window();
                 return;
             }
+        };
+
+        // For Immich configs, inject the API key from the keyring.
+        let config = match config {
+            LibraryConfig::Immich { server_url, .. } => {
+                let api_key = crate::library::keyring::lookup_api_key(&server_url)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+                LibraryConfig::Immich { server_url, api_key }
+            }
+            other => other,
         };
 
         let settings = self.imp().settings.get().expect("settings initialised");

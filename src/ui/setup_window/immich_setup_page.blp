@@ -1,0 +1,71 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $MomentsImmichSetupPage : Adw.NavigationPage {
+  title: _("Immich Server");
+
+  child: Adw.ToolbarView {
+    [top]
+    Adw.HeaderBar {}
+
+    Gtk.Box {
+      orientation: vertical;
+      spacing: 24;
+      valign: center;
+      margin-top: 24;
+      margin-bottom: 48;
+      margin-start: 24;
+      margin-end: 24;
+
+      Adw.StatusPage {
+        icon-name: "network-server-symbolic";
+        title: _("Connect to Immich");
+        description: _("Enter the URL and API key for your Immich server.");
+      }
+
+      Gtk.ListBox {
+        selection-mode: none;
+
+        styles ["boxed-list"]
+
+        Adw.EntryRow server_url_row {
+          title: _("Server URL");
+          text: "http://";
+        }
+
+        Adw.PasswordEntryRow api_key_row {
+          title: _("API Key");
+        }
+      }
+
+      Gtk.Box {
+        orientation: vertical;
+        spacing: 12;
+        halign: center;
+
+        Gtk.Button test_btn {
+          label: _("Test Connection");
+          halign: center;
+
+          styles ["pill"]
+        }
+
+        Gtk.Label status_label {
+          label: "";
+          halign: center;
+          wrap: true;
+
+          styles ["dim-label"]
+        }
+      }
+
+      Gtk.Button connect_btn {
+        label: _("Connect");
+        sensitive: false;
+        halign: center;
+
+        styles ["suggested-action", "pill"]
+      }
+    }
+  };
+}
