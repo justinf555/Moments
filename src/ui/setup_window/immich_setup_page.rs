@@ -135,25 +135,45 @@ impl MomentsImmichSetupPage {
             }
         };
 
+        // Get the Tokio handle from the application — HTTP calls must run
+        // on the Tokio executor, not the GTK main context.
+        let app = self
+            .root()
+            .and_then(|r| r.downcast::<gtk::Window>().ok())
+            .and_then(|w| w.application())
+            .and_then(|a| a.downcast::<crate::application::MomentsApplication>().ok());
+        let Some(app) = app else {
+            imp.status_label.set_text("Internal error: no application");
+            imp.test_btn.set_sensitive(true);
+            return;
+        };
+        let tokio = app.imp().tokio.get().expect("tokio handle set").clone();
+
         let obj_weak = self.downgrade();
         glib::MainContext::default().spawn_local(async move {
-            let result = client.validate().await;
+            let result = tokio.spawn(async move { client.validate().await }).await;
             let Some(obj) = obj_weak.upgrade() else { return };
             let imp = obj.imp();
             imp.test_btn.set_sensitive(true);
 
             match result {
-                Ok(about) => {
+                Ok(Ok(about)) => {
                     debug!(version = %about.version, "connection successful");
                     imp.status_label.set_text(&format!("Connected — {about}"));
                     imp.status_label.remove_css_class("error");
                     imp.status_label.add_css_class("success");
                     imp.connect_btn.set_sensitive(true);
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     error!("connection test failed: {e}");
                     imp.status_label.set_text(&format!("Failed: {e}"));
                     imp.status_label.remove_css_class("success");
+                    imp.status_label.add_css_class("error");
+                    imp.connect_btn.set_sensitive(false);
+                }
+                Err(e) => {
+                    error!("tokio join error: {e}");
+                    imp.status_label.set_text(&format!("Internal error: {e}"));
                     imp.status_label.add_css_class("error");
                     imp.connect_btn.set_sensitive(false);
                 }
