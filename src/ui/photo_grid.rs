@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use adw::prelude::*;
 use gtk::{gio, glib, subclass::prelude::*};
-use tracing::instrument;
+use tracing::{debug, instrument};
 
-use crate::library::media::MediaType;
+use crate::library::media::{MediaFilter, MediaType};
 use crate::library::Library;
 use crate::ui::video_viewer::VideoViewer;
 use crate::ui::viewer::PhotoViewer;
@@ -264,6 +264,8 @@ pub struct PhotoGridView {
     trash_btn: gtk::Button,
     restore_btn: gtk::Button,
     delete_btn: gtk::Button,
+    album_btn: gtk::Button,
+    remove_from_album_btn: gtk::Button,
     widget: gtk::Widget,
     /// Zoom actions — must be installed on the window so accelerators work
     /// regardless of which widget has focus.
@@ -347,6 +349,23 @@ impl PhotoGridView {
             .build();
         trash_btn.add_css_class("flat");
         header.pack_end(&trash_btn);
+
+        let remove_from_album_btn = gtk::Button::builder()
+            .icon_name("list-remove-symbolic")
+            .tooltip_text("Remove from Album")
+            .sensitive(false)
+            .visible(false)
+            .build();
+        remove_from_album_btn.add_css_class("flat");
+        header.pack_end(&remove_from_album_btn);
+
+        let album_btn = gtk::Button::builder()
+            .icon_name("folder-new-symbolic")
+            .tooltip_text("Add to Album")
+            .sensitive(false)
+            .build();
+        album_btn.add_css_class("flat");
+        header.pack_end(&album_btn);
 
         let menu_button = gtk::MenuButton::builder()
             .primary(true)
@@ -434,6 +453,8 @@ impl PhotoGridView {
             trash_btn,
             restore_btn,
             delete_btn,
+            album_btn,
+            remove_from_album_btn,
             widget,
             view_actions: action_group,
         }
@@ -502,22 +523,29 @@ impl PhotoGridView {
 
         let selection = self.photo_grid.imp().selection.borrow().clone().unwrap();
         let is_trash_view = filter == crate::library::media::MediaFilter::Trashed;
+        let is_album_view = matches!(filter, crate::library::media::MediaFilter::Album { .. });
 
         // Show the right buttons for this view.
         self.trash_btn.set_visible(!is_trash_view);
         self.restore_btn.set_visible(is_trash_view);
         self.delete_btn.set_visible(is_trash_view);
+        self.album_btn.set_visible(!is_trash_view && !is_album_view);
+        self.remove_from_album_btn.set_visible(is_album_view);
 
         // Enable/disable action buttons based on selection.
         {
             let trash_btn = self.trash_btn.clone();
             let restore_btn = self.restore_btn.clone();
             let delete_btn = self.delete_btn.clone();
+            let album_btn = self.album_btn.clone();
+            let remove_btn = self.remove_from_album_btn.clone();
             selection.connect_selection_changed(move |sel, _, _| {
                 let has_selection = sel.selection().size() > 0;
                 trash_btn.set_sensitive(has_selection);
                 restore_btn.set_sensitive(has_selection);
                 delete_btn.set_sensitive(has_selection);
+                album_btn.set_sensitive(has_selection);
+                remove_btn.set_sensitive(has_selection);
             });
         }
 
@@ -623,6 +651,7 @@ impl PhotoGridView {
             let lib = Arc::clone(&self.library);
             let tk = self.tokio.clone();
             let trash_btn = self.trash_btn.clone();
+            let registry_for_trash = Rc::clone(&registry);
             trash_btn.connect_clicked(move |btn| {
                 let ids = collect_selected_ids(&selection);
                 if ids.is_empty() { return; }
@@ -631,7 +660,7 @@ impl PhotoGridView {
 
                 let lib = Arc::clone(&lib);
                 let tk = tk.clone();
-                let reg = Rc::clone(&registry);
+                let reg = Rc::clone(&registry_for_trash);
                 glib::MainContext::default().spawn_local(async move {
                     let ids_bc = ids.clone();
                     let result = tk
@@ -645,6 +674,154 @@ impl PhotoGridView {
                         }
                         Ok(Err(e)) => tracing::error!("trash failed: {e}"),
                         Err(e) => tracing::error!("trash join failed: {e}"),
+                    }
+                });
+            });
+        }
+
+        // ── "Add to Album" popover ──────────────────────────────────────
+        {
+            let lib = Arc::clone(&self.library);
+            let tk = self.tokio.clone();
+            let reg = Rc::clone(&registry);
+            let selection = selection.clone();
+            let album_btn = self.album_btn.clone();
+
+            // Load albums async on click, then show a Popover with the list.
+            album_btn.connect_clicked(move |btn: &gtk::Button| {
+                debug!("album button clicked, loading albums async");
+
+                let lib = Arc::clone(&lib);
+                let tk = tk.clone();
+                let reg = Rc::clone(&reg);
+                let sel = selection.clone();
+                let btn_weak: glib::WeakRef<gtk::Button> = btn.downgrade();
+
+                glib::MainContext::default().spawn_local(async move {
+                    let lib_q = Arc::clone(&lib);
+                    debug!("fetching album list from library");
+                    let albums = match tk.spawn(async move { lib_q.list_albums().await }).await {
+                        Ok(Ok(a)) => a,
+                        Ok(Err(e)) => {
+                            tracing::error!("list_albums failed: {e}");
+                            return;
+                        }
+                        Err(e) => {
+                            tracing::error!("list_albums join failed: {e}");
+                            return;
+                        }
+                    };
+
+                    let Some(btn) = btn_weak.upgrade() else {
+                        debug!("album button weak ref gone");
+                        return;
+                    };
+
+                    debug!(count = albums.len(), "albums loaded, building popover");
+
+                    let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                    vbox.set_margin_top(6);
+                    vbox.set_margin_bottom(6);
+                    vbox.set_margin_start(6);
+                    vbox.set_margin_end(6);
+
+                    // Create the popover first so album buttons can close it.
+                    let popover = gtk::Popover::new();
+                    popover.set_parent(btn.upcast_ref::<gtk::Widget>());
+
+                    if albums.is_empty() {
+                        let label = gtk::Label::new(Some("No albums"));
+                        label.add_css_class("dim-label");
+                        vbox.append(&label);
+                    } else {
+                        for album in &albums {
+                            let ab = gtk::Button::with_label(&album.name);
+                            ab.add_css_class("flat");
+                            let aid = album.id.clone();
+                            let lib_add = Arc::clone(&lib);
+                            let tk_add = tk.clone();
+                            let reg_add = Rc::clone(&reg);
+                            let sel_add = sel.clone();
+                            let pop_weak = popover.downgrade();
+                            ab.connect_clicked(move |_| {
+                                debug!(album_id = %aid, "album selected in popover");
+                                let ids = collect_selected_ids(&sel_add);
+                                if ids.is_empty() {
+                                    debug!("no photos selected, skipping");
+                                    return;
+                                }
+                                debug!(count = ids.len(), album_id = %aid, "adding photos to album");
+
+                                if let Some(p) = pop_weak.upgrade() {
+                                    p.popdown();
+                                }
+
+                                let lib = Arc::clone(&lib_add);
+                                let tk = tk_add.clone();
+                                let reg = Rc::clone(&reg_add);
+                                let aid = aid.clone();
+                                glib::MainContext::default().spawn_local(async move {
+                                    let aid_bc = aid.clone();
+                                    let result = tk
+                                        .spawn(async move { lib.add_to_album(&aid, &ids).await })
+                                        .await;
+                                    match result {
+                                        Ok(Ok(())) => {
+                                            debug!(album_id = %aid_bc, "photos added to album");
+                                            reg.on_album_media_changed(&aid_bc);
+                                        }
+                                        Ok(Err(e)) => tracing::error!("add_to_album failed: {e}"),
+                                        Err(e) => tracing::error!("add_to_album join failed: {e}"),
+                                    }
+                                });
+                            });
+                            vbox.append(&ab);
+                        }
+                    }
+
+                    popover.set_child(Some(&vbox));
+
+                    popover.connect_closed(move |p| {
+                        debug!("album popover closed");
+                        p.unparent();
+                    });
+
+                    debug!("showing album popover");
+                    popover.popup();
+                });
+            });
+        }
+
+        // ── "Remove from Album" button ──────────────────────────────────
+        if let MediaFilter::Album { album_id } = filter {
+            let selection = selection.clone();
+            let lib = Arc::clone(&self.library);
+            let tk = self.tokio.clone();
+            let reg = Rc::clone(&registry);
+            let remove_btn = self.remove_from_album_btn.clone();
+
+            remove_btn.connect_clicked(move |btn| {
+                let ids = collect_selected_ids(&selection);
+                if ids.is_empty() { return; }
+                selection.unselect_all();
+                btn.set_sensitive(false);
+
+                let lib = Arc::clone(&lib);
+                let tk = tk.clone();
+                let reg = Rc::clone(&reg);
+                let aid = album_id.clone();
+                glib::MainContext::default().spawn_local(async move {
+                    let aid_bc = aid.clone();
+                    let result = tk
+                        .spawn(async move { lib.remove_from_album(&aid, &ids).await })
+                        .await;
+                    match result {
+                        Ok(Ok(())) => {
+                            tracing::debug!(album_id = %aid_bc, "photos removed from album");
+                            reg.on_album_media_changed(&aid_bc);
+                        }
+                        Ok(Err(e)) => tracing::error!("remove_from_album failed: {e}"),
+                        Err(e) => tracing::error!("remove_from_album join failed: {e}"),
                     }
                 });
             });

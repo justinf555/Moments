@@ -1,7 +1,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::library::media::MediaId;
+use crate::library::album::AlbumId;
+use crate::library::media::{MediaFilter, MediaId};
 use crate::ui::photo_grid::PhotoGridModel;
 
 /// Shared registry of all active [`PhotoGridModel`] instances.
@@ -57,6 +58,17 @@ impl ModelRegistry {
     pub fn on_deleted(&self, id: &MediaId) {
         for model in self.models.borrow().iter() {
             model.on_deleted(id);
+        }
+    }
+
+    /// Reload the model for a specific album (e.g. after add/remove).
+    pub fn on_album_media_changed(&self, album_id: &AlbumId) {
+        for model in self.models.borrow().iter() {
+            if let MediaFilter::Album { album_id: ref mid } = model.filter() {
+                if mid == album_id {
+                    model.reload();
+                }
+            }
         }
     }
 
