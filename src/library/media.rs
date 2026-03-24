@@ -95,10 +95,12 @@ pub struct MediaItem {
 }
 
 /// Filter for [`LibraryMedia::list_media`] queries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// Not `Copy` because `Album` holds an `AlbumId` (heap-allocated String).
+/// Use `RefCell<MediaFilter>` instead of `Cell<MediaFilter>` in UI models.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MediaFilter {
     /// All media items (excludes trashed).
-    #[default]
     All,
     /// Only items marked as favourite (excludes trashed).
     Favorites,
@@ -107,6 +109,8 @@ pub enum MediaFilter {
     /// Items imported after `since` (Unix timestamp). Excludes trashed.
     /// Sorted by `imported_at DESC` instead of `taken_at`.
     RecentImports { since: i64 },
+    /// Items belonging to a specific album. Excludes trashed.
+    Album { album_id: super::album::AlbumId },
 }
 
 /// Opaque cursor for keyset pagination in [`LibraryMedia::list_media`].

@@ -31,7 +31,7 @@ pub struct PhotoGridModel {
     pub store: gio::ListStore,
     library: Arc<dyn Library>,
     tokio: tokio::runtime::Handle,
-    filter: Cell<MediaFilter>,
+    filter: RefCell<MediaFilter>,
     cursor: RefCell<Option<MediaCursor>>,
     loading: Cell<bool>,
     has_more: Cell<bool>,
@@ -49,7 +49,7 @@ impl PhotoGridModel {
             store: gio::ListStore::new::<MediaItemObject>(),
             library,
             tokio,
-            filter: Cell::new(filter),
+            filter: RefCell::new(filter),
             cursor: RefCell::new(None),
             loading: Cell::new(false),
             has_more: Cell::new(true),
@@ -59,7 +59,7 @@ impl PhotoGridModel {
 
     /// The filter this model was constructed with.
     pub fn filter(&self) -> MediaFilter {
-        self.filter.get()
+        self.filter.borrow().clone()
     }
 
     /// Clear all items and reload from the first page.
@@ -88,7 +88,7 @@ impl PhotoGridModel {
         self.loading.set(true);
         debug!("loading next page (has_cursor={})", self.cursor.borrow().is_some());
 
-        let filter = self.filter.get();
+        let filter = self.filter.borrow().clone();
         let cursor = self.cursor.borrow().clone();
         let library = Arc::clone(&self.library);
         let tokio = self.tokio.clone();
@@ -159,8 +159,8 @@ impl PhotoGridModel {
     }
 
     pub fn on_favorite_changed(self: &Rc<Self>, id: &MediaId, is_favorite: bool) {
-        match self.filter.get() {
-            MediaFilter::All | MediaFilter::RecentImports { .. } => {
+        match self.filter.borrow().clone() {
+            MediaFilter::All | MediaFilter::RecentImports { .. } | MediaFilter::Album { .. } => {
                 let weak = self.id_index.borrow().get(id).cloned();
                 if let Some(obj) = weak.and_then(|w| w.upgrade()) {
                     obj.set_is_favorite(is_favorite);
@@ -180,8 +180,8 @@ impl PhotoGridModel {
 
     /// Called when an item is trashed or restored in any view.
     pub fn on_trashed(self: &Rc<Self>, id: &MediaId, is_trashed: bool) {
-        match self.filter.get() {
-            MediaFilter::All | MediaFilter::Favorites | MediaFilter::RecentImports { .. } => {
+        match self.filter.borrow().clone() {
+            MediaFilter::All | MediaFilter::Favorites | MediaFilter::RecentImports { .. } | MediaFilter::Album { .. } => {
                 if is_trashed {
                     // Item moved to trash — remove from this view.
                     self.remove_item(id);
@@ -215,7 +215,7 @@ impl PhotoGridModel {
         // Advance the cursor to the last item so the next page continues
         // exactly where this one left off (keyset pagination).
         if let Some(last) = items.last() {
-            let sort_key = match self.filter.get() {
+            let sort_key = match self.filter.borrow().clone() {
                 MediaFilter::RecentImports { .. } => last.imported_at,
                 _ => last.taken_at.unwrap_or(0),
             };
