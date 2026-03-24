@@ -21,6 +21,9 @@ pub enum LibraryError {
 
     #[error("thumbnail error: {0}")]
     Thumbnail(String),
+
+    #[error("immich error: {0}")]
+    Immich(String),
 }
 
 #[cfg(test)]

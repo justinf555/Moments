@@ -7,6 +7,7 @@ pub mod event;
 pub mod exif;
 pub mod factory;
 pub mod format;
+pub mod immich_client;
 pub mod import;
 pub mod importer;
 pub mod media;
