@@ -308,6 +308,61 @@ impl ImmichClient {
 
         Ok(())
     }
+
+    /// Send a POST request and return the raw response for streaming.
+    ///
+    /// Used by SyncManager for the `POST /sync/stream` endpoint which
+    /// returns newline-delimited JSON.
+    pub(crate) async fn post_stream<B: serde::Serialize>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<reqwest::Response, LibraryError> {
+        let url = self.url(path);
+        let resp = self
+            .client
+            .post(&url)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| LibraryError::Immich(format!("POST {path} stream failed: {e}")))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(LibraryError::Immich(format!(
+                "POST {path} stream returned {status}: {body}"
+            )));
+        }
+
+        Ok(resp)
+    }
+
+    /// Send a POST request with a JSON body, expecting no response body (204).
+    pub(crate) async fn post_no_content<B: serde::Serialize>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<(), LibraryError> {
+        let url = self.url(path);
+        let resp = self
+            .client
+            .post(&url)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| LibraryError::Immich(format!("POST {path} failed: {e}")))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(LibraryError::Immich(format!(
+                "POST {path} returned {status}: {body}"
+            )));
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Serialize)]

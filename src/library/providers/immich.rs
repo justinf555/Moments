@@ -12,6 +12,7 @@ use crate::library::error::LibraryError;
 use crate::library::event::LibraryEvent;
 use crate::library::immich_client::ImmichClient;
 use crate::library::import::LibraryImport;
+use crate::library::sync::SyncHandle;
 use crate::library::media::{
     LibraryMedia, MediaCursor, MediaFilter, MediaId, MediaItem, MediaMetadataRecord, MediaRecord,
 };
@@ -28,12 +29,12 @@ use crate::library::viewer::LibraryViewer;
 /// `SyncManager` (PR #109) keeps the cache in sync with the server.
 pub struct ImmichLibrary {
     bundle: Bundle,
-    #[allow(dead_code)] // used in later PRs
     client: ImmichClient,
     db: Database,
     events: Sender<LibraryEvent>,
-    #[allow(dead_code)] // used in later PRs
     tokio: Handle,
+    #[allow(dead_code)] // shutdown signalled in close()
+    sync_handle: SyncHandle,
 }
 
 impl ImmichLibrary {
@@ -59,12 +60,21 @@ impl ImmichLibrary {
             .await
             .map_err(|e| LibraryError::Runtime(e.to_string()))??;
 
+        // Start the background sync engine.
+        let sync_handle = SyncHandle::start(
+            client.clone(),
+            db.clone(),
+            events.clone(),
+            tokio.clone(),
+        );
+
         let library = Self {
             bundle,
             client,
             db,
             events,
             tokio,
+            sync_handle,
         };
 
         library

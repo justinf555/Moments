@@ -14,6 +14,7 @@ pub mod importer;
 pub mod media;
 pub mod providers;
 pub mod storage;
+pub mod sync;
 pub mod thumbnail;
 pub mod thumbnailer;
 pub mod video_meta;

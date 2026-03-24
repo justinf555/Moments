@@ -209,6 +209,9 @@ impl ImportJob {
                 height: exif.height.map(|h| h as i64),
                 orientation: exif.orientation.unwrap_or(1),
                 duration_ms,
+                is_favorite: false,
+                is_trashed: false,
+                trashed_at: None,
             })
             .await?;
 

@@ -635,6 +635,120 @@ impl LibraryAlbums for Database {
     }
 }
 
+// ── Sync support (used by SyncManager for Immich backend) ───────────────────
+
+impl Database {
+    /// Upsert a media record. Uses `INSERT OR REPLACE` so existing records
+    /// are updated without a separate EXISTS check.
+    pub async fn upsert_media(&self, record: &MediaRecord) -> Result<(), LibraryError> {
+        sqlx::query(
+            "INSERT OR REPLACE INTO media (id, relative_path, original_filename, file_size,
+                                           imported_at, media_type, taken_at, width, height,
+                                           orientation, duration_ms, is_favorite, is_trashed,
+                                           trashed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(record.id.as_str())
+        .bind(&record.relative_path)
+        .bind(&record.original_filename)
+        .bind(record.file_size)
+        .bind(record.imported_at)
+        .bind(record.media_type as i64)
+        .bind(record.taken_at)
+        .bind(record.width)
+        .bind(record.height)
+        .bind(record.orientation as i64)
+        .bind(record.duration_ms.map(|v| v as i64))
+        .bind(record.is_favorite as i64)
+        .bind(record.is_trashed as i64)
+        .bind(record.trashed_at)
+        .execute(&self.pool)
+        .await
+        .map_err(LibraryError::Db)?;
+        Ok(())
+    }
+
+    /// Upsert a media metadata record.
+    pub async fn upsert_media_metadata(
+        &self,
+        record: &MediaMetadataRecord,
+    ) -> Result<(), LibraryError> {
+        if !record.has_data() {
+            return Ok(());
+        }
+        sqlx::query(
+            "INSERT OR REPLACE INTO media_metadata
+                (media_id, camera_make, camera_model, lens_model, aperture, shutter_str,
+                 iso, focal_length, gps_lat, gps_lon, gps_alt, color_space)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(record.media_id.as_str())
+        .bind(&record.camera_make)
+        .bind(&record.camera_model)
+        .bind(&record.lens_model)
+        .bind(record.aperture)
+        .bind(&record.shutter_str)
+        .bind(record.iso.map(|v| v as i64))
+        .bind(record.focal_length)
+        .bind(record.gps_lat)
+        .bind(record.gps_lon)
+        .bind(record.gps_alt)
+        .bind(&record.color_space)
+        .execute(&self.pool)
+        .await
+        .map_err(LibraryError::Db)?;
+        Ok(())
+    }
+
+    /// Load all media IDs into a HashSet (for reset sync deletion detection).
+    pub async fn all_media_ids(&self) -> Result<std::collections::HashSet<String>, LibraryError> {
+        let rows: Vec<(String,)> = sqlx::query_as("SELECT id FROM media")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(LibraryError::Db)?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
+    /// Retrieve all sync checkpoints.
+    pub async fn get_sync_checkpoints(
+        &self,
+    ) -> Result<std::collections::HashMap<String, String>, LibraryError> {
+        let rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT entity_type, ack FROM sync_checkpoints")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(LibraryError::Db)?;
+        Ok(rows.into_iter().collect())
+    }
+
+    /// Save sync checkpoints (upsert).
+    pub async fn save_sync_checkpoints(
+        &self,
+        acks: &[(String, String)],
+    ) -> Result<(), LibraryError> {
+        for (entity_type, ack) in acks {
+            sqlx::query(
+                "INSERT OR REPLACE INTO sync_checkpoints (entity_type, ack) VALUES (?, ?)",
+            )
+            .bind(entity_type)
+            .bind(ack)
+            .execute(&self.pool)
+            .await
+            .map_err(LibraryError::Db)?;
+        }
+        Ok(())
+    }
+
+    /// Clear all sync checkpoints (for reset sync).
+    pub async fn clear_sync_checkpoints(&self) -> Result<(), LibraryError> {
+        sqlx::query("DELETE FROM sync_checkpoints")
+            .execute(&self.pool)
+            .await
+            .map_err(LibraryError::Db)?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -658,6 +772,9 @@ mod tests {
             height: None,
             orientation: 1,
             duration_ms: None,
+            is_favorite: false,
+            is_trashed: false,
+            trashed_at: None,
         }
     }
 
@@ -715,6 +832,9 @@ mod tests {
             height: Some(1080),
             orientation: 1,
             duration_ms: None,
+            is_favorite: false,
+            is_trashed: false,
+            trashed_at: None,
         }
     }
 
@@ -995,6 +1115,9 @@ mod tests {
             height: Some(1080),
             orientation: 1,
             duration_ms: None,
+            is_favorite: false,
+            is_trashed: false,
+            trashed_at: None,
         }
     }
 

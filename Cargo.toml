@@ -13,6 +13,8 @@ gettext-rs = { version = "0.7", features = ["gettext-system"] }
 # Async runtime
 async-trait = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs"] }
+tokio-util = { version = "0.7", features = ["io"] }
+futures-util = "0.3"
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
@@ -39,7 +41,7 @@ gstreamer-app = "0.23"
 gstreamer-video = "0.23"
 
 # HTTP client (Immich backend)
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 serde_json = "1"
 
 # Credential storage (GNOME Keyring)
