@@ -5,7 +5,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use gtk::{glib, prelude::*, subclass::prelude::*};
-use gtk::gio;
 use adw::prelude::NavigationPageExt;
 use tracing::debug;
 
@@ -14,7 +13,6 @@ use row::MomentsSidebarRow;
 
 /// Stored callbacks for album row right-click menus.
 struct AlbumContextMenu {
-    menu_model: gio::MenuModel,
     on_rename: std::rc::Rc<dyn Fn(String, String)>,
     on_delete: std::rc::Rc<dyn Fn(String, String)>,
 }
@@ -284,12 +282,10 @@ impl MomentsSidebar {
     /// that shows a popover with Rename/Delete using these callbacks.
     pub fn set_album_context_callbacks(
         &self,
-        menu_model: gio::MenuModel,
         on_rename: impl Fn(String, String) + 'static,
         on_delete: impl Fn(String, String) + 'static,
     ) {
         *self.imp().context_menu.borrow_mut() = Some(AlbumContextMenu {
-            menu_model,
             on_rename: std::rc::Rc::new(on_rename),
             on_delete: std::rc::Rc::new(on_delete),
         });
@@ -306,7 +302,6 @@ impl MomentsSidebar {
         let gesture = gtk::GestureClick::new();
         gesture.set_button(3);
 
-        let menu = ctx.menu_model.clone();
         let on_rename = ctx.on_rename.clone();
         let on_delete = ctx.on_delete.clone();
         let aid = album_id.to_owned();
@@ -323,34 +318,49 @@ impl MomentsSidebar {
 
             debug!(album_id = %aid, "right-click pressed on album row");
 
-            let action_group = gio::SimpleActionGroup::new();
+            // Build a simple popover with buttons instead of GMenuModel
+            // to avoid action resolution issues.
+            let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            vbox.add_css_class("menu");
+
+            let rename_btn = gtk::Button::with_label("Rename");
+            rename_btn.add_css_class("flat");
+            vbox.append(&rename_btn);
+
+            let delete_btn = gtk::Button::with_label("Delete");
+            delete_btn.add_css_class("flat");
+            delete_btn.add_css_class("error");
+            vbox.append(&delete_btn);
+
+            let popover = gtk::Popover::new();
+            popover.set_child(Some(&vbox));
+            popover.set_parent(&row);
+            popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, 0, 1, 1)));
+            popover.set_has_arrow(true);
 
             let rename_cb = on_rename.clone();
             let aid_r = aid.clone();
             let aname_r = aname.clone();
-            let rename_action = gio::SimpleAction::new("rename", None);
-            rename_action.connect_activate(move |_, _| {
-                debug!(album_id = %aid_r, "rename action activated");
+            let pop_weak = popover.downgrade();
+            rename_btn.connect_clicked(move |_| {
+                debug!(album_id = %aid_r, "rename clicked");
+                if let Some(p) = pop_weak.upgrade() {
+                    p.popdown();
+                }
                 rename_cb(aid_r.clone(), aname_r.clone());
             });
-            action_group.add_action(&rename_action);
 
             let delete_cb = on_delete.clone();
             let aid_d = aid.clone();
             let aname_d = aname.clone();
-            let delete_action = gio::SimpleAction::new("delete", None);
-            delete_action.connect_activate(move |_, _| {
-                debug!(album_id = %aid_d, "delete action activated");
+            let pop_weak = popover.downgrade();
+            delete_btn.connect_clicked(move |_| {
+                debug!(album_id = %aid_d, "delete clicked");
+                if let Some(p) = pop_weak.upgrade() {
+                    p.popdown();
+                }
                 delete_cb(aid_d.clone(), aname_d.clone());
             });
-            action_group.add_action(&delete_action);
-
-            debug!(album_id = %aid, "creating popover menu");
-            let popover = gtk::PopoverMenu::from_model(Some(&menu));
-            row.insert_action_group("album", Some(&action_group));
-            popover.set_parent(&row);
-            popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, 0, 1, 1)));
-            popover.set_has_arrow(true);
 
             popover.connect_closed(move |p| {
                 debug!("popover closed, unparenting");

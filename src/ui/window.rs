@@ -216,7 +216,6 @@ impl MomentsWindow {
 
         // Wire right-click context menu on album rows.
         {
-            let menu = album_dialogs::album_context_menu();
             let win_weak = self.downgrade();
             let lib_rename = Arc::clone(&library);
             let tk_rename = tokio.clone();
@@ -228,7 +227,6 @@ impl MomentsWindow {
             let sb_delete = sidebar.clone();
 
             sidebar.set_album_context_callbacks(
-                menu,
                 // on_rename callback
                 move |album_id, album_name| {
                     debug!(album_id = %album_id, "rename callback fired from context menu");

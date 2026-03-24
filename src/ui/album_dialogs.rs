@@ -1,5 +1,4 @@
 use adw::prelude::*;
-use gtk::gio;
 
 /// Show a dialog for creating a new album.
 ///
@@ -122,15 +121,4 @@ pub fn show_delete_album_dialog(
     });
 
     dialog.present(Some(window));
-}
-
-/// Build a `gio::MenuModel` for album row context menus.
-///
-/// Returns a menu with "Rename" and "Delete" items that activate
-/// `album.rename` and `album.delete` actions respectively.
-pub fn album_context_menu() -> gio::MenuModel {
-    let menu = gio::Menu::new();
-    menu.append(Some("Rename"), Some("album.rename"));
-    menu.append(Some("Delete"), Some("album.delete"));
-    menu.upcast()
 }
