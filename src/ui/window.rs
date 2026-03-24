@@ -260,17 +260,25 @@ impl MomentsWindow {
                     let tk = tk_delete.clone();
                     let sb = sb_delete.clone();
                     let aid = album_id.clone();
+                    let win_weak_inner = win.downgrade();
                     album_dialogs::show_delete_album_dialog(&win, &album_name, move || {
                         let lib = Arc::clone(&lib);
                         let tk = tk.clone();
                         let sb = sb.clone();
                         let aid = aid.clone();
+                        let win_w = win_weak_inner.clone();
                         glib::MainContext::default().spawn_local(async move {
                             let id = AlbumId::from_raw(aid.clone());
                             match tk.spawn(async move { lib.delete_album(&id).await }).await {
                                 Ok(Ok(())) => {
                                     debug!(album_id = %aid, "album deleted");
                                     sb.remove_album(&aid);
+                                    if let Some(win) = win_w.upgrade() {
+                                        let route = format!("album:{aid}");
+                                        if let Some(coord) = win.imp().coordinator.get() {
+                                            coord.borrow_mut().unregister(&route);
+                                        }
+                                    }
                                 }
                                 Ok(Err(e)) => tracing::error!("failed to delete album: {e}"),
                                 Err(e) => tracing::error!("tokio join error: {e}"),
@@ -350,7 +358,7 @@ impl MomentsWindow {
         {
             let lib = Arc::clone(&library);
             let tk = tokio.clone();
-            let s = settings;
+            let s = settings.clone();
             let reg = Rc::clone(&registry);
             coordinator.register_lazy("trash", move || {
                 let model = Rc::new(PhotoGridModel::new(
@@ -393,13 +401,44 @@ impl MomentsWindow {
             .expect("coordinator set once in setup()");
 
         // Wire sidebar selection → coordinator navigation.
-        let obj_weak = self.downgrade();
-        sidebar.connect_route_selected(move |id| {
-            let Some(win) = obj_weak.upgrade() else { return };
-            if let Some(coordinator) = win.imp().coordinator.get() {
-                coordinator.borrow_mut().navigate(id);
-            }
-        });
+        // Album routes are registered dynamically on first click.
+        {
+            let obj_weak = self.downgrade();
+            let lib = Arc::clone(&library);
+            let tk = tokio.clone();
+            let s = settings.clone();
+            let reg = Rc::clone(&registry);
+            sidebar.connect_route_selected(move |id| {
+                let Some(win) = obj_weak.upgrade() else { return };
+                let Some(coordinator) = win.imp().coordinator.get() else { return };
+
+                // Dynamic registration for album routes.
+                if let Some(album_id_str) = id.strip_prefix("album:") {
+                    let mut coord = coordinator.borrow_mut();
+                    if !coord.has_route(id) {
+                        let album_id = AlbumId::from_raw(album_id_str.to_owned());
+                        let model = Rc::new(PhotoGridModel::new(
+                            Arc::clone(&lib),
+                            tk.clone(),
+                            MediaFilter::Album { album_id },
+                        ));
+                        let view = Rc::new(PhotoGridView::new(
+                            Arc::clone(&lib),
+                            tk.clone(),
+                            s.clone(),
+                            Rc::clone(&reg),
+                        ));
+                        view.set_model(Rc::clone(&model), Rc::clone(&reg));
+                        reg.register(&model);
+                        coord.register(id, view);
+                        debug!(route = %id, "registered album view");
+                    }
+                    coord.navigate(id);
+                } else {
+                    coordinator.borrow_mut().navigate(id);
+                }
+            });
+        }
 
         sidebar.select_first();
 

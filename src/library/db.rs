@@ -235,7 +235,7 @@ impl LibraryMedia for Database {
     ) -> Result<Vec<MediaItem>, LibraryError> {
         // Each filter defines its own WHERE clause and sort expression.
         // RecentImports sorts by imported_at; all others by taken_at.
-        let (filter_clause, sort_expr) = match filter {
+        let (filter_clause, sort_expr) = match &filter {
             MediaFilter::All => (" AND is_trashed = 0", "COALESCE(taken_at, 0)"),
             MediaFilter::Favorites => (
                 " AND is_trashed = 0 AND is_favorite = 1",
@@ -246,10 +246,16 @@ impl LibraryMedia for Database {
                 " AND is_trashed = 0 AND imported_at > ?",
                 "imported_at",
             ),
+            MediaFilter::Album { .. } => (
+                " AND is_trashed = 0 AND id IN (SELECT media_id FROM album_media WHERE album_id = ?)",
+                "COALESCE(taken_at, 0)",
+            ),
         };
 
-        let since_bind = match filter {
-            MediaFilter::RecentImports { since } => Some(since),
+        // Extra bind parameter for filters that need one.
+        let extra_bind: Option<String> = match &filter {
+            MediaFilter::RecentImports { since } => Some(since.to_string()),
+            MediaFilter::Album { album_id } => Some(album_id.as_str().to_owned()),
             _ => None,
         };
 
@@ -267,8 +273,8 @@ impl LibraryMedia for Database {
                      LIMIT ?"
                 );
                 let mut q = sqlx::query_as::<_, MediaRow>(&sql);
-                if let Some(since) = since_bind {
-                    q = q.bind(since);
+                if let Some(ref val) = extra_bind {
+                    q = q.bind(val.as_str());
                 }
                 q.bind(limit as i64)
                     .fetch_all(&self.pool)
@@ -288,8 +294,8 @@ impl LibraryMedia for Database {
                     .bind(cur.sort_key)
                     .bind(cur.sort_key)
                     .bind(cur.id.as_str());
-                if let Some(since) = since_bind {
-                    q = q.bind(since);
+                if let Some(ref val) = extra_bind {
+                    q = q.bind(val.as_str());
                 }
                 q.bind(limit as i64)
                     .fetch_all(&self.pool)
@@ -1291,6 +1297,48 @@ mod tests {
         db.delete_permanently(&[media_id]).await.unwrap();
 
         let items = db.list_album_media(&album_id, None, 50).await.unwrap();
+        assert!(items.is_empty());
+    }
+
+    // ── album via MediaFilter tests ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_media_album_filter() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+
+        let album_id = db.create_album("Filter Test").await.unwrap();
+        let id_in = MediaId::new("i".repeat(64));
+        let id_out = MediaId::new("o".repeat(64));
+        db.insert_media(&record_with_taken_at(id_in.clone(), "in.jpg", Some(2000)))
+            .await.unwrap();
+        db.insert_media(&record_with_taken_at(id_out.clone(), "out.jpg", Some(1000)))
+            .await.unwrap();
+        db.add_to_album(&album_id, &[id_in.clone()]).await.unwrap();
+
+        let items = db
+            .list_media(MediaFilter::Album { album_id: album_id.clone() }, None, 50)
+            .await
+            .unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, id_in);
+    }
+
+    #[tokio::test]
+    async fn list_media_album_filter_excludes_trashed() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+
+        let album_id = db.create_album("Trash Filter").await.unwrap();
+        let media_id = MediaId::new("t".repeat(64));
+        db.insert_media(&test_record(media_id.clone())).await.unwrap();
+        db.add_to_album(&album_id, &[media_id.clone()]).await.unwrap();
+        db.trash(&[media_id]).await.unwrap();
+
+        let items = db
+            .list_media(MediaFilter::Album { album_id }, None, 50)
+            .await
+            .unwrap();
         assert!(items.is_empty());
     }
 }

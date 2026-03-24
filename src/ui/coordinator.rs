@@ -87,6 +87,20 @@ impl ContentCoordinator {
 
         self.stack.set_visible_child_name(id);
     }
+
+    /// Returns `true` if a route with the given id is registered.
+    pub fn has_route(&self, id: &str) -> bool {
+        self.slots.contains_key(id)
+    }
+
+    /// Remove a route and its widget from the stack.
+    pub fn unregister(&mut self, id: &str) {
+        if self.slots.remove(id).is_some() {
+            if let Some(child) = self.stack.child_by_name(id) {
+                self.stack.remove(&child);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
