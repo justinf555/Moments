@@ -309,6 +309,31 @@ impl ImmichClient {
         Ok(())
     }
 
+    /// Make a GET request and return the raw response bytes.
+    ///
+    /// Used for downloading binary content (thumbnails, originals).
+    pub(crate) async fn get_bytes(&self, path: &str) -> Result<Vec<u8>, LibraryError> {
+        let url = self.url(path);
+        let resp = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| LibraryError::Immich(format!("GET {path} failed: {e}")))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(LibraryError::Immich(format!(
+                "GET {path} returned {status}"
+            )));
+        }
+
+        resp.bytes()
+            .await
+            .map(|b| b.to_vec())
+            .map_err(|e| LibraryError::Immich(format!("GET {path} read failed: {e}")))
+    }
+
     /// Send a POST request and return the raw response for streaming.
     ///
     /// Used by SyncManager for the `POST /sync/stream` endpoint which
