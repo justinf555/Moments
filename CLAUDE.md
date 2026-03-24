@@ -33,14 +33,50 @@ Moments is a GNOME/GTK4 photo management app written in Rust, targeting GNOME Ci
 
 ```
 src/
-  main.rs          — Entry point: sets up gettext, loads GResources, creates MomentsApplication
-  application.rs   — MomentsApplication (adw::Application subclass); registers GActions
-  window.rs        — MomentsWindow (adw::ApplicationWindow subclass); binds UI template
-  config.rs        — Compile-time constants (VERSION, PKGDATADIR, etc.)
-  library.rs       — Library trait (top-level photo library abstraction)
+  main.rs              — Entry point: sets up gettext, loads GResources, creates MomentsApplication
+  application.rs       — MomentsApplication (adw::Application subclass); registers GActions
+  config.rs            — Compile-time constants (VERSION, PKGDATADIR, etc.)
+  library.rs           — Library supertrait (composition of feature sub-traits)
   library/
-    storage.rs     — LibraryStorage async trait (open/close a library bundle on disk)
-    error.rs       — LibraryError enum (thiserror-based)
+    storage.rs         — LibraryStorage async trait (open/close)
+    media.rs           — MediaId, MediaItem, MediaFilter, LibraryMedia trait
+    album.rs           — AlbumId, Album, LibraryAlbums trait
+    import.rs          — LibraryImport trait
+    thumbnail.rs       — LibraryThumbnail trait, sharded path helpers
+    viewer.rs          — LibraryViewer trait (original file access)
+    error.rs           — LibraryError enum (thiserror-based)
+    event.rs           — LibraryEvent enum (channel-based backend → GTK communication)
+    db.rs              — Database struct (sqlx::SqlitePool), all SQL queries
+    db/migrations/     — Numbered SQL migrations (001–009)
+    bundle.rs          — Library bundle on disk (manifest, paths)
+    config.rs          — LibraryConfig enum (Local / Immich)
+    factory.rs         — LibraryFactory (creates backends by config type)
+    immich_client.rs   — ImmichClient (HTTP client for Immich API)
+    keyring.rs         — GNOME Keyring integration (session token storage)
+    sync.rs            — SyncManager + ThumbnailDownloader (Immich background sync)
+    format/            — Format detection (magic bytes, standard/raw/video handlers)
+    providers/
+      local.rs         — LocalLibrary (local filesystem backend)
+      immich.rs        — ImmichLibrary (Immich server backend)
+  ui/
+    window.rs          — MomentsWindow; wires sidebar, coordinator, views
+    sidebar.rs         — MomentsSidebar with dynamic album section
+    sidebar/
+      route.rs         — TOP_ROUTES / BOTTOM_ROUTES definitions
+      row.rs           — MomentsSidebarRow widget
+    coordinator.rs     — ContentCoordinator (stack-based view routing)
+    model_registry.rs  — ModelRegistry (broadcasts events to all grid models)
+    photo_grid.rs      — PhotoGridView (header bar, actions, viewer integration)
+    photo_grid/
+      model.rs         — PhotoGridModel (pagination, filtering, incremental updates)
+      factory.rs       — Cell factory (bind/unbind with texture management)
+      cell.rs          — PhotoGridCell widget (placeholder → thumbnail → star)
+      item.rs          — MediaItemObject (GObject wrapper for grid items)
+    viewer.rs          — PhotoViewer (full-res image display)
+    video_viewer.rs    — VideoViewer (GStreamer playback)
+    album_dialogs.rs   — Create/rename/delete album dialogs
+    import_dialog.rs   — Import progress dialog
+    setup_window/      — Setup wizard (backend picker, local setup, Immich setup)
 ```
 
 ### GTK/GObject subclassing pattern
@@ -65,7 +101,7 @@ Results flow back from Tokio → GTK via `Sender<LibraryEvent>` (a `std::sync::m
 
 Two backends exist:
 - **`LocalLibrary`** (`providers/local.rs`) — stores originals on disk, generates thumbnails locally
-- **`ImmichLibrary`** (`providers/immich.rs`, in progress) — syncs with an Immich server, caches everything locally. See `docs/design-immich-backend.md` for the full design.
+- **`ImmichLibrary`** (`providers/immich.rs`) — syncs with an Immich server via `POST /sync/stream`, caches everything locally in the same SQLite schema. Background sync polls every 30s with a thumbnail download worker pool. See `docs/design-immich-backend.md` for the full design.
 
 ### Database
 
