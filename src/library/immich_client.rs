@@ -387,6 +387,83 @@ impl ImmichClient {
         Ok(())
     }
 
+    /// Upload an asset to the Immich server via multipart form-data.
+    ///
+    /// Returns the server-assigned asset ID and status ("created" or "duplicate").
+    pub(crate) async fn upload_asset(
+        &self,
+        file_path: &std::path::Path,
+        device_asset_id: &str,
+        file_created_at: &str,
+        file_modified_at: &str,
+        checksum: Option<&str>,
+    ) -> Result<UploadResponse, LibraryError> {
+        let url = self.url("/assets");
+
+        let file_name = file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("upload")
+            .to_owned();
+
+        let file_bytes = tokio::fs::read(file_path)
+            .await
+            .map_err(LibraryError::Io)?;
+
+        let file_part = reqwest::multipart::Part::bytes(file_bytes)
+            .file_name(file_name)
+            .mime_str("application/octet-stream")
+            .map_err(|e| LibraryError::Immich(format!("invalid mime type: {e}")))?;
+
+        let form = reqwest::multipart::Form::new()
+            .part("assetData", file_part)
+            .text("deviceAssetId", device_asset_id.to_owned())
+            .text("deviceId", "moments".to_owned())
+            .text("fileCreatedAt", file_created_at.to_owned())
+            .text("fileModifiedAt", file_modified_at.to_owned());
+
+        let mut request = self.client.post(&url).multipart(form);
+
+        if let Some(hash) = checksum {
+            request = request.header("x-immich-checksum", hash);
+        }
+
+        let resp = request
+            .send()
+            .await
+            .map_err(|e| LibraryError::Immich(format!("upload failed: {e}")))?;
+
+        let status_code = resp.status();
+        // 201 = created, 200 = duplicate
+        if !status_code.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(LibraryError::Immich(format!(
+                "upload returned {status_code}: {body}"
+            )));
+        }
+
+        let upload_status = if status_code.as_u16() == 200 {
+            "duplicate".to_string()
+        } else {
+            "created".to_string()
+        };
+
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| LibraryError::Immich(format!("invalid upload response: {e}")))?;
+
+        let id = body["id"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+
+        Ok(UploadResponse {
+            id,
+            status: upload_status,
+        })
+    }
+
     /// Make a GET request and return the raw response bytes.
     ///
     /// Used for downloading binary content (thumbnails, originals).
@@ -485,6 +562,15 @@ pub struct LoginResponse {
     pub user_id: String,
     /// Display name of the authenticated user.
     pub name: String,
+}
+
+/// Response from `POST /assets` (upload).
+#[derive(Debug, Clone)]
+pub struct UploadResponse {
+    /// Server-assigned asset UUID.
+    pub id: String,
+    /// "created" or "duplicate".
+    pub status: String,
 }
 
 #[derive(Debug, Deserialize)]

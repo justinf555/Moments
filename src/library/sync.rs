@@ -302,13 +302,15 @@ impl SyncManager {
             }
         }
 
-        // Acknowledge processed changes.
+        // Acknowledge processed changes (batched — Immich limits to 1000 per request).
         if !acks.is_empty() {
             info!(count = acks.len(), "sending sync acks to server");
-            let ack_request = SyncAckRequest { acks: acks.clone() };
-            if let Err(e) = self.client.post_no_content("/sync/ack", &ack_request).await {
-                error!("failed to send sync acks: {e}");
-                return Err(e);
+            for chunk in acks.chunks(1000) {
+                let ack_request = SyncAckRequest { acks: chunk.to_vec() };
+                if let Err(e) = self.client.post_no_content("/sync/ack", &ack_request).await {
+                    error!("failed to send sync acks: {e}");
+                    return Err(e);
+                }
             }
             debug!("acks sent successfully");
 
