@@ -117,9 +117,12 @@ mod imp {
                     star.set_visible(false);
                 }
             });
-            self.overlay.add_controller(motion);
-
             self.overlay.set_parent(&*obj);
+
+            // Add motion controller to the cell widget (not the overlay)
+            // so it receives enter/leave even when child widgets consume
+            // pointer events.
+            obj.add_controller(motion);
         }
 
         fn dispose(&self) {
