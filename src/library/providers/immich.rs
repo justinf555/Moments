@@ -413,43 +413,62 @@ impl LibraryAlbums for ImmichLibrary {
         self.db.list_albums().await
     }
 
-    async fn create_album(&self, _name: &str) -> Result<AlbumId, LibraryError> {
-        // TODO (#105): call Immich API then update local cache.
-        Err(LibraryError::Immich(
-            "album creation not yet implemented for Immich backend".to_string(),
-        ))
+    async fn create_album(&self, name: &str) -> Result<AlbumId, LibraryError> {
+        // API first: POST /albums → returns album with server-generated ID.
+        let resp: serde_json::Value = self
+            .client
+            .post("/albums", &serde_json::json!({ "albumName": name }))
+            .await?;
+        let server_id = resp["id"]
+            .as_str()
+            .ok_or_else(|| LibraryError::Immich("no id in create album response".to_string()))?
+            .to_owned();
+
+        // Cache locally with the server-generated ID.
+        let now = chrono::Utc::now().timestamp();
+        self.db.upsert_album(&server_id, name, now, now).await?;
+
+        Ok(AlbumId::from_raw(server_id))
     }
 
-    async fn rename_album(&self, _id: &AlbumId, _name: &str) -> Result<(), LibraryError> {
-        Err(LibraryError::Immich(
-            "album rename not yet implemented for Immich backend".to_string(),
-        ))
+    async fn rename_album(&self, id: &AlbumId, name: &str) -> Result<(), LibraryError> {
+        let path = format!("/albums/{}", id.as_str());
+        self.client
+            .patch_no_content(&path, &serde_json::json!({ "albumName": name }))
+            .await?;
+        self.db.rename_album(id, name).await
     }
 
-    async fn delete_album(&self, _id: &AlbumId) -> Result<(), LibraryError> {
-        Err(LibraryError::Immich(
-            "album delete not yet implemented for Immich backend".to_string(),
-        ))
+    async fn delete_album(&self, id: &AlbumId) -> Result<(), LibraryError> {
+        let path = format!("/albums/{}", id.as_str());
+        self.client.delete_no_content(&path).await?;
+        self.db.delete_album(id).await
     }
 
     async fn add_to_album(
         &self,
-        _album_id: &AlbumId,
-        _media_ids: &[MediaId],
+        album_id: &AlbumId,
+        media_ids: &[MediaId],
     ) -> Result<(), LibraryError> {
-        Err(LibraryError::Immich(
-            "add to album not yet implemented for Immich backend".to_string(),
-        ))
+        let ids: Vec<String> = media_ids.iter().map(|id| id.as_str().to_owned()).collect();
+        let path = format!("/albums/{}/assets", album_id.as_str());
+        self.client
+            .put_no_content(&path, &serde_json::json!({ "ids": ids }))
+            .await?;
+        self.db.add_to_album(album_id, media_ids).await
     }
 
     async fn remove_from_album(
         &self,
-        _album_id: &AlbumId,
-        _media_ids: &[MediaId],
+        album_id: &AlbumId,
+        media_ids: &[MediaId],
     ) -> Result<(), LibraryError> {
-        Err(LibraryError::Immich(
-            "remove from album not yet implemented for Immich backend".to_string(),
-        ))
+        let ids: Vec<String> = media_ids.iter().map(|id| id.as_str().to_owned()).collect();
+        let path = format!("/albums/{}/assets", album_id.as_str());
+        self.client
+            .delete_with_body(&path, &serde_json::json!({ "ids": ids }))
+            .await?;
+        self.db.remove_from_album(album_id, media_ids).await
     }
 
     async fn list_album_media(

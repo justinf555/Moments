@@ -52,6 +52,9 @@ mod imp {
         /// Set up once in `setup()` — holds live references to all registered views.
         pub coordinator: OnceCell<Rc<RefCell<ContentCoordinator>>>,
 
+        /// Sidebar reference for event-driven album updates.
+        pub sidebar: OnceCell<MomentsSidebar>,
+
         /// GSettings instance for persisting window geometry.
         pub settings: OnceCell<gio::Settings>,
     }
@@ -162,6 +165,7 @@ impl MomentsWindow {
         // Build sidebar — MomentsSidebar is already an AdwNavigationPage subclass.
         let sidebar = MomentsSidebar::new();
         imp.split_view.set_sidebar(Some(&sidebar));
+        let _ = imp.sidebar.set(sidebar.clone());
 
         // Populate sidebar with existing albums from the library.
         {
@@ -449,6 +453,11 @@ impl MomentsWindow {
         imp.main_stack.set_visible_child_name("content");
 
         registry
+    }
+
+    /// Access the sidebar for event-driven album updates.
+    pub fn sidebar(&self) -> Option<&MomentsSidebar> {
+        self.imp().sidebar.get()
     }
 
     /// Navigate to the given route by id (e.g. "recent", "photos").

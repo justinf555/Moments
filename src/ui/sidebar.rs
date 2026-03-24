@@ -215,7 +215,15 @@ impl MomentsSidebar {
     }
 
     /// Add a single album row to the Albums section.
+    ///
+    /// Idempotent — if an album with this ID already exists, updates its name instead.
     pub fn add_album(&self, album_id: &str, name: &str) {
+        // If already present, just update the name (handles sync re-delivering existing albums).
+        if self.imp().album_rows.borrow().contains_key(album_id) {
+            self.rename_album(album_id, name);
+            return;
+        }
+
         let imp = self.imp();
         let list_box = imp.list_box.get().unwrap();
         let bottom_sep = imp.bottom_separator.get().unwrap();

@@ -463,6 +463,34 @@ impl MomentsApplication {
                                     Ok(LibraryEvent::AssetSynced { item }) => {
                                         registry.on_asset_synced(&item);
                                     }
+                                    Ok(LibraryEvent::AlbumCreated { id, name }) => {
+                                        if let Some(win) = win_for_idle.upgrade() {
+                                            if let Some(sb) = win.sidebar() {
+                                                sb.add_album(id.as_str(), &name);
+                                            }
+                                        }
+                                    }
+                                    Ok(LibraryEvent::AlbumDeleted { id }) => {
+                                        if let Some(win) = win_for_idle.upgrade() {
+                                            if let Some(sb) = win.sidebar() {
+                                                sb.remove_album(id.as_str());
+                                            }
+                                            if let Some(coord) = win.imp().coordinator.get() {
+                                                let route = format!("album:{}", id.as_str());
+                                                coord.borrow_mut().unregister(&route);
+                                            }
+                                        }
+                                    }
+                                    Ok(LibraryEvent::AlbumRenamed { id, name }) => {
+                                        if let Some(win) = win_for_idle.upgrade() {
+                                            if let Some(sb) = win.sidebar() {
+                                                sb.rename_album(id.as_str(), &name);
+                                            }
+                                        }
+                                    }
+                                    Ok(LibraryEvent::AlbumMediaChanged { album_id }) => {
+                                        registry.on_album_media_changed(&album_id);
+                                    }
                                     Ok(_) => {}
                                     Err(std::sync::mpsc::TryRecvError::Empty) => break,
                                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {

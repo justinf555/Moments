@@ -361,6 +361,32 @@ impl ImmichClient {
         Ok(())
     }
 
+    /// Make a PATCH request with a JSON body, expecting no response body.
+    pub(crate) async fn patch_no_content<B: serde::Serialize>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<(), LibraryError> {
+        let url = self.url(path);
+        let resp = self
+            .client
+            .patch(&url)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| LibraryError::Immich(format!("PATCH {path} failed: {e}")))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(LibraryError::Immich(format!(
+                "PATCH {path} returned {status}: {body}"
+            )));
+        }
+
+        Ok(())
+    }
+
     /// Make a GET request and return the raw response bytes.
     ///
     /// Used for downloading binary content (thumbnails, originals).
