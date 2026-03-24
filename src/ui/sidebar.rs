@@ -298,7 +298,10 @@ impl MomentsSidebar {
     /// Attach a right-click gesture to an individual album row.
     fn attach_row_context_menu(&self, list_row: &gtk::ListBoxRow, album_id: &str, name: &str) {
         let ctx = self.imp().context_menu.borrow();
-        let Some(ctx) = ctx.as_ref() else { return };
+        let Some(ctx) = ctx.as_ref() else {
+            debug!("no context menu callbacks set, skipping gesture for {album_id}");
+            return;
+        };
 
         let gesture = gtk::GestureClick::new();
         gesture.set_button(3);
@@ -310,8 +313,15 @@ impl MomentsSidebar {
         let aname = name.to_owned();
         let row_weak = list_row.downgrade();
 
+        debug!(album_id = %album_id, "attaching context menu gesture");
+
         gesture.connect_pressed(move |gesture, _, x, _y| {
-            let Some(row) = row_weak.upgrade() else { return };
+            let Some(row) = row_weak.upgrade() else {
+                debug!("row weak ref gone in gesture handler");
+                return;
+            };
+
+            debug!(album_id = %aid, "right-click pressed on album row");
 
             let action_group = gio::SimpleActionGroup::new();
 
@@ -320,6 +330,7 @@ impl MomentsSidebar {
             let aname_r = aname.clone();
             let rename_action = gio::SimpleAction::new("rename", None);
             rename_action.connect_activate(move |_, _| {
+                debug!(album_id = %aid_r, "rename action activated");
                 rename_cb(aid_r.clone(), aname_r.clone());
             });
             action_group.add_action(&rename_action);
@@ -329,10 +340,12 @@ impl MomentsSidebar {
             let aname_d = aname.clone();
             let delete_action = gio::SimpleAction::new("delete", None);
             delete_action.connect_activate(move |_, _| {
+                debug!(album_id = %aid_d, "delete action activated");
                 delete_cb(aid_d.clone(), aname_d.clone());
             });
             action_group.add_action(&delete_action);
 
+            debug!(album_id = %aid, "creating popover menu");
             let popover = gtk::PopoverMenu::from_model(Some(&menu));
             row.insert_action_group("album", Some(&action_group));
             popover.set_parent(&row);
@@ -340,13 +353,16 @@ impl MomentsSidebar {
             popover.set_has_arrow(true);
 
             popover.connect_closed(move |p| {
+                debug!("popover closed, unparenting");
                 p.unparent();
             });
 
             popover.popup();
+            debug!(album_id = %aid, "popover shown");
             gesture.set_state(gtk::EventSequenceState::Claimed);
         });
 
         list_row.add_controller(gesture);
+        debug!(album_id = %album_id, "gesture controller added to row");
     }
 }

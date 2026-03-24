@@ -231,7 +231,11 @@ impl MomentsWindow {
                 menu,
                 // on_rename callback
                 move |album_id, album_name| {
-                    let Some(win) = win_weak.upgrade() else { return };
+                    debug!(album_id = %album_id, "rename callback fired from context menu");
+                    let Some(win) = win_weak.upgrade() else {
+                        debug!("window weak ref gone in rename callback");
+                        return;
+                    };
                     let lib = Arc::clone(&lib_rename);
                     let tk = tk_rename.clone();
                     let sb = sb_rename.clone();
@@ -257,7 +261,11 @@ impl MomentsWindow {
                 },
                 // on_delete callback
                 move |album_id, album_name| {
-                    let Some(win) = win_weak2.upgrade() else { return };
+                    debug!(album_id = %album_id, "delete callback fired from context menu");
+                    let Some(win) = win_weak2.upgrade() else {
+                        debug!("window weak ref gone in delete callback");
+                        return;
+                    };
                     let lib = Arc::clone(&lib_delete);
                     let tk = tk_delete.clone();
                     let sb = sb_delete.clone();
