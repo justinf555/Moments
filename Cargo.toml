@@ -38,6 +38,10 @@ gstreamer = "0.23"
 gstreamer-app = "0.23"
 gstreamer-video = "0.23"
 
+# HTTP client (Immich backend)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde_json = "1"
+
 # Utilities
 thiserror = "2"
 chrono = "0.4"
