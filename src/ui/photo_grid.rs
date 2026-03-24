@@ -733,7 +733,7 @@ impl PhotoGridView {
                                 if ids.is_empty() { return; }
 
                                 if let Some(b) = btn_w2.upgrade() {
-                                    b.set_active(false);
+                                    b.popdown();
                                 }
 
                                 let lib = Arc::clone(&lib_add);
@@ -762,7 +762,6 @@ impl PhotoGridView {
                     let popover = gtk::Popover::new();
                     popover.set_child(Some(&vbox));
                     btn.set_popover(Some(&popover));
-                    popover.popup();
                 });
             });
         }
