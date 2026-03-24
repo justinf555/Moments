@@ -35,8 +35,11 @@ fn extract_poster_frame(path: &Path) -> Result<image::DynamicImage, LibraryError
             .display()
     );
 
+    // videoflip method=automatic reads the container's rotation metadata
+    // (e.g. MP4 transformation matrix) and corrects orientation before the
+    // frame reaches the appsink.
     let pipeline = gst::parse::launch(&format!(
-        "uridecodebin uri={uri} ! videoconvert ! video/x-raw,format=RGB ! appsink name=sink"
+        "uridecodebin uri={uri} ! videoflip method=automatic ! videoconvert ! video/x-raw,format=RGB ! appsink name=sink"
     ))
     .map_err(|e| LibraryError::Thumbnail(format!("GStreamer pipeline error: {e}")))?;
 
