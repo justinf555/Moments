@@ -20,7 +20,7 @@ template $MomentsImmichSetupPage : Adw.NavigationPage {
       Adw.StatusPage {
         icon-name: "network-server-symbolic";
         title: _("Connect to Immich");
-        description: _("Enter the URL and API key for your Immich server.");
+        description: _("Sign in with your Immich account.");
       }
 
       Gtk.ListBox {
@@ -33,8 +33,12 @@ template $MomentsImmichSetupPage : Adw.NavigationPage {
           text: "http://";
         }
 
-        Adw.PasswordEntryRow api_key_row {
-          title: _("API Key");
+        Adw.EntryRow email_row {
+          title: _("Email");
+        }
+
+        Adw.PasswordEntryRow password_row {
+          title: _("Password");
         }
       }
 

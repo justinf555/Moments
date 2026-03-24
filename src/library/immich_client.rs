@@ -1,12 +1,15 @@
-use reqwest::header::{HeaderMap, HeaderValue};
-use serde::Deserialize;
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument};
 
 use super::error::LibraryError;
 
 /// HTTP client for the Immich server API.
 ///
-/// Handles authentication, request building, and response parsing.
+/// Uses session-based authentication (`Authorization: Bearer {token}`).
+/// The session token is obtained via [`ImmichClient::login`] and stored
+/// in the GNOME Keyring. Sessions persist indefinitely on the server.
+///
 /// All methods are async and intended to run on the Tokio executor.
 #[derive(Clone)]
 pub struct ImmichClient {
@@ -15,16 +18,17 @@ pub struct ImmichClient {
 }
 
 impl ImmichClient {
-    /// Create a new client targeting `server_url` with the given API key.
+    /// Create a new client with an existing session token.
     ///
     /// The `server_url` should be the root URL (e.g. `https://immich.example.com`).
     /// A trailing `/api` is appended automatically for endpoint calls.
-    pub fn new(server_url: &str, api_key: &str) -> Result<Self, LibraryError> {
+    pub fn new(server_url: &str, access_token: &str) -> Result<Self, LibraryError> {
         let mut headers = HeaderMap::new();
+        let auth_value = format!("Bearer {access_token}");
         headers.insert(
-            "x-api-key",
-            HeaderValue::from_str(api_key)
-                .map_err(|e| LibraryError::Immich(format!("invalid API key: {e}")))?,
+            AUTHORIZATION,
+            HeaderValue::from_str(&auth_value)
+                .map_err(|e| LibraryError::Immich(format!("invalid access token: {e}")))?,
         );
         headers.insert("Accept", HeaderValue::from_static("application/json"));
 
@@ -37,6 +41,56 @@ impl ImmichClient {
         let base_url = server_url.trim_end_matches('/').to_owned();
 
         Ok(Self { client, base_url })
+    }
+
+    /// Login to the Immich server with email and password.
+    ///
+    /// Returns a [`LoginResponse`] containing the session token and user info.
+    /// The token should be stored in the GNOME Keyring and passed to [`new`](Self::new)
+    /// for subsequent client construction.
+    #[instrument(skip(password), fields(server_url = %server_url, email = %email))]
+    pub async fn login(
+        server_url: &str,
+        email: &str,
+        password: &str,
+    ) -> Result<LoginResponse, LibraryError> {
+        let base_url = server_url.trim_end_matches('/');
+        let url = format!("{base_url}/api/auth/login");
+
+        debug!("logging in to Immich server");
+
+        let body = LoginRequest {
+            email: email.to_owned(),
+            password: password.to_owned(),
+        };
+
+        let client = reqwest::Client::builder()
+            .user_agent("Moments/0.1")
+            .build()
+            .map_err(|e| LibraryError::Immich(format!("failed to build HTTP client: {e}")))?;
+
+        let resp = client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| LibraryError::Immich(format!("login failed: {e}")))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(LibraryError::Immich(format!(
+                "login failed with status {status}: {body}"
+            )));
+        }
+
+        let login: LoginResponse = resp
+            .json()
+            .await
+            .map_err(|e| LibraryError::Immich(format!("invalid login response: {e}")))?;
+
+        debug!(user = %login.name, "login successful");
+        Ok(login)
     }
 
     /// The base server URL (without trailing slash).
@@ -256,6 +310,25 @@ impl ImmichClient {
     }
 }
 
+#[derive(Debug, Serialize)]
+struct LoginRequest {
+    email: String,
+    password: String,
+}
+
+/// Response from `POST /auth/login`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LoginResponse {
+    /// Session token — use as `Authorization: Bearer {access_token}`.
+    #[serde(rename = "accessToken")]
+    pub access_token: String,
+    /// Immich user ID (UUID).
+    #[serde(rename = "userId")]
+    pub user_id: String,
+    /// Display name of the authenticated user.
+    pub name: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct PingResponse {
     res: String,
@@ -281,19 +354,19 @@ mod tests {
 
     #[test]
     fn client_normalises_trailing_slash() {
-        let client = ImmichClient::new("https://immich.example.com/", "test-key").unwrap();
+        let client = ImmichClient::new("https://immich.example.com/", "test-token").unwrap();
         assert_eq!(client.base_url(), "https://immich.example.com");
     }
 
     #[test]
     fn client_preserves_url_without_trailing_slash() {
-        let client = ImmichClient::new("https://immich.example.com", "test-key").unwrap();
+        let client = ImmichClient::new("https://immich.example.com", "test-token").unwrap();
         assert_eq!(client.base_url(), "https://immich.example.com");
     }
 
     #[test]
     fn url_builds_api_path() {
-        let client = ImmichClient::new("https://immich.example.com", "test-key").unwrap();
+        let client = ImmichClient::new("https://immich.example.com", "test-token").unwrap();
         assert_eq!(
             client.url("/server/ping"),
             "https://immich.example.com/api/server/ping"

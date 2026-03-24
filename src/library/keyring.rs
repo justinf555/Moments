@@ -2,35 +2,35 @@ use tracing::{debug, instrument};
 
 use super::error::LibraryError;
 
-/// Store an Immich API key in the GNOME Keyring.
+/// Store an Immich session token in the GNOME Keyring.
 ///
-/// The key is associated with the server URL so multiple Immich servers
+/// The token is associated with the server URL so multiple Immich servers
 /// can each have their own stored credential.
-#[instrument(skip(api_key), fields(server_url = %server_url))]
-pub fn store_api_key(server_url: &str, api_key: &str) -> Result<(), LibraryError> {
+#[instrument(skip(access_token), fields(server_url = %server_url))]
+pub fn store_access_token(server_url: &str, access_token: &str) -> Result<(), LibraryError> {
     let schema = schema();
     let attributes = std::collections::HashMap::from([("server_url", server_url)]);
-    let label = format!("Moments — Immich API key for {server_url}");
+    let label = format!("Moments — Immich session for {server_url}");
 
     libsecret::password_store_sync(
         Some(&schema),
         attributes,
         Some(libsecret::COLLECTION_DEFAULT),
         &label,
-        api_key,
+        access_token,
         gio::Cancellable::NONE,
     )
-    .map_err(|e| LibraryError::Immich(format!("failed to store API key in keyring: {e}")))?;
+    .map_err(|e| LibraryError::Immich(format!("failed to store token in keyring: {e}")))?;
 
-    debug!("API key stored in keyring");
+    debug!("access token stored in keyring");
     Ok(())
 }
 
-/// Retrieve an Immich API key from the GNOME Keyring.
+/// Retrieve an Immich session token from the GNOME Keyring.
 ///
-/// Returns `None` if no key is stored for this server URL.
+/// Returns `None` if no token is stored for this server URL.
 #[instrument(fields(server_url = %server_url))]
-pub fn lookup_api_key(server_url: &str) -> Result<Option<String>, LibraryError> {
+pub fn lookup_access_token(server_url: &str) -> Result<Option<String>, LibraryError> {
     let schema = schema();
     let attributes = std::collections::HashMap::from([("server_url", server_url)]);
 
@@ -39,20 +39,20 @@ pub fn lookup_api_key(server_url: &str) -> Result<Option<String>, LibraryError> 
         attributes,
         gio::Cancellable::NONE,
     )
-    .map_err(|e| LibraryError::Immich(format!("failed to lookup API key in keyring: {e}")))?;
+    .map_err(|e| LibraryError::Immich(format!("failed to lookup token in keyring: {e}")))?;
 
     if secret.is_some() {
-        debug!("API key found in keyring");
+        debug!("access token found in keyring");
     } else {
-        debug!("no API key found in keyring");
+        debug!("no access token found in keyring");
     }
 
     Ok(secret.map(|s| s.to_string()))
 }
 
-/// Delete a stored Immich API key from the GNOME Keyring.
+/// Delete a stored Immich session token from the GNOME Keyring.
 #[instrument(fields(server_url = %server_url))]
-pub fn delete_api_key(server_url: &str) -> Result<(), LibraryError> {
+pub fn delete_access_token(server_url: &str) -> Result<(), LibraryError> {
     let schema = schema();
     let attributes = std::collections::HashMap::from([("server_url", server_url)]);
 
@@ -61,9 +61,9 @@ pub fn delete_api_key(server_url: &str) -> Result<(), LibraryError> {
         attributes,
         gio::Cancellable::NONE,
     )
-    .map_err(|e| LibraryError::Immich(format!("failed to delete API key from keyring: {e}")))?;
+    .map_err(|e| LibraryError::Immich(format!("failed to delete token from keyring: {e}")))?;
 
-    debug!("API key deleted from keyring");
+    debug!("access token deleted from keyring");
     Ok(())
 }
 
@@ -85,7 +85,6 @@ mod tests {
     #[test]
     fn schema_has_correct_name() {
         let s = schema();
-        // Just verify it builds without panic.
         let _ = format!("{s:?}");
     }
 }

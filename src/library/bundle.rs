@@ -74,9 +74,9 @@ impl LibraryConfig {
                 })?;
                 Ok(LibraryConfig::Immich {
                     server_url: immich.server_url.clone(),
-                    // api_key is never stored in library.toml — fetched from
-                    // the system keyring by the Immich backend on open()
-                    api_key: String::new(),
+                    // access_token is never stored in library.toml — fetched
+                    // from the GNOME Keyring by the application on open()
+                    access_token: String::new(),
                 })
             }
             other => Err(LibraryError::InvalidBackend(other.to_string())),
@@ -268,7 +268,7 @@ mod tests {
 
         let config = LibraryConfig::Immich {
             server_url: "http://immich.local:2283".to_string(),
-            api_key: "secret".to_string(),
+            access_token: "secret".to_string(),
         };
         Bundle::create(&bundle_path, &config).unwrap();
         let (_, restored) = Bundle::open(&bundle_path).unwrap();
@@ -300,7 +300,7 @@ mod tests {
     fn manifest_roundtrip_immich() {
         let config = LibraryConfig::Immich {
             server_url: "http://test:2283".to_string(),
-            api_key: "key".to_string(),
+            access_token: "key".to_string(),
         };
         let manifest = LibraryManifest::new(&config);
         let restored = LibraryConfig::from_manifest(&manifest).unwrap();
