@@ -154,6 +154,20 @@ impl MomentsApplication {
         app
     }
 
+    /// Access the shared Tokio runtime handle.
+    ///
+    /// Available from anywhere via `MomentsApplication::default().tokio_handle()`.
+    pub fn tokio_handle(&self) -> tokio::runtime::Handle {
+        self.imp().tokio.get().expect("tokio handle set").clone()
+    }
+
+    /// Get the singleton application instance.
+    pub fn default() -> Self {
+        gio::Application::default()
+            .and_downcast::<Self>()
+            .expect("application is MomentsApplication")
+    }
+
     fn setup_gactions(&self) {
         let quit_action = gio::ActionEntry::builder("quit")
             .activate(move |app: &Self, _, _| app.quit())

@@ -135,19 +135,8 @@ impl MomentsImmichSetupPage {
             }
         };
 
-        // Get the Tokio handle from the application — HTTP calls must run
-        // on the Tokio executor, not the GTK main context.
-        let app = self
-            .root()
-            .and_then(|r| r.downcast::<gtk::Window>().ok())
-            .and_then(|w| w.application())
-            .and_then(|a| a.downcast::<crate::application::MomentsApplication>().ok());
-        let Some(app) = app else {
-            imp.status_label.set_text("Internal error: no application");
-            imp.test_btn.set_sensitive(true);
-            return;
-        };
-        let tokio = app.imp().tokio.get().expect("tokio handle set").clone();
+        // HTTP calls must run on the Tokio executor, not the GTK main context.
+        let tokio = crate::application::MomentsApplication::default().tokio_handle();
 
         let obj_weak = self.downgrade();
         glib::MainContext::default().spawn_local(async move {
