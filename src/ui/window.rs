@@ -227,7 +227,7 @@ impl MomentsWindow {
             let tk_delete = tokio.clone();
             let sb_delete = sidebar.clone();
 
-            sidebar.setup_album_context_menu(
+            sidebar.set_album_context_callbacks(
                 menu,
                 // on_rename callback
                 move |album_id, album_name| {

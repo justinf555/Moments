@@ -12,11 +12,17 @@ use tracing::debug;
 use route::{TOP_ROUTES, BOTTOM_ROUTES};
 use row::MomentsSidebarRow;
 
+/// Stored callbacks for album row right-click menus.
+struct AlbumContextMenu {
+    menu_model: gio::MenuModel,
+    on_rename: std::rc::Rc<dyn Fn(String, String)>,
+    on_delete: std::rc::Rc<dyn Fn(String, String)>,
+}
+
 mod imp {
     use super::*;
     use std::cell::OnceCell;
 
-    #[derive(Default)]
     pub struct MomentsSidebar {
         pub list_box: OnceCell<gtk::ListBox>,
         /// Maps album_id → ListBoxRow for dynamic add/remove.
@@ -27,6 +33,21 @@ mod imp {
         pub bottom_separator: OnceCell<gtk::ListBoxRow>,
         /// The "+" button for creating albums.
         pub add_button: OnceCell<gtk::Button>,
+        /// Stored context menu callbacks (set once via set_album_context_callbacks).
+        pub(super) context_menu: RefCell<Option<AlbumContextMenu>>,
+    }
+
+    impl Default for MomentsSidebar {
+        fn default() -> Self {
+            Self {
+                list_box: OnceCell::new(),
+                album_rows: RefCell::new(HashMap::new()),
+                albums_header: OnceCell::new(),
+                bottom_separator: OnceCell::new(),
+                add_button: OnceCell::new(),
+                context_menu: RefCell::new(None),
+            }
+        }
     }
 
     #[glib::object_subclass]
@@ -209,6 +230,9 @@ impl MomentsSidebar {
         // Insert before the bottom separator.
         list_box.insert(&list_row, bottom_sep.index());
 
+        // Attach right-click context menu if callbacks are set.
+        self.attach_row_context_menu(&list_row, album_id, name);
+
         imp.album_rows
             .borrow_mut()
             .insert(album_id.to_owned(), list_row);
@@ -254,83 +278,75 @@ impl MomentsSidebar {
         }
     }
 
-    /// Connect a right-click handler on album rows.
+    /// Store callbacks for album context menu actions.
     ///
-    /// When a user right-clicks an album row, a popover menu is shown with
-    /// Rename and Delete actions. The callbacks receive the album_id.
-    pub fn setup_album_context_menu(
+    /// When `add_album` creates a row, it attaches a right-click gesture
+    /// that shows a popover with Rename/Delete using these callbacks.
+    pub fn set_album_context_callbacks(
         &self,
         menu_model: gio::MenuModel,
         on_rename: impl Fn(String, String) + 'static,
         on_delete: impl Fn(String, String) + 'static,
     ) {
-        let list_box = self.imp().list_box.get().unwrap();
+        *self.imp().context_menu.borrow_mut() = Some(AlbumContextMenu {
+            menu_model,
+            on_rename: std::rc::Rc::new(on_rename),
+            on_delete: std::rc::Rc::new(on_delete),
+        });
+    }
 
-        // Right-click gesture on the ListBox.
+    /// Attach a right-click gesture to an individual album row.
+    fn attach_row_context_menu(&self, list_row: &gtk::ListBoxRow, album_id: &str, name: &str) {
+        let ctx = self.imp().context_menu.borrow();
+        let Some(ctx) = ctx.as_ref() else { return };
+
         let gesture = gtk::GestureClick::new();
-        gesture.set_button(3); // secondary (right) button
+        gesture.set_button(3);
 
-        let menu = menu_model;
-        let on_rename = std::rc::Rc::new(on_rename);
-        let on_delete = std::rc::Rc::new(on_delete);
+        let menu = ctx.menu_model.clone();
+        let on_rename = ctx.on_rename.clone();
+        let on_delete = ctx.on_delete.clone();
+        let aid = album_id.to_owned();
+        let aname = name.to_owned();
+        let row_weak = list_row.downgrade();
 
-        gesture.connect_pressed(glib::clone!(
-            #[weak]
-            list_box,
-            move |gesture, _, x, y| {
-                // Find which row was clicked.
-                let Some(row) = list_box.row_at_y(y as i32) else { return };
-                let Some(child) = row.child() else { return };
-                let Some(sidebar_row) = child.downcast_ref::<MomentsSidebarRow>() else {
-                    return;
-                };
+        gesture.connect_pressed(move |gesture, _, x, _y| {
+            let Some(row) = row_weak.upgrade() else { return };
 
-                let route_id = sidebar_row.route_id().to_owned();
-                // Only handle album rows (route_id starts with "album:").
-                let Some(album_id) = route_id.strip_prefix("album:") else { return };
-                let album_id = album_id.to_owned();
-                let album_name = sidebar_row.label_text().to_owned();
+            let action_group = gio::SimpleActionGroup::new();
 
-                // Create action group with rename/delete for this album.
-                let action_group = gio::SimpleActionGroup::new();
+            let rename_cb = on_rename.clone();
+            let aid_r = aid.clone();
+            let aname_r = aname.clone();
+            let rename_action = gio::SimpleAction::new("rename", None);
+            rename_action.connect_activate(move |_, _| {
+                rename_cb(aid_r.clone(), aname_r.clone());
+            });
+            action_group.add_action(&rename_action);
 
-                let rename_cb = on_rename.clone();
-                let aid = album_id.clone();
-                let aname = album_name.clone();
-                let rename_action = gio::SimpleAction::new("rename", None);
-                rename_action.connect_activate(move |_, _| {
-                    rename_cb(aid.clone(), aname.clone());
-                });
-                action_group.add_action(&rename_action);
+            let delete_cb = on_delete.clone();
+            let aid_d = aid.clone();
+            let aname_d = aname.clone();
+            let delete_action = gio::SimpleAction::new("delete", None);
+            delete_action.connect_activate(move |_, _| {
+                delete_cb(aid_d.clone(), aname_d.clone());
+            });
+            action_group.add_action(&delete_action);
 
-                let delete_cb = on_delete.clone();
-                let aid = album_id.clone();
-                let aname = album_name.clone();
-                let delete_action = gio::SimpleAction::new("delete", None);
-                delete_action.connect_activate(move |_, _| {
-                    delete_cb(aid.clone(), aname.clone());
-                });
-                action_group.add_action(&delete_action);
+            let popover = gtk::PopoverMenu::from_model(Some(&menu));
+            popover.insert_action_group("album", Some(&action_group));
+            popover.set_parent(&row);
+            popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, 0, 1, 1)));
+            popover.set_has_arrow(true);
 
-                // Build and show popover menu.
-                let popover = gtk::PopoverMenu::from_model(Some(&menu));
-                popover.insert_action_group("album", Some(&action_group));
-                popover.set_parent(&row);
-                popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
-                    x as i32, 0, 1, 1,
-                )));
-                popover.set_has_arrow(true);
+            popover.connect_closed(move |p| {
+                p.unparent();
+            });
 
-                // Clean up when popover is closed.
-                popover.connect_closed(move |p| {
-                    p.unparent();
-                });
+            popover.popup();
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+        });
 
-                popover.popup();
-                gesture.set_state(gtk::EventSequenceState::Claimed);
-            }
-        ));
-
-        list_box.add_controller(gesture);
+        list_row.add_controller(gesture);
     }
 }
