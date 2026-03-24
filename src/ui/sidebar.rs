@@ -334,7 +334,7 @@ impl MomentsSidebar {
             action_group.add_action(&delete_action);
 
             let popover = gtk::PopoverMenu::from_model(Some(&menu));
-            popover.insert_action_group("album", Some(&action_group));
+            row.insert_action_group("album", Some(&action_group));
             popover.set_parent(&row);
             popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, 0, 1, 1)));
             popover.set_has_arrow(true);
