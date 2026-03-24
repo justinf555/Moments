@@ -220,7 +220,7 @@ impl MomentsApplication {
 
         // Present the main window first, then close setup — ensures there is
         // always at least one window alive during the transition.
-        let window = MomentsWindow::new(self);
+        let window = MomentsWindow::new(self, settings);
         window.present();
         setup_win.close();
 
@@ -249,7 +249,8 @@ impl MomentsApplication {
             }
         };
 
-        let window = MomentsWindow::new(self);
+        let settings = self.imp().settings.get().expect("settings initialised");
+        let window = MomentsWindow::new(self, settings);
         window.present();
 
         self.load_library_async(bundle, config, window);
