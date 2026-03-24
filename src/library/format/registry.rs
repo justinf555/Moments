@@ -88,10 +88,12 @@ impl FormatRegistry {
     /// nor a recognised video format.
     pub fn media_type(&self, ext: &str) -> Option<MediaType> {
         let lower = ext.to_ascii_lowercase();
-        if self.handlers.contains_key(&lower) {
-            Some(MediaType::Image)
-        } else if VIDEO_EXTENSIONS.contains(&lower.as_str()) {
+        // Check video first — VideoHandler registers in the handlers map
+        // for thumbnail decode, but the media type is still Video.
+        if VIDEO_EXTENSIONS.contains(&lower.as_str()) {
             Some(MediaType::Video)
+        } else if self.handlers.contains_key(&lower) {
+            Some(MediaType::Image)
         } else {
             None
         }

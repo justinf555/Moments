@@ -7,6 +7,7 @@ pub mod model_registry;
 pub mod photo_grid;
 pub mod setup_window;
 pub mod sidebar;
+pub mod video_viewer;
 pub mod viewer;
 pub mod window;
 
