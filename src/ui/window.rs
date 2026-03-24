@@ -205,6 +205,27 @@ impl MomentsWindow {
             });
         }
 
+        // Register the Recent Imports view (lazy — created on first click).
+        {
+            let lib = Arc::clone(&library);
+            let tk = tokio.clone();
+            let s = settings.clone();
+            let reg = Rc::clone(&registry);
+            coordinator.register_lazy("recent", move || {
+                let days = s.uint("recent-imports-days") as i64;
+                let since = chrono::Utc::now().timestamp() - days * 86400;
+                let model = Rc::new(PhotoGridModel::new(
+                    Arc::clone(&lib),
+                    tk.clone(),
+                    MediaFilter::RecentImports { since },
+                ));
+                let view = Rc::new(PhotoGridView::new(lib, tk, s, Rc::clone(&reg)));
+                view.set_model(Rc::clone(&model), Rc::clone(&reg));
+                reg.register(&model);
+                view
+            });
+        }
+
         // Register the Trash view (lazy — created on first click).
         {
             let lib = Arc::clone(&library);
@@ -269,6 +290,13 @@ impl MomentsWindow {
         imp.main_stack.set_visible_child_name("content");
 
         registry
+    }
+
+    /// Navigate to the given route by id (e.g. "recent", "photos").
+    pub fn navigate(&self, route_id: &str) {
+        if let Some(coordinator) = self.imp().coordinator.get() {
+            coordinator.borrow_mut().navigate(route_id);
+        }
     }
 
     /// Install a `win.toggle-sidebar` boolean action wired to the split view.

@@ -373,6 +373,7 @@ impl MomentsApplication {
                             .expect("receiver set above");
 
                         let app_for_idle = app.downgrade();
+                        let win_for_idle = window.downgrade();
                         let source_id = glib::idle_add_local(move || {
                             let app = match app_for_idle.upgrade() {
                                 Some(a) => a,
@@ -399,6 +400,10 @@ impl MomentsApplication {
                                         // Release strong ref — dialog stays open until user dismisses.
                                         app.imp().import_dialog.borrow_mut().take();
                                         registry.reload_all();
+                                        // Navigate to Recent Imports so the user sees what arrived.
+                                        if let Some(win) = win_for_idle.upgrade() {
+                                            win.navigate("recent");
+                                        }
                                     }
                                     Ok(_) => {}
                                     Err(std::sync::mpsc::TryRecvError::Empty) => break,

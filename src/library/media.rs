@@ -104,6 +104,9 @@ pub enum MediaFilter {
     Favorites,
     /// Only trashed items.
     Trashed,
+    /// Items imported after `since` (Unix timestamp). Excludes trashed.
+    /// Sorted by `imported_at DESC` instead of `taken_at`.
+    RecentImports { since: i64 },
 }
 
 /// Opaque cursor for keyset pagination in [`LibraryMedia::list_media`].
