@@ -3,16 +3,19 @@ use std::path::Path;
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 
 use crate::library::error::LibraryError;
+use crate::library::thumbnailer::apply_orientation;
 
 use super::registry::{FormatHandler, VIDEO_EXTENSIONS};
 
 /// Extracts a poster frame from video files via GStreamer.
 ///
 /// Uses a pipeline: `filesrc → decodebin → videoconvert → appsink`
-/// to pull a single RGB frame, then converts it to an `image::DynamicImage`.
+/// to pull a single RGB frame. Reads rotation metadata from the
+/// container and applies orientation correction manually, since
+/// `videoflip method=automatic` doesn't work for all container types.
 pub struct VideoHandler;
 
 impl FormatHandler for VideoHandler {
@@ -35,11 +38,8 @@ fn extract_poster_frame(path: &Path) -> Result<image::DynamicImage, LibraryError
             .display()
     );
 
-    // videoflip method=automatic reads the container's rotation metadata
-    // (e.g. MP4 transformation matrix) and corrects orientation before the
-    // frame reaches the appsink.
     let pipeline = gst::parse::launch(&format!(
-        "uridecodebin uri={uri} ! videoflip method=automatic ! videoconvert ! video/x-raw,format=RGB ! appsink name=sink"
+        "uridecodebin uri={uri} ! videoconvert ! video/x-raw,format=RGB ! appsink name=sink"
     ))
     .map_err(|e| LibraryError::Thumbnail(format!("GStreamer pipeline error: {e}")))?;
 
@@ -98,8 +98,80 @@ fn extract_poster_frame(path: &Path) -> Result<image::DynamicImage, LibraryError
         ))
     })?;
 
+    // Read rotation from stream tags before shutting down the pipeline.
+    let rotation = read_rotation_tag(&appsink);
+
     // Clean up pipeline.
     let _ = pipeline.set_state(gst::State::Null);
 
-    Ok(image::DynamicImage::ImageRgb8(img))
+    let img = image::DynamicImage::ImageRgb8(img);
+
+    // Apply rotation if present.
+    let orientation = rotation_to_exif_orientation(rotation);
+    if orientation != 1 {
+        debug!(rotation, orientation, "applying video rotation correction");
+    }
+    Ok(apply_orientation(img, orientation))
+}
+
+/// Read the rotation tag from the appsink's sticky tag event.
+///
+/// Returns the rotation in degrees (0, 90, 180, 270). Falls back to 0 if
+/// no rotation metadata is found.
+fn read_rotation_tag(appsink: &gst_app::AppSink) -> i32 {
+    // Check sticky Tag events on the appsink's sink pad — tags propagate
+    // downstream through the pipeline.
+    let Some(pad) = appsink.static_pad("sink") else {
+        debug!("appsink has no sink pad");
+        return 0;
+    };
+
+    // Iterate sticky events looking for Tag events.
+    let mut rotation = 0i32;
+    pad.sticky_events_foreach(|event| {
+        if let gst::EventView::Tag(tag_event) = event.view() {
+            let tag_list = tag_event.tag();
+            if let Some(orient) = tag_list.get::<gst::tags::ImageOrientation>() {
+                let val = orient.get();
+                debug!(orientation = %val, "found image-orientation tag");
+                rotation = match val {
+                    "rotate-90" => 90,
+                    "rotate-180" => 180,
+                    "rotate-270" => 270,
+                    _ => 0,
+                };
+            }
+        }
+        std::ops::ControlFlow::Continue(gst::EventForeachAction::Keep)
+    });
+
+    if rotation == 0 {
+        debug!("no rotation tag found in video");
+    }
+
+    rotation
+}
+
+/// Map video rotation degrees to EXIF orientation values.
+fn rotation_to_exif_orientation(degrees: i32) -> u8 {
+    match degrees {
+        90 => 6,   // Rotated 90° CW
+        180 => 3,  // Rotated 180°
+        270 => 8,  // Rotated 90° CCW (270° CW)
+        _ => 1,    // Normal
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rotation_to_orientation_mapping() {
+        assert_eq!(rotation_to_exif_orientation(0), 1);
+        assert_eq!(rotation_to_exif_orientation(90), 6);
+        assert_eq!(rotation_to_exif_orientation(180), 3);
+        assert_eq!(rotation_to_exif_orientation(270), 8);
+        assert_eq!(rotation_to_exif_orientation(45), 1); // Unknown → normal
+    }
 }
