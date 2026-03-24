@@ -161,6 +161,27 @@ impl MomentsWindow {
         let sidebar = MomentsSidebar::new();
         imp.split_view.set_sidebar(Some(&sidebar));
 
+        // Populate sidebar with existing albums from the library.
+        {
+            let lib = Arc::clone(&library);
+            let tk = tokio.clone();
+            let sb = sidebar.clone();
+            glib::MainContext::default().spawn_local(async move {
+                if let Ok(albums) = tk.spawn(async move { lib.list_albums().await }).await {
+                    match albums {
+                        Ok(albums) => {
+                            let pairs: Vec<(String, String)> = albums
+                                .into_iter()
+                                .map(|a| (a.id.as_str().to_owned(), a.name))
+                                .collect();
+                            sb.set_albums(&pairs);
+                        }
+                        Err(e) => tracing::error!("failed to load albums for sidebar: {e}"),
+                    }
+                }
+            });
+        }
+
         // Build content stack + coordinator.
         let content_stack = gtk::Stack::new();
         content_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
