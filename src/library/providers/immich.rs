@@ -60,6 +60,18 @@ impl ImmichLibrary {
             .await
             .map_err(|e| LibraryError::Runtime(e.to_string()))??;
 
+        // Fire-and-forget: evict old originals cache entries if over the limit.
+        // Read GSettings on the GTK thread before spawning onto Tokio.
+        {
+            use gtk::prelude::SettingsExt;
+            let settings = gtk::gio::Settings::new("io.github.justinf555.Moments");
+            let max_mb = settings.uint("originals-cache-max-mb");
+            let originals_dir = bundle.originals.clone();
+            tokio.spawn(async move {
+                evict_originals_cache(&originals_dir, max_mb).await;
+            });
+        }
+
         // Start the background sync engine.
         let sync_handle = SyncHandle::start(
             client.clone(),
@@ -257,13 +269,138 @@ impl LibraryThumbnail for ImmichLibrary {
 
 #[async_trait]
 impl LibraryViewer for ImmichLibrary {
+    #[instrument(skip(self))]
     async fn original_path(
         &self,
-        _id: &MediaId,
+        id: &MediaId,
     ) -> Result<Option<PathBuf>, LibraryError> {
-        // TODO (#107): download original on demand with local cache.
-        Ok(None)
+        // Get the original filename for its extension (needed by image decoders).
+        let filename = self.db.media_original_filename(id).await?;
+        let ext = filename
+            .as_deref()
+            .and_then(|f| std::path::Path::new(f).extension())
+            .and_then(|e| e.to_str())
+            .unwrap_or("dat");
+
+        let cache_path = sharded_original_path(&self.bundle.originals, id, ext);
+
+        // Return cached file if it exists.
+        if cache_path.exists() {
+            debug!(id = %id, "original cache hit");
+            return Ok(Some(cache_path));
+        }
+
+        // Download from Immich.
+        let api_path = format!("/assets/{}/original", id.as_str());
+        info!(id = %id, "downloading original from Immich");
+        let bytes = self.client.get_bytes(&api_path).await?;
+
+        // Write to cache.
+        if let Some(parent) = cache_path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(LibraryError::Io)?;
+        }
+        let size = bytes.len();
+        tokio::fs::write(&cache_path, &bytes)
+            .await
+            .map_err(LibraryError::Io)?;
+        debug!(id = %id, size_bytes = size, ext, "original cached");
+
+        Ok(Some(cache_path))
     }
+}
+
+/// Compute the sharded cache path for an original file.
+///
+/// Includes the file extension so image/video decoders can identify the format.
+/// Path: `originals/{hex[..2]}/{hex[2..4]}/{id}.{ext}`
+fn sharded_original_path(originals_dir: &std::path::Path, id: &MediaId, ext: &str) -> PathBuf {
+    let hex = id.as_str();
+    originals_dir
+        .join(&hex[..2])
+        .join(&hex[2..4])
+        .join(format!("{hex}.{ext}"))
+}
+
+/// Evict oldest cached originals until the cache is under the configured limit.
+///
+/// Reads the limit from GSettings (`originals-cache-max-mb`). Walks the
+/// originals directory, sorts by modification time, and deletes oldest
+/// files first. Runs on library open as a background task.
+async fn evict_originals_cache(originals_dir: &std::path::Path, max_mb: u32) {
+    if max_mb == 0 {
+        debug!("originals cache eviction disabled (max_mb=0)");
+        return;
+    }
+    let max_bytes = max_mb as u64 * 1024 * 1024;
+
+    // Walk the cache directory and collect file info.
+    let mut entries: Vec<(PathBuf, u64, std::time::SystemTime)> = Vec::new();
+    let mut total_size: u64 = 0;
+
+    if let Ok(mut read_dir) = tokio::fs::read_dir(originals_dir).await {
+        while let Ok(Some(shard1)) = read_dir.next_entry().await {
+            if !shard1.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            if let Ok(mut shard1_dir) = tokio::fs::read_dir(shard1.path()).await {
+                while let Ok(Some(shard2)) = shard1_dir.next_entry().await {
+                    if !shard2.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
+                        continue;
+                    }
+                    if let Ok(mut shard2_dir) = tokio::fs::read_dir(shard2.path()).await {
+                        while let Ok(Some(file)) = shard2_dir.next_entry().await {
+                            if let Ok(meta) = file.metadata().await {
+                                if meta.is_file() {
+                                    let size = meta.len();
+                                    let modified = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+                                    total_size += size;
+                                    entries.push((file.path(), size, modified));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if total_size <= max_bytes {
+        debug!(
+            total_mb = total_size / (1024 * 1024),
+            max_mb,
+            files = entries.len(),
+            "originals cache within limit"
+        );
+        return;
+    }
+
+    // Sort oldest first.
+    entries.sort_by_key(|(_, _, modified)| *modified);
+
+    let mut evicted_count = 0u64;
+    let mut evicted_bytes = 0u64;
+
+    for (path, size, _) in &entries {
+        if total_size <= max_bytes {
+            break;
+        }
+        if let Err(e) = tokio::fs::remove_file(&path).await {
+            tracing::warn!(path = %path.display(), "failed to evict cached original: {e}");
+            continue;
+        }
+        total_size -= size;
+        evicted_bytes += size;
+        evicted_count += 1;
+    }
+
+    info!(
+        evicted_files = evicted_count,
+        evicted_mb = evicted_bytes / (1024 * 1024),
+        remaining_mb = total_size / (1024 * 1024),
+        "originals cache eviction complete"
+    );
 }
 
 #[async_trait]

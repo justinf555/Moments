@@ -25,6 +25,16 @@
 				Imports view. Set to 0 to show all imports.
 			</description>
 		</key>
+		<key name="originals-cache-max-mb" type="u">
+			<default>2048</default>
+			<summary>Maximum size of the originals cache in MB</summary>
+			<description>
+				Downloaded original photos and videos are cached locally for
+				offline access. When the cache exceeds this limit, the oldest
+				files are evicted on library open. Only applies to Immich
+				libraries. Set to 0 to disable eviction.
+			</description>
+		</key>
 		<key name="window-width" type="i">
 			<default>800</default>
 			<summary>Window width</summary>
