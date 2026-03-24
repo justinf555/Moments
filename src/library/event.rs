@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use super::album::AlbumId;
 use super::error::LibraryError;
 use super::import::ImportSummary;
-use super::media::MediaId;
+use super::media::{MediaId, MediaItem};
 
 /// Events emitted by the library backend and delivered to the GTK application.
 ///
@@ -54,6 +54,12 @@ pub enum LibraryEvent {
 
     /// Media items were added to or removed from an album.
     AlbumMediaChanged { album_id: AlbumId },
+
+    // ── Sync events ─────────────────────────────────────────────────────────
+
+    /// A single asset was synced from the server. Used for incremental
+    /// grid updates without full reload.
+    AssetSynced { item: MediaItem },
 }
 
 #[cfg(test)]

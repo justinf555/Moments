@@ -161,6 +161,23 @@ impl Database {
 
     /// Return the `relative_path` column for `id`, or `None` if no row exists.
     ///
+    /// Fetch a single media item by ID.
+    ///
+    /// Used for incremental grid updates without full reload.
+    pub async fn get_media_item(&self, id: &MediaId) -> Result<Option<MediaItem>, LibraryError> {
+        let row: Option<MediaRow> = sqlx::query_as(
+            "SELECT id, taken_at, imported_at, original_filename,
+                    width, height, orientation, media_type, is_favorite,
+                    is_trashed, trashed_at, duration_ms
+             FROM media WHERE id = ?",
+        )
+        .bind(id.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(LibraryError::Db)?;
+        Ok(row.map(MediaRow::into_item))
+    }
+
     /// Return the `original_filename` column for `id`, or `None` if no row exists.
     ///
     /// Used by `ImmichLibrary` to determine the file extension for cached originals.
@@ -211,6 +228,11 @@ impl Database {
 
 #[async_trait::async_trait]
 impl LibraryMedia for Database {
+    async fn get_media_item(&self, id: &MediaId) -> Result<Option<MediaItem>, LibraryError> {
+        // Delegates to the public method on Database (defined above).
+        Database::get_media_item(self, id).await
+    }
+
     async fn media_exists(&self, id: &MediaId) -> Result<bool, LibraryError> {
         let id_str = id.as_str();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM media WHERE id = ?")
