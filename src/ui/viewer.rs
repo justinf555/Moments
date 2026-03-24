@@ -185,6 +185,18 @@ impl ViewerInner {
                 return;
             }
 
+            // Guard: skip decode for video files (they use VideoViewer).
+            let is_video = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| crate::library::format::registry::VIDEO_EXTENSIONS.contains(&e.to_lowercase().as_str()))
+                .unwrap_or(false);
+            if is_video {
+                inner.spinner.set_spinning(false);
+                inner.spinner.set_visible(false);
+                return;
+            }
+
             // Decode via `image` crate with EXIF orientation applied.
             let pixels: Option<(Vec<u8>, i32, i32)> = tokio
                 .spawn(async move {
