@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use adw::prelude::*;
 use gtk::{gio, glib, subclass::prelude::*};
-use tracing::instrument;
+use tracing::{debug, instrument};
 
 use crate::library::media::{MediaFilter, MediaType};
 use crate::library::Library;
@@ -264,7 +264,7 @@ pub struct PhotoGridView {
     trash_btn: gtk::Button,
     restore_btn: gtk::Button,
     delete_btn: gtk::Button,
-    album_btn: gtk::MenuButton,
+    album_btn: gtk::Button,
     remove_from_album_btn: gtk::Button,
     widget: gtk::Widget,
     /// Zoom actions — must be installed on the window so accelerators work
@@ -359,14 +359,12 @@ impl PhotoGridView {
         remove_from_album_btn.add_css_class("flat");
         header.pack_end(&remove_from_album_btn);
 
-        let album_btn = gtk::MenuButton::builder()
+        let album_btn = gtk::Button::builder()
             .icon_name("folder-new-symbolic")
             .tooltip_text("Add to Album")
             .sensitive(false)
             .build();
         album_btn.add_css_class("flat");
-        // Set an initial empty popover so GTK treats the button as interactive.
-        album_btn.set_popover(Some(&gtk::Popover::new()));
         header.pack_end(&album_btn);
 
         let menu_button = gtk::MenuButton::builder()
@@ -689,30 +687,47 @@ impl PhotoGridView {
             let selection = selection.clone();
             let album_btn = self.album_btn.clone();
 
-            // Build the popover content dynamically when the menu button opens.
-            album_btn.connect_active_notify(move |btn: &gtk::MenuButton| {
-                if !btn.is_active() { return; }
+            // Load albums async on click, then show a Popover with the list.
+            album_btn.connect_clicked(move |btn: &gtk::Button| {
+                debug!("album button clicked, loading albums async");
 
                 let lib = Arc::clone(&lib);
                 let tk = tk.clone();
                 let reg = Rc::clone(&reg);
                 let sel = selection.clone();
-                let btn_weak: glib::WeakRef<gtk::MenuButton> = btn.downgrade();
+                let btn_weak: glib::WeakRef<gtk::Button> = btn.downgrade();
 
                 glib::MainContext::default().spawn_local(async move {
                     let lib_q = Arc::clone(&lib);
+                    debug!("fetching album list from library");
                     let albums = match tk.spawn(async move { lib_q.list_albums().await }).await {
                         Ok(Ok(a)) => a,
-                        _ => return,
+                        Ok(Err(e)) => {
+                            tracing::error!("list_albums failed: {e}");
+                            return;
+                        }
+                        Err(e) => {
+                            tracing::error!("list_albums join failed: {e}");
+                            return;
+                        }
                     };
 
-                    let Some(btn) = btn_weak.upgrade() else { return };
+                    let Some(btn) = btn_weak.upgrade() else {
+                        debug!("album button weak ref gone");
+                        return;
+                    };
+
+                    debug!(count = albums.len(), "albums loaded, building popover");
 
                     let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
                     vbox.set_margin_top(6);
                     vbox.set_margin_bottom(6);
                     vbox.set_margin_start(6);
                     vbox.set_margin_end(6);
+
+                    // Create the popover first so album buttons can close it.
+                    let popover = gtk::Popover::new();
+                    popover.set_parent(btn.upcast_ref::<gtk::Widget>());
 
                     if albums.is_empty() {
                         let label = gtk::Label::new(Some("No albums"));
@@ -727,13 +742,18 @@ impl PhotoGridView {
                             let tk_add = tk.clone();
                             let reg_add = Rc::clone(&reg);
                             let sel_add = sel.clone();
-                            let btn_w2: glib::WeakRef<gtk::MenuButton> = btn.downgrade();
+                            let pop_weak = popover.downgrade();
                             ab.connect_clicked(move |_| {
+                                debug!(album_id = %aid, "album selected in popover");
                                 let ids = collect_selected_ids(&sel_add);
-                                if ids.is_empty() { return; }
+                                if ids.is_empty() {
+                                    debug!("no photos selected, skipping");
+                                    return;
+                                }
+                                debug!(count = ids.len(), album_id = %aid, "adding photos to album");
 
-                                if let Some(b) = btn_w2.upgrade() {
-                                    b.popdown();
+                                if let Some(p) = pop_weak.upgrade() {
+                                    p.popdown();
                                 }
 
                                 let lib = Arc::clone(&lib_add);
@@ -747,7 +767,7 @@ impl PhotoGridView {
                                         .await;
                                     match result {
                                         Ok(Ok(())) => {
-                                            tracing::debug!(album_id = %aid_bc, "photos added to album");
+                                            debug!(album_id = %aid_bc, "photos added to album");
                                             reg.on_album_media_changed(&aid_bc);
                                         }
                                         Ok(Err(e)) => tracing::error!("add_to_album failed: {e}"),
@@ -759,9 +779,15 @@ impl PhotoGridView {
                         }
                     }
 
-                    let popover = gtk::Popover::new();
                     popover.set_child(Some(&vbox));
-                    btn.set_popover(Some(&popover));
+
+                    popover.connect_closed(move |p| {
+                        debug!("album popover closed");
+                        p.unparent();
+                    });
+
+                    debug!("showing album popover");
+                    popover.popup();
                 });
             });
         }
