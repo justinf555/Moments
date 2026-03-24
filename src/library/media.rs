@@ -90,6 +90,8 @@ pub struct MediaItem {
     pub is_trashed: bool,
     /// Unix timestamp when the item was trashed. `None` if not trashed.
     pub trashed_at: Option<i64>,
+    /// Video duration in milliseconds. `None` for images.
+    pub duration_ms: Option<u64>,
 }
 
 /// Filter for [`LibraryMedia::list_media`] queries.
@@ -203,6 +205,8 @@ pub struct MediaRecord {
     pub height: Option<i64>,
     /// EXIF orientation tag (1–8). Defaults to 1 (normal).
     pub orientation: u8,
+    /// Video duration in milliseconds. `None` for images.
+    pub duration_ms: Option<u64>,
 }
 
 /// A row in the `media_metadata` table — full EXIF detail, loaded on demand.

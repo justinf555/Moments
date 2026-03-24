@@ -87,6 +87,7 @@ struct MediaRow {
     is_favorite: i64,
     is_trashed: i64,
     trashed_at: Option<i64>,
+    duration_ms: Option<i64>,
 }
 
 impl MediaRow {
@@ -107,6 +108,7 @@ impl MediaRow {
             is_favorite: self.is_favorite != 0,
             is_trashed: self.is_trashed != 0,
             trashed_at: self.trashed_at,
+            duration_ms: self.duration_ms.map(|v| v as u64),
         }
     }
 }
@@ -204,8 +206,8 @@ impl LibraryMedia for Database {
     async fn insert_media(&self, record: &MediaRecord) -> Result<(), LibraryError> {
         sqlx::query(
             "INSERT INTO media (id, relative_path, original_filename, file_size, imported_at,
-                                media_type, taken_at, width, height, orientation)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                media_type, taken_at, width, height, orientation, duration_ms)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(record.id.as_str())
         .bind(&record.relative_path)
@@ -217,6 +219,7 @@ impl LibraryMedia for Database {
         .bind(record.width)
         .bind(record.height)
         .bind(record.orientation as i64)
+        .bind(record.duration_ms.map(|v| v as i64))
         .execute(&self.pool)
         .await
         .map_err(LibraryError::Db)?;
@@ -240,7 +243,7 @@ impl LibraryMedia for Database {
                 let sql = format!(
                     "SELECT id, taken_at, imported_at, original_filename,
                             width, height, orientation, media_type, is_favorite,
-                            is_trashed, trashed_at
+                            is_trashed, trashed_at, duration_ms
                      FROM media
                      WHERE 1=1{filter_clause}
                      ORDER BY COALESCE(taken_at, 0) DESC, id DESC
@@ -256,7 +259,7 @@ impl LibraryMedia for Database {
                 let sql = format!(
                     "SELECT id, taken_at, imported_at, original_filename,
                             width, height, orientation, media_type, is_favorite,
-                            is_trashed, trashed_at
+                            is_trashed, trashed_at, duration_ms
                      FROM media
                      WHERE (COALESCE(taken_at, 0) < ?
                         OR (COALESCE(taken_at, 0) = ? AND id < ?)){filter_clause}
@@ -436,6 +439,7 @@ mod tests {
             width: None,
             height: None,
             orientation: 1,
+            duration_ms: None,
         }
     }
 
@@ -492,6 +496,7 @@ mod tests {
             width: Some(1920),
             height: Some(1080),
             orientation: 1,
+            duration_ms: None,
         }
     }
 
