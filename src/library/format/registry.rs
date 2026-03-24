@@ -82,6 +82,25 @@ impl FormatRegistry {
         VIDEO_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
     }
 
+    /// Determine the [`MediaType`] using content sniffing with extension fallback.
+    ///
+    /// Reads the first 12 bytes of the file to identify the format by magic
+    /// bytes. Falls back to extension-based detection for unknown signatures
+    /// (e.g. RAW camera formats that share TIFF headers).
+    pub fn media_type_with_sniff(&self, path: &Path, ext: &str) -> Option<MediaType> {
+        use super::detect::{detect_format, DetectedFormat};
+
+        if let Ok(detected) = detect_format(path) {
+            match detected {
+                DetectedFormat::Image(_) => return Some(MediaType::Image),
+                DetectedFormat::Video(_) => return Some(MediaType::Video),
+                DetectedFormat::Unknown => {} // fall through to extension
+            }
+        }
+
+        self.media_type(ext)
+    }
+
     /// Determine the [`MediaType`] for a file extension.
     ///
     /// Returns `None` if the extension is neither a registered image format
@@ -161,5 +180,52 @@ mod tests {
         assert_eq!(reg.media_type("fake"), Some(MediaType::Image));
         assert_eq!(reg.media_type("mp4"), Some(MediaType::Video));
         assert_eq!(reg.media_type("unknown"), None);
+    }
+
+    #[test]
+    fn media_type_with_sniff_overrides_extension() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut reg = FormatRegistry::new();
+        reg.register(Arc::new(FakeHandler));
+
+        // Write JPEG magic bytes to a file with .fake extension.
+        let mut f = NamedTempFile::with_suffix(".fake").unwrap();
+        f.write_all(&[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10]).unwrap();
+        f.flush().unwrap();
+
+        // Content sniffing detects Image (JPEG) — matches extension fallback too.
+        assert_eq!(
+            reg.media_type_with_sniff(f.path(), "fake"),
+            Some(MediaType::Image),
+        );
+
+        // Write MP4 magic bytes to a file with .fake extension.
+        let mut f = NamedTempFile::with_suffix(".fake").unwrap();
+        f.write_all(b"\x00\x00\x00\x18ftypisom").unwrap();
+        f.flush().unwrap();
+
+        // Content sniffing detects Video, overriding extension-based Image.
+        assert_eq!(
+            reg.media_type_with_sniff(f.path(), "fake"),
+            Some(MediaType::Video),
+        );
+    }
+
+    #[test]
+    fn media_type_with_sniff_falls_back_for_unknown_content() {
+        let mut reg = FormatRegistry::new();
+        reg.register(Arc::new(FakeHandler));
+
+        // Write unknown bytes — sniff returns Unknown, falls back to extension.
+        let mut f = tempfile::NamedTempFile::with_suffix(".fake").unwrap();
+        std::io::Write::write_all(&mut f, &[0x00, 0x01, 0x02, 0x03, 0x04, 0x05]).unwrap();
+        std::io::Write::flush(&mut f).unwrap();
+
+        assert_eq!(
+            reg.media_type_with_sniff(f.path(), "fake"),
+            Some(MediaType::Image), // extension fallback
+        );
     }
 }

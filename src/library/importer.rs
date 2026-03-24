@@ -119,7 +119,7 @@ impl ImportJob {
             .map(|e| e.to_lowercase())
             .unwrap_or_default();
 
-        let media_type = match self.formats.media_type(&ext) {
+        let media_type = match self.formats.media_type_with_sniff(source, &ext) {
             Some(mt) => mt,
             None => return Ok(Some(SkipReason::UnsupportedFormat)),
         };
