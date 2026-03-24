@@ -529,7 +529,7 @@ impl PhotoGridView {
         self.trash_btn.set_visible(!is_trash_view);
         self.restore_btn.set_visible(is_trash_view);
         self.delete_btn.set_visible(is_trash_view);
-        self.album_btn.set_visible(!is_trash_view);
+        self.album_btn.set_visible(!is_trash_view && !is_album_view);
         self.remove_from_album_btn.set_visible(is_album_view);
 
         // Enable/disable action buttons based on selection.
