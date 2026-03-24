@@ -65,6 +65,7 @@ impl ImmichLibrary {
             client.clone(),
             db.clone(),
             events.clone(),
+            bundle.thumbnails.clone(),
             tokio.clone(),
         );
 
