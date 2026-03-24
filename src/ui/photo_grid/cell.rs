@@ -28,6 +28,10 @@ mod imp {
         pub bindings: RefCell<Option<CellBindings>>,
         /// Whether to show the star button (false in Trash view).
         pub show_star: Cell<bool>,
+        /// Whether the cell has a loaded texture (star hover only works when visible).
+        pub has_texture: Cell<bool>,
+        /// Whether the item is currently favourited (show star without hover).
+        pub is_favorited: Cell<bool>,
         /// Click handler for the star button — connected in factory `bind`,
         /// disconnected in factory `unbind`.
         pub star_click_handler: RefCell<Option<glib::SignalHandlerId>>,
@@ -58,15 +62,17 @@ mod imp {
 
             self.spinner.set_spinning(true);
 
+            // Star button — bottom-left, shown on hover or when favourited.
             self.star_btn.set_icon_name("non-starred-symbolic");
-            self.star_btn.set_halign(gtk::Align::End);
+            self.star_btn.set_halign(gtk::Align::Start);
             self.star_btn.set_valign(gtk::Align::End);
-            self.star_btn.set_margin_end(4);
+            self.star_btn.set_margin_start(4);
             self.star_btn.set_margin_bottom(4);
             self.star_btn.add_css_class("circular");
             self.star_btn.add_css_class("osd");
             self.star_btn.set_visible(false);
 
+            // Trash days-remaining — bottom-right (Trash view only).
             self.days_label.set_halign(gtk::Align::End);
             self.days_label.set_valign(gtk::Align::End);
             self.days_label.set_margin_end(4);
@@ -76,9 +82,10 @@ mod imp {
             self.days_label.add_css_class("pill");
             self.days_label.set_visible(false);
 
-            self.duration_label.set_halign(gtk::Align::Start);
+            // Video duration — bottom-right, always visible for videos.
+            self.duration_label.set_halign(gtk::Align::End);
             self.duration_label.set_valign(gtk::Align::End);
-            self.duration_label.set_margin_start(4);
+            self.duration_label.set_margin_end(4);
             self.duration_label.set_margin_bottom(4);
             self.duration_label.add_css_class("osd");
             self.duration_label.add_css_class("caption");
@@ -90,6 +97,28 @@ mod imp {
             self.overlay.add_overlay(&self.star_btn);
             self.overlay.add_overlay(&self.days_label);
             self.overlay.add_overlay(&self.duration_label);
+
+            // Hover controller — show star button on mouse enter/leave.
+            let star = self.star_btn.clone();
+            let show_star = self.show_star.clone();
+            let has_texture = self.has_texture.clone();
+            let is_favorited = self.is_favorited.clone();
+            let motion = gtk::EventControllerMotion::new();
+            motion.connect_enter(move |_, _, _| {
+                if show_star.get() && has_texture.get() {
+                    star.set_visible(true);
+                }
+            });
+            let star = self.star_btn.clone();
+            let is_favorited2 = self.is_favorited.clone();
+            motion.connect_leave(move |_| {
+                // Keep visible if item is favourited (visual indicator).
+                if !is_favorited2.get() {
+                    star.set_visible(false);
+                }
+            });
+            self.overlay.add_controller(motion);
+
             self.overlay.set_parent(&*obj);
         }
 
@@ -154,6 +183,8 @@ impl PhotoGridCell {
         imp.star_btn.set_visible(false);
         imp.days_label.set_visible(false);
         imp.duration_label.set_visible(false);
+        imp.has_texture.set(false);
+        imp.is_favorited.set(false);
     }
 
     fn update_duration(&self, item: &MediaItemObject) {
@@ -188,10 +219,18 @@ impl PhotoGridCell {
 
     fn update_star(&self, item: &MediaItemObject) {
         let imp = self.imp();
-        if item.is_favorite() {
+        let fav = item.is_favorite();
+        imp.is_favorited.set(fav);
+        if fav {
             imp.star_btn.set_icon_name("starred-symbolic");
+            // Show starred indicator even without hover.
+            if imp.show_star.get() && imp.has_texture.get() {
+                imp.star_btn.set_visible(true);
+            }
         } else {
             imp.star_btn.set_icon_name("non-starred-symbolic");
+            // Hide unless hovering (hover controller handles visibility).
+            imp.star_btn.set_visible(false);
         }
     }
 
@@ -202,12 +241,17 @@ impl PhotoGridCell {
             imp.picture.set_visible(true);
             imp.spinner.set_visible(false);
             imp.spinner.set_spinning(false);
-            imp.star_btn.set_visible(imp.show_star.get());
+            imp.has_texture.set(true);
+            // Show star only if favourited (hover handles non-favourited).
+            if imp.show_star.get() && imp.is_favorited.get() {
+                imp.star_btn.set_visible(true);
+            }
         } else {
             imp.picture.set_paintable(None::<&gtk::gdk::Texture>);
             imp.picture.set_visible(false);
             imp.spinner.set_visible(true);
             imp.spinner.set_spinning(true);
+            imp.has_texture.set(false);
             imp.star_btn.set_visible(false);
         }
     }
