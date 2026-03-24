@@ -365,6 +365,8 @@ impl PhotoGridView {
             .sensitive(false)
             .build();
         album_btn.add_css_class("flat");
+        // Set an initial empty popover so GTK treats the button as interactive.
+        album_btn.set_popover(Some(&gtk::Popover::new()));
         header.pack_end(&album_btn);
 
         let menu_button = gtk::MenuButton::builder()
