@@ -177,11 +177,22 @@ impl ViewerInner {
                         let img = image::open(&path)
                             .map_err(|e| debug!("full-res decode failed: {e}"))
                             .ok()?;
-                        let orientation = crate::library::exif::extract_exif(&path)
-                            .orientation
-                            .unwrap_or(1);
-                        let img =
-                            crate::library::thumbnailer::apply_orientation(img, orientation);
+                        // Skip orientation for HEIC/HEIF — libheif applies it
+                        // automatically during decode. Applying again would
+                        // double-rotate.
+                        let ext = path
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .map(|e| e.to_lowercase())
+                            .unwrap_or_default();
+                        let img = if matches!(ext.as_str(), "heic" | "heif") {
+                            img
+                        } else {
+                            let orientation = crate::library::exif::extract_exif(&path)
+                                .orientation
+                                .unwrap_or(1);
+                            crate::library::thumbnailer::apply_orientation(img, orientation)
+                        };
                         let rgba = img.into_rgba8();
                         let (w, h) = rgba.dimensions();
                         Some((rgba.into_raw(), w as i32, h as i32))

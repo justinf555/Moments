@@ -135,14 +135,17 @@ fn generate_thumbnail(
 ) -> Result<(), LibraryError> {
     let img = formats.decode(source)?;
 
-    // Apply EXIF orientation for images only — videos don't have EXIF.
-    let img = if formats.is_video(
-        &source
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_lowercase())
-            .unwrap_or_default(),
-    ) {
+    // Apply EXIF orientation for standard image formats only.
+    // Skip for: videos (no EXIF), HEIC/HEIF (libheif applies orientation
+    // automatically during decode — applying it again would double-rotate).
+    let ext = source
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+    let skip_orientation = formats.is_video(&ext)
+        || matches!(ext.as_str(), "heic" | "heif");
+    let img = if skip_orientation {
         img
     } else {
         let orientation = crate::library::exif::extract_exif(source)
