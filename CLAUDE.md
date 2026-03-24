@@ -61,7 +61,11 @@ Results flow back from Tokio → GTK via `Sender<LibraryEvent>` (a `std::sync::m
 
 ### Library abstraction layer
 
-`Library` (in `library.rs`) is a blanket-impl composition of feature sub-traits: `LibraryStorage + LibraryImport`. All backend work runs on the Tokio executor. `LibraryStorage::open()` receives a `tokio::runtime::Handle` which is stored for the backend's lifetime.
+`Library` (in `library.rs`) is a blanket-impl composition of feature sub-traits: `LibraryStorage + LibraryImport + LibraryMedia + LibraryThumbnail + LibraryViewer + LibraryAlbums`. All backend work runs on the Tokio executor. `LibraryStorage::open()` receives a `tokio::runtime::Handle` which is stored for the backend's lifetime.
+
+Two backends exist:
+- **`LocalLibrary`** (`providers/local.rs`) — stores originals on disk, generates thumbnails locally
+- **`ImmichLibrary`** (`providers/immich.rs`, in progress) — syncs with an Immich server, caches everything locally. See `docs/design-immich-backend.md` for the full design.
 
 ### Database
 
@@ -79,7 +83,11 @@ CI sets `SQLX_OFFLINE=true` and uses the committed `.sqlx/` snapshot.
 
 ### MediaId
 
-`src/library/media.rs` — `MediaId` is the content-addressable identity for every asset (64-char lowercase hex BLAKE3 hash). It is the primary key in the `media` table and will key thumbnails. Hashing uses `tokio::task::spawn_blocking` with a streaming hasher — safe for large video files.
+`src/library/media.rs` — `MediaId` is the primary identity for every asset. For the local backend, it is a 64-char lowercase hex BLAKE3 hash (content-addressable). For the Immich backend, it is the server's UUID. The `MediaId` newtype treats both as opaque strings — the grid, viewer, and thumbnail pipeline don't care which format is used.
+
+### Application singleton pattern
+
+Access shared application state (Tokio handle, settings, etc.) via `MomentsApplication::default()` with typed accessors like `tokio_handle()`. Don't walk the widget tree with `.root().application()`. This follows the standard GNOME Rust pattern (Fractal, Planify).
 
 ## Tracing / logging
 
