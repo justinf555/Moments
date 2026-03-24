@@ -104,6 +104,7 @@ mod imp {
             let has_texture = self.has_texture.clone();
             let is_favorited = self.is_favorited.clone();
             let motion = gtk::EventControllerMotion::new();
+            motion.set_propagation_phase(gtk::PropagationPhase::Capture);
             motion.connect_enter(move |_, _, _| {
                 if show_star.get() && has_texture.get() {
                     star.set_visible(true);
