@@ -161,6 +161,23 @@ impl Database {
 
     /// Return the `relative_path` column for `id`, or `None` if no row exists.
     ///
+    /// Return the `original_filename` column for `id`, or `None` if no row exists.
+    ///
+    /// Used by `ImmichLibrary` to determine the file extension for cached originals.
+    pub async fn media_original_filename(
+        &self,
+        id: &MediaId,
+    ) -> Result<Option<String>, LibraryError> {
+        let id_str = id.as_str();
+        let row: Option<String> =
+            sqlx::query_scalar("SELECT original_filename FROM media WHERE id = ?")
+                .bind(id_str)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(LibraryError::Db)?;
+        Ok(row)
+    }
+
     /// Used by `LocalLibrary` to construct the absolute original-file path.
     pub async fn media_relative_path(
         &self,

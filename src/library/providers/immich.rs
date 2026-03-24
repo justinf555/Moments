@@ -274,7 +274,15 @@ impl LibraryViewer for ImmichLibrary {
         &self,
         id: &MediaId,
     ) -> Result<Option<PathBuf>, LibraryError> {
-        let cache_path = sharded_original_path(&self.bundle.originals, id);
+        // Get the original filename for its extension (needed by image decoders).
+        let filename = self.db.media_original_filename(id).await?;
+        let ext = filename
+            .as_deref()
+            .and_then(|f| std::path::Path::new(f).extension())
+            .and_then(|e| e.to_str())
+            .unwrap_or("dat");
+
+        let cache_path = sharded_original_path(&self.bundle.originals, id, ext);
 
         // Return cached file if it exists.
         if cache_path.exists() {
@@ -297,7 +305,7 @@ impl LibraryViewer for ImmichLibrary {
         tokio::fs::write(&cache_path, &bytes)
             .await
             .map_err(LibraryError::Io)?;
-        debug!(id = %id, size_bytes = size, "original cached");
+        debug!(id = %id, size_bytes = size, ext, "original cached");
 
         Ok(Some(cache_path))
     }
@@ -305,13 +313,14 @@ impl LibraryViewer for ImmichLibrary {
 
 /// Compute the sharded cache path for an original file.
 ///
-/// Same two-level sharding as thumbnails: `originals/{hex[..2]}/{hex[2..4]}/{id}`
-fn sharded_original_path(originals_dir: &std::path::Path, id: &MediaId) -> PathBuf {
+/// Includes the file extension so image/video decoders can identify the format.
+/// Path: `originals/{hex[..2]}/{hex[2..4]}/{id}.{ext}`
+fn sharded_original_path(originals_dir: &std::path::Path, id: &MediaId, ext: &str) -> PathBuf {
     let hex = id.as_str();
     originals_dir
         .join(&hex[..2])
         .join(&hex[2..4])
-        .join(hex)
+        .join(format!("{hex}.{ext}"))
 }
 
 /// Evict oldest cached originals until the cache is under the configured limit.
