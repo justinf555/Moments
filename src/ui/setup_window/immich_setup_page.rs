@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::sync::OnceLock;
 
 use adw::prelude::*;
@@ -19,13 +20,18 @@ mod imp {
         #[template_child]
         pub server_url_row: TemplateChild<adw::EntryRow>,
         #[template_child]
-        pub api_key_row: TemplateChild<adw::PasswordEntryRow>,
+        pub email_row: TemplateChild<adw::EntryRow>,
+        #[template_child]
+        pub password_row: TemplateChild<adw::PasswordEntryRow>,
         #[template_child]
         pub test_btn: TemplateChild<gtk::Button>,
         #[template_child]
         pub status_label: TemplateChild<gtk::Label>,
         #[template_child]
         pub connect_btn: TemplateChild<gtk::Button>,
+
+        /// Stored after a successful test connection, used by Connect.
+        pub access_token: RefCell<Option<String>>,
     }
 
     #[glib::object_subclass]
@@ -57,7 +63,6 @@ mod imp {
             self.parent_constructed();
             let obj = self.obj();
 
-            // Test Connection button
             self.test_btn.connect_clicked(glib::clone!(
                 #[weak]
                 obj,
@@ -66,7 +71,6 @@ mod imp {
                 }
             ));
 
-            // Connect button
             self.connect_btn.connect_clicked(glib::clone!(
                 #[weak]
                 obj,
@@ -105,15 +109,16 @@ impl MomentsImmichSetupPage {
         )
     }
 
-    /// Test the connection to the Immich server.
+    /// Test the connection by logging in to the Immich server.
     #[instrument(skip(self))]
     fn test_connection(&self) {
         let imp = self.imp();
         let server_url = imp.server_url_row.text().to_string();
-        let api_key = imp.api_key_row.text().to_string();
+        let email = imp.email_row.text().to_string();
+        let password = imp.password_row.text().to_string();
 
-        if server_url.is_empty() || api_key.is_empty() {
-            imp.status_label.set_text("Please enter both URL and API key.");
+        if server_url.is_empty() || email.is_empty() || password.is_empty() {
+            imp.status_label.set_text("Please fill in all fields.");
             imp.status_label.remove_css_class("success");
             imp.status_label.add_css_class("error");
             return;
@@ -125,46 +130,79 @@ impl MomentsImmichSetupPage {
         imp.status_label.remove_css_class("success");
         imp.connect_btn.set_sensitive(false);
 
-        let client = match ImmichClient::new(&server_url, &api_key) {
-            Ok(c) => c,
-            Err(e) => {
-                imp.status_label.set_text(&format!("Error: {e}"));
-                imp.status_label.add_css_class("error");
-                imp.test_btn.set_sensitive(true);
-                return;
-            }
-        };
-
-        // HTTP calls must run on the Tokio executor, not the GTK main context.
         let tokio = crate::application::MomentsApplication::default().tokio_handle();
 
         let obj_weak = self.downgrade();
         glib::MainContext::default().spawn_local(async move {
-            let result = tokio.spawn(async move { client.validate().await }).await;
+            // Step 1: Login to get a session token.
+            let login_result = tokio
+                .spawn(async move {
+                    ImmichClient::login(&server_url, &email, &password).await
+                })
+                .await;
+
             let Some(obj) = obj_weak.upgrade() else { return };
             let imp = obj.imp();
-            imp.test_btn.set_sensitive(true);
 
-            match result {
-                Ok(Ok(about)) => {
-                    debug!(version = %about.version, "connection successful");
-                    imp.status_label.set_text(&format!("Connected — {about}"));
-                    imp.status_label.remove_css_class("error");
-                    imp.status_label.add_css_class("success");
-                    imp.connect_btn.set_sensitive(true);
-                }
+            let login = match login_result {
+                Ok(Ok(login)) => login,
                 Ok(Err(e)) => {
-                    error!("connection test failed: {e}");
-                    imp.status_label.set_text(&format!("Failed: {e}"));
-                    imp.status_label.remove_css_class("success");
+                    error!("login failed: {e}");
+                    imp.status_label.set_text(&format!("Login failed: {e}"));
                     imp.status_label.add_css_class("error");
-                    imp.connect_btn.set_sensitive(false);
+                    imp.test_btn.set_sensitive(true);
+                    return;
                 }
                 Err(e) => {
                     error!("tokio join error: {e}");
                     imp.status_label.set_text(&format!("Internal error: {e}"));
                     imp.status_label.add_css_class("error");
-                    imp.connect_btn.set_sensitive(false);
+                    imp.test_btn.set_sensitive(true);
+                    return;
+                }
+            };
+
+            // Step 2: Use the token to validate and get server version.
+            let token = login.access_token.clone();
+            let user_name = login.name.clone();
+            let server_url = imp.server_url_row.text().to_string();
+
+            let client = match ImmichClient::new(&server_url, &token) {
+                Ok(c) => c,
+                Err(e) => {
+                    imp.status_label.set_text(&format!("Error: {e}"));
+                    imp.status_label.add_css_class("error");
+                    imp.test_btn.set_sensitive(true);
+                    return;
+                }
+            };
+
+            let validate_result = tokio
+                .spawn(async move { client.server_about().await })
+                .await;
+
+            imp.test_btn.set_sensitive(true);
+
+            match validate_result {
+                Ok(Ok(about)) => {
+                    debug!(version = %about.version, user = %user_name, "connection successful");
+                    imp.status_label.set_text(&format!(
+                        "Connected as {user_name} — {about}"
+                    ));
+                    imp.status_label.remove_css_class("error");
+                    imp.status_label.add_css_class("success");
+                    imp.connect_btn.set_sensitive(true);
+                    *imp.access_token.borrow_mut() = Some(token);
+                }
+                Ok(Err(e)) => {
+                    error!("server validation failed: {e}");
+                    imp.status_label.set_text(&format!("Failed: {e}"));
+                    imp.status_label.add_css_class("error");
+                }
+                Err(e) => {
+                    error!("tokio join error: {e}");
+                    imp.status_label.set_text(&format!("Internal error: {e}"));
+                    imp.status_label.add_css_class("error");
                 }
             }
         });
@@ -175,11 +213,17 @@ impl MomentsImmichSetupPage {
     fn on_connect(&self) {
         let imp = self.imp();
         let server_url = imp.server_url_row.text().to_string();
-        let api_key = imp.api_key_row.text().to_string();
+        let access_token = imp.access_token.borrow().clone().unwrap_or_default();
 
-        // Store API key in GNOME Keyring.
-        if let Err(e) = keyring::store_api_key(&server_url, &api_key) {
-            error!("failed to store API key: {e}");
+        if access_token.is_empty() {
+            imp.status_label.set_text("Please test the connection first.");
+            imp.status_label.add_css_class("error");
+            return;
+        }
+
+        // Store session token in GNOME Keyring.
+        if let Err(e) = keyring::store_access_token(&server_url, &access_token) {
+            error!("failed to store access token: {e}");
             imp.status_label.set_text(&format!("Failed to store credentials: {e}"));
             imp.status_label.add_css_class("error");
             return;
@@ -189,7 +233,7 @@ impl MomentsImmichSetupPage {
         let bundle_path = default_immich_library_path();
         let config = LibraryConfig::Immich {
             server_url,
-            api_key,
+            access_token,
         };
         if let Err(e) = Bundle::create(&bundle_path, &config) {
             error!("failed to create Immich bundle: {e}");
@@ -210,7 +254,6 @@ impl Default for MomentsImmichSetupPage {
     }
 }
 
-/// Default bundle path for Immich libraries.
 fn default_immich_library_path() -> std::path::PathBuf {
     glib::home_dir().join("Pictures").join("Moments-Immich.library")
 }

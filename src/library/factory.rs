@@ -40,8 +40,8 @@ impl LibraryFactory {
                 let library = LocalLibrary::open(bundle, events, tokio).await?;
                 Ok(Arc::new(library))
             }
-            LibraryConfig::Immich { server_url, api_key } => {
-                let client = ImmichClient::new(&server_url, &api_key)?;
+            LibraryConfig::Immich { server_url, access_token } => {
+                let client = ImmichClient::new(&server_url, &access_token)?;
                 let library = ImmichLibrary::open(bundle, client, events, tokio).await?;
                 Ok(Arc::new(library))
             }

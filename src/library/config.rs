@@ -12,7 +12,9 @@ pub enum LibraryConfig {
     /// metadata and thumbnails locally.
     Immich {
         server_url: String,
-        api_key: String,
+        /// Session token obtained via `POST /auth/login`. Stored in GNOME
+        /// Keyring, never in the bundle manifest.
+        access_token: String,
     },
 }
 
@@ -30,11 +32,11 @@ mod tests {
     fn immich_config_stores_fields() {
         let config = LibraryConfig::Immich {
             server_url: "http://immich.local:2283".to_string(),
-            api_key: "abc123".to_string(),
+            access_token: "test-token".to_string(),
         };
-        if let LibraryConfig::Immich { server_url, api_key } = config {
+        if let LibraryConfig::Immich { server_url, access_token } = config {
             assert_eq!(server_url, "http://immich.local:2283");
-            assert_eq!(api_key, "abc123");
+            assert_eq!(access_token, "test-token");
         } else {
             panic!("expected Immich variant");
         }

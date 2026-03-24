@@ -244,14 +244,14 @@ impl MomentsApplication {
             (bundle, LibraryConfig::Local)
         };
 
-        // For Immich configs, inject the API key from the keyring.
+        // For Immich configs, inject the session token from the keyring.
         let config = match config {
             LibraryConfig::Immich { server_url, .. } => {
-                let api_key = crate::library::keyring::lookup_api_key(&server_url)
+                let access_token = crate::library::keyring::lookup_access_token(&server_url)
                     .ok()
                     .flatten()
                     .unwrap_or_default();
-                LibraryConfig::Immich { server_url, api_key }
+                LibraryConfig::Immich { server_url, access_token }
             }
             other => other,
         };
@@ -292,14 +292,14 @@ impl MomentsApplication {
             }
         };
 
-        // For Immich configs, inject the API key from the keyring.
+        // For Immich configs, inject the session token from the keyring.
         let config = match config {
             LibraryConfig::Immich { server_url, .. } => {
-                let api_key = crate::library::keyring::lookup_api_key(&server_url)
+                let access_token = crate::library::keyring::lookup_access_token(&server_url)
                     .ok()
                     .flatten()
                     .unwrap_or_default();
-                LibraryConfig::Immich { server_url, api_key }
+                LibraryConfig::Immich { server_url, access_token }
             }
             other => other,
         };

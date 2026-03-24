@@ -129,12 +129,19 @@ For uploads from Moments → Immich, we compute SHA-1 (Immich's dedup hash) alon
 
 ## API Endpoints Used
 
+### Auth
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /auth/login` | Login with email/password → session token |
+| `POST /auth/validateToken` | Validate current session token |
+
 ### Sync
 | Endpoint | Purpose |
 |----------|---------|
-| `POST /sync/delta-sync` | Incremental changes since last checkpoint |
-| `POST /sync/full-sync` | Full initial sync |
-| `POST /sync/ack` | Acknowledge processed changes |
+| `POST /sync/stream` | Stream changes as newline-delimited JSON (primary sync endpoint) |
+| `POST /sync/ack` | Acknowledge processed changes (advances checkpoint) |
+| `GET /sync/ack` | Retrieve current sync checkpoints |
+| `DELETE /sync/ack` | Reset sync checkpoints (force full re-sync) |
 
 ### Assets
 | Endpoint | Purpose |
@@ -169,28 +176,68 @@ For uploads from Moments → Immich, we compute SHA-1 (Immich's dedup hash) alon
 | `GET /server/ping` | Connection check |
 | `GET /server/about` | Server version info |
 
-## Credential Storage
+## Authentication
 
-API keys are stored in the GNOME Keyring via `libsecret`:
+Immich uses **session-based auth** — the modern `POST /sync/stream` endpoint
+rejects API keys and requires a session token.
+
+**Login flow:**
+1. Setup wizard collects server URL + email + password
+2. `POST /api/auth/login` with `{ email, password }` → returns `{ accessToken, userId, name }`
+3. `accessToken` is a persistent session token (no expiry by default)
+4. Stored in GNOME Keyring via `libsecret` (keyed by `server_url`)
+5. `ImmichClient` uses `Authorization: Bearer {token}` on all requests
+
+**Session lifecycle:**
+- Sessions persist indefinitely until: password change, explicit logout, or admin revocation
+- On 401 response: prompt user to re-authenticate (future enhancement)
+- No refresh token — the access token IS the session
+
+**Why not API keys:**
+- `POST /sync/stream` explicitly rejects API keys
+- Session auth is what the Immich mobile app uses
+- Future-proof as Immich deprecates API-key-compatible endpoints
+
+**Credential storage** via GNOME Keyring (`libsecret`):
 - Schema: `io.github.justinf555.Moments` with attribute `server_url`
 - Each Immich server gets its own keyring entry
+- Stores the session token, never the password
 - Never written to disk in plain text
 - Requires Flatpak permission: `--talk-name=org.freedesktop.secrets`
 
 Module: `src/library/keyring.rs`
 
-## Sync Entity Types
+## Sync Protocol
 
-The delta sync API reports changes across these categories:
+The sync engine uses `POST /sync/stream` which returns **newline-delimited JSON**
+(content-type `application/jsonlines+json`). Each line is:
 
-| Entity Type | What Changes |
-|-------------|-------------|
-| `AssetsV1` / `AssetDeleteV1` | Asset created/updated/deleted |
-| `AssetExifV1` | EXIF metadata changes |
-| `AlbumsV1` | Album created/updated/deleted |
-| `AlbumToAssetV1` | Assets added/removed from albums |
+```json
+{"type":"AssetV1","data":{...},"ack":"AssetV1|019513a2-..."}
+```
 
-We subscribe to these four types. Other types (People, Faces, Memories, Partners, Stacks) can be added later as we implement those features.
+The `ack` field is sent back via `POST /sync/ack` to checkpoint progress. The
+server tracks checkpoints per-session and only sends changes since the last
+acknowledged position on subsequent syncs.
+
+**Stream lifecycle:**
+1. First sync (no checkpoints): server streams all data
+2. Last line is always `SyncCompleteV1` — ack this to mark sync complete
+3. Subsequent syncs: only changes since last checkpoint
+4. If checkpoint is >30 days old: server sends `SyncResetV1` — client must wipe and re-sync
+
+### Sync Request Types
+
+We subscribe to these types via the `types` array in the request:
+
+| Request Type | Entity Types Produced | What Changes |
+|-------------|----------------------|-------------|
+| `AssetsV1` | `AssetV1`, `AssetDeleteV1` | Asset created/updated/deleted |
+| `AssetExifsV1` | `AssetExifV1` | EXIF metadata changes |
+| `AlbumsV1` | `AlbumV1`, `AlbumDeleteV1` | Album created/updated/deleted |
+| `AlbumToAssetsV1` | `AlbumToAssetV1`, `AlbumToAssetDeleteV1` | Assets added/removed from albums |
+
+Other types (People, Faces, Memories, Partners, Stacks) can be added later.
 
 ## Configuration
 
