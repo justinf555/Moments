@@ -13,6 +13,7 @@ use crate::library::event::LibraryEvent;
 use crate::library::format::{FormatRegistry, RawHandler, StandardHandler, VideoHandler};
 use crate::library::import::LibraryImport;
 use crate::library::importer::ImportJob;
+use crate::library::album::{Album, AlbumId, LibraryAlbums};
 use crate::library::media::{
     LibraryMedia, MediaCursor, MediaFilter, MediaId, MediaItem, MediaMetadataRecord, MediaRecord,
 };
@@ -241,6 +242,50 @@ impl LibraryThumbnail for LocalLibrary {
         id: &MediaId,
     ) -> Result<Option<crate::library::thumbnail::ThumbnailStatus>, LibraryError> {
         self.db.thumbnail_status(id).await
+    }
+}
+
+#[async_trait]
+impl LibraryAlbums for LocalLibrary {
+    async fn list_albums(&self) -> Result<Vec<Album>, LibraryError> {
+        self.db.list_albums().await
+    }
+
+    async fn create_album(&self, name: &str) -> Result<AlbumId, LibraryError> {
+        self.db.create_album(name).await
+    }
+
+    async fn rename_album(&self, id: &AlbumId, name: &str) -> Result<(), LibraryError> {
+        self.db.rename_album(id, name).await
+    }
+
+    async fn delete_album(&self, id: &AlbumId) -> Result<(), LibraryError> {
+        self.db.delete_album(id).await
+    }
+
+    async fn add_to_album(
+        &self,
+        album_id: &AlbumId,
+        media_ids: &[MediaId],
+    ) -> Result<(), LibraryError> {
+        self.db.add_to_album(album_id, media_ids).await
+    }
+
+    async fn remove_from_album(
+        &self,
+        album_id: &AlbumId,
+        media_ids: &[MediaId],
+    ) -> Result<(), LibraryError> {
+        self.db.remove_from_album(album_id, media_ids).await
+    }
+
+    async fn list_album_media(
+        &self,
+        album_id: &AlbumId,
+        cursor: Option<&MediaCursor>,
+        limit: u32,
+    ) -> Result<Vec<MediaItem>, LibraryError> {
+        self.db.list_album_media(album_id, cursor, limit).await
     }
 }
 

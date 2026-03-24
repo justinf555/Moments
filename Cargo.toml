@@ -41,6 +41,7 @@ gstreamer-video = "0.23"
 # Utilities
 thiserror = "2"
 chrono = "0.4"
+uuid = { version = "1", features = ["v4"] }
 rawler = "0.7.2"
 
 [dev-dependencies]

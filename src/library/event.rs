@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use super::album::AlbumId;
 use super::error::LibraryError;
 use super::import::ImportSummary;
 use super::media::MediaId;
@@ -39,6 +40,20 @@ pub enum LibraryEvent {
 
     /// The grid thumbnail for an asset has been generated and written to disk.
     ThumbnailReady { media_id: MediaId },
+
+    // ── Album events ────────────────────────────────────────────────────────
+
+    /// A new album was created.
+    AlbumCreated { id: AlbumId, name: String },
+
+    /// An album was renamed.
+    AlbumRenamed { id: AlbumId, name: String },
+
+    /// An album was deleted.
+    AlbumDeleted { id: AlbumId },
+
+    /// Media items were added to or removed from an album.
+    AlbumMediaChanged { album_id: AlbumId },
 }
 
 #[cfg(test)]
