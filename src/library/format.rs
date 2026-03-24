@@ -1,3 +1,4 @@
+pub mod detect;
 pub mod raw;
 pub mod registry;
 pub mod standard;
