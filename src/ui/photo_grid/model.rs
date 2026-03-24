@@ -182,16 +182,9 @@ impl PhotoGridModel {
             .borrow_mut()
             .insert(obj.item().id.clone(), obj.downgrade());
 
-        // Speculatively load thumbnail.
-        let id = obj.item().id.clone();
-        let path = self.library.thumbnail_path(&id);
-        let tokio = self.tokio.clone();
-        let obj_ref = obj.clone();
-        glib::MainContext::default().spawn_local(async move {
-            if let Some(texture) = load_texture(tokio, path).await {
-                obj_ref.set_texture(Some(texture));
-            }
-        });
+        // Texture loading is handled by the factory bind callback when
+        // the cell becomes visible. No speculative loading here — this
+        // bounds GPU memory to the visible cell count.
 
         self.store.insert(pos, &obj);
     }
@@ -315,18 +308,9 @@ impl PhotoGridModel {
         };
 
         for obj in &objects {
-            // Speculatively load any thumbnail that already exists on disk.
-            let id = obj.item().id.clone();
-            let path = self.library.thumbnail_path(&id);
-            let tokio = self.tokio.clone();
-            let obj_ref = obj.clone();
-            glib::MainContext::default().spawn_local(async move {
-                if let Some(texture) = load_texture(tokio, path).await {
-                    debug!(id = %id, "speculative load: texture set");
-                    obj_ref.set_texture(Some(texture));
-                }
-            });
-
+            // Texture loading is handled by the factory bind callback when
+            // cells become visible. No speculative loading — bounds GPU
+            // memory to the visible cell count instead of the full store.
             self.store.append(obj);
         }
 

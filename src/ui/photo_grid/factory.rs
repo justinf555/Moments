@@ -131,6 +131,16 @@ pub fn build_factory(
             cell.imp().star_btn.disconnect(handler);
         }
         cell.unbind();
+
+        // Release the GPU texture for off-screen items to bound VRAM usage.
+        // The texture will be reloaded by the bind callback when the cell
+        // becomes visible again.
+        if let Some(item) = list_item
+            .item()
+            .and_then(|o| o.downcast::<MediaItemObject>().ok())
+        {
+            item.set_texture(None::<gtk::gdk::Texture>);
+        }
     });
 
     factory.connect_teardown(|_, obj| {
