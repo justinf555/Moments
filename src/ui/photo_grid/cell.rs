@@ -20,7 +20,7 @@ mod imp {
     #[derive(Default)]
     pub struct PhotoGridCell {
         pub picture: gtk::Picture,
-        pub spinner: gtk::Spinner,
+        pub placeholder: gtk::Image,
         pub star_btn: gtk::Button,
         pub days_label: gtk::Label,
         pub duration_label: gtk::Label,
@@ -60,7 +60,13 @@ mod imp {
             self.picture.set_can_shrink(true);
             self.picture.set_visible(false);
 
-            self.spinner.set_spinning(true);
+            // Static placeholder shown while thumbnail loads — no animation,
+            // zero CPU cost (replaces GtkSpinner which caused scroll jank).
+            self.placeholder.set_icon_name(Some("image-x-generic-symbolic"));
+            self.placeholder.set_pixel_size(48);
+            self.placeholder.set_halign(gtk::Align::Center);
+            self.placeholder.set_valign(gtk::Align::Center);
+            self.placeholder.add_css_class("dim-label");
 
             // Star button — bottom-left, shown on hover or when favourited.
             self.star_btn.set_icon_name("non-starred-symbolic");
@@ -93,7 +99,7 @@ mod imp {
             self.duration_label.set_visible(false);
 
             self.overlay.set_child(Some(&self.picture));
-            self.overlay.add_overlay(&self.spinner);
+            self.overlay.add_overlay(&self.placeholder);
             self.overlay.add_overlay(&self.star_btn);
             self.overlay.add_overlay(&self.days_label);
             self.overlay.add_overlay(&self.duration_label);
@@ -180,8 +186,7 @@ impl PhotoGridCell {
         }
         imp.picture.set_paintable(None::<&gtk::gdk::Texture>);
         imp.picture.set_visible(false);
-        imp.spinner.set_spinning(true);
-        imp.spinner.set_visible(true);
+        imp.placeholder.set_visible(true);
         imp.star_btn.set_visible(false);
         imp.days_label.set_visible(false);
         imp.duration_label.set_visible(false);
@@ -241,8 +246,7 @@ impl PhotoGridCell {
         if let Some(texture) = item.texture() {
             imp.picture.set_paintable(Some(&texture));
             imp.picture.set_visible(true);
-            imp.spinner.set_visible(false);
-            imp.spinner.set_spinning(false);
+            imp.placeholder.set_visible(false);
             imp.has_texture.set(true);
             // Show star only if favourited (hover handles non-favourited).
             if imp.show_star.get() && imp.is_favorited.get() {
@@ -251,8 +255,7 @@ impl PhotoGridCell {
         } else {
             imp.picture.set_paintable(None::<&gtk::gdk::Texture>);
             imp.picture.set_visible(false);
-            imp.spinner.set_visible(true);
-            imp.spinner.set_spinning(true);
+            imp.placeholder.set_visible(true);
             imp.has_texture.set(false);
             imp.star_btn.set_visible(false);
         }
