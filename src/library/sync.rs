@@ -22,6 +22,9 @@ pub struct SyncHandle {
     shutdown_tx: tokio::sync::watch::Sender<bool>,
 }
 
+/// Interval between sync cycles.
+const SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Maximum concurrent thumbnail downloads.
 const MAX_THUMBNAIL_WORKERS: usize = 4;
 /// Bounded channel capacity for thumbnail download queue.
@@ -90,19 +93,36 @@ struct SyncManager {
 }
 
 impl SyncManager {
-    /// Main sync loop. Runs once for now (periodic polling is PR 2).
+    /// Main sync loop. Runs an initial sync, then polls every 30 seconds
+    /// to pick up changes from mobile uploads and other clients.
     #[instrument(skip(self))]
     async fn run(&self) -> Result<(), LibraryError> {
         info!("sync manager starting");
 
-        // Check if we've been asked to shut down before starting.
-        if *self.shutdown_rx.borrow() {
-            return Ok(());
+        loop {
+            // Check for shutdown before each cycle.
+            if *self.shutdown_rx.borrow() {
+                info!("sync manager shutting down");
+                break;
+            }
+
+            if let Err(e) = self.run_sync().await {
+                error!("sync cycle failed: {e}");
+                // Don't abort the loop on transient errors — retry next cycle.
+            }
+
+            // Wait for the next cycle, but break early on shutdown.
+            let mut shutdown = self.shutdown_rx.clone();
+            tokio::select! {
+                _ = tokio::time::sleep(SYNC_INTERVAL) => {}
+                _ = shutdown.changed() => {
+                    info!("sync manager shutting down during sleep");
+                    break;
+                }
+            }
         }
 
-        self.run_sync().await?;
-
-        info!("sync manager finished");
+        info!("sync manager stopped");
         Ok(())
     }
 
