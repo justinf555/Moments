@@ -103,34 +103,50 @@ impl SyncManager {
         let mut lines = reader.lines();
         let mut acks: Vec<String> = Vec::new();
         let mut asset_count: usize = 0;
+        let mut exif_count: usize = 0;
+        let mut delete_count: usize = 0;
         let mut is_reset = false;
         let mut existing_ids: Option<HashSet<String>> = None;
+        let mut line_number: usize = 0;
+
+        info!("reading sync stream");
 
         while let Some(line) = lines.next_line().await.map_err(|e| {
-            LibraryError::Immich(format!("failed to read sync stream: {e}"))
+            LibraryError::Immich(format!("failed to read sync stream line {line_number}: {e}"))
         })? {
+            line_number += 1;
             if line.is_empty() {
                 continue;
             }
 
             let sync_line: SyncLine = serde_json::from_str(&line).map_err(|e| {
-                LibraryError::Immich(format!("failed to parse sync line: {e}"))
+                error!(line_number, line = %line.chars().take(200).collect::<String>(), "failed to parse sync line");
+                LibraryError::Immich(format!("failed to parse sync line {line_number}: {e}"))
             })?;
 
             match sync_line.entity_type.as_str() {
                 "SyncResetV1" => {
                     warn!("server requested sync reset — performing full resync");
                     is_reset = true;
-                    existing_ids = Some(self.db.all_media_ids().await?);
+                    let ids = self.db.all_media_ids().await?;
+                    info!(existing_count = ids.len(), "loaded existing media IDs for reset tracking");
+                    existing_ids = Some(ids);
                     self.db.clear_sync_checkpoints().await?;
                     acks.push(sync_line.ack);
                 }
                 "AssetV1" => {
                     let asset: SyncAssetV1 = serde_json::from_value(sync_line.data)
-                        .map_err(|e| LibraryError::Immich(format!("invalid AssetV1: {e}")))?;
+                        .map_err(|e| {
+                            error!(line_number, "failed to deserialize AssetV1: {e}");
+                            LibraryError::Immich(format!("invalid AssetV1 at line {line_number}: {e}"))
+                        })?;
                     let id = asset.id.clone();
                     self.handle_asset(asset).await?;
                     asset_count += 1;
+
+                    if asset_count % 500 == 0 {
+                        info!(assets = asset_count, "sync progress");
+                    }
 
                     // Remove from the reset tracking set if present.
                     if let Some(ref mut ids) = existing_ids {
@@ -141,28 +157,44 @@ impl SyncManager {
                 }
                 "AssetDeleteV1" => {
                     let delete: SyncAssetDeleteV1 = serde_json::from_value(sync_line.data)
-                        .map_err(|e| LibraryError::Immich(format!("invalid AssetDeleteV1: {e}")))?;
+                        .map_err(|e| {
+                            error!(line_number, "failed to deserialize AssetDeleteV1: {e}");
+                            LibraryError::Immich(format!("invalid AssetDeleteV1 at line {line_number}: {e}"))
+                        })?;
+
+                    debug!(asset_id = %delete.asset_id, "deleting asset from cache");
 
                     if let Some(ref mut ids) = existing_ids {
                         ids.remove(&delete.asset_id);
                     }
 
                     self.handle_asset_delete(&delete.asset_id).await?;
+                    delete_count += 1;
                     acks.push(sync_line.ack);
                 }
                 "AssetExifV1" => {
                     let exif: SyncAssetExifV1 = serde_json::from_value(sync_line.data)
-                        .map_err(|e| LibraryError::Immich(format!("invalid AssetExifV1: {e}")))?;
+                        .map_err(|e| {
+                            error!(line_number, "failed to deserialize AssetExifV1: {e}");
+                            LibraryError::Immich(format!("invalid AssetExifV1 at line {line_number}: {e}"))
+                        })?;
                     self.handle_asset_exif(exif).await?;
+                    exif_count += 1;
                     acks.push(sync_line.ack);
                 }
                 "SyncCompleteV1" => {
-                    debug!("sync complete");
+                    info!(
+                        assets = asset_count,
+                        exifs = exif_count,
+                        deletes = delete_count,
+                        lines = line_number,
+                        "sync stream complete"
+                    );
                     acks.push(sync_line.ack);
                     break;
                 }
                 other => {
-                    debug!(entity_type = other, "ignoring unknown sync entity type");
+                    debug!(entity_type = other, line_number, "ignoring unknown sync entity type");
                     acks.push(sync_line.ack);
                 }
             }
@@ -184,12 +216,15 @@ impl SyncManager {
 
         // Acknowledge processed changes.
         if !acks.is_empty() {
-            debug!(count = acks.len(), "sending sync acks");
+            info!(count = acks.len(), "sending sync acks to server");
             let ack_request = SyncAckRequest { acks: acks.clone() };
-            self.client.post_no_content("/sync/ack", &ack_request).await?;
+            if let Err(e) = self.client.post_no_content("/sync/ack", &ack_request).await {
+                error!("failed to send sync acks: {e}");
+                return Err(e);
+            }
+            debug!("acks sent successfully");
 
             // Persist checkpoints locally for delta sync on next launch.
-            // We store the last ack per entity type.
             let mut checkpoints: std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
             for ack in &acks {
@@ -198,6 +233,7 @@ impl SyncManager {
                 }
             }
             let pairs: Vec<(String, String)> = checkpoints.into_iter().collect();
+            info!(count = pairs.len(), "saving sync checkpoints locally");
             self.db.save_sync_checkpoints(&pairs).await?;
         }
 
@@ -216,6 +252,7 @@ impl SyncManager {
     }
 
     /// Upsert an asset from the sync stream into the local cache.
+    #[instrument(skip(self, asset), fields(asset_id = %asset.id, filename = %asset.original_file_name))]
     async fn handle_asset(&self, asset: SyncAssetV1) -> Result<(), LibraryError> {
         let media_type = match asset.asset_type.as_str() {
             "VIDEO" => MediaType::Video,
@@ -260,6 +297,7 @@ impl SyncManager {
     }
 
     /// Upsert EXIF metadata from the sync stream.
+    #[instrument(skip(self, exif), fields(asset_id = %exif.asset_id))]
     async fn handle_asset_exif(&self, exif: SyncAssetExifV1) -> Result<(), LibraryError> {
         let record = MediaMetadataRecord {
             media_id: MediaId::new(exif.asset_id),
@@ -281,6 +319,7 @@ impl SyncManager {
     }
 
     /// Delete an asset from the local cache.
+    #[instrument(skip(self))]
     async fn handle_asset_delete(&self, asset_id: &str) -> Result<(), LibraryError> {
         let id = MediaId::new(asset_id.to_owned());
         self.db.delete_permanently(&[id]).await?;
