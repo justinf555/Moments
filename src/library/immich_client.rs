@@ -309,6 +309,58 @@ impl ImmichClient {
         Ok(())
     }
 
+    /// Make a PUT request with a JSON body, expecting no response body.
+    pub(crate) async fn put_no_content<B: serde::Serialize>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<(), LibraryError> {
+        let url = self.url(path);
+        let resp = self
+            .client
+            .put(&url)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| LibraryError::Immich(format!("PUT {path} failed: {e}")))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(LibraryError::Immich(format!(
+                "PUT {path} returned {status}: {body}"
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Make a DELETE request with a JSON body, expecting no response body.
+    pub(crate) async fn delete_with_body<B: serde::Serialize>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<(), LibraryError> {
+        let url = self.url(path);
+        let resp = self
+            .client
+            .delete(&url)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| LibraryError::Immich(format!("DELETE {path} failed: {e}")))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(LibraryError::Immich(format!(
+                "DELETE {path} returned {status}: {body}"
+            )));
+        }
+
+        Ok(())
+    }
+
     /// Make a GET request and return the raw response bytes.
     ///
     /// Used for downloading binary content (thumbnails, originals).

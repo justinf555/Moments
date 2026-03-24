@@ -160,22 +160,50 @@ impl LibraryMedia for ImmichLibrary {
         ids: &[MediaId],
         favorite: bool,
     ) -> Result<(), LibraryError> {
-        // TODO (#103): call Immich API then update local cache.
+        // Write-through: API first, then local cache.
+        let api_ids: Vec<String> = ids.iter().map(|id| id.as_str().to_owned()).collect();
+        self.client
+            .put_no_content(
+                "/assets",
+                &serde_json::json!({
+                    "ids": api_ids,
+                    "isFavorite": favorite,
+                }),
+            )
+            .await?;
         self.db.set_favorite(ids, favorite).await
     }
 
     async fn trash(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
-        // TODO (#103): call Immich API then update local cache.
+        let api_ids: Vec<String> = ids.iter().map(|id| id.as_str().to_owned()).collect();
+        self.client
+            .delete_with_body(
+                "/assets",
+                &serde_json::json!({ "ids": api_ids }),
+            )
+            .await?;
         self.db.trash(ids).await
     }
 
     async fn restore(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
-        // TODO (#103): call Immich API then update local cache.
+        let api_ids: Vec<String> = ids.iter().map(|id| id.as_str().to_owned()).collect();
+        self.client
+            .post_no_content(
+                "/trash/restore/assets",
+                &serde_json::json!({ "ids": api_ids }),
+            )
+            .await?;
         self.db.restore(ids).await
     }
 
     async fn delete_permanently(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
-        // TODO (#103): call Immich API then update local cache.
+        let api_ids: Vec<String> = ids.iter().map(|id| id.as_str().to_owned()).collect();
+        self.client
+            .delete_with_body(
+                "/assets",
+                &serde_json::json!({ "ids": api_ids, "force": true }),
+            )
+            .await?;
         self.db.delete_permanently(ids).await
     }
 
