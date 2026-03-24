@@ -233,9 +233,10 @@ impl SyncManager {
 
         let duration_ms = asset.duration.as_deref().and_then(parse_duration_ms);
 
+        let id_str = asset.id.clone();
         let record = MediaRecord {
             id: MediaId::new(asset.id),
-            relative_path: String::new(), // No local file for Immich assets
+            relative_path: format!("immich/{id_str}"), // Placeholder — no local file
             original_filename: asset.original_file_name,
             file_size: 0, // Not in sync DTO
             imported_at,
