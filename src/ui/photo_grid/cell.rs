@@ -98,33 +98,29 @@ mod imp {
             self.overlay.add_overlay(&self.days_label);
             self.overlay.add_overlay(&self.duration_label);
 
-            // Hover controller — show star button on mouse enter/leave.
-            let star = self.star_btn.clone();
-            let show_star = self.show_star.clone();
-            let has_texture = self.has_texture.clone();
-            let is_favorited = self.is_favorited.clone();
-            let motion = gtk::EventControllerMotion::new();
-            motion.set_propagation_phase(gtk::PropagationPhase::Capture);
-            motion.connect_enter(move |_, x, y| {
-                tracing::debug!(x, y, show_star = show_star.get(), has_texture = has_texture.get(), "cell hover ENTER");
-                if show_star.get() && has_texture.get() {
-                    star.set_visible(true);
-                }
-            });
-            let star = self.star_btn.clone();
-            let is_favorited2 = self.is_favorited.clone();
-            motion.connect_leave(move |_| {
-                tracing::debug!(is_favorited = is_favorited2.get(), "cell hover LEAVE");
-                // Keep visible if item is favourited (visual indicator).
-                if !is_favorited2.get() {
-                    star.set_visible(false);
-                }
-            });
             self.overlay.set_parent(&*obj);
 
-            // Add motion controller to the cell widget (not the overlay)
-            // so it receives enter/leave even when child widgets consume
-            // pointer events.
+            // Hover controller — show star button on mouse enter/leave.
+            // Uses weak ref to the cell to read live imp state (show_star,
+            // has_texture, is_favorited are set later during factory bind).
+            let motion = gtk::EventControllerMotion::new();
+            motion.set_propagation_phase(gtk::PropagationPhase::Capture);
+            let cell_weak = obj.downgrade();
+            motion.connect_enter(move |_, _x, _y| {
+                let Some(cell) = cell_weak.upgrade() else { return };
+                let imp = cell.imp();
+                if imp.show_star.get() && imp.has_texture.get() {
+                    imp.star_btn.set_visible(true);
+                }
+            });
+            let cell_weak = obj.downgrade();
+            motion.connect_leave(move |_| {
+                let Some(cell) = cell_weak.upgrade() else { return };
+                let imp = cell.imp();
+                if !imp.is_favorited.get() {
+                    imp.star_btn.set_visible(false);
+                }
+            });
             obj.add_controller(motion);
         }
 
