@@ -294,10 +294,7 @@ impl MomentsSidebar {
     /// Attach a right-click gesture to an individual album row.
     fn attach_row_context_menu(&self, list_row: &gtk::ListBoxRow, album_id: &str, name: &str) {
         let ctx = self.imp().context_menu.borrow();
-        let Some(ctx) = ctx.as_ref() else {
-            debug!("no context menu callbacks set, skipping gesture for {album_id}");
-            return;
-        };
+        let Some(ctx) = ctx.as_ref() else { return };
 
         let gesture = gtk::GestureClick::new();
         gesture.set_button(3);
@@ -308,18 +305,9 @@ impl MomentsSidebar {
         let aname = name.to_owned();
         let row_weak = list_row.downgrade();
 
-        debug!(album_id = %album_id, "attaching context menu gesture");
-
         gesture.connect_pressed(move |gesture, _, x, _y| {
-            let Some(row) = row_weak.upgrade() else {
-                debug!("row weak ref gone in gesture handler");
-                return;
-            };
+            let Some(row) = row_weak.upgrade() else { return };
 
-            debug!(album_id = %aid, "right-click pressed on album row");
-
-            // Build a simple popover with buttons instead of GMenuModel
-            // to avoid action resolution issues.
             let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
             vbox.add_css_class("menu");
 
@@ -343,7 +331,6 @@ impl MomentsSidebar {
             let aname_r = aname.clone();
             let pop_weak = popover.downgrade();
             rename_btn.connect_clicked(move |_| {
-                debug!(album_id = %aid_r, "rename clicked");
                 if let Some(p) = pop_weak.upgrade() {
                     p.popdown();
                 }
@@ -355,7 +342,6 @@ impl MomentsSidebar {
             let aname_d = aname.clone();
             let pop_weak = popover.downgrade();
             delete_btn.connect_clicked(move |_| {
-                debug!(album_id = %aid_d, "delete clicked");
                 if let Some(p) = pop_weak.upgrade() {
                     p.popdown();
                 }
@@ -363,16 +349,13 @@ impl MomentsSidebar {
             });
 
             popover.connect_closed(move |p| {
-                debug!("popover closed, unparenting");
                 p.unparent();
             });
 
             popover.popup();
-            debug!(album_id = %aid, "popover shown");
             gesture.set_state(gtk::EventSequenceState::Claimed);
         });
 
         list_row.add_controller(gesture);
-        debug!(album_id = %album_id, "gesture controller added to row");
     }
 }
