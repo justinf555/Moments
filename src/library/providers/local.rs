@@ -135,6 +135,10 @@ impl LibraryImport for LocalLibrary {
 
 #[async_trait]
 impl LibraryMedia for LocalLibrary {
+    async fn get_media_item(&self, id: &MediaId) -> Result<Option<MediaItem>, LibraryError> {
+        self.db.get_media_item(id).await
+    }
+
     async fn media_exists(&self, id: &MediaId) -> Result<bool, LibraryError> {
         self.db.media_exists(id).await
     }

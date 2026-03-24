@@ -460,6 +460,9 @@ impl MomentsApplication {
                                             win.navigate("recent");
                                         }
                                     }
+                                    Ok(LibraryEvent::AssetSynced { item }) => {
+                                        registry.on_asset_synced(&item);
+                                    }
                                     Ok(_) => {}
                                     Err(std::sync::mpsc::TryRecvError::Empty) => break,
                                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {

@@ -113,6 +113,22 @@ pub enum MediaFilter {
     Album { album_id: super::album::AlbumId },
 }
 
+impl MediaFilter {
+    /// Check whether a [`MediaItem`] belongs in this filtered view.
+    ///
+    /// Returns `false` for `Album` — album membership requires a DB query
+    /// and cannot be determined from the item alone.
+    pub fn matches(&self, item: &MediaItem) -> bool {
+        match self {
+            MediaFilter::All => !item.is_trashed,
+            MediaFilter::Favorites => item.is_favorite && !item.is_trashed,
+            MediaFilter::Trashed => item.is_trashed,
+            MediaFilter::RecentImports { since } => !item.is_trashed && item.imported_at > *since,
+            MediaFilter::Album { .. } => false,
+        }
+    }
+}
+
 /// Opaque cursor for keyset pagination in [`LibraryMedia::list_media`].
 ///
 /// Encodes the position of the last item seen so the next page continues
@@ -139,6 +155,11 @@ pub struct MediaCursor {
 pub trait LibraryMedia: Send + Sync {
     /// Return `true` if an asset with this [`MediaId`] is already stored.
     async fn media_exists(&self, id: &MediaId) -> Result<bool, LibraryError>;
+
+    /// Fetch a single media item by ID.
+    ///
+    /// Used for incremental grid updates without full reload.
+    async fn get_media_item(&self, id: &MediaId) -> Result<Option<MediaItem>, LibraryError>;
 
     /// Persist a newly imported media asset record.
     async fn insert_media(&self, record: &MediaRecord) -> Result<(), LibraryError>;

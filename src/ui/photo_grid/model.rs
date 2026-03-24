@@ -145,6 +145,79 @@ impl PhotoGridModel {
     ///
     /// For filtered models (`Favorites`): reloads from the database since
     /// items need to be added or removed from the filtered set.
+    /// Insert a single item at the correct sorted position without clearing the store.
+    ///
+    /// Preserves scroll position. Skips if the item is already in the store.
+    pub fn insert_item_sorted(self: &Rc<Self>, item: MediaItem) {
+        // Skip duplicates.
+        if self.id_index.borrow().contains_key(&item.id) {
+            return;
+        }
+
+        let sort_key = match self.filter.borrow().clone() {
+            MediaFilter::RecentImports { .. } => item.imported_at,
+            _ => item.taken_at.unwrap_or(0),
+        };
+
+        // Find insertion position (descending order).
+        // Linear scan — store is already sorted, find first item with smaller key.
+        let n = self.store.n_items();
+        let pos = (0..n)
+            .find(|&i| {
+                if let Some(obj) = self.store.item(i).and_then(|o| o.downcast::<MediaItemObject>().ok()) {
+                    let obj_key = match self.filter.borrow().clone() {
+                        MediaFilter::RecentImports { .. } => obj.item().imported_at,
+                        _ => obj.item().taken_at.unwrap_or(0),
+                    };
+                    obj_key < sort_key
+                        || (obj_key == sort_key && obj.item().id.as_str() < item.id.as_str())
+                } else {
+                    false
+                }
+            })
+            .unwrap_or(n);
+
+        let obj = MediaItemObject::new(item);
+        self.id_index
+            .borrow_mut()
+            .insert(obj.item().id.clone(), obj.downgrade());
+
+        // Speculatively load thumbnail.
+        let id = obj.item().id.clone();
+        let path = self.library.thumbnail_path(&id);
+        let tokio = self.tokio.clone();
+        let obj_ref = obj.clone();
+        glib::MainContext::default().spawn_local(async move {
+            if let Some(texture) = load_texture(tokio, path).await {
+                obj_ref.set_texture(Some(texture));
+            }
+        });
+
+        self.store.insert(pos, &obj);
+    }
+
+    /// Fetch a single item from the DB and insert it at the sorted position.
+    ///
+    /// Used by event handlers to add items to filtered views without full reload.
+    pub fn fetch_and_insert_sorted(self: &Rc<Self>, id: &MediaId) {
+        let library = Arc::clone(&self.library);
+        let tokio = self.tokio.clone();
+        let model = Rc::clone(self);
+        let id = id.clone();
+
+        glib::MainContext::default().spawn_local(async move {
+            let result = tokio
+                .spawn(async move { library.get_media_item(&id).await })
+                .await;
+            match result {
+                Ok(Ok(Some(item))) => model.insert_item_sorted(item),
+                Ok(Ok(None)) => debug!("item not found for insert"),
+                Ok(Err(e)) => error!("get_media_item failed: {e}"),
+                Err(e) => error!("tokio join failed: {e}"),
+            }
+        });
+    }
+
     /// Remove a single item from the store by ID.
     fn remove_item(&self, id: &MediaId) {
         let pos = self.store.find_with_equal_func(|obj| {
@@ -168,7 +241,7 @@ impl PhotoGridModel {
             }
             MediaFilter::Favorites => {
                 if is_favorite {
-                    self.reload();
+                    self.fetch_and_insert_sorted(id);
                 } else {
                     self.remove_item(id);
                 }
@@ -186,14 +259,14 @@ impl PhotoGridModel {
                     // Item moved to trash — remove from this view.
                     self.remove_item(id);
                 } else {
-                    // Item restored — reload to add it back in sort order.
-                    self.reload();
+                    // Item restored — insert at sorted position.
+                    self.fetch_and_insert_sorted(id);
                 }
             }
             MediaFilter::Trashed => {
                 if is_trashed {
-                    // Item just trashed — reload to add it.
-                    self.reload();
+                    // Item just trashed — insert into trash view.
+                    self.fetch_and_insert_sorted(id);
                 } else {
                     // Item restored — remove from trash view.
                     self.remove_item(id);

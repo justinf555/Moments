@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::library::album::AlbumId;
-use crate::library::media::{MediaFilter, MediaId};
+use crate::library::media::{MediaFilter, MediaId, MediaItem};
 use crate::ui::photo_grid::PhotoGridModel;
 
 /// Shared registry of all active [`PhotoGridModel`] instances.
@@ -68,6 +68,19 @@ impl ModelRegistry {
                 if mid == album_id {
                     model.reload();
                 }
+            }
+        }
+    }
+
+    /// Insert a synced asset into all matching model views.
+    ///
+    /// Each model checks its filter — if the item matches, it's inserted
+    /// at the correct sorted position without clearing the store.
+    pub fn on_asset_synced(&self, item: &MediaItem) {
+        for model in self.models.borrow().iter() {
+            let filter = model.filter();
+            if filter.matches(item) {
+                model.insert_item_sorted(item.clone());
             }
         }
     }

@@ -13,8 +13,7 @@ use super::db::Database;
 use super::error::LibraryError;
 use super::event::LibraryEvent;
 use super::immich_client::ImmichClient;
-use super::import::ImportSummary;
-use super::media::{LibraryMedia, MediaId, MediaMetadataRecord, MediaRecord, MediaType};
+use super::media::{LibraryMedia, MediaId, MediaItem, MediaMetadataRecord, MediaRecord, MediaType};
 use super::thumbnail::sharded_thumbnail_path;
 
 /// Handle returned by [`SyncHandle::start`] to signal shutdown.
@@ -284,13 +283,9 @@ impl SyncManager {
             self.db.save_sync_checkpoints(&pairs).await?;
         }
 
-        // Trigger grid refresh.
+        // Log summary — grid updates are already handled per-asset via AssetSynced events.
         if asset_count > 0 {
             info!(count = asset_count, "sync complete — assets synced");
-            let _ = self.events.send(LibraryEvent::ImportComplete(ImportSummary {
-                imported: asset_count,
-                ..Default::default()
-            }));
         } else {
             debug!("sync complete — no new assets");
         }
@@ -337,6 +332,23 @@ impl SyncManager {
 
         let media_id = record.id.clone();
         self.db.upsert_media(&record).await?;
+
+        // Emit per-asset event for incremental grid updates.
+        let item = MediaItem {
+            id: media_id.clone(),
+            taken_at,
+            imported_at,
+            original_filename: record.original_filename.clone(),
+            width: record.width,
+            height: record.height,
+            orientation: record.orientation,
+            media_type,
+            is_favorite: record.is_favorite,
+            is_trashed: record.is_trashed,
+            trashed_at: record.trashed_at,
+            duration_ms: record.duration_ms,
+        };
+        let _ = self.events.send(LibraryEvent::AssetSynced { item });
 
         // Queue thumbnail download — the worker pool handles concurrency.
         self.db.insert_thumbnail_pending(&media_id).await?;
