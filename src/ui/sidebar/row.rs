@@ -7,6 +7,7 @@ mod imp {
     #[derive(Default)]
     pub struct MomentsSidebarRow {
         pub route_id: OnceCell<String>,
+        pub label: OnceCell<gtk::Label>,
     }
 
     #[glib::object_subclass]
@@ -52,10 +53,22 @@ impl MomentsSidebarRow {
         label_widget.set_hexpand(true);
         obj.append(&label_widget);
 
+        obj.imp()
+            .label
+            .set(label_widget)
+            .expect("label set once");
+
         obj
     }
 
     pub fn route_id(&self) -> &str {
         self.imp().route_id.get().map(|s| s.as_str()).unwrap_or("")
+    }
+
+    /// Update the displayed label text.
+    pub fn set_label_text(&self, text: &str) {
+        if let Some(label) = self.imp().label.get() {
+            label.set_text(text);
+        }
     }
 }

@@ -8,10 +8,8 @@ pub struct SidebarRoute {
     pub icon: &'static str,
 }
 
-/// All sidebar routes, in display order.
-///
-/// Adding a new view is one entry here — no widget code changes required.
-pub const ROUTES: &[SidebarRoute] = &[
+/// Top sidebar routes, displayed above the Albums section.
+pub const TOP_ROUTES: &[SidebarRoute] = &[
     SidebarRoute {
         id: "photos",
         label: "Photos",
@@ -27,6 +25,10 @@ pub const ROUTES: &[SidebarRoute] = &[
         label: "Recent Imports",
         icon: "document-open-recent-symbolic",
     },
+];
+
+/// Bottom sidebar routes, displayed below the Albums section.
+pub const BOTTOM_ROUTES: &[SidebarRoute] = &[
     SidebarRoute {
         id: "trash",
         label: "Trash",
