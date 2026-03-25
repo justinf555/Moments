@@ -601,11 +601,33 @@ impl MomentsSidebar {
         self.set_status(imp::StatusState::Sync, "sync");
     }
 
-    /// Show sync complete — transition to idle.
+    /// Show sync complete — update sync timestamp and schedule idle.
+    ///
+    /// Thumbnail downloads may still be in-flight after the sync stream
+    /// finishes. We schedule a delayed transition to idle that fires
+    /// after 3 seconds — if thumbnail progress events arrive in the
+    /// meantime, they'll take priority and the idle will be rescheduled
+    /// on the next sync complete.
     pub fn show_sync_complete(&self, _assets: usize) {
         let imp = self.imp();
         imp.last_synced_at.set(Some(chrono::Utc::now().timestamp()));
-        self.set_idle();
+
+        // If already idle or only thumbnails running, go to idle now.
+        let current = imp.current_state.get();
+        if current == imp::StatusState::Idle || current == imp::StatusState::Sync {
+            self.set_idle();
+        } else {
+            // Thumbnails still running — schedule delayed idle.
+            let obj_weak = self.downgrade();
+            glib::timeout_add_local_once(std::time::Duration::from_secs(3), move || {
+                if let Some(obj) = obj_weak.upgrade() {
+                    let state = obj.imp().current_state.get();
+                    if state == imp::StatusState::Thumbnails {
+                        obj.set_idle();
+                    }
+                }
+            });
+        }
     }
 
     /// Show thumbnail download progress.
