@@ -77,6 +77,12 @@ pub trait LibraryFaces: Send + Sync {
         target: &PersonId,
         sources: &[PersonId],
     ) -> Result<(), LibraryError>;
+
+    /// Return the filesystem path to a person's face thumbnail, if available.
+    ///
+    /// The Immich backend stores these at `{thumbnails_dir}/people/{id}.jpg`.
+    /// The local backend returns `None`.
+    fn person_thumbnail_path(&self, person_id: &PersonId) -> Option<std::path::PathBuf>;
 }
 
 #[cfg(test)]

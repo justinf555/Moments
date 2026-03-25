@@ -528,4 +528,13 @@ impl LibraryFaces for ImmichLibrary {
     ) -> Result<(), LibraryError> {
         Ok(())
     }
+
+    fn person_thumbnail_path(&self, person_id: &PersonId) -> Option<std::path::PathBuf> {
+        let path = self.bundle.thumbnails.join("people").join(format!("{}.jpg", person_id.as_str()));
+        if path.exists() {
+            Some(path)
+        } else {
+            None
+        }
+    }
 }
