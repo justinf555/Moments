@@ -89,19 +89,38 @@ Shown for 5 seconds after an upload finishes, then transitions to idle.
 
 ### State 5: Idle (lowest priority, default)
 
-No background activity. Shows the Import button and last sync time.
+No background activity. Shows last sync time.
 
 ```
 ┌──────────────────────────────────────┐
 │                                      │
-│  [⬆ Import]          Synced 2m ago   │
+│  Synced 2m ago                    ✓  │
 └──────────────────────────────────────┘
 ```
 
-- **Left:** Import button — triggers `app.import` action
-- **Right:** Last sync timestamp — "Synced just now", "Synced 30s ago", "Synced 2m ago", "Synced 1h ago"
+- **Text:** Last sync timestamp — "Synced just now", "Synced 30s ago", "Synced 2m ago", "Synced 1h ago"
 - Updated every 10 seconds via `timeout_add_local`
-- For the local backend (no sync): just the Import button, no sync timestamp
+- For the local backend (no sync): bar is hidden (no status to show)
+- First launch before any sync: "Waiting for sync..."
+
+## Button Relocation
+
+Import and the hamburger menu move from the content header bar to the **sidebar header bar**:
+
+```
+┌─────────────────────┬──────────────────────────────────┐
+│ [⬆] Moments    [≡]  │          [🔍-] [🔍+]   [⭐] [🗑]  │
+│                      │                                    │
+│  Photos              │   Content area (view-specific      │
+│  Favorites           │   controls only in header)         │
+│  ...                 │                                    │
+└─────────────────────┴──────────────────────────────────┘
+```
+
+- **Sidebar header LHS:** Import button (upload icon) — triggers `app.import`
+- **Sidebar header RHS:** Hamburger menu — Preferences, Keyboard Shortcuts, About Moments
+- **Content header:** View-specific controls only (zoom in/out, selection actions, album controls)
+- Import button and menu are **always visible** regardless of which content view is active
 
 ## State Machine
 
@@ -259,21 +278,23 @@ Ok(LibraryEvent::ThumbnailProgress { completed, total }) => {
 |------|--------|
 | `src/library/event.rs` | Add SyncStarted, SyncProgress, SyncComplete, ThumbnailProgress, ThumbnailsComplete variants |
 | `src/library/sync.rs` | Emit new events at sync start/flush/end and from thumbnail downloader |
-| `src/ui/sidebar.rs` | Replace bottom bar with GtkStack, add state methods, sync time timer |
+| `src/ui/sidebar.rs` | Replace bottom bar with GtkStack, add state methods, sync time timer, add Import button + hamburger menu to sidebar header |
+| `src/ui/photo_grid.rs` | Remove Import button and hamburger menu from content header bar |
 | `src/application.rs` | Wire new events to sidebar methods |
 
 ## Implementation Phases
 
 | Phase | Description | Scope |
 |-------|-------------|-------|
-| 1 | Persistent idle bar with Import button | Bottom bar always visible, import button, no sync status yet |
+| 1 | Move Import + menu to sidebar header, persistent status bar | Import button + hamburger menu in sidebar header, bottom bar always visible with idle state, remove from content header |
 | 2 | Sync events + sync status display | SyncStarted/Complete events, "Syncing..." state, "Synced X ago" timer |
 | 3 | Thumbnail download progress | ThumbnailProgress events, thumbnail count display |
 | 4 | Priority state machine | Handle overlapping states correctly (upload overrides sync/thumbnails) |
 
 ## Edge Cases
 
-- **First launch (no sync yet):** Idle state shows "Import" button only, no "Synced" time
+- **First launch (no sync yet):** Idle state shows "Waiting for sync...", no timestamp
+- **Local backend:** Bottom bar hidden — no sync status to show, import is in sidebar header
 - **Sync error:** Show "Sync failed" briefly, then revert to idle with last successful sync time
 - **Very fast sync (< 1s):** Skip the "Syncing..." state entirely — go straight to idle or thumbnails
 - **Offline:** Don't show "Syncing..." when the server is unreachable — let the sync error handling deal with it
