@@ -299,6 +299,7 @@ mod imp {
             bottom_sheet.set_bottom_bar(Some(&bar_stack));
             bottom_sheet.set_open(false);
             bottom_sheet.set_show_drag_handle(false);
+            bottom_sheet.set_can_open(false);
             bottom_sheet.set_modal(false);
             bottom_sheet.set_full_width(true);
             // Always visible — shows status at all times.
@@ -567,9 +568,8 @@ impl MomentsSidebar {
             // Close the sheet when leaving upload state.
             if state != imp::StatusState::Upload {
                 if let Some(sheet) = imp.bottom_sheet.get() {
-                    if sheet.is_open() {
-                        sheet.set_open(false);
-                    }
+                    sheet.set_can_open(false);
+                    sheet.set_open(false);
                 }
             }
         }
@@ -679,6 +679,7 @@ impl MomentsSidebar {
         // Auto-open the sheet during upload so progress is always visible.
         if let Some(sheet) = imp.bottom_sheet.get() {
             if !sheet.is_open() {
+                sheet.set_can_open(true);
                 sheet.set_open(true);
             }
         }
