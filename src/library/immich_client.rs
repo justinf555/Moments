@@ -180,211 +180,121 @@ impl ImmichClient {
         self.server_about().await
     }
 
-    /// Make a GET request to the given API path and deserialize the response.
-    pub(crate) async fn get<T: serde::de::DeserializeOwned>(
+    // ── Private helpers ────────────────────────────────────────────────────
+
+    /// Send a request, check the status, and return the response.
+    async fn send(
         &self,
+        request: reqwest::RequestBuilder,
+        method: &str,
         path: &str,
-    ) -> Result<T, LibraryError> {
-        let url = self.url(path);
-        let resp = self
-            .client
-            .get(&url)
+    ) -> Result<reqwest::Response, LibraryError> {
+        let resp = request
             .send()
             .await
-            .map_err(|e| LibraryError::Immich(format!("GET {path} failed: {e}")))?;
+            .map_err(|e| LibraryError::Immich(format!("{method} {path} failed: {e}")))?;
 
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
             return Err(LibraryError::Immich(format!(
-                "GET {path} returned {status}: {body}"
+                "{method} {path} returned {status}: {body}"
             )));
         }
 
-        resp.json()
-            .await
-            .map_err(|e| LibraryError::Immich(format!("GET {path} parse failed: {e}")))
+        Ok(resp)
     }
 
-    /// Make a POST request with a JSON body and deserialize the response.
+    /// Send a request, check status, parse JSON response.
+    async fn send_json<T: serde::de::DeserializeOwned>(
+        &self,
+        request: reqwest::RequestBuilder,
+        method: &str,
+        path: &str,
+    ) -> Result<T, LibraryError> {
+        let resp = self.send(request, method, path).await?;
+        resp.json()
+            .await
+            .map_err(|e| LibraryError::Immich(format!("{method} {path} parse failed: {e}")))
+    }
+
+    /// Send a request, check status, discard body.
+    async fn send_no_content(
+        &self,
+        request: reqwest::RequestBuilder,
+        method: &str,
+        path: &str,
+    ) -> Result<(), LibraryError> {
+        self.send(request, method, path).await?;
+        Ok(())
+    }
+
+    // ── Typed HTTP methods ───────────────────────────────────────────────
+
+    pub(crate) async fn get<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+    ) -> Result<T, LibraryError> {
+        self.send_json(self.client.get(&self.url(path)), "GET", path).await
+    }
+
     pub(crate) async fn post<B: serde::Serialize, T: serde::de::DeserializeOwned>(
         &self,
         path: &str,
         body: &B,
     ) -> Result<T, LibraryError> {
-        let url = self.url(path);
-        let resp = self
-            .client
-            .post(&url)
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| LibraryError::Immich(format!("POST {path} failed: {e}")))?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(LibraryError::Immich(format!(
-                "POST {path} returned {status}: {body}"
-            )));
-        }
-
-        resp.json()
-            .await
-            .map_err(|e| LibraryError::Immich(format!("POST {path} parse failed: {e}")))
+        self.send_json(self.client.post(&self.url(path)).json(body), "POST", path).await
     }
 
-    /// Make a PUT request with a JSON body and deserialize the response.
     pub(crate) async fn put<B: serde::Serialize, T: serde::de::DeserializeOwned>(
         &self,
         path: &str,
         body: &B,
     ) -> Result<T, LibraryError> {
-        let url = self.url(path);
-        let resp = self
-            .client
-            .put(&url)
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| LibraryError::Immich(format!("PUT {path} failed: {e}")))?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(LibraryError::Immich(format!(
-                "PUT {path} returned {status}: {body}"
-            )));
-        }
-
-        resp.json()
-            .await
-            .map_err(|e| LibraryError::Immich(format!("PUT {path} parse failed: {e}")))
+        self.send_json(self.client.put(&self.url(path)).json(body), "PUT", path).await
     }
 
-    /// Make a DELETE request and deserialize the response.
     pub(crate) async fn delete<T: serde::de::DeserializeOwned>(
         &self,
         path: &str,
     ) -> Result<T, LibraryError> {
-        let url = self.url(path);
-        let resp = self
-            .client
-            .delete(&url)
-            .send()
-            .await
-            .map_err(|e| LibraryError::Immich(format!("DELETE {path} failed: {e}")))?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(LibraryError::Immich(format!(
-                "DELETE {path} returned {status}: {body}"
-            )));
-        }
-
-        resp.json()
-            .await
-            .map_err(|e| LibraryError::Immich(format!("DELETE {path} parse failed: {e}")))
+        self.send_json(self.client.delete(&self.url(path)), "DELETE", path).await
     }
 
-    /// Make a DELETE request that returns no body (204 No Content).
-    pub(crate) async fn delete_no_content(&self, path: &str) -> Result<(), LibraryError> {
-        let url = self.url(path);
-        let resp = self
-            .client
-            .delete(&url)
-            .send()
-            .await
-            .map_err(|e| LibraryError::Immich(format!("DELETE {path} failed: {e}")))?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(LibraryError::Immich(format!(
-                "DELETE {path} returned {status}: {body}"
-            )));
-        }
-
-        Ok(())
+    pub(crate) async fn post_no_content<B: serde::Serialize>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<(), LibraryError> {
+        self.send_no_content(self.client.post(&self.url(path)).json(body), "POST", path).await
     }
 
-    /// Make a PUT request with a JSON body, expecting no response body.
     pub(crate) async fn put_no_content<B: serde::Serialize>(
         &self,
         path: &str,
         body: &B,
     ) -> Result<(), LibraryError> {
-        let url = self.url(path);
-        let resp = self
-            .client
-            .put(&url)
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| LibraryError::Immich(format!("PUT {path} failed: {e}")))?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(LibraryError::Immich(format!(
-                "PUT {path} returned {status}: {body}"
-            )));
-        }
-
-        Ok(())
+        self.send_no_content(self.client.put(&self.url(path)).json(body), "PUT", path).await
     }
 
-    /// Make a DELETE request with a JSON body, expecting no response body.
+    pub(crate) async fn delete_no_content(&self, path: &str) -> Result<(), LibraryError> {
+        self.send_no_content(self.client.delete(&self.url(path)), "DELETE", path).await
+    }
+
     pub(crate) async fn delete_with_body<B: serde::Serialize>(
         &self,
         path: &str,
         body: &B,
     ) -> Result<(), LibraryError> {
-        let url = self.url(path);
-        let resp = self
-            .client
-            .delete(&url)
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| LibraryError::Immich(format!("DELETE {path} failed: {e}")))?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(LibraryError::Immich(format!(
-                "DELETE {path} returned {status}: {body}"
-            )));
-        }
-
-        Ok(())
+        self.send_no_content(self.client.delete(&self.url(path)).json(body), "DELETE", path).await
     }
 
-    /// Make a PATCH request with a JSON body, expecting no response body.
     pub(crate) async fn patch_no_content<B: serde::Serialize>(
         &self,
         path: &str,
         body: &B,
     ) -> Result<(), LibraryError> {
-        let url = self.url(path);
-        let resp = self
-            .client
-            .patch(&url)
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| LibraryError::Immich(format!("PATCH {path} failed: {e}")))?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(LibraryError::Immich(format!(
-                "PATCH {path} returned {status}: {body}"
-            )));
-        }
-
-        Ok(())
+        self.send_no_content(self.client.patch(&self.url(path)).json(body), "PATCH", path).await
     }
 
     /// Upload an asset to the Immich server via multipart form-data.
@@ -465,24 +375,8 @@ impl ImmichClient {
     }
 
     /// Make a GET request and return the raw response bytes.
-    ///
-    /// Used for downloading binary content (thumbnails, originals).
     pub(crate) async fn get_bytes(&self, path: &str) -> Result<Vec<u8>, LibraryError> {
-        let url = self.url(path);
-        let resp = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| LibraryError::Immich(format!("GET {path} failed: {e}")))?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            return Err(LibraryError::Immich(format!(
-                "GET {path} returned {status}"
-            )));
-        }
-
+        let resp = self.send(self.client.get(&self.url(path)), "GET", path).await?;
         resp.bytes()
             .await
             .map(|b| b.to_vec())
@@ -490,58 +384,12 @@ impl ImmichClient {
     }
 
     /// Send a POST request and return the raw response for streaming.
-    ///
-    /// Used by SyncManager for the `POST /sync/stream` endpoint which
-    /// returns newline-delimited JSON.
     pub(crate) async fn post_stream<B: serde::Serialize>(
         &self,
         path: &str,
         body: &B,
     ) -> Result<reqwest::Response, LibraryError> {
-        let url = self.url(path);
-        let resp = self
-            .client
-            .post(&url)
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| LibraryError::Immich(format!("POST {path} stream failed: {e}")))?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(LibraryError::Immich(format!(
-                "POST {path} stream returned {status}: {body}"
-            )));
-        }
-
-        Ok(resp)
-    }
-
-    /// Send a POST request with a JSON body, expecting no response body (204).
-    pub(crate) async fn post_no_content<B: serde::Serialize>(
-        &self,
-        path: &str,
-        body: &B,
-    ) -> Result<(), LibraryError> {
-        let url = self.url(path);
-        let resp = self
-            .client
-            .post(&url)
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| LibraryError::Immich(format!("POST {path} failed: {e}")))?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(LibraryError::Immich(format!(
-                "POST {path} returned {status}: {body}"
-            )));
-        }
-
-        Ok(())
+        self.send(self.client.post(&self.url(path)).json(body), "POST", path).await
     }
 }
 
