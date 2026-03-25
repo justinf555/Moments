@@ -217,6 +217,9 @@ pub trait LibraryMedia: Send + Sync {
 
     /// Return IDs of items trashed longer than `max_age_secs` ago.
     async fn expired_trash(&self, max_age_secs: i64) -> Result<Vec<MediaId>, LibraryError>;
+
+    /// Return aggregate library statistics for the preferences overview.
+    async fn library_stats(&self) -> Result<super::db::LibraryStats, LibraryError>;
 }
 
 /// A row in the `media` table.

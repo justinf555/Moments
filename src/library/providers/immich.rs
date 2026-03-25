@@ -229,6 +229,16 @@ impl LibraryMedia for ImmichLibrary {
         // Server manages trash retention — nothing to do locally.
         Ok(vec![])
     }
+
+    async fn library_stats(&self) -> Result<crate::library::db::LibraryStats, LibraryError> {
+        let mut stats = self.db.library_stats().await?;
+        // Calculate originals cache disk usage.
+        let originals_dir = self.bundle.originals.clone();
+        if let Ok(size) = tokio::task::spawn_blocking(move || dir_size(&originals_dir)).await {
+            stats.cache_used_bytes = size;
+        }
+        Ok(stats)
+    }
 }
 
 #[async_trait]
@@ -331,6 +341,23 @@ fn sharded_original_path(originals_dir: &std::path::Path, id: &MediaId, ext: &st
         .join(&hex[..2])
         .join(&hex[2..4])
         .join(format!("{hex}.{ext}"))
+}
+
+/// Calculate total disk usage of a directory (recursive).
+fn dir_size(path: &std::path::Path) -> u64 {
+    let mut total = 0u64;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata() {
+                if meta.is_file() {
+                    total += meta.len();
+                } else if meta.is_dir() {
+                    total += dir_size(&entry.path());
+                }
+            }
+        }
+    }
+    total
 }
 
 /// Evict oldest cached originals until the cache is under the configured limit.

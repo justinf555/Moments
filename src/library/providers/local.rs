@@ -209,6 +209,10 @@ impl LibraryMedia for LocalLibrary {
     async fn expired_trash(&self, max_age_secs: i64) -> Result<Vec<MediaId>, LibraryError> {
         self.db.expired_trash(max_age_secs).await
     }
+
+    async fn library_stats(&self) -> Result<crate::library::db::LibraryStats, LibraryError> {
+        self.db.library_stats().await
+    }
 }
 
 #[async_trait]
