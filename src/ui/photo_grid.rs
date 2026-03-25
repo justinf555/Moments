@@ -4,14 +4,15 @@ use std::sync::Arc;
 
 use adw::prelude::*;
 use gtk::{gio, glib, subclass::prelude::*};
-use tracing::{debug, instrument};
+use tracing::instrument;
 
-use crate::library::media::{MediaFilter, MediaType};
+use crate::library::media::MediaType;
 use crate::library::Library;
 use crate::ui::video_viewer::VideoViewer;
 use crate::ui::viewer::PhotoViewer;
 use crate::ui::ContentView;
 
+pub mod actions;
 pub mod cell;
 pub mod factory;
 pub mod item;
@@ -486,21 +487,7 @@ impl PhotoGridView {
         }
     }
 
-    /// Action group containing `zoom-in` and `zoom-out` actions.
-    ///
-    /// Install on the window with prefix `"view"` so accelerators work
-    /// regardless of focus.
-    pub fn view_actions(&self) -> &gio::SimpleActionGroup {
-        &self.view_actions
-    }
-
     pub fn set_model(&self, model: Rc<PhotoGridModel>, registry: Rc<crate::ui::model_registry::ModelRegistry>) {
-        let nav_view = self.nav_view.clone();
-        let photo_viewer = Rc::clone(&self.photo_viewer);
-        let photo_nav_page = self.photo_viewer.nav_page().clone();
-        let video_viewer = Rc::clone(&self.video_viewer);
-        let video_nav_page = self.video_viewer.nav_page().clone();
-
         let filter = model.filter();
         self.photo_grid.set_model(
             Rc::clone(&model),
@@ -509,575 +496,73 @@ impl PhotoGridView {
             Rc::clone(&registry),
             filter.clone(),
             Rc::clone(&self.texture_cache),
-            move |items, index| {
-                // Choose viewer based on media type.
-                let media_type = items
-                    .get(index)
-                    .map(|obj| obj.item().media_type)
-                    .unwrap_or(MediaType::Image);
+            {
+                let nav_view = self.nav_view.clone();
+                let photo_viewer = Rc::clone(&self.photo_viewer);
+                let photo_nav_page = self.photo_viewer.nav_page().clone();
+                let video_viewer = Rc::clone(&self.video_viewer);
+                let video_nav_page = self.video_viewer.nav_page().clone();
+                move |items, index| {
+                    let media_type = items
+                        .get(index)
+                        .map(|obj| obj.item().media_type)
+                        .unwrap_or(MediaType::Image);
 
-                let filename = items
-                    .get(index)
-                    .map(|obj| obj.item().original_filename.clone())
-                    .unwrap_or_default();
+                    let filename = items
+                        .get(index)
+                        .map(|obj| obj.item().original_filename.clone())
+                        .unwrap_or_default();
 
-                tracing::debug!(
-                    index,
-                    ?media_type,
-                    %filename,
-                    "grid item activated"
-                );
+                    tracing::debug!(index, ?media_type, %filename, "grid item activated");
 
-                let (tag, nav_page) = if media_type == MediaType::Video {
-                    video_viewer.show(items, index);
-                    ("video-viewer", &video_nav_page)
-                } else {
-                    photo_viewer.show(items, index);
-                    ("viewer", &photo_nav_page)
-                };
+                    let (tag, nav_page) = if media_type == MediaType::Video {
+                        video_viewer.show(items, index);
+                        ("video-viewer", &video_nav_page)
+                    } else {
+                        photo_viewer.show(items, index);
+                        ("viewer", &photo_nav_page)
+                    };
 
-                // Push viewer page if it isn't already the visible page.
-                let visible_tag = nav_view
-                    .visible_page()
-                    .and_then(|p| p.tag())
-                    .unwrap_or_default();
-                tracing::debug!(target_tag = tag, %visible_tag, "pushing viewer page");
-                if visible_tag != tag {
-                    nav_view.push(nav_page);
+                    let visible_tag = nav_view
+                        .visible_page()
+                        .and_then(|p| p.tag())
+                        .unwrap_or_default();
+                    tracing::debug!(target_tag = tag, %visible_tag, "pushing viewer page");
+                    if visible_tag != tag {
+                        nav_view.push(nav_page);
+                    }
                 }
             },
         );
 
         let selection = self.photo_grid.imp().selection.borrow().clone().unwrap();
-        let is_trash_view = filter == crate::library::media::MediaFilter::Trashed;
-        let is_album_view = matches!(filter, crate::library::media::MediaFilter::Album { .. });
+        let grid_view = self.photo_grid.imp().grid_view.get().unwrap().clone();
 
-        // Show the right buttons for this view.
-        self.trash_btn.set_visible(!is_trash_view);
-        self.restore_btn.set_visible(is_trash_view);
-        self.delete_btn.set_visible(is_trash_view);
-        self.album_btn.set_visible(!is_trash_view && !is_album_view);
-        self.remove_from_album_btn.set_visible(is_album_view);
+        let ctx = actions::ActionContext {
+            selection,
+            library: Arc::clone(&self.library),
+            tokio: self.tokio.clone(),
+            registry: Rc::clone(&registry),
+            filter,
+            nav_view: self.nav_view.clone(),
+            grid_view,
+        };
 
-        // Enable/disable action buttons based on selection.
-        {
-            let trash_btn = self.trash_btn.clone();
-            let restore_btn = self.restore_btn.clone();
-            let delete_btn = self.delete_btn.clone();
-            let album_btn = self.album_btn.clone();
-            let remove_btn = self.remove_from_album_btn.clone();
-            selection.connect_selection_changed(move |sel, _, _| {
-                let has_selection = sel.selection().size() > 0;
-                trash_btn.set_sensitive(has_selection);
-                restore_btn.set_sensitive(has_selection);
-                delete_btn.set_sensitive(has_selection);
-                album_btn.set_sensitive(has_selection);
-                remove_btn.set_sensitive(has_selection);
-            });
-        }
-
-        if is_trash_view {
-            // ── Restore button ──────────────────────────────────────────
-            {
-                let selection = selection.clone();
-                let lib = Arc::clone(&self.library);
-                let tk = self.tokio.clone();
-                let reg = Rc::clone(&registry);
-                let restore_btn = self.restore_btn.clone();
-                restore_btn.connect_clicked(move |btn| {
-                    let ids = collect_selected_ids(&selection);
-                    if ids.is_empty() { return; }
-                    selection.unselect_all();
-                    btn.set_sensitive(false);
-
-                    let lib = Arc::clone(&lib);
-                    let tk = tk.clone();
-                    let reg = Rc::clone(&reg);
-                    glib::MainContext::default().spawn_local(async move {
-                        let ids_bc = ids.clone();
-                        let result = tk
-                            .spawn(async move { lib.restore(&ids).await })
-                            .await;
-                        match result {
-                            Ok(Ok(())) => {
-                                for id in &ids_bc {
-                                    reg.on_trashed(id, false);
-                                }
-                            }
-                            Ok(Err(e)) => tracing::error!("restore failed: {e}"),
-                            Err(e) => tracing::error!("restore join failed: {e}"),
-                        }
-                    });
-                });
-            }
-
-            // ── Delete permanently button ───────────────────────────────
-            {
-                let selection = selection.clone();
-                let lib = Arc::clone(&self.library);
-                let tk = self.tokio.clone();
-                let reg = Rc::clone(&registry);
-                let delete_btn = self.delete_btn.clone();
-                let nav_view = self.nav_view.clone();
-                delete_btn.connect_clicked(move |btn| {
-                    let ids = collect_selected_ids(&selection);
-                    if ids.is_empty() { return; }
-
-                    // Confirmation dialog.
-                    let count = ids.len();
-                    let dialog = adw::AlertDialog::builder()
-                        .heading("Delete Permanently?")
-                        .body(format!(
-                            "This will permanently delete {count} {} and cannot be undone.",
-                            if count == 1 { "photo" } else { "photos" }
-                        ))
-                        .build();
-                    dialog.add_response("cancel", "Cancel");
-                    dialog.add_response("delete", "Delete");
-                    dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
-                    dialog.set_default_response(Some("cancel"));
-                    dialog.set_close_response("cancel");
-
-                    let selection = selection.clone();
-                    let lib = Arc::clone(&lib);
-                    let tk = tk.clone();
-                    let reg = Rc::clone(&reg);
-                    let btn = btn.clone();
-                    dialog.connect_response(None, move |_, response| {
-                        if response != "delete" { return; }
-
-                        let ids = ids.clone();
-                        selection.unselect_all();
-                        btn.set_sensitive(false);
-
-                        let lib = Arc::clone(&lib);
-                        let tk = tk.clone();
-                        let reg = Rc::clone(&reg);
-                        glib::MainContext::default().spawn_local(async move {
-                            let ids_bc = ids.clone();
-                            let result = tk
-                                .spawn(async move { lib.delete_permanently(&ids).await })
-                                .await;
-                            match result {
-                                Ok(Ok(())) => {
-                                    for id in &ids_bc {
-                                        reg.on_deleted(id);
-                                    }
-                                }
-                                Ok(Err(e)) => tracing::error!("delete_permanently failed: {e}"),
-                                Err(e) => tracing::error!("delete_permanently join failed: {e}"),
-                            }
-                        });
-                    });
-                    dialog.present(nav_view.root().as_ref().and_then(|r| r.downcast_ref::<gtk::Window>()));
-                });
-            }
-        } else {
-            // ── Trash button ────────────────────────────────────────────
-            let selection = selection.clone();
-            let lib = Arc::clone(&self.library);
-            let tk = self.tokio.clone();
-            let trash_btn = self.trash_btn.clone();
-            let registry_for_trash = Rc::clone(&registry);
-            trash_btn.connect_clicked(move |btn| {
-                let ids = collect_selected_ids(&selection);
-                if ids.is_empty() { return; }
-                selection.unselect_all();
-                btn.set_sensitive(false);
-
-                let lib = Arc::clone(&lib);
-                let tk = tk.clone();
-                let reg = Rc::clone(&registry_for_trash);
-                glib::MainContext::default().spawn_local(async move {
-                    let ids_bc = ids.clone();
-                    let result = tk
-                        .spawn(async move { lib.trash(&ids).await })
-                        .await;
-                    match result {
-                        Ok(Ok(())) => {
-                            for id in &ids_bc {
-                                reg.on_trashed(id, true);
-                            }
-                        }
-                        Ok(Err(e)) => tracing::error!("trash failed: {e}"),
-                        Err(e) => tracing::error!("trash join failed: {e}"),
-                    }
-                });
-            });
-        }
-
-        // ── "Add to Album" popover ──────────────────────────────────────
-        {
-            let lib = Arc::clone(&self.library);
-            let tk = self.tokio.clone();
-            let reg = Rc::clone(&registry);
-            let selection = selection.clone();
-            let album_btn = self.album_btn.clone();
-
-            // Load albums async on click, then show a Popover with the list.
-            album_btn.connect_clicked(move |btn: &gtk::Button| {
-                debug!("album button clicked, loading albums async");
-
-                let lib = Arc::clone(&lib);
-                let tk = tk.clone();
-                let reg = Rc::clone(&reg);
-                let sel = selection.clone();
-                let btn_weak: glib::WeakRef<gtk::Button> = btn.downgrade();
-
-                glib::MainContext::default().spawn_local(async move {
-                    let lib_q = Arc::clone(&lib);
-                    debug!("fetching album list from library");
-                    let albums = match tk.spawn(async move { lib_q.list_albums().await }).await {
-                        Ok(Ok(a)) => a,
-                        Ok(Err(e)) => {
-                            tracing::error!("list_albums failed: {e}");
-                            return;
-                        }
-                        Err(e) => {
-                            tracing::error!("list_albums join failed: {e}");
-                            return;
-                        }
-                    };
-
-                    let Some(btn) = btn_weak.upgrade() else {
-                        debug!("album button weak ref gone");
-                        return;
-                    };
-
-                    debug!(count = albums.len(), "albums loaded, building popover");
-
-                    let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
-                    vbox.set_margin_top(6);
-                    vbox.set_margin_bottom(6);
-                    vbox.set_margin_start(6);
-                    vbox.set_margin_end(6);
-
-                    // Create the popover first so album buttons can close it.
-                    let popover = gtk::Popover::new();
-                    popover.set_parent(btn.upcast_ref::<gtk::Widget>());
-
-                    if albums.is_empty() {
-                        let label = gtk::Label::new(Some("No albums"));
-                        label.add_css_class("dim-label");
-                        vbox.append(&label);
-                    } else {
-                        for album in &albums {
-                            let ab = gtk::Button::with_label(&album.name);
-                            ab.add_css_class("flat");
-                            let aid = album.id.clone();
-                            let lib_add = Arc::clone(&lib);
-                            let tk_add = tk.clone();
-                            let reg_add = Rc::clone(&reg);
-                            let sel_add = sel.clone();
-                            let pop_weak = popover.downgrade();
-                            ab.connect_clicked(move |_| {
-                                debug!(album_id = %aid, "album selected in popover");
-                                let ids = collect_selected_ids(&sel_add);
-                                if ids.is_empty() {
-                                    debug!("no photos selected, skipping");
-                                    return;
-                                }
-                                debug!(count = ids.len(), album_id = %aid, "adding photos to album");
-
-                                if let Some(p) = pop_weak.upgrade() {
-                                    p.popdown();
-                                }
-
-                                let lib = Arc::clone(&lib_add);
-                                let tk = tk_add.clone();
-                                let reg = Rc::clone(&reg_add);
-                                let aid = aid.clone();
-                                glib::MainContext::default().spawn_local(async move {
-                                    let aid_bc = aid.clone();
-                                    let result = tk
-                                        .spawn(async move { lib.add_to_album(&aid, &ids).await })
-                                        .await;
-                                    match result {
-                                        Ok(Ok(())) => {
-                                            debug!(album_id = %aid_bc, "photos added to album");
-                                            reg.on_album_media_changed(&aid_bc);
-                                        }
-                                        Ok(Err(e)) => tracing::error!("add_to_album failed: {e}"),
-                                        Err(e) => tracing::error!("add_to_album join failed: {e}"),
-                                    }
-                                });
-                            });
-                            vbox.append(&ab);
-                        }
-                    }
-
-                    popover.set_child(Some(&vbox));
-
-                    popover.connect_closed(move |p| {
-                        debug!("album popover closed");
-                        p.unparent();
-                    });
-
-                    debug!("showing album popover");
-                    popover.popup();
-                });
-            });
-        }
-
-        // ── Right-click context menu on grid cells ─────────────────────
-        {
-            let gesture = gtk::GestureClick::new();
-            gesture.set_button(3);
-
-            let grid_view = self.photo_grid.imp().grid_view.get().unwrap().clone();
-            let selection = selection.clone();
-            let lib = Arc::clone(&self.library);
-            let tk = self.tokio.clone();
-            let reg = Rc::clone(&registry);
-            let filter_for_ctx = self.photo_grid.imp().filter.borrow().clone();
-
-            gesture.connect_pressed(move |gesture, _, x, y| {
-                // Find the grid child widget at the click position, then walk up
-                // to the direct child of the GridView to determine its index.
-                let Some(picked) = grid_view.pick(x, y, gtk::PickFlags::DEFAULT) else { return };
-
-                // Walk up to the direct child of the GridView.
-                let grid_widget = grid_view.upcast_ref::<gtk::Widget>();
-                let mut target = Some(picked);
-                while let Some(ref w) = target {
-                    if w.parent().as_ref() == Some(grid_widget) {
-                        break;
-                    }
-                    target = w.parent();
-                }
-                let Some(target) = target else { return };
-
-                // Find the position by counting siblings.
-                let mut pos = 0u32;
-                let mut child = grid_view.first_child();
-                loop {
-                    let Some(c) = child else { return };
-                    if c == target { break; }
-                    pos += 1;
-                    child = c.next_sibling();
-                }
-
-                let Some(pos) = Some(pos) else { return };
-
-                // Select the item if not already selected.
-                if !selection.is_selected(pos) {
-                    selection.unselect_all();
-                    selection.select_item(pos, true);
-                }
-
-                // Get the item for context.
-                let Some(obj) = selection.item(pos)
-                    .and_then(|o| o.downcast::<item::MediaItemObject>().ok()) else { return };
-
-                let is_favorite = obj.is_favorite();
-                let is_trash = matches!(filter_for_ctx, MediaFilter::Trashed);
-                let is_album = matches!(filter_for_ctx, MediaFilter::Album { .. });
-
-                // Build popover with action buttons.
-                let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
-                vbox.set_margin_top(6);
-                vbox.set_margin_bottom(6);
-                vbox.set_margin_start(6);
-                vbox.set_margin_end(6);
-
-                // Create popover early so buttons can dismiss it.
-                let popover = gtk::Popover::new();
-                let pop_ref = popover.downgrade();
-
-                if is_trash {
-                    // Trash view: Restore, Delete Permanently
-                    let restore_btn = gtk::Button::with_label("Restore");
-                    restore_btn.add_css_class("flat");
-                    vbox.append(&restore_btn);
-
-                    let delete_btn = gtk::Button::with_label("Delete Permanently");
-                    delete_btn.add_css_class("flat");
-                    delete_btn.add_css_class("error");
-                    vbox.append(&delete_btn);
-
-                    let sel = selection.clone();
-                    let lib_r = Arc::clone(&lib);
-                    let tk_r = tk.clone();
-                    let reg_r = Rc::clone(&reg);
-                    let pw = pop_ref.clone();
-                    restore_btn.connect_clicked(move |_| {
-                        if let Some(p) = pw.upgrade() { p.popdown(); }
-                        let ids = collect_selected_ids(&sel);
-                        if ids.is_empty() { return; }
-                        sel.unselect_all();
-                        let lib = Arc::clone(&lib_r);
-                        let tk = tk_r.clone();
-                        let reg = Rc::clone(&reg_r);
-                        glib::MainContext::default().spawn_local(async move {
-                            let ids_bc = ids.clone();
-                            if let Ok(Ok(())) = tk.spawn(async move { lib.restore(&ids).await }).await {
-                                for id in &ids_bc { reg.on_trashed(id, false); }
-                            }
-                        });
-                    });
-
-                    let sel = selection.clone();
-                    let lib_d = Arc::clone(&lib);
-                    let tk_d = tk.clone();
-                    let reg_d = Rc::clone(&reg);
-                    let pw = pop_ref.clone();
-                    delete_btn.connect_clicked(move |_| {
-                        if let Some(p) = pw.upgrade() { p.popdown(); }
-                        let ids = collect_selected_ids(&sel);
-                        if ids.is_empty() { return; }
-                        sel.unselect_all();
-                        let lib = Arc::clone(&lib_d);
-                        let tk = tk_d.clone();
-                        let reg = Rc::clone(&reg_d);
-                        glib::MainContext::default().spawn_local(async move {
-                            let ids_bc = ids.clone();
-                            if let Ok(Ok(())) = tk.spawn(async move { lib.delete_permanently(&ids).await }).await {
-                                for id in &ids_bc { reg.on_deleted(id); }
-                            }
-                        });
-                    });
-                } else {
-                    // Non-trash: Favourite toggle, Trash
-                    let fav_label = if is_favorite { "Unfavourite" } else { "Favourite" };
-                    let fav_btn = gtk::Button::with_label(fav_label);
-                    fav_btn.add_css_class("flat");
-                    vbox.append(&fav_btn);
-
-                    let trash_ctx_btn = gtk::Button::with_label("Move to Trash");
-                    trash_ctx_btn.add_css_class("flat");
-                    trash_ctx_btn.add_css_class("error");
-                    vbox.append(&trash_ctx_btn);
-
-                    if is_album {
-                        let remove_btn = gtk::Button::with_label("Remove from Album");
-                        remove_btn.add_css_class("flat");
-                        vbox.append(&remove_btn);
-
-                        if let MediaFilter::Album { ref album_id } = filter_for_ctx {
-                            let sel = selection.clone();
-                            let lib_ra = Arc::clone(&lib);
-                            let tk_ra = tk.clone();
-                            let reg_ra = Rc::clone(&reg);
-                            let aid = album_id.clone();
-                            let pw = pop_ref.clone();
-                            remove_btn.connect_clicked(move |_| {
-                                if let Some(p) = pw.upgrade() { p.popdown(); }
-                                let ids = collect_selected_ids(&sel);
-                                if ids.is_empty() { return; }
-                                sel.unselect_all();
-                                let lib = Arc::clone(&lib_ra);
-                                let tk = tk_ra.clone();
-                                let reg = Rc::clone(&reg_ra);
-                                let aid = aid.clone();
-                                glib::MainContext::default().spawn_local(async move {
-                                    let aid_bc = aid.clone();
-                                    if let Ok(Ok(())) = tk.spawn(async move { lib.remove_from_album(&aid, &ids).await }).await {
-                                        reg.on_album_media_changed(&aid_bc);
-                                    }
-                                });
-                            });
-                        }
-                    }
-
-                    let new_fav = !is_favorite;
-                    let sel = selection.clone();
-                    let lib_f = Arc::clone(&lib);
-                    let tk_f = tk.clone();
-                    let reg_f = Rc::clone(&reg);
-                    let pw = pop_ref.clone();
-                    fav_btn.connect_clicked(move |_| {
-                        if let Some(p) = pw.upgrade() { p.popdown(); }
-                        let ids = collect_selected_ids(&sel);
-                        if ids.is_empty() { return; }
-                        let lib = Arc::clone(&lib_f);
-                        let tk = tk_f.clone();
-                        let reg = Rc::clone(&reg_f);
-                        glib::MainContext::default().spawn_local(async move {
-                            let ids_bc = ids.clone();
-                            if let Ok(Ok(())) = tk.spawn(async move { lib.set_favorite(&ids, new_fav).await }).await {
-                                for id in &ids_bc { reg.on_favorite_changed(id, new_fav); }
-                            }
-                        });
-                    });
-
-                    let sel = selection.clone();
-                    let lib_t = Arc::clone(&lib);
-                    let tk_t = tk.clone();
-                    let reg_t = Rc::clone(&reg);
-                    let pw = pop_ref.clone();
-                    trash_ctx_btn.connect_clicked(move |_| {
-                        if let Some(p) = pw.upgrade() { p.popdown(); }
-                        let ids = collect_selected_ids(&sel);
-                        if ids.is_empty() { return; }
-                        sel.unselect_all();
-                        let lib = Arc::clone(&lib_t);
-                        let tk = tk_t.clone();
-                        let reg = Rc::clone(&reg_t);
-                        glib::MainContext::default().spawn_local(async move {
-                            let ids_bc = ids.clone();
-                            if let Ok(Ok(())) = tk.spawn(async move { lib.trash(&ids).await }).await {
-                                for id in &ids_bc { reg.on_trashed(id, true); }
-                            }
-                        });
-                    });
-                }
-
-                // Show the popover on the grid view.
-                popover.set_child(Some(&vbox));
-                popover.set_parent(&grid_view);
-                popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
-                popover.set_has_arrow(true);
-
-                popover.connect_closed(move |p| {
-                    p.unparent();
-                });
-
-                popover.popup();
-                gesture.set_state(gtk::EventSequenceState::Claimed);
-            });
-
-            self.photo_grid.imp().grid_view.get().unwrap().add_controller(gesture);
-        }
-
-        // ── "Remove from Album" button ──────────────────────────────────
-        if let MediaFilter::Album { album_id } = filter {
-            let selection = selection.clone();
-            let lib = Arc::clone(&self.library);
-            let tk = self.tokio.clone();
-            let reg = Rc::clone(&registry);
-            let remove_btn = self.remove_from_album_btn.clone();
-
-            remove_btn.connect_clicked(move |btn| {
-                let ids = collect_selected_ids(&selection);
-                if ids.is_empty() { return; }
-                selection.unselect_all();
-                btn.set_sensitive(false);
-
-                let lib = Arc::clone(&lib);
-                let tk = tk.clone();
-                let reg = Rc::clone(&reg);
-                let aid = album_id.clone();
-                glib::MainContext::default().spawn_local(async move {
-                    let aid_bc = aid.clone();
-                    let result = tk
-                        .spawn(async move { lib.remove_from_album(&aid, &ids).await })
-                        .await;
-                    match result {
-                        Ok(Ok(())) => {
-                            tracing::debug!(album_id = %aid_bc, "photos removed from album");
-                            reg.on_album_media_changed(&aid_bc);
-                        }
-                        Ok(Err(e)) => tracing::error!("remove_from_album failed: {e}"),
-                        Err(e) => tracing::error!("remove_from_album join failed: {e}"),
-                    }
-                });
-            });
-        }
+        actions::wire_selection_buttons(
+            &ctx,
+            &self.trash_btn,
+            &self.restore_btn,
+            &self.delete_btn,
+            &self.album_btn,
+            &self.remove_from_album_btn,
+        );
+        actions::wire_album_controls(&ctx, &self.album_btn);
+        actions::wire_context_menu(&ctx);
     }
 }
 
 /// Collect media IDs from the current selection.
-fn collect_selected_ids(selection: &gtk::MultiSelection) -> Vec<crate::library::media::MediaId> {
+pub(super) fn collect_selected_ids(selection: &gtk::MultiSelection) -> Vec<crate::library::media::MediaId> {
     let bitset = selection.selection();
     let n = bitset.size();
     let mut ids = Vec::with_capacity(n as usize);
@@ -1096,6 +581,10 @@ fn collect_selected_ids(selection: &gtk::MultiSelection) -> Vec<crate::library::
 impl ContentView for PhotoGridView {
     fn widget(&self) -> &gtk::Widget {
         &self.widget
+    }
+
+    fn view_actions(&self) -> Option<&gio::SimpleActionGroup> {
+        Some(&self.view_actions)
     }
 }
 
