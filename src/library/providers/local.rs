@@ -10,6 +10,7 @@ use crate::library::bundle::Bundle;
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
 use crate::library::event::LibraryEvent;
+use crate::library::faces::{LibraryFaces, Person, PersonId};
 use crate::library::format::{FormatRegistry, RawHandler, StandardHandler, VideoHandler};
 use crate::library::import::LibraryImport;
 use crate::library::importer::ImportJob;
@@ -290,6 +291,48 @@ impl LibraryAlbums for LocalLibrary {
         limit: u32,
     ) -> Result<Vec<MediaItem>, LibraryError> {
         self.db.list_album_media(album_id, cursor, limit).await
+    }
+}
+
+#[async_trait]
+impl LibraryFaces for LocalLibrary {
+    async fn list_people(
+        &self,
+        _include_hidden: bool,
+        _include_unnamed: bool,
+    ) -> Result<Vec<Person>, LibraryError> {
+        Ok(Vec::new())
+    }
+
+    async fn list_media_for_person(
+        &self,
+        _person_id: &PersonId,
+    ) -> Result<Vec<MediaId>, LibraryError> {
+        Ok(Vec::new())
+    }
+
+    async fn rename_person(
+        &self,
+        _person_id: &PersonId,
+        _name: &str,
+    ) -> Result<(), LibraryError> {
+        Ok(())
+    }
+
+    async fn set_person_hidden(
+        &self,
+        _person_id: &PersonId,
+        _hidden: bool,
+    ) -> Result<(), LibraryError> {
+        Ok(())
+    }
+
+    async fn merge_people(
+        &self,
+        _target: &PersonId,
+        _sources: &[PersonId],
+    ) -> Result<(), LibraryError> {
+        Ok(())
     }
 }
 

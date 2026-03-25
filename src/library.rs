@@ -5,6 +5,7 @@ pub mod db;
 pub mod error;
 pub mod event;
 pub mod exif;
+pub mod faces;
 pub mod factory;
 pub mod format;
 pub mod immich_client;
@@ -22,6 +23,7 @@ pub mod video_meta;
 pub mod viewer;
 
 use album::LibraryAlbums;
+use faces::LibraryFaces;
 use import::LibraryImport;
 use media::LibraryMedia;
 use storage::LibraryStorage;
@@ -41,6 +43,7 @@ use viewer::LibraryViewer;
 /// - [`LibraryThumbnail`] — thumbnail generation and path resolution (issue #6)
 /// - [`LibraryViewer`]    — detail-view data access (issue #10)
 /// - [`LibraryAlbums`]    — album management (issue #11)
+/// - [`LibraryFaces`]     — face/people management (issue #178)
 ///
 /// `close()` is inherited from `LibraryStorage` and is not duplicated here.
 pub trait Library:
@@ -50,6 +53,7 @@ pub trait Library:
     + LibraryThumbnail
     + LibraryViewer
     + LibraryAlbums
+    + LibraryFaces
     + Send
     + Sync
 {
@@ -62,6 +66,7 @@ impl<
         + LibraryThumbnail
         + LibraryViewer
         + LibraryAlbums
+        + LibraryFaces
         + Send
         + Sync,
 > Library for T
