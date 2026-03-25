@@ -177,23 +177,34 @@ impl PhotoGridModel {
             _ => item.taken_at.unwrap_or(0),
         };
 
-        // Find insertion position (descending order).
-        // Linear scan — store is already sorted, find first item with smaller key.
+        // Find insertion position (descending order) via binary search.
+        // O(log n) instead of O(n) — significant for large libraries during sync.
+        let filter = self.filter.borrow().clone();
         let n = self.store.n_items();
-        let pos = (0..n)
-            .find(|&i| {
-                if let Some(obj) = self.store.item(i).and_then(|o| o.downcast::<MediaItemObject>().ok()) {
-                    let obj_key = match self.filter.borrow().clone() {
+        let mut lo: u32 = 0;
+        let mut hi: u32 = n;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let mid_before_new = self
+                .store
+                .item(mid)
+                .and_then(|o| o.downcast::<MediaItemObject>().ok())
+                .map(|obj| {
+                    let obj_key = match filter {
                         MediaFilter::RecentImports { .. } => obj.item().imported_at,
                         _ => obj.item().taken_at.unwrap_or(0),
                     };
-                    obj_key < sort_key
-                        || (obj_key == sort_key && obj.item().id.as_str() < item.id.as_str())
-                } else {
-                    false
-                }
-            })
-            .unwrap_or(n);
+                    obj_key > sort_key
+                        || (obj_key == sort_key && obj.item().id.as_str() >= item.id.as_str())
+                })
+                .unwrap_or(false);
+            if mid_before_new {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        let pos = lo;
 
         let obj = MediaItemObject::new(item);
         self.id_index
