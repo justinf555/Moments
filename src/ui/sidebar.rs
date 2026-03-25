@@ -699,10 +699,10 @@ impl MomentsSidebar {
         }
 
         if let Some(label) = imp.complete_label.get() {
-            label.set_text(&bar_text);
+            label.set_text("Upload Complete");
         }
         if let Some(label) = imp.progress_label.get() {
-            label.set_text("Upload Complete");
+            label.set_text(&bar_text);
         }
         if let Some(bar) = imp.progress_bar.get() {
             bar.set_fraction(1.0);
