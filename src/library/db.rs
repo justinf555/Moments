@@ -9,6 +9,7 @@ use super::error::LibraryError;
 use super::media::{MediaId, MediaRecord};
 
 mod albums;
+pub(crate) mod faces;
 mod media;
 mod stats;
 mod sync;
