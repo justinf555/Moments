@@ -491,34 +491,34 @@ impl LibraryAlbums for ImmichLibrary {
 impl LibraryFaces for ImmichLibrary {
     async fn list_people(
         &self,
-        _include_hidden: bool,
-        _include_unnamed: bool,
+        include_hidden: bool,
+        include_unnamed: bool,
     ) -> Result<Vec<Person>, LibraryError> {
-        // TODO: wire to self.db once db/faces.rs is implemented (#181)
-        Ok(Vec::new())
+        self.db.list_people(include_hidden, include_unnamed).await
     }
 
     async fn list_media_for_person(
         &self,
-        _person_id: &PersonId,
+        person_id: &PersonId,
     ) -> Result<Vec<MediaId>, LibraryError> {
-        Ok(Vec::new())
+        let ids = self.db.list_media_for_person(person_id.as_str()).await?;
+        Ok(ids.into_iter().map(MediaId::new).collect())
     }
 
     async fn rename_person(
         &self,
-        _person_id: &PersonId,
-        _name: &str,
+        person_id: &PersonId,
+        name: &str,
     ) -> Result<(), LibraryError> {
-        Ok(())
+        self.db.rename_person(person_id.as_str(), name).await
     }
 
     async fn set_person_hidden(
         &self,
-        _person_id: &PersonId,
-        _hidden: bool,
+        person_id: &PersonId,
+        hidden: bool,
     ) -> Result<(), LibraryError> {
-        Ok(())
+        self.db.set_person_hidden(person_id.as_str(), hidden).await
     }
 
     async fn merge_people(
@@ -526,6 +526,7 @@ impl LibraryFaces for ImmichLibrary {
         _target: &PersonId,
         _sources: &[PersonId],
     ) -> Result<(), LibraryError> {
+        // TODO: wire to Immich API POST /people/{id}/merge (#185)
         Ok(())
     }
 
