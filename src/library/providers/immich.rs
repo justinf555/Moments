@@ -229,6 +229,10 @@ impl LibraryMedia for ImmichLibrary {
         // Server manages trash retention — nothing to do locally.
         Ok(vec![])
     }
+
+    async fn library_stats(&self) -> Result<crate::library::db::LibraryStats, LibraryError> {
+        self.db.library_stats().await
+    }
 }
 
 #[async_trait]

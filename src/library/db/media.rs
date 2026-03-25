@@ -396,6 +396,10 @@ impl LibraryMedia for Database {
         .map_err(LibraryError::Db)?;
         Ok(())
     }
+
+    async fn library_stats(&self) -> Result<super::LibraryStats, LibraryError> {
+        self.library_stats().await
+    }
 }
 
 #[cfg(test)]

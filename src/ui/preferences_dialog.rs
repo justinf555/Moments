@@ -153,21 +153,31 @@ pub fn show_preferences(
         let videos_weak = videos_row.downgrade();
         let albums_weak = albums_row.downgrade();
         glib::MainContext::default().spawn_local(async move {
-            if let Ok(Ok(stats)) = tokio
-                .spawn(async move {
-                    // Access db stats through library — need to add a trait method or use db directly.
-                    // For now, use list_media counts as a proxy.
-                    lib.list_media(crate::library::media::MediaFilter::All, None, 1).await.map(|_| ())
-                })
-                .await
-            {
-                // Stats loaded — but we don't have direct access to db.library_stats() from here.
-                // This is a placeholder — we'll improve this.
+            let result = tokio
+                .spawn(async move { lib.library_stats().await })
+                .await;
+            match result {
+                Ok(Ok(stats)) => {
+                    if let Some(r) = photos_weak.upgrade() {
+                        r.set_subtitle(&format_count(stats.photo_count, "photo"));
+                    }
+                    if let Some(r) = videos_weak.upgrade() {
+                        r.set_subtitle(&format_count(stats.video_count, "video"));
+                    }
+                    if let Some(r) = albums_weak.upgrade() {
+                        r.set_subtitle(&format_count(stats.album_count, "album"));
+                    }
+                }
+                Ok(Err(e)) => {
+                    tracing::error!("library_stats failed: {e}");
+                    if let Some(r) = photos_weak.upgrade() { r.set_subtitle("—"); }
+                    if let Some(r) = videos_weak.upgrade() { r.set_subtitle("—"); }
+                    if let Some(r) = albums_weak.upgrade() { r.set_subtitle("—"); }
+                }
+                Err(e) => {
+                    tracing::error!("library_stats join failed: {e}");
+                }
             }
-            // For now, set placeholder values.
-            if let Some(r) = photos_weak.upgrade() { r.set_subtitle("—"); }
-            if let Some(r) = videos_weak.upgrade() { r.set_subtitle("—"); }
-            if let Some(r) = albums_weak.upgrade() { r.set_subtitle("—"); }
         });
     }
 
@@ -224,4 +234,58 @@ pub fn show_preferences(
     }
 
     dialog.present(Some(window));
+}
+
+/// Format a count with singular/plural label (e.g. "1,976 photos").
+fn format_count(count: u64, singular: &str) -> String {
+    let label = if count == 1 { singular } else { &format!("{singular}s") };
+    format!("{} {label}", format_number(count))
+}
+
+/// Format a number with thousands separators (e.g. 1976 → "1,976").
+fn format_number(n: u64) -> String {
+    let s = n.to_string();
+    let mut result = String::with_capacity(s.len() + s.len() / 3);
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_count_singular() {
+        assert_eq!(format_count(1, "photo"), "1 photo");
+    }
+
+    #[test]
+    fn format_count_plural() {
+        assert_eq!(format_count(1976, "photo"), "1,976 photos");
+    }
+
+    #[test]
+    fn format_count_zero() {
+        assert_eq!(format_count(0, "album"), "0 albums");
+    }
+
+    #[test]
+    fn format_number_small() {
+        assert_eq!(format_number(42), "42");
+    }
+
+    #[test]
+    fn format_number_thousands() {
+        assert_eq!(format_number(1976), "1,976");
+    }
+
+    #[test]
+    fn format_number_millions() {
+        assert_eq!(format_number(1234567), "1,234,567");
+    }
 }
