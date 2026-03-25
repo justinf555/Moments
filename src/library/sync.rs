@@ -29,6 +29,10 @@ const SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 const MAX_THUMBNAIL_WORKERS: usize = 4;
 /// Bounded channel capacity for thumbnail download queue.
 const THUMBNAIL_QUEUE_SIZE: usize = 1000;
+/// Delay between thumbnail download dispatches to avoid overloading the server.
+const THUMBNAIL_THROTTLE: std::time::Duration = std::time::Duration::from_millis(5);
+/// Number of acks to accumulate before flushing to server.
+const ACK_FLUSH_THRESHOLD: usize = 500;
 
 impl SyncHandle {
     /// Spawn the sync manager and thumbnail downloader as background Tokio tasks.
@@ -127,6 +131,11 @@ impl SyncManager {
     }
 
     /// Execute a single sync cycle against the Immich server.
+    ///
+    /// Records are processed individually with skip-on-failure semantics:
+    /// a single failed upsert does not abort the entire cycle. Acks are
+    /// flushed to the server every [`ACK_FLUSH_THRESHOLD`] records so that
+    /// progress is preserved incrementally.
     #[instrument(skip(self))]
     async fn run_sync(&self) -> Result<(), LibraryError> {
         let request = SyncStreamRequest {
@@ -141,7 +150,6 @@ impl SyncManager {
         debug!("starting sync stream");
         let response = self.client.post_stream("/sync/stream", &request).await?;
 
-        // Read the response as newline-delimited JSON.
         let byte_stream = response
             .bytes_stream()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
@@ -155,9 +163,11 @@ impl SyncManager {
         let mut exif_count: usize = 0;
         let mut delete_count: usize = 0;
         let mut album_count: usize = 0;
+        let mut error_count: usize = 0;
         let mut is_reset = false;
         let mut existing_ids: Option<HashSet<String>> = None;
         let mut line_number: usize = 0;
+        let sync_cycle = chrono::Utc::now().to_rfc3339();
 
         info!("reading sync stream");
 
@@ -191,19 +201,34 @@ impl SyncManager {
                             LibraryError::Immich(format!("invalid AssetV1 at line {line_number}: {e}"))
                         })?;
                     let id = asset.id.clone();
-                    self.handle_asset(asset).await?;
-                    asset_count += 1;
 
-                    if asset_count % 500 == 0 {
+                    let audit_id = self.db.start_sync_audit("AssetV1", &id, &sync_cycle).await.ok();
+
+                    match self.handle_asset(asset).await {
+                        Ok(()) => {
+                            if let Some(aid) = audit_id {
+                                let _ = self.db.complete_sync_audit(aid, "upsert").await;
+                            }
+                            acks.push(sync_line.ack);
+                            asset_count += 1;
+                        }
+                        Err(e) => {
+                            warn!(asset_id = %id, error = %e, "skipping asset");
+                            if let Some(aid) = audit_id {
+                                let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
+                            }
+                            error_count += 1;
+                            // Don't ack — server will resend next cycle.
+                        }
+                    }
+
+                    if asset_count % 500 == 0 && asset_count > 0 {
                         info!(assets = asset_count, "sync progress");
                     }
 
-                    // Remove from the reset tracking set if present.
                     if let Some(ref mut ids) = existing_ids {
                         ids.remove(&id);
                     }
-
-                    acks.push(sync_line.ack);
                 }
                 "AssetDeleteV1" => {
                     let delete: SyncAssetDeleteV1 = serde_json::from_value(sync_line.data)
@@ -212,15 +237,28 @@ impl SyncManager {
                             LibraryError::Immich(format!("invalid AssetDeleteV1 at line {line_number}: {e}"))
                         })?;
 
-                    debug!(asset_id = %delete.asset_id, "deleting asset from cache");
+                    let audit_id = self.db.start_sync_audit("AssetDeleteV1", &delete.asset_id, &sync_cycle).await.ok();
 
                     if let Some(ref mut ids) = existing_ids {
                         ids.remove(&delete.asset_id);
                     }
 
-                    self.handle_asset_delete(&delete.asset_id).await?;
-                    delete_count += 1;
-                    acks.push(sync_line.ack);
+                    match self.handle_asset_delete(&delete.asset_id).await {
+                        Ok(()) => {
+                            if let Some(aid) = audit_id {
+                                let _ = self.db.complete_sync_audit(aid, "delete").await;
+                            }
+                            acks.push(sync_line.ack);
+                            delete_count += 1;
+                        }
+                        Err(e) => {
+                            warn!(asset_id = %delete.asset_id, error = %e, "skipping asset delete");
+                            if let Some(aid) = audit_id {
+                                let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
+                            }
+                            error_count += 1;
+                        }
+                    }
                 }
                 "AssetExifV1" => {
                     let exif: SyncAssetExifV1 = serde_json::from_value(sync_line.data)
@@ -228,9 +266,26 @@ impl SyncManager {
                             error!(line_number, "failed to deserialize AssetExifV1: {e}");
                             LibraryError::Immich(format!("invalid AssetExifV1 at line {line_number}: {e}"))
                         })?;
-                    self.handle_asset_exif(exif).await?;
-                    exif_count += 1;
-                    acks.push(sync_line.ack);
+
+                    let exif_asset_id = exif.asset_id.clone();
+                    let audit_id = self.db.start_sync_audit("AssetExifV1", &exif_asset_id, &sync_cycle).await.ok();
+
+                    match self.handle_asset_exif(exif).await {
+                        Ok(()) => {
+                            if let Some(aid) = audit_id {
+                                let _ = self.db.complete_sync_audit(aid, "upsert").await;
+                            }
+                            acks.push(sync_line.ack);
+                            exif_count += 1;
+                        }
+                        Err(e) => {
+                            warn!(asset_id = %exif_asset_id, error = %e, "skipping exif");
+                            if let Some(aid) = audit_id {
+                                let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
+                            }
+                            error_count += 1;
+                        }
+                    }
                 }
                 "AlbumV1" => {
                     let album: SyncAlbumV1 = serde_json::from_value(sync_line.data)
@@ -238,9 +293,26 @@ impl SyncManager {
                             error!(line_number, "failed to deserialize AlbumV1: {e}");
                             LibraryError::Immich(format!("invalid AlbumV1 at line {line_number}: {e}"))
                         })?;
-                    self.handle_album(album).await?;
-                    album_count += 1;
-                    acks.push(sync_line.ack);
+
+                    let album_id = album.id.clone();
+                    let audit_id = self.db.start_sync_audit("AlbumV1", &album_id, &sync_cycle).await.ok();
+
+                    match self.handle_album(album).await {
+                        Ok(()) => {
+                            if let Some(aid) = audit_id {
+                                let _ = self.db.complete_sync_audit(aid, "upsert").await;
+                            }
+                            acks.push(sync_line.ack);
+                            album_count += 1;
+                        }
+                        Err(e) => {
+                            warn!(album_id = %album_id, error = %e, "skipping album");
+                            if let Some(aid) = audit_id {
+                                let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
+                            }
+                            error_count += 1;
+                        }
+                    }
                 }
                 "AlbumDeleteV1" => {
                     let delete: SyncAlbumDeleteV1 = serde_json::from_value(sync_line.data)
@@ -248,8 +320,25 @@ impl SyncManager {
                             error!(line_number, "failed to deserialize AlbumDeleteV1: {e}");
                             LibraryError::Immich(format!("invalid AlbumDeleteV1 at line {line_number}: {e}"))
                         })?;
-                    self.handle_album_delete(&delete.album_id).await?;
-                    acks.push(sync_line.ack);
+
+                    let del_album_id = delete.album_id.clone();
+                    let audit_id = self.db.start_sync_audit("AlbumDeleteV1", &del_album_id, &sync_cycle).await.ok();
+
+                    match self.handle_album_delete(&delete.album_id).await {
+                        Ok(()) => {
+                            if let Some(aid) = audit_id {
+                                let _ = self.db.complete_sync_audit(aid, "delete").await;
+                            }
+                            acks.push(sync_line.ack);
+                        }
+                        Err(e) => {
+                            warn!(album_id = %del_album_id, error = %e, "skipping album delete");
+                            if let Some(aid) = audit_id {
+                                let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
+                            }
+                            error_count += 1;
+                        }
+                    }
                 }
                 "AlbumToAssetV1" => {
                     let assoc: SyncAlbumToAssetV1 = serde_json::from_value(sync_line.data)
@@ -257,8 +346,25 @@ impl SyncManager {
                             error!(line_number, "failed to deserialize AlbumToAssetV1: {e}");
                             LibraryError::Immich(format!("invalid AlbumToAssetV1 at line {line_number}: {e}"))
                         })?;
-                    self.handle_album_asset(assoc).await?;
-                    acks.push(sync_line.ack);
+
+                    let assoc_id = format!("{}:{}", assoc.album_id, assoc.asset_id);
+                    let audit_id = self.db.start_sync_audit("AlbumToAssetV1", &assoc_id, &sync_cycle).await.ok();
+
+                    match self.handle_album_asset(assoc).await {
+                        Ok(()) => {
+                            if let Some(aid) = audit_id {
+                                let _ = self.db.complete_sync_audit(aid, "upsert").await;
+                            }
+                            acks.push(sync_line.ack);
+                        }
+                        Err(e) => {
+                            warn!(assoc = %assoc_id, error = %e, "skipping album-asset link");
+                            if let Some(aid) = audit_id {
+                                let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
+                            }
+                            error_count += 1;
+                        }
+                    }
                 }
                 "AlbumToAssetDeleteV1" => {
                     let assoc: SyncAlbumToAssetDeleteV1 = serde_json::from_value(sync_line.data)
@@ -266,8 +372,25 @@ impl SyncManager {
                             error!(line_number, "failed to deserialize AlbumToAssetDeleteV1: {e}");
                             LibraryError::Immich(format!("invalid AlbumToAssetDeleteV1 at line {line_number}: {e}"))
                         })?;
-                    self.handle_album_asset_delete(assoc).await?;
-                    acks.push(sync_line.ack);
+
+                    let assoc_id = format!("{}:{}", assoc.album_id, assoc.asset_id);
+                    let audit_id = self.db.start_sync_audit("AlbumToAssetDeleteV1", &assoc_id, &sync_cycle).await.ok();
+
+                    match self.handle_album_asset_delete(assoc).await {
+                        Ok(()) => {
+                            if let Some(aid) = audit_id {
+                                let _ = self.db.complete_sync_audit(aid, "delete").await;
+                            }
+                            acks.push(sync_line.ack);
+                        }
+                        Err(e) => {
+                            warn!(assoc = %assoc_id, error = %e, "skipping album-asset unlink");
+                            if let Some(aid) = audit_id {
+                                let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
+                            }
+                            error_count += 1;
+                        }
+                    }
                 }
                 "SyncCompleteV1" => {
                     info!(
@@ -275,6 +398,7 @@ impl SyncManager {
                         exifs = exif_count,
                         deletes = delete_count,
                         albums = album_count,
+                        errors = error_count,
                         lines = line_number,
                         "sync stream complete"
                     );
@@ -285,6 +409,11 @@ impl SyncManager {
                     debug!(entity_type = other, line_number, "ignoring unknown sync entity type");
                     acks.push(sync_line.ack);
                 }
+            }
+
+            // Flush acks incrementally so progress is preserved.
+            if acks.len() >= ACK_FLUSH_THRESHOLD {
+                self.flush_acks(&mut acks).await?;
             }
         }
 
@@ -302,38 +431,51 @@ impl SyncManager {
             }
         }
 
-        // Acknowledge processed changes (batched — Immich limits to 1000 per request).
+        // Flush any remaining acks.
         if !acks.is_empty() {
-            info!(count = acks.len(), "sending sync acks to server");
-            for chunk in acks.chunks(1000) {
-                let ack_request = SyncAckRequest { acks: chunk.to_vec() };
-                if let Err(e) = self.client.post_no_content("/sync/ack", &ack_request).await {
-                    error!("failed to send sync acks: {e}");
-                    return Err(e);
-                }
-            }
-            debug!("acks sent successfully");
-
-            // Persist checkpoints locally for delta sync on next launch.
-            let mut checkpoints: std::collections::HashMap<String, String> =
-                std::collections::HashMap::new();
-            for ack in &acks {
-                if let Some(entity_type) = ack.split('|').next() {
-                    checkpoints.insert(entity_type.to_string(), ack.clone());
-                }
-            }
-            let pairs: Vec<(String, String)> = checkpoints.into_iter().collect();
-            info!(count = pairs.len(), "saving sync checkpoints locally");
-            self.db.save_sync_checkpoints(&pairs).await?;
+            self.flush_acks(&mut acks).await?;
         }
 
-        // Log summary — grid updates are already handled per-asset via AssetSynced events.
-        if asset_count > 0 {
-            info!(count = asset_count, "sync complete — assets synced");
+        if asset_count > 0 || error_count > 0 {
+            info!(
+                synced = asset_count,
+                errors = error_count,
+                "sync complete"
+            );
         } else {
             debug!("sync complete — no new assets");
         }
 
+        Ok(())
+    }
+
+    /// Send accumulated acks to the server and save checkpoints locally.
+    ///
+    /// Clears `acks` after successful flush. Called both incrementally during
+    /// the stream and once at the end for any remaining acks.
+    async fn flush_acks(&self, acks: &mut Vec<String>) -> Result<(), LibraryError> {
+        if acks.is_empty() {
+            return Ok(());
+        }
+
+        info!(count = acks.len(), "flushing acks to server");
+        for chunk in acks.chunks(1000) {
+            let ack_request = SyncAckRequest { acks: chunk.to_vec() };
+            self.client.post_no_content("/sync/ack", &ack_request).await?;
+        }
+
+        // Persist checkpoints — keep only the latest ack per entity type.
+        let mut checkpoints: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for ack in acks.iter() {
+            if let Some(entity_type) = ack.split('|').next() {
+                checkpoints.insert(entity_type.to_string(), ack.clone());
+            }
+        }
+        let pairs: Vec<(String, String)> = checkpoints.into_iter().collect();
+        self.db.save_sync_checkpoints(&pairs).await?;
+
+        acks.clear();
         Ok(())
     }
 
@@ -538,6 +680,9 @@ impl ThumbnailDownloader {
             if download_count % 100 == 0 {
                 info!(queued = download_count, "thumbnail download progress");
             }
+
+            // Throttle to avoid overloading the Immich server during bulk syncs.
+            tokio::time::sleep(THUMBNAIL_THROTTLE).await;
         }
 
         info!(total = download_count, "thumbnail downloader finished");

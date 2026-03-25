@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use std::time::Duration;
+
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::SqlitePool;
 use tracing::{info, instrument};
 
@@ -50,9 +52,12 @@ impl Database {
 
         let opts = SqliteConnectOptions::new()
             .filename(db_path)
-            .create_if_missing(true);
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .busy_timeout(Duration::from_secs(5));
 
         let pool = SqlitePoolOptions::new()
+            .max_connections(4)
             .connect_with(opts)
             .await
             .map_err(LibraryError::Db)?;
@@ -476,7 +481,19 @@ impl LibraryMedia for Database {
             "INSERT INTO media_metadata
                 (media_id, camera_make, camera_model, lens_model, aperture, shutter_str,
                  iso, focal_length, gps_lat, gps_lon, gps_alt, color_space)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(media_id) DO UPDATE SET
+                camera_make = excluded.camera_make,
+                camera_model = excluded.camera_model,
+                lens_model = excluded.lens_model,
+                aperture = excluded.aperture,
+                shutter_str = excluded.shutter_str,
+                iso = excluded.iso,
+                focal_length = excluded.focal_length,
+                gps_lat = excluded.gps_lat,
+                gps_lon = excluded.gps_lon,
+                gps_alt = excluded.gps_alt,
+                color_space = excluded.color_space",
         )
         .bind(record.media_id.as_str())
         .bind(&record.camera_make)
@@ -949,6 +966,69 @@ impl Database {
             .execute(&self.pool)
             .await
             .map_err(LibraryError::Db)?;
+        Ok(())
+    }
+
+    // ── Sync audit ──────────────────────────────────────────────────────────
+
+    /// Record the start of processing a sync record.
+    /// Returns the row id for later completion via [`complete_sync_audit`].
+    pub async fn start_sync_audit(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+        sync_cycle: &str,
+    ) -> Result<i64, LibraryError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let result = sqlx::query(
+            "INSERT INTO sync_audit (entity_type, entity_id, action, started_at, sync_cycle)
+             VALUES (?, ?, 'upsert', ?, ?)",
+        )
+        .bind(entity_type)
+        .bind(entity_id)
+        .bind(&now)
+        .bind(sync_cycle)
+        .execute(&self.pool)
+        .await
+        .map_err(LibraryError::Db)?;
+        Ok(result.last_insert_rowid())
+    }
+
+    /// Mark a sync audit record as completed (just before acking).
+    pub async fn complete_sync_audit(
+        &self,
+        row_id: i64,
+        action: &str,
+    ) -> Result<(), LibraryError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "UPDATE sync_audit SET completed_at = ?, action = ? WHERE id = ?",
+        )
+        .bind(&now)
+        .bind(action)
+        .bind(row_id)
+        .execute(&self.pool)
+        .await
+        .map_err(LibraryError::Db)?;
+        Ok(())
+    }
+
+    /// Mark a sync audit record as failed with an error message.
+    pub async fn fail_sync_audit(
+        &self,
+        row_id: i64,
+        error_msg: &str,
+    ) -> Result<(), LibraryError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "UPDATE sync_audit SET completed_at = ?, action = 'error', error_msg = ? WHERE id = ?",
+        )
+        .bind(&now)
+        .bind(error_msg)
+        .bind(row_id)
+        .execute(&self.pool)
+        .await
+        .map_err(LibraryError::Db)?;
         Ok(())
     }
 }

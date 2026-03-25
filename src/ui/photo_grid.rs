@@ -16,6 +16,7 @@ pub mod cell;
 pub mod factory;
 pub mod item;
 pub mod model;
+pub mod texture_cache;
 
 pub use model::PhotoGridModel;
 
@@ -40,6 +41,7 @@ mod imp {
         pub tokio: OnceCell<tokio::runtime::Handle>,
         pub registry: OnceCell<Rc<crate::ui::model_registry::ModelRegistry>>,
         pub filter: RefCell<crate::library::media::MediaFilter>,
+        pub texture_cache: OnceCell<Rc<super::texture_cache::TextureCache>>,
     }
 
     impl Default for PhotoGrid {
@@ -54,6 +56,7 @@ mod imp {
                 tokio: OnceCell::default(),
                 registry: OnceCell::default(),
                 filter: RefCell::new(crate::library::media::MediaFilter::All),
+                texture_cache: OnceCell::default(),
             }
         }
     }
@@ -162,12 +165,14 @@ impl PhotoGrid {
         let tokio = imp.tokio.get().unwrap().clone();
         let registry = imp.registry.get().unwrap().clone();
         let filter = imp.filter.borrow().clone();
+        let cache = imp.texture_cache.get().unwrap().clone();
         grid_view.set_factory(Some(&factory::build_factory(
             self.current_cell_size(),
             library,
             tokio,
             registry,
             filter,
+            cache,
         )));
     }
 
@@ -187,12 +192,14 @@ impl PhotoGrid {
         tokio: tokio::runtime::Handle,
         registry: Rc<crate::ui::model_registry::ModelRegistry>,
         filter: crate::library::media::MediaFilter,
+        cache: Rc<texture_cache::TextureCache>,
         on_activate: impl Fn(Vec<item::MediaItemObject>, usize) + 'static,
     ) {
         let imp = self.imp();
         let _ = imp.library.set(Arc::clone(&library));
         let _ = imp.tokio.set(tokio.clone());
         let _ = imp.registry.set(Rc::clone(&registry));
+        let _ = imp.texture_cache.set(Rc::clone(&cache));
         *imp.filter.borrow_mut() = filter.clone();
 
         let grid_view = imp.grid_view.get().unwrap();
@@ -207,6 +214,7 @@ impl PhotoGrid {
             tokio,
             Rc::clone(&registry),
             filter.clone(),
+            cache,
         )));
 
         // Fetch the first page immediately.
@@ -261,6 +269,7 @@ pub struct PhotoGridView {
     video_viewer: Rc<VideoViewer>,
     library: Arc<dyn Library>,
     tokio: tokio::runtime::Handle,
+    texture_cache: Rc<texture_cache::TextureCache>,
     trash_btn: gtk::Button,
     restore_btn: gtk::Button,
     delete_btn: gtk::Button,
@@ -278,6 +287,7 @@ impl PhotoGridView {
         tokio: tokio::runtime::Handle,
         settings: gio::Settings,
         registry: Rc<crate::ui::model_registry::ModelRegistry>,
+        texture_cache: Rc<texture_cache::TextureCache>,
     ) -> Self {
         // ── Grid header bar ──────────────────────────────────────────────────
         let header = adw::HeaderBar::new();
@@ -450,6 +460,7 @@ impl PhotoGridView {
             video_viewer,
             library,
             tokio,
+            texture_cache,
             trash_btn,
             restore_btn,
             delete_btn,
@@ -482,6 +493,7 @@ impl PhotoGridView {
             self.tokio.clone(),
             Rc::clone(&registry),
             filter.clone(),
+            Rc::clone(&self.texture_cache),
             move |items, index| {
                 // Choose viewer based on media type.
                 let media_type = items

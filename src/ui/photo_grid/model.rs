@@ -12,7 +12,7 @@ use crate::library::Library;
 use super::item::MediaItemObject;
 
 /// Number of items fetched per page.
-const PAGE_SIZE: u32 = 100;
+const PAGE_SIZE: u32 = 250;
 
 /// Data and pagination state for the photo grid.
 ///
@@ -95,18 +95,27 @@ impl PhotoGridModel {
         let model = Rc::clone(self);
 
         glib::MainContext::default().spawn_local(async move {
+            let start = std::time::Instant::now();
             let result = tokio
                 .spawn(async move { library.list_media(filter, cursor.as_ref(), PAGE_SIZE).await })
                 .await;
 
+            let elapsed = start.elapsed();
             match result {
-                Ok(Ok(items)) => model.on_page_loaded(items),
+                Ok(Ok(ref items)) => {
+                    debug!(
+                        items = items.len(),
+                        elapsed_ms = elapsed.as_millis(),
+                        "page fetched from database"
+                    );
+                    model.on_page_loaded(result.unwrap().unwrap());
+                }
                 Ok(Err(e)) => {
-                    error!("list_media failed: {e}");
+                    error!(elapsed_ms = elapsed.as_millis(), "list_media failed: {e}");
                     model.loading.set(false);
                 }
                 Err(e) => {
-                    error!("tokio join failed: {e}");
+                    error!(elapsed_ms = elapsed.as_millis(), "tokio join failed: {e}");
                     model.loading.set(false);
                 }
             }
