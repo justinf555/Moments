@@ -853,6 +853,10 @@ impl PhotoGridView {
                 vbox.set_margin_start(6);
                 vbox.set_margin_end(6);
 
+                // Create popover early so buttons can dismiss it.
+                let popover = gtk::Popover::new();
+                let pop_ref = popover.downgrade();
+
                 if is_trash {
                     // Trash view: Restore, Delete Permanently
                     let restore_btn = gtk::Button::with_label("Restore");
@@ -868,7 +872,9 @@ impl PhotoGridView {
                     let lib_r = Arc::clone(&lib);
                     let tk_r = tk.clone();
                     let reg_r = Rc::clone(&reg);
+                    let pw = pop_ref.clone();
                     restore_btn.connect_clicked(move |_| {
+                        if let Some(p) = pw.upgrade() { p.popdown(); }
                         let ids = collect_selected_ids(&sel);
                         if ids.is_empty() { return; }
                         sel.unselect_all();
@@ -887,7 +893,9 @@ impl PhotoGridView {
                     let lib_d = Arc::clone(&lib);
                     let tk_d = tk.clone();
                     let reg_d = Rc::clone(&reg);
+                    let pw = pop_ref.clone();
                     delete_btn.connect_clicked(move |_| {
+                        if let Some(p) = pw.upgrade() { p.popdown(); }
                         let ids = collect_selected_ids(&sel);
                         if ids.is_empty() { return; }
                         sel.unselect_all();
@@ -924,7 +932,9 @@ impl PhotoGridView {
                             let tk_ra = tk.clone();
                             let reg_ra = Rc::clone(&reg);
                             let aid = album_id.clone();
+                            let pw = pop_ref.clone();
                             remove_btn.connect_clicked(move |_| {
+                                if let Some(p) = pw.upgrade() { p.popdown(); }
                                 let ids = collect_selected_ids(&sel);
                                 if ids.is_empty() { return; }
                                 sel.unselect_all();
@@ -947,7 +957,9 @@ impl PhotoGridView {
                     let lib_f = Arc::clone(&lib);
                     let tk_f = tk.clone();
                     let reg_f = Rc::clone(&reg);
+                    let pw = pop_ref.clone();
                     fav_btn.connect_clicked(move |_| {
+                        if let Some(p) = pw.upgrade() { p.popdown(); }
                         let ids = collect_selected_ids(&sel);
                         if ids.is_empty() { return; }
                         let lib = Arc::clone(&lib_f);
@@ -965,7 +977,9 @@ impl PhotoGridView {
                     let lib_t = Arc::clone(&lib);
                     let tk_t = tk.clone();
                     let reg_t = Rc::clone(&reg);
+                    let pw = pop_ref.clone();
                     trash_ctx_btn.connect_clicked(move |_| {
+                        if let Some(p) = pw.upgrade() { p.popdown(); }
                         let ids = collect_selected_ids(&sel);
                         if ids.is_empty() { return; }
                         sel.unselect_all();
@@ -982,7 +996,6 @@ impl PhotoGridView {
                 }
 
                 // Show the popover on the grid view.
-                let popover = gtk::Popover::new();
                 popover.set_child(Some(&vbox));
                 popover.set_parent(&grid_view);
                 popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
