@@ -17,6 +17,7 @@ mod imp {
     pub struct CollectionGridCell {
         pub picture: gtk::Picture,
         pub placeholder: gtk::Image,
+        pub hidden_icon: gtk::Image,
         pub name_label: gtk::Label,
         pub subtitle_label: gtk::Label,
         pub bindings: RefCell<Option<CellBindings>>,
@@ -27,6 +28,7 @@ mod imp {
             Self {
                 picture: gtk::Picture::new(),
                 placeholder: gtk::Image::from_icon_name("avatar-default-symbolic"),
+                hidden_icon: gtk::Image::from_icon_name("view-conceal-symbolic"),
                 name_label: gtk::Label::new(None),
                 subtitle_label: gtk::Label::new(None),
                 bindings: RefCell::default(),
@@ -77,6 +79,14 @@ mod imp {
             self.picture.set_content_fit(gtk::ContentFit::Cover);
             self.picture.set_visible(false);
             overlay.add_overlay(&self.picture);
+
+            // Hidden indicator icon — shown over the thumbnail when person is hidden.
+            self.hidden_icon.set_pixel_size(32);
+            self.hidden_icon.set_halign(gtk::Align::Center);
+            self.hidden_icon.set_valign(gtk::Align::Center);
+            self.hidden_icon.set_visible(false);
+            self.hidden_icon.add_css_class("hidden-icon");
+            overlay.add_overlay(&self.hidden_icon);
 
             frame.set_child(Some(&overlay));
             frame.set_parent(&*obj);
@@ -131,6 +141,14 @@ impl CollectionGridCell {
         imp.name_label.set_text(display_name);
         imp.subtitle_label.set_text(&data.subtitle);
 
+        if data.is_hidden {
+            self.add_css_class("hidden-person");
+            imp.hidden_icon.set_visible(true);
+        } else {
+            self.remove_css_class("hidden-person");
+            imp.hidden_icon.set_visible(false);
+        }
+
         if let Some(texture) = item.texture() {
             imp.picture.set_paintable(Some(&texture));
             imp.picture.set_visible(true);
@@ -166,5 +184,7 @@ impl CollectionGridCell {
         imp.placeholder.set_visible(true);
         imp.name_label.set_text("");
         imp.subtitle_label.set_text("");
+        imp.hidden_icon.set_visible(false);
+        self.remove_css_class("hidden-person");
     }
 }
