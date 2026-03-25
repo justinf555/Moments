@@ -564,6 +564,14 @@ impl MomentsSidebar {
             if let Some(stack) = imp.bar_stack.get() {
                 stack.set_visible_child_name(page);
             }
+            // Only allow expanding the sheet during uploads.
+            if let Some(sheet) = imp.bottom_sheet.get() {
+                let can_expand = state == imp::StatusState::Upload;
+                sheet.set_show_drag_handle(can_expand);
+                if !can_expand && sheet.is_open() {
+                    sheet.set_open(false);
+                }
+            }
         }
     }
 
