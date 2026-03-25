@@ -28,7 +28,7 @@ mod imp {
             Self {
                 picture: gtk::Picture::new(),
                 placeholder: gtk::Image::from_icon_name("avatar-default-symbolic"),
-                hidden_icon: gtk::Image::from_icon_name("eye-not-looking-symbolic"),
+                hidden_icon: gtk::Image::from_icon_name("user-invisible-symbolic"),
                 name_label: gtk::Label::new(None),
                 subtitle_label: gtk::Label::new(None),
                 bindings: RefCell::default(),
