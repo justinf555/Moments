@@ -41,4 +41,8 @@ pub trait LibraryStorage: Send + Sync + 'static {
     /// finishing their current item. Sends [`LibraryEvent::ShutdownComplete`]
     /// before returning.
     async fn close(&self) -> Result<(), LibraryError>;
+
+    /// Update the sync polling interval (seconds). Takes effect on the next cycle.
+    /// Set to 0 to disable polling. Default implementation is a no-op (local backend).
+    fn set_sync_interval(&self, _secs: u64) {}
 }
