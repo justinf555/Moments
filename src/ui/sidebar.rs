@@ -631,8 +631,16 @@ impl MomentsSidebar {
     }
 
     /// Show thumbnail download progress.
+    ///
+    /// Suppressed if sync has already completed (last_synced_at is set)
+    /// and we've already transitioned to idle — avoids re-triggering
+    /// the thumbnail state from straggler downloads after sync ends.
     pub fn show_thumbnail_progress(&self, completed: usize, total: usize) {
         let imp = self.imp();
+        // Only show thumbnail state while sync is actively running.
+        if imp.current_state.get() == imp::StatusState::Idle {
+            return;
+        }
         if let Some(label) = imp.thumb_label.get() {
             label.set_text(&format!("Thumbnails {completed}/{total}"));
         }
