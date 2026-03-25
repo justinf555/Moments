@@ -17,3 +17,8 @@ collection-grid-cell.circular .collection-thumbnail-frame {
 collection-grid-cell .collection-thumbnail-frame {
     border-radius: 8px;
 }
+
+/* Dimmed style for hidden people. */
+collection-grid-cell.hidden-person {
+    opacity: 0.4;
+}

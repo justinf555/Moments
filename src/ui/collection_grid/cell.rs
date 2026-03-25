@@ -131,6 +131,12 @@ impl CollectionGridCell {
         imp.name_label.set_text(display_name);
         imp.subtitle_label.set_text(&data.subtitle);
 
+        if data.is_hidden {
+            self.add_css_class("hidden-person");
+        } else {
+            self.remove_css_class("hidden-person");
+        }
+
         if let Some(texture) = item.texture() {
             imp.picture.set_paintable(Some(&texture));
             imp.picture.set_visible(true);
@@ -166,5 +172,6 @@ impl CollectionGridCell {
         imp.placeholder.set_visible(true);
         imp.name_label.set_text("");
         imp.subtitle_label.set_text("");
+        self.remove_css_class("hidden-person");
     }
 }
