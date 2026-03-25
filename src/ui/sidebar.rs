@@ -113,7 +113,7 @@ mod imp {
 
             // Import button (LHS).
             let import_button = gtk::Button::builder()
-                .icon_name("go-up-symbolic")
+                .icon_name("document-send-symbolic")
                 .tooltip_text("Import Photos")
                 .action_name("app.import")
                 .build();
@@ -199,7 +199,7 @@ mod imp {
             idle_box.set_margin_end(12);
             idle_box.set_margin_top(8);
             idle_box.set_margin_bottom(8);
-            let idle_icon = gtk::Image::from_icon_name("emblem-ok-symbolic");
+            let idle_icon = gtk::Image::from_icon_name("object-select-symbolic");
             idle_icon.add_css_class("dim-label");
             idle_box.append(&idle_icon);
             let idle_label = gtk::Label::new(Some("Waiting for sync..."));
@@ -261,7 +261,7 @@ mod imp {
             complete_box.set_margin_end(12);
             complete_box.set_margin_top(8);
             complete_box.set_margin_bottom(8);
-            let complete_icon = gtk::Image::from_icon_name("emblem-ok-symbolic");
+            let complete_icon = gtk::Image::from_icon_name("object-select-symbolic");
             complete_box.append(&complete_icon);
             let complete_label = gtk::Label::new(Some("Import complete"));
             complete_label.set_hexpand(true);
