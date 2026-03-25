@@ -451,12 +451,26 @@ impl MomentsApplication {
                                         registry.on_thumbnail_ready(&media_id);
                                     }
                                     Ok(LibraryEvent::ImportProgress { current, total }) => {
+                                        // Update sidebar bottom sheet (non-modal).
+                                        if let Some(win) = win_for_idle.upgrade() {
+                                            if let Some(sb) = win.sidebar() {
+                                                sb.show_upload_progress(current, total);
+                                            }
+                                        }
+                                        // Also update modal dialog if present.
                                         let borrow = app.imp().import_dialog.borrow();
                                         if let Some(d) = borrow.as_ref() {
                                             d.set_progress(current, total);
                                         }
                                     }
                                     Ok(LibraryEvent::ImportComplete(summary)) => {
+                                        // Update sidebar bottom sheet.
+                                        if let Some(win) = win_for_idle.upgrade() {
+                                            if let Some(sb) = win.sidebar() {
+                                                sb.show_upload_complete(&summary);
+                                            }
+                                        }
+                                        // Also update modal dialog if present.
                                         {
                                             let borrow = app.imp().import_dialog.borrow();
                                             if let Some(d) = borrow.as_ref() {
