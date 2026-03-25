@@ -395,65 +395,73 @@ impl LibraryMedia for Database {
         ids: &[MediaId],
         favorite: bool,
     ) -> Result<(), LibraryError> {
-        let value: i64 = if favorite { 1 } else { 0 };
-        for id in ids {
-            sqlx::query("UPDATE media SET is_favorite = ? WHERE id = ?")
-                .bind(value)
-                .bind(id.as_str())
-                .execute(&self.pool)
-                .await
-                .map_err(LibraryError::Db)?;
+        if ids.is_empty() {
+            return Ok(());
         }
+        let value: i64 = if favorite { 1 } else { 0 };
+        let placeholders = id_placeholders(ids.len());
+        let sql = format!("UPDATE media SET is_favorite = ? WHERE id IN ({placeholders})");
+        let mut query = sqlx::query(&sql);
+        query = query.bind(value);
+        for id in ids {
+            query = query.bind(id.as_str());
+        }
+        query.execute(&self.pool).await.map_err(LibraryError::Db)?;
         Ok(())
     }
 
     async fn trash(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
-        let now = chrono::Utc::now().timestamp();
-        for id in ids {
-            sqlx::query("UPDATE media SET is_trashed = 1, trashed_at = ? WHERE id = ?")
-                .bind(now)
-                .bind(id.as_str())
-                .execute(&self.pool)
-                .await
-                .map_err(LibraryError::Db)?;
+        if ids.is_empty() {
+            return Ok(());
         }
+        let now = chrono::Utc::now().timestamp();
+        let placeholders = id_placeholders(ids.len());
+        let sql = format!(
+            "UPDATE media SET is_trashed = 1, trashed_at = ? WHERE id IN ({placeholders})"
+        );
+        let mut query = sqlx::query(&sql);
+        query = query.bind(now);
+        for id in ids {
+            query = query.bind(id.as_str());
+        }
+        query.execute(&self.pool).await.map_err(LibraryError::Db)?;
         Ok(())
     }
 
     async fn restore(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
-        for id in ids {
-            sqlx::query("UPDATE media SET is_trashed = 0, trashed_at = NULL WHERE id = ?")
-                .bind(id.as_str())
-                .execute(&self.pool)
-                .await
-                .map_err(LibraryError::Db)?;
+        if ids.is_empty() {
+            return Ok(());
         }
+        let placeholders = id_placeholders(ids.len());
+        let sql = format!(
+            "UPDATE media SET is_trashed = 0, trashed_at = NULL WHERE id IN ({placeholders})"
+        );
+        let mut query = sqlx::query(&sql);
+        for id in ids {
+            query = query.bind(id.as_str());
+        }
+        query.execute(&self.pool).await.map_err(LibraryError::Db)?;
         Ok(())
     }
 
     async fn delete_permanently(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
-        for id in ids {
-            // Delete all FK references, then the media row itself.
-            sqlx::query("DELETE FROM media_metadata WHERE media_id = ?")
-                .bind(id.as_str())
-                .execute(&self.pool)
-                .await
-                .map_err(LibraryError::Db)?;
-            sqlx::query("DELETE FROM thumbnails WHERE media_id = ?")
-                .bind(id.as_str())
-                .execute(&self.pool)
-                .await
-                .map_err(LibraryError::Db)?;
-            sqlx::query("DELETE FROM album_media WHERE media_id = ?")
-                .bind(id.as_str())
-                .execute(&self.pool)
-                .await
-                .map_err(LibraryError::Db)?;
-            sqlx::query("DELETE FROM media WHERE id = ?")
-                .bind(id.as_str())
-                .execute(&self.pool)
-                .await
-                .map_err(LibraryError::Db)?;
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let placeholders = id_placeholders(ids.len());
+        // Delete all FK references, then the media rows — one query per table.
+        for (table, col) in [
+            ("media_metadata", "media_id"),
+            ("thumbnails", "media_id"),
+            ("album_media", "media_id"),
+            ("media", "id"),
+        ] {
+            let sql = format!("DELETE FROM {table} WHERE {col} IN ({placeholders})");
+            let mut query = sqlx::query(&sql);
+            for id in ids {
+                query = query.bind(id.as_str());
+            }
+            query.execute(&self.pool).await.map_err(LibraryError::Db)?;
         }
         Ok(())
     }
@@ -603,18 +611,25 @@ impl LibraryAlbums for Database {
         album_id: &AlbumId,
         media_ids: &[MediaId],
     ) -> Result<(), LibraryError> {
-        let now = chrono::Utc::now().timestamp();
-        for media_id in media_ids {
-            sqlx::query(
-                "INSERT OR IGNORE INTO album_media (album_id, media_id, added_at) VALUES (?, ?, ?)",
-            )
-            .bind(album_id.as_str())
-            .bind(media_id.as_str())
-            .bind(now)
-            .execute(&self.pool)
-            .await
-            .map_err(LibraryError::Db)?;
+        if media_ids.is_empty() {
+            return Ok(());
         }
+        let now = chrono::Utc::now().timestamp();
+        // Batch insert via multi-row VALUES.
+        let row_placeholders: Vec<&str> = media_ids.iter().map(|_| "(?, ?, ?)").collect();
+        let sql = format!(
+            "INSERT OR IGNORE INTO album_media (album_id, media_id, added_at) VALUES {}",
+            row_placeholders.join(", ")
+        );
+        let mut query = sqlx::query(&sql);
+        for media_id in media_ids {
+            query = query
+                .bind(album_id.as_str())
+                .bind(media_id.as_str())
+                .bind(now);
+        }
+        query.execute(&self.pool).await.map_err(LibraryError::Db)?;
+
         sqlx::query("UPDATE albums SET updated_at = ? WHERE id = ?")
             .bind(now)
             .bind(album_id.as_str())
@@ -629,14 +644,19 @@ impl LibraryAlbums for Database {
         album_id: &AlbumId,
         media_ids: &[MediaId],
     ) -> Result<(), LibraryError> {
-        for media_id in media_ids {
-            sqlx::query("DELETE FROM album_media WHERE album_id = ? AND media_id = ?")
-                .bind(album_id.as_str())
-                .bind(media_id.as_str())
-                .execute(&self.pool)
-                .await
-                .map_err(LibraryError::Db)?;
+        if media_ids.is_empty() {
+            return Ok(());
         }
+        let placeholders = id_placeholders(media_ids.len());
+        let sql = format!(
+            "DELETE FROM album_media WHERE album_id = ? AND media_id IN ({placeholders})"
+        );
+        let mut query = sqlx::query(&sql);
+        query = query.bind(album_id.as_str());
+        for media_id in media_ids {
+            query = query.bind(media_id.as_str());
+        }
+        query.execute(&self.pool).await.map_err(LibraryError::Db)?;
         let now = chrono::Utc::now().timestamp();
         sqlx::query("UPDATE albums SET updated_at = ? WHERE id = ?")
             .bind(now)
@@ -841,21 +861,24 @@ impl Database {
         Ok(rows.into_iter().collect())
     }
 
-    /// Save sync checkpoints (upsert).
+    /// Save sync checkpoints (batch upsert).
     pub async fn save_sync_checkpoints(
         &self,
         acks: &[(String, String)],
     ) -> Result<(), LibraryError> {
-        for (entity_type, ack) in acks {
-            sqlx::query(
-                "INSERT OR REPLACE INTO sync_checkpoints (entity_type, ack) VALUES (?, ?)",
-            )
-            .bind(entity_type)
-            .bind(ack)
-            .execute(&self.pool)
-            .await
-            .map_err(LibraryError::Db)?;
+        if acks.is_empty() {
+            return Ok(());
         }
+        let row_placeholders: Vec<&str> = acks.iter().map(|_| "(?, ?)").collect();
+        let sql = format!(
+            "INSERT OR REPLACE INTO sync_checkpoints (entity_type, ack) VALUES {}",
+            row_placeholders.join(", ")
+        );
+        let mut query = sqlx::query(&sql);
+        for (entity_type, ack) in acks {
+            query = query.bind(entity_type).bind(ack);
+        }
+        query.execute(&self.pool).await.map_err(LibraryError::Db)?;
         Ok(())
     }
 
@@ -1031,6 +1054,18 @@ impl Database {
         .map_err(LibraryError::Db)?;
         Ok(())
     }
+}
+
+/// Build a comma-separated list of `?` placeholders for an `IN (...)` clause.
+fn id_placeholders(count: usize) -> String {
+    let mut s = String::with_capacity(count * 3);
+    for i in 0..count {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push('?');
+    }
+    s
 }
 
 #[cfg(test)]
