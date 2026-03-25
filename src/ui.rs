@@ -2,6 +2,7 @@ use gtk;
 
 pub mod album_dialogs;
 pub mod coordinator;
+pub mod preferences_dialog;
 pub mod empty_library;
 pub mod import_dialog;
 pub mod model_registry;

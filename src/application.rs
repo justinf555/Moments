@@ -18,7 +18,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-use std::cell::{OnceCell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{mpsc::Receiver, Arc};
@@ -48,6 +48,8 @@ mod imp {
         pub settings: OnceCell<gio::Settings>,
         pub tokio: OnceCell<tokio::runtime::Handle>,
         pub library: RefCell<Option<Arc<dyn Library>>>,
+        pub is_immich: Cell<bool>,
+        pub immich_server_url: RefCell<Option<String>>,
         pub library_events: RefCell<Option<Receiver<LibraryEvent>>>,
         pub model_registry: RefCell<Option<Rc<ModelRegistry>>>,
         /// Held while an import is in flight so the idle loop can update it.
@@ -114,6 +116,17 @@ mod imp {
                     gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
                 );
             }
+
+            // Apply saved color scheme preference.
+            let settings = self
+                .settings
+                .get_or_init(|| gio::Settings::new("io.github.justinf555.Moments"));
+            let color_scheme = match settings.uint("color-scheme") {
+                1 => adw::ColorScheme::ForceLight,
+                4 => adw::ColorScheme::ForceDark,
+                _ => adw::ColorScheme::Default,
+            };
+            adw::StyleManager::default().set_color_scheme(color_scheme);
 
             // Present existing window if the app is already running.
             if let Some(window) = app.active_window() {
@@ -189,7 +202,10 @@ impl MomentsApplication {
         let import_action = gio::ActionEntry::builder("import")
             .activate(move |app: &Self, _, _| app.show_import_dialog())
             .build();
-        self.add_action_entries([quit_action, about_action, import_action]);
+        let preferences_action = gio::ActionEntry::builder("preferences")
+            .activate(move |app: &Self, _, _| app.show_preferences())
+            .build();
+        self.add_action_entries([quit_action, about_action, import_action, preferences_action]);
     }
 
     fn show_about(&self) {
@@ -205,6 +221,25 @@ impl MomentsApplication {
             .build();
 
         about.present(Some(&window));
+    }
+
+    fn show_preferences(&self) {
+        let window = match self.active_window() {
+            Some(w) => w,
+            None => return,
+        };
+        let settings = self.imp().settings.get().expect("settings initialised").clone();
+        let is_immich = self.imp().is_immich.get();
+        let library = self.imp().library.borrow().clone();
+        let immich_url = self.imp().immich_server_url.borrow().clone();
+
+        crate::ui::preferences_dialog::show_preferences(
+            &window,
+            &settings,
+            is_immich,
+            library,
+            immich_url,
+        );
     }
 
     /// Show the first-run setup window.
@@ -389,6 +424,12 @@ impl MomentsApplication {
     ///  4. Starts polling `LibraryEvent`s via `glib::idle_add_local`, forwarding
     ///     `ThumbnailReady` events into the model so cells repaint automatically.
     fn load_library_async(&self, bundle: Bundle, config: LibraryConfig, window: MomentsWindow) {
+        // Store backend type for preferences dialog.
+        if let LibraryConfig::Immich { ref server_url, .. } = config {
+            self.imp().is_immich.set(true);
+            *self.imp().immich_server_url.borrow_mut() = Some(server_url.clone());
+        }
+
         let (sender, receiver) = std::sync::mpsc::channel::<LibraryEvent>();
         *self.imp().library_events.borrow_mut() = Some(receiver);
 
