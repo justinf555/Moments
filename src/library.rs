@@ -8,6 +8,7 @@ pub mod exif;
 pub mod factory;
 pub mod format;
 pub mod immich_client;
+pub mod immich_importer;
 pub mod import;
 pub mod keyring;
 pub mod importer;
