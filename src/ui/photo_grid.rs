@@ -487,14 +487,6 @@ impl PhotoGridView {
         }
     }
 
-    /// Action group containing `zoom-in` and `zoom-out` actions.
-    ///
-    /// Install on the window with prefix `"view"` so accelerators work
-    /// regardless of focus.
-    pub fn view_actions(&self) -> &gio::SimpleActionGroup {
-        &self.view_actions
-    }
-
     pub fn set_model(&self, model: Rc<PhotoGridModel>, registry: Rc<crate::ui::model_registry::ModelRegistry>) {
         let filter = model.filter();
         self.photo_grid.set_model(
@@ -589,6 +581,10 @@ pub(super) fn collect_selected_ids(selection: &gtk::MultiSelection) -> Vec<crate
 impl ContentView for PhotoGridView {
     fn widget(&self) -> &gtk::Widget {
         &self.widget
+    }
+
+    fn view_actions(&self) -> Option<&gio::SimpleActionGroup> {
+        Some(&self.view_actions)
     }
 }
 

@@ -70,10 +70,13 @@ impl ContentCoordinator {
     ///
     /// If the slot is `Lazy`, the factory is called to materialise the view
     /// and add its widget to the stack. Subsequent navigations are instant.
-    pub fn navigate(&mut self, id: &str) {
+    ///
+    /// Returns the view's optional action group so the caller can install it
+    /// on the window (e.g. under the `"view"` prefix for zoom actions).
+    pub fn navigate(&mut self, id: &str) -> Option<gtk::gio::SimpleActionGroup> {
         let Some(slot) = self.slots.get_mut(id) else {
             warn!(route = %id, "navigate: unknown route");
-            return;
+            return None;
         };
 
         // Materialise lazy views on first access.
@@ -86,6 +89,12 @@ impl ContentCoordinator {
         }
 
         self.stack.set_visible_child_name(id);
+
+        if let Some(ViewSlot::Ready(view)) = self.slots.get(id) {
+            view.view_actions().cloned()
+        } else {
+            None
+        }
     }
 
     /// Returns `true` if a route with the given id is registered.

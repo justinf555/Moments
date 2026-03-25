@@ -320,7 +320,6 @@ impl MomentsWindow {
             Rc::clone(&texture_cache),
         ));
         photos_view.set_model(Rc::clone(&photos_model), Rc::clone(&registry));
-        self.insert_action_group("view", Some(photos_view.view_actions()));
         registry.register(&photos_model);
         coordinator.register("photos", photos_view);
 
@@ -448,9 +447,13 @@ impl MomentsWindow {
                         coord.register(id, view);
                         debug!(route = %id, "registered album view");
                     }
-                    coord.navigate(id);
+                    if let Some(actions) = coord.navigate(id) {
+                        win.insert_action_group("view", Some(&actions));
+                    }
                 } else {
-                    coordinator.borrow_mut().navigate(id);
+                    if let Some(actions) = coordinator.borrow_mut().navigate(id) {
+                        win.insert_action_group("view", Some(&actions));
+                    }
                 }
             });
         }
@@ -474,7 +477,9 @@ impl MomentsWindow {
     /// Navigate to the given route by id (e.g. "recent", "photos").
     pub fn navigate(&self, route_id: &str) {
         if let Some(coordinator) = self.imp().coordinator.get() {
-            coordinator.borrow_mut().navigate(route_id);
+            if let Some(actions) = coordinator.borrow_mut().navigate(route_id) {
+                self.insert_action_group("view", Some(&actions));
+            }
         }
     }
 

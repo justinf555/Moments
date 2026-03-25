@@ -24,4 +24,13 @@ pub use window::MomentsWindow;
 pub trait ContentView {
     /// The root widget to place inside the split-view content pane.
     fn widget(&self) -> &gtk::Widget;
+
+    /// Optional action group for view-specific actions (e.g. zoom).
+    ///
+    /// When the coordinator navigates to this view, the returned group is
+    /// installed on the window under the `"view"` prefix so that accelerators
+    /// and action-name references resolve to the correct view.
+    fn view_actions(&self) -> Option<&gtk::gio::SimpleActionGroup> {
+        None
+    }
 }
