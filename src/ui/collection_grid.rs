@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -21,6 +22,13 @@ pub mod item;
 use factory::ThumbnailStyle;
 use item::{CollectionItemData, CollectionItemObject};
 
+/// Shared filter state for the people grid, wrapped in `Rc` so that
+/// toggle buttons, load, reload, and context menu closures can all access it.
+struct PeopleFilter {
+    include_hidden: Cell<bool>,
+    include_unnamed: Cell<bool>,
+}
+
 /// A reusable grid view for browsing collections (people, memories, etc.).
 ///
 /// Displays a grid of items with thumbnails and labels. Clicking an item
@@ -30,6 +38,7 @@ pub struct CollectionGridView {
     widget: gtk::Widget,
     store: gio::ListStore,
     library: Arc<dyn Library>,
+    filter: Rc<PeopleFilter>,
 }
 
 impl std::fmt::Debug for CollectionGridView {
@@ -51,6 +60,29 @@ impl CollectionGridView {
         texture_cache: Rc<TextureCache>,
     ) -> Self {
         let header = adw::HeaderBar::new();
+
+        // ── Filter toggle buttons ────────────────────────────────────────
+        let filter = Rc::new(PeopleFilter {
+            include_hidden: Cell::new(false),
+            include_unnamed: Cell::new(false),
+        });
+
+        let unnamed_toggle = gtk::ToggleButton::builder()
+            .icon_name("person-symbolic")
+            .tooltip_text("Show Unnamed")
+            .build();
+        unnamed_toggle.add_css_class("flat");
+
+        let hidden_toggle = gtk::ToggleButton::builder()
+            .icon_name("view-reveal-symbolic")
+            .tooltip_text("Show Hidden")
+            .build();
+        hidden_toggle.add_css_class("flat");
+
+        let toggle_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        toggle_box.append(&unnamed_toggle);
+        toggle_box.append(&hidden_toggle);
+        header.pack_start(&toggle_box);
 
         let grid_view = gtk::GridView::new(
             None::<gtk::NoSelection>,
@@ -86,7 +118,29 @@ impl CollectionGridView {
 
         let widget = nav_view.clone().upcast::<gtk::Widget>();
 
-        // Wire item activation — clicking a person pushes their PhotoGridView.
+        // ── Wire toggle buttons to reload ────────────────────────────────
+        {
+            let f = Rc::clone(&filter);
+            let s = store.clone();
+            let lib = Arc::clone(&library);
+            unnamed_toggle.connect_toggled(move |btn| {
+                f.include_unnamed.set(btn.is_active());
+                debug!(include_unnamed = btn.is_active(), "unnamed toggle changed");
+                full_reload(&s, &lib, &f);
+            });
+        }
+        {
+            let f = Rc::clone(&filter);
+            let s = store.clone();
+            let lib = Arc::clone(&library);
+            hidden_toggle.connect_toggled(move |btn| {
+                f.include_hidden.set(btn.is_active());
+                debug!(include_hidden = btn.is_active(), "hidden toggle changed");
+                full_reload(&s, &lib, &f);
+            });
+        }
+
+        // ── Wire item activation ─────────────────────────────────────────
         {
             let nav_clone = nav_view.clone();
             let lib = Arc::clone(&library);
@@ -141,7 +195,7 @@ impl CollectionGridView {
             });
         }
 
-        // Wire right-click context menu.
+        // ── Wire right-click context menu ────────────────────────────────
         {
             let gesture = gtk::GestureClick::new();
             gesture.set_button(3);
@@ -150,13 +204,13 @@ impl CollectionGridView {
             let lib = Arc::clone(&library);
             let tk = tokio.clone();
             let store_ctx = store.clone();
+            let filter_ctx = Rc::clone(&filter);
 
             gesture.connect_pressed(move |gesture, _, x, y| {
                 let Some(picked) = gv.pick(x, y, gtk::PickFlags::DEFAULT) else {
                     return;
                 };
 
-                // Walk up to the direct child of the GridView.
                 let grid_widget = gv.upcast_ref::<gtk::Widget>();
                 let mut target = Some(picked);
                 while let Some(ref w) = target {
@@ -167,7 +221,6 @@ impl CollectionGridView {
                 }
                 let Some(target) = target else { return };
 
-                // Find position by counting siblings.
                 let mut pos = 0u32;
                 let mut child = gv.first_child();
                 loop {
@@ -189,8 +242,8 @@ impl CollectionGridView {
                 let data = obj.data();
                 let person_id = data.id.clone();
                 let current_name = data.name.clone();
+                let is_hidden = data.is_hidden;
 
-                // Build context menu popover.
                 let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
                 vbox.set_margin_top(6);
                 vbox.set_margin_bottom(6);
@@ -204,11 +257,13 @@ impl CollectionGridView {
                 rename_btn.add_css_class("flat");
                 vbox.append(&rename_btn);
 
-                // ── Hide button ──
-                let hide_btn = gtk::Button::with_label("Hide");
+                // ── Hide/Unhide button ──
+                let hide_label = if is_hidden { "Unhide" } else { "Hide" };
+                let hide_btn = gtk::Button::with_label(hide_label);
                 hide_btn.add_css_class("flat");
                 vbox.append(&hide_btn);
 
+                // Wire rename.
                 let pop_weak = popover.downgrade();
                 let lib_r = Arc::clone(&lib);
                 let tk_r = tk.clone();
@@ -216,6 +271,7 @@ impl CollectionGridView {
                 let lib_r2 = Arc::clone(&lib);
                 let pid_r = person_id.clone();
                 let gv_ref = gv.clone();
+                let filter_r = Rc::clone(&filter_ctx);
                 rename_btn.connect_clicked(move |_| {
                     if let Some(p) = pop_weak.upgrade() {
                         p.popdown();
@@ -240,6 +296,7 @@ impl CollectionGridView {
                     let store = store_r.clone();
                     let pid = pid_r.clone();
                     let lib_reload = Arc::clone(&lib_r2);
+                    let f = Rc::clone(&filter_r);
                     dialog.connect_response(None, move |_, response| {
                         if response != "rename" {
                             return;
@@ -253,6 +310,7 @@ impl CollectionGridView {
                         let tk = tk.clone();
                         let store = store.clone();
                         let lib_reload = Arc::clone(&lib_reload);
+                        let f = Rc::clone(&f);
                         debug!(person_id = %pid, name = %new_name, "renaming person");
                         glib::MainContext::default().spawn_local(async move {
                             let name = new_name.clone();
@@ -262,7 +320,7 @@ impl CollectionGridView {
                             match result {
                                 Ok(Ok(())) => {
                                     info!("person renamed successfully");
-                                    reload_people(&store, &lib_reload);
+                                    full_reload(&store, &lib_reload, &f);
                                 }
                                 Ok(Err(e)) => tracing::error!("rename_person failed: {e}"),
                                 Err(e) => tracing::error!("rename_person join failed: {e}"),
@@ -277,11 +335,14 @@ impl CollectionGridView {
                     );
                 });
 
+                // Wire hide/unhide.
                 let pop_weak = popover.downgrade();
                 let lib_h = Arc::clone(&lib);
                 let tk_h = tk.clone();
                 let store_h = store_ctx.clone();
                 let lib_h2 = Arc::clone(&lib);
+                let filter_h = Rc::clone(&filter_ctx);
+                let new_hidden = !is_hidden;
                 hide_btn.connect_clicked(move |_| {
                     if let Some(p) = pop_weak.upgrade() {
                         p.popdown();
@@ -291,15 +352,17 @@ impl CollectionGridView {
                     let tk = tk_h.clone();
                     let store = store_h.clone();
                     let lib_reload = Arc::clone(&lib_h2);
-                    debug!(person_id = %pid, "hiding person");
+                    let f = Rc::clone(&filter_h);
+                    let action = if new_hidden { "hiding" } else { "unhiding" };
+                    debug!(person_id = %pid, action, "toggling person visibility");
                     glib::MainContext::default().spawn_local(async move {
                         let result = tk
-                            .spawn(async move { lib.set_person_hidden(&pid, true).await })
+                            .spawn(async move { lib.set_person_hidden(&pid, new_hidden).await })
                             .await;
                         match result {
                             Ok(Ok(())) => {
-                                info!("person hidden successfully");
-                                reload_people(&store, &lib_reload);
+                                info!("person visibility changed successfully");
+                                full_reload(&store, &lib_reload, &f);
                             }
                             Ok(Err(e)) => tracing::error!("set_person_hidden failed: {e}"),
                             Err(e) => tracing::error!("set_person_hidden join failed: {e}"),
@@ -326,47 +389,46 @@ impl CollectionGridView {
         }
 
         // Load people asynchronously.
-        load_people(&store, &library);
+        load_people(&store, &library, &filter);
 
         Self {
             widget,
             store,
             library,
+            filter,
         }
     }
 
     /// Reload the people grid from the database.
     pub fn reload(&self) {
-        reload_people(&self.store, &self.library);
+        incremental_reload(&self.store, &self.library, &self.filter);
     }
 }
 
-/// Load people from the library and populate the store.
-fn load_people(store: &gio::ListStore, library: &Arc<dyn Library>) {
+/// Load people from the library and populate the store (initial load).
+fn load_people(store: &gio::ListStore, library: &Arc<dyn Library>, filter: &Rc<PeopleFilter>) {
     let lib = Arc::clone(library);
     let store = store.clone();
     let lib_thumb = Arc::clone(library);
+    let include_hidden = filter.include_hidden.get();
+    let include_unnamed = filter.include_unnamed.get();
     glib::MainContext::default().spawn_local(async move {
         let lib_q = Arc::clone(&lib);
         let result = crate::application::MomentsApplication::default()
             .tokio_handle()
-            .spawn(async move { lib_q.list_people(false, false).await })
+            .spawn(async move { lib_q.list_people(include_hidden, include_unnamed).await })
             .await;
 
         match result {
             Ok(Ok(people)) => {
-                info!(count = people.len(), "loaded people for collection grid");
+                info!(count = people.len(), include_hidden, include_unnamed, "loaded people for collection grid");
                 for person in &people {
                     let thumbnail_path = lib_thumb.person_thumbnail_path(&person.id);
 
                     let subtitle = format!(
                         "{} {}",
                         person.face_count,
-                        if person.face_count == 1 {
-                            "photo"
-                        } else {
-                            "photos"
-                        }
+                        if person.face_count == 1 { "photo" } else { "photos" }
                     );
 
                     let item = CollectionItemObject::new(CollectionItemData {
@@ -374,6 +436,7 @@ fn load_people(store: &gio::ListStore, library: &Arc<dyn Library>) {
                         name: person.name.clone(),
                         subtitle,
                         thumbnail_path,
+                        is_hidden: person.is_hidden,
                     });
                     store.append(&item);
                 }
@@ -384,18 +447,26 @@ fn load_people(store: &gio::ListStore, library: &Arc<dyn Library>) {
     });
 }
 
-/// Incrementally update the people store: insert new, remove deleted, update changed.
-fn reload_people(store: &gio::ListStore, library: &Arc<dyn Library>) {
+/// Full reload: clear store and re-populate (used when filter toggles change).
+fn full_reload(store: &gio::ListStore, library: &Arc<dyn Library>, filter: &Rc<PeopleFilter>) {
+    store.remove_all();
+    load_people(store, library, filter);
+}
+
+/// Incremental update: insert new, remove deleted (used for sync refresh).
+fn incremental_reload(store: &gio::ListStore, library: &Arc<dyn Library>, filter: &Rc<PeopleFilter>) {
     use std::collections::HashMap;
 
     let lib = Arc::clone(library);
     let store = store.clone();
     let lib_thumb = Arc::clone(library);
+    let include_hidden = filter.include_hidden.get();
+    let include_unnamed = filter.include_unnamed.get();
     glib::MainContext::default().spawn_local(async move {
         let lib_q = Arc::clone(&lib);
         let result = crate::application::MomentsApplication::default()
             .tokio_handle()
-            .spawn(async move { lib_q.list_people(false, false).await })
+            .spawn(async move { lib_q.list_people(include_hidden, include_unnamed).await })
             .await;
 
         let people = match result {
@@ -410,13 +481,11 @@ fn reload_people(store: &gio::ListStore, library: &Arc<dyn Library>) {
             }
         };
 
-        // Build a map of fresh data keyed by person ID.
         let fresh: HashMap<String, _> = people
             .iter()
             .map(|p| (p.id.as_str().to_string(), p))
             .collect();
 
-        // Build a map of existing store items keyed by person ID → position.
         let mut existing: HashMap<String, u32> = HashMap::new();
         for i in 0..store.n_items() {
             if let Some(obj) = store
@@ -427,19 +496,19 @@ fn reload_people(store: &gio::ListStore, library: &Arc<dyn Library>) {
             }
         }
 
-        // Remove items no longer in the fresh data (iterate in reverse to keep indices stable).
+        // Remove items no longer in fresh data (reverse order for stable indices).
         let mut to_remove: Vec<u32> = existing
             .iter()
             .filter(|(id, _)| !fresh.contains_key(id.as_str()))
             .map(|(_, &pos)| pos)
             .collect();
-        to_remove.sort_unstable_by(|a, b| b.cmp(a)); // reverse order
+        to_remove.sort_unstable_by(|a, b| b.cmp(a));
         for pos in &to_remove {
             debug!(position = pos, "removing person from grid");
             store.remove(*pos);
         }
 
-        // Insert new items not already in the store.
+        // Insert new items.
         for person in &people {
             let pid = person.id.as_str().to_string();
             if existing.contains_key(&pid) {
@@ -458,6 +527,7 @@ fn reload_people(store: &gio::ListStore, library: &Arc<dyn Library>) {
                 name: person.name.clone(),
                 subtitle,
                 thumbnail_path,
+                is_hidden: person.is_hidden,
             });
             debug!(person = %person.name, "inserting person into grid");
             store.append(&item);

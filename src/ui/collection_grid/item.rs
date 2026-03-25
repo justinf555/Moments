@@ -10,6 +10,7 @@ pub struct CollectionItemData {
     pub name: String,
     pub subtitle: String,
     pub thumbnail_path: Option<PathBuf>,
+    pub is_hidden: bool,
 }
 
 mod imp {
