@@ -35,6 +35,30 @@
 				libraries. Set to 0 to disable eviction.
 			</description>
 		</key>
+		<key name="color-scheme" type="u">
+			<default>0</default>
+			<summary>Color scheme preference</summary>
+			<description>
+				0 = follow system, 1 = force light, 4 = force dark.
+				Matches AdwColorScheme enum values.
+			</description>
+		</key>
+		<key name="trash-retention-days" type="u">
+			<default>30</default>
+			<summary>Trash retention period in days</summary>
+			<description>
+				Items in the trash are automatically deleted after this many
+				days. Only applies to the local backend.
+			</description>
+		</key>
+		<key name="sync-interval-seconds" type="u">
+			<default>30</default>
+			<summary>Immich sync polling interval in seconds</summary>
+			<description>
+				How often to poll the Immich server for changes. Only applies
+				to Immich libraries. Set to 0 to disable polling.
+			</description>
+		</key>
 		<key name="window-width" type="i">
 			<default>800</default>
 			<summary>Window width</summary>
