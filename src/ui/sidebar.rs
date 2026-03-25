@@ -673,10 +673,6 @@ impl MomentsSidebar {
         if failed > 0 {
             detail.push_str(&format!(", {failed} failed"));
         }
-        let remaining = total.saturating_sub(current);
-        if remaining > 0 {
-            detail.push_str(&format!(", {remaining} remaining"));
-        }
         if let Some(label) = imp.detail_label.get() {
             label.set_text(&detail);
         }
