@@ -244,8 +244,8 @@ mod imp {
             let upload_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
             upload_box.set_margin_start(12);
             upload_box.set_margin_end(12);
-            upload_box.set_margin_top(8);
-            upload_box.set_margin_bottom(8);
+            upload_box.set_margin_top(12);
+            upload_box.set_margin_bottom(16);
             let upload_icon = gtk::Image::from_icon_name("go-up-symbolic");
             upload_box.append(&upload_icon);
             let upload_label = gtk::Label::new(Some("Uploading..."));
@@ -672,8 +672,18 @@ impl MomentsSidebar {
     /// Show upload complete summary, then auto-revert to idle after 5 seconds.
     pub fn show_upload_complete(&self, summary: &crate::library::import::ImportSummary) {
         let imp = self.imp();
+
+        // Build summary text.
+        let mut bar_text = format!("{} imported", summary.imported);
+        if summary.skipped_duplicates > 0 {
+            bar_text.push_str(&format!(", {} skipped", summary.skipped_duplicates));
+        }
+        if summary.failed > 0 {
+            bar_text.push_str(&format!(", {} failed", summary.failed));
+        }
+
         if let Some(label) = imp.complete_label.get() {
-            label.set_text(&format!("{} imported", summary.imported));
+            label.set_text(&bar_text);
         }
         if let Some(label) = imp.progress_label.get() {
             label.set_text("Upload Complete");
@@ -681,15 +691,8 @@ impl MomentsSidebar {
         if let Some(bar) = imp.progress_bar.get() {
             bar.set_fraction(1.0);
         }
-        let mut detail = format!("{} imported", summary.imported);
-        if summary.skipped_duplicates > 0 {
-            detail.push_str(&format!(", {} skipped", summary.skipped_duplicates));
-        }
-        if summary.failed > 0 {
-            detail.push_str(&format!(", {} failed", summary.failed));
-        }
         if let Some(label) = imp.detail_label.get() {
-            label.set_text(&detail);
+            label.set_text(&bar_text);
         }
 
         // Close expanded sheet.
