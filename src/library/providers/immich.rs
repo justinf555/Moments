@@ -266,8 +266,21 @@ impl LibraryMedia for ImmichLibrary {
             server.server_videos = asset_stats.videos as u64;
         }
 
-        // GET /server/storage — disk usage.
-        if let Ok(storage) = self.client.get::<ServerStorage>("/server/storage").await {
+        // GET /server/statistics — Immich-specific storage usage (admin only).
+        // Falls back to /server/storage (OS-level) if the user is not an admin.
+        if let Ok(stats_resp) = self.client.get::<ServerStatistics>("/server/statistics").await {
+            server.disk_use = stats_resp.usage as u64;
+            // /server/statistics doesn't include total disk size — fetch from /server/storage.
+            if let Ok(storage) = self.client.get::<ServerStorage>("/server/storage").await {
+                server.disk_size = storage.disk_size_raw;
+                server.disk_usage_percentage = if storage.disk_size_raw > 0 {
+                    (stats_resp.usage as f64 / storage.disk_size_raw as f64) * 100.0
+                } else {
+                    0.0
+                };
+            }
+        } else if let Ok(storage) = self.client.get::<ServerStorage>("/server/storage").await {
+            // Fallback for non-admin users.
             server.disk_size = storage.disk_size_raw;
             server.disk_use = storage.disk_use_raw;
             server.disk_usage_percentage = storage.disk_usage_percentage;
@@ -378,6 +391,12 @@ fn sharded_original_path(originals_dir: &std::path::Path, id: &MediaId, ext: &st
         .join(&hex[..2])
         .join(&hex[2..4])
         .join(format!("{hex}.{ext}"))
+}
+
+/// Response from `GET /server/statistics` (admin only).
+#[derive(Debug, serde::Deserialize)]
+struct ServerStatistics {
+    usage: i64,
 }
 
 /// Response from `GET /assets/statistics`.
