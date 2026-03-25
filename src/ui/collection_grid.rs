@@ -146,7 +146,7 @@ impl CollectionGridView {
             glib::MainContext::default().spawn_local(async move {
                 let lib_q = Arc::clone(&lib);
                 let result = tk
-                    .spawn(async move { lib_q.list_people(false, true).await })
+                    .spawn(async move { lib_q.list_people(false, false).await })
                     .await;
 
                 match result {

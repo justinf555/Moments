@@ -41,22 +41,12 @@ pub fn build_factory(cell_size: i32, style: ThumbnailStyle) -> gtk::SignalListIt
         cell.bind(&item);
 
         // Load thumbnail from disk if not yet decoded.
+        // Person thumbnails are small (250x250 JPEG) so loading on the
+        // main thread is fine — no need for a blocking task.
         if item.texture().is_none() {
             if let Some(path) = &item.data().thumbnail_path {
-                if path.exists() {
-                    let path = path.clone();
-                    let item_weak = item.downgrade();
-                    glib::MainContext::default().spawn_local(async move {
-                        let result = tokio::task::spawn_blocking(move || {
-                            gtk::gdk::Texture::from_filename(&path).ok()
-                        })
-                        .await;
-                        if let Ok(Some(texture)) = result {
-                            if let Some(item) = item_weak.upgrade() {
-                                item.set_texture(Some(&texture));
-                            }
-                        }
-                    });
+                if let Ok(texture) = gtk::gdk::Texture::from_filename(path) {
+                    item.set_texture(Some(&texture));
                 }
             }
         }
