@@ -367,21 +367,8 @@ impl MomentsApplication {
             None => return,
         };
 
-        let dialog = ImportDialog::new();
-
-        // Clear our reference when the user dismisses the dialog early so the
-        // idle loop stops trying to forward events to a closed widget.
-        dialog.connect_closed(glib::clone!(
-            #[weak(rename_to = app)]
-            self,
-            move |_| {
-                app.imp().import_dialog.borrow_mut().take();
-            }
-        ));
-
-        dialog.present(Some(&window));
-        *self.imp().import_dialog.borrow_mut() = Some(dialog);
-
+        // Progress is shown in the sidebar bottom sheet (non-modal).
+        // The modal ImportDialog is no longer presented.
         info!(path = %folder.display(), "starting import");
         glib::MainContext::default().spawn_local(async move {
             let result = tokio
