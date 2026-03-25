@@ -73,6 +73,13 @@ impl ImmichLibrary {
             });
         }
 
+        // Read sync interval from GSettings (must be on GTK thread).
+        let sync_interval_secs = {
+            use gtk::prelude::SettingsExt;
+            let settings = gtk::gio::Settings::new("io.github.justinf555.Moments");
+            settings.uint("sync-interval-seconds") as u64
+        };
+
         // Start the background sync engine.
         let sync_handle = SyncHandle::start(
             client.clone(),
@@ -80,6 +87,7 @@ impl ImmichLibrary {
             events.clone(),
             bundle.thumbnails.clone(),
             tokio.clone(),
+            sync_interval_secs,
         );
 
         let library = Self {
@@ -128,6 +136,10 @@ impl LibraryStorage for ImmichLibrary {
             .send(LibraryEvent::ShutdownComplete)
             .map_err(|_| LibraryError::Bundle("event channel closed".to_string()))?;
         Ok(())
+    }
+
+    fn set_sync_interval(&self, secs: u64) {
+        self.sync_handle.set_interval(secs);
     }
 }
 

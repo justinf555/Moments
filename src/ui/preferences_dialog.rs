@@ -246,8 +246,14 @@ pub fn show_preferences(
         interval_row.set_subtitle("Seconds between sync cycles");
         interval_row.set_value(settings.uint("sync-interval-seconds") as f64);
         let settings_sync = settings.clone();
+        let lib_sync = library.clone();
         interval_row.connect_changed(move |row| {
-            let _ = settings_sync.set_uint("sync-interval-seconds", row.value() as u32);
+            let secs = row.value() as u32;
+            let _ = settings_sync.set_uint("sync-interval-seconds", secs);
+            // Live-update the sync manager without restart.
+            if let Some(ref lib) = lib_sync {
+                lib.set_sync_interval(secs as u64);
+            }
         });
         sync_group.add(&interval_row);
 

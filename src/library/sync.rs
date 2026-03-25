@@ -21,10 +21,11 @@ use super::thumbnail::sharded_thumbnail_path;
 /// Handle returned by [`SyncHandle::start`] to signal shutdown.
 pub struct SyncHandle {
     shutdown_tx: tokio::sync::watch::Sender<bool>,
+    interval_tx: tokio::sync::watch::Sender<u64>,
 }
 
-/// Interval between sync cycles.
-const SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+/// Default interval between sync cycles (seconds).
+const DEFAULT_SYNC_INTERVAL_SECS: u64 = 30;
 
 /// Maximum concurrent thumbnail downloads.
 const MAX_THUMBNAIL_WORKERS: usize = 4;
@@ -37,14 +38,19 @@ const ACK_FLUSH_THRESHOLD: usize = 500;
 
 impl SyncHandle {
     /// Spawn the sync manager and thumbnail downloader as background Tokio tasks.
+    ///
+    /// `initial_interval_secs` is the polling interval read from GSettings.
+    /// Use [`set_interval`] to update it live from the preferences dialog.
     pub fn start(
         client: ImmichClient,
         db: Database,
         events: Sender<LibraryEvent>,
         thumbnails_dir: PathBuf,
         tokio: tokio::runtime::Handle,
+        initial_interval_secs: u64,
     ) -> Self {
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let (interval_tx, interval_rx) = tokio::sync::watch::channel(initial_interval_secs);
         let (thumb_tx, thumb_rx) = tokio::sync::mpsc::channel::<MediaId>(THUMBNAIL_QUEUE_SIZE);
 
         // Spawn the thumbnail downloader.
@@ -69,6 +75,7 @@ impl SyncHandle {
             shutdown_rx,
             thumbnail_tx: thumb_tx,
             thumbnails_dir: manager_thumbnails_dir,
+            interval_rx,
         };
 
         tokio.spawn(async move {
@@ -78,12 +85,18 @@ impl SyncHandle {
             }
         });
 
-        Self { shutdown_tx }
+        Self { shutdown_tx, interval_tx }
     }
 
     /// Signal the sync manager to stop.
     pub fn shutdown(&self) {
         let _ = self.shutdown_tx.send(true);
+    }
+
+    /// Update the polling interval (seconds). Takes effect on the next cycle.
+    /// Set to 0 to disable polling (sync on open only).
+    pub fn set_interval(&self, secs: u64) {
+        let _ = self.interval_tx.send(secs);
     }
 }
 
@@ -98,11 +111,12 @@ struct SyncManager {
     shutdown_rx: tokio::sync::watch::Receiver<bool>,
     thumbnail_tx: tokio::sync::mpsc::Sender<MediaId>,
     thumbnails_dir: PathBuf,
+    interval_rx: tokio::sync::watch::Receiver<u64>,
 }
 
 impl SyncManager {
-    /// Main sync loop. Runs an initial sync, then polls every 30 seconds
-    /// to pick up changes from mobile uploads and other clients.
+    /// Main sync loop. Runs an initial sync, then polls at the configured
+    /// interval. The interval can be updated live via the watch channel.
     #[instrument(skip(self))]
     async fn run(&self) -> Result<(), LibraryError> {
         info!("sync manager starting");
@@ -119,13 +133,28 @@ impl SyncManager {
                 // Don't abort the loop on transient errors — retry next cycle.
             }
 
-            // Wait for the next cycle, but break early on shutdown.
+            // Read the current interval (may have changed via preferences).
+            let interval_secs = *self.interval_rx.borrow();
+            if interval_secs == 0 {
+                info!("sync polling disabled (interval=0), stopping after initial sync");
+                break;
+            }
+
+            let interval = std::time::Duration::from_secs(interval_secs);
+            debug!(interval_secs, "waiting for next sync cycle");
+
+            // Wait for the next cycle, but break early on shutdown or interval change.
             let mut shutdown = self.shutdown_rx.clone();
+            let mut interval_watch = self.interval_rx.clone();
             tokio::select! {
-                _ = tokio::time::sleep(SYNC_INTERVAL) => {}
+                _ = tokio::time::sleep(interval) => {}
                 _ = shutdown.changed() => {
                     info!("sync manager shutting down during sleep");
                     break;
+                }
+                _ = interval_watch.changed() => {
+                    debug!("sync interval changed, restarting cycle immediately");
+                    // New interval takes effect — loop back to run_sync.
                 }
             }
         }
