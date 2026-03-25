@@ -21,11 +21,20 @@ impl Database {
             .await
             .map_err(LibraryError::Db)?;
 
+        let people_count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM people WHERE name != '' AND is_hidden = 0",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(LibraryError::Db)?;
+
         Ok(LibraryStats {
             photo_count: row.0 as u64,
             video_count: row.1 as u64,
             album_count: album_count.0 as u64,
             total_file_size: row.2 as u64,
+            cache_used_bytes: 0, // Set by the backend, not the DB.
+            people_count: people_count.0 as u64,
         })
     }
 }

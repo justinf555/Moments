@@ -121,13 +121,18 @@ pub fn show_preferences(
     albums_row.set_subtitle("Loading...");
     overview_group.add(&albums_row);
 
+    let people_row = adw::ActionRow::new();
+    people_row.set_title("People");
+    people_row.set_subtitle("Loading...");
+    overview_group.add(&people_row);
+
     library_page.add(&overview_group);
 
     // Storage group
     let storage_group = adw::PreferencesGroup::new();
     storage_group.set_title("Storage");
 
-    if is_immich {
+    let cache_usage_row = if is_immich {
         let cache_row = adw::SpinRow::new(
             Some(&gtk::Adjustment::new(2048.0, 0.0, 50000.0, 256.0, 1024.0, 0.0)),
             256.0,
@@ -141,7 +146,15 @@ pub fn show_preferences(
             let _ = settings_cache.set_uint("originals-cache-max-mb", row.value() as u32);
         });
         storage_group.add(&cache_row);
-    }
+
+        let usage_row = adw::ActionRow::new();
+        usage_row.set_title("Cache Used");
+        usage_row.set_subtitle("Loading...");
+        storage_group.add(&usage_row);
+        Some(usage_row)
+    } else {
+        None
+    };
 
     library_page.add(&storage_group);
     dialog.add(&library_page);
@@ -152,6 +165,8 @@ pub fn show_preferences(
         let photos_weak = photos_row.downgrade();
         let videos_weak = videos_row.downgrade();
         let albums_weak = albums_row.downgrade();
+        let people_weak = people_row.downgrade();
+        let cache_weak = cache_usage_row.as_ref().map(|r| r.downgrade());
         glib::MainContext::default().spawn_local(async move {
             let result = tokio
                 .spawn(async move { lib.library_stats().await })
@@ -167,12 +182,19 @@ pub fn show_preferences(
                     if let Some(r) = albums_weak.upgrade() {
                         r.set_subtitle(&format_count(stats.album_count, "album"));
                     }
+                    if let Some(r) = people_weak.upgrade() {
+                        r.set_subtitle(&format_count(stats.people_count, "person"));
+                    }
+                    if let Some(Some(r)) = cache_weak.as_ref().map(|w| w.upgrade()) {
+                        r.set_subtitle(&format_bytes(stats.cache_used_bytes));
+                    }
                 }
                 Ok(Err(e)) => {
                     tracing::error!("library_stats failed: {e}");
                     if let Some(r) = photos_weak.upgrade() { r.set_subtitle("—"); }
                     if let Some(r) = videos_weak.upgrade() { r.set_subtitle("—"); }
                     if let Some(r) = albums_weak.upgrade() { r.set_subtitle("—"); }
+                    if let Some(r) = people_weak.upgrade() { r.set_subtitle("—"); }
                 }
                 Err(e) => {
                     tracing::error!("library_stats join failed: {e}");
@@ -238,7 +260,13 @@ pub fn show_preferences(
 
 /// Format a count with singular/plural label (e.g. "1,976 photos").
 fn format_count(count: u64, singular: &str) -> String {
-    let label = if count == 1 { singular } else { &format!("{singular}s") };
+    let label = if count == 1 {
+        singular.to_string()
+    } else if singular == "person" {
+        "people".to_string()
+    } else {
+        format!("{singular}s")
+    };
     format!("{} {label}", format_number(count))
 }
 
@@ -253,6 +281,23 @@ fn format_number(n: u64) -> String {
         result.push(c);
     }
     result
+}
+
+/// Format bytes as human-readable size (e.g. "14.2 GB", "256 MB").
+fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * KB;
+    const GB: u64 = 1024 * MB;
+
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} bytes")
+    }
 }
 
 #[cfg(test)]
@@ -287,5 +332,35 @@ mod tests {
     #[test]
     fn format_number_millions() {
         assert_eq!(format_number(1234567), "1,234,567");
+    }
+
+    #[test]
+    fn format_bytes_gb() {
+        assert_eq!(format_bytes(15_032_385_536), "14.0 GB");
+    }
+
+    #[test]
+    fn format_bytes_mb() {
+        assert_eq!(format_bytes(268_435_456), "256.0 MB");
+    }
+
+    #[test]
+    fn format_bytes_kb() {
+        assert_eq!(format_bytes(1536), "1.5 KB");
+    }
+
+    #[test]
+    fn format_bytes_small() {
+        assert_eq!(format_bytes(42), "42 bytes");
+    }
+
+    #[test]
+    fn format_count_person_singular() {
+        assert_eq!(format_count(1, "person"), "1 person");
+    }
+
+    #[test]
+    fn format_count_people_plural() {
+        assert_eq!(format_count(5, "person"), "5 people");
     }
 }
