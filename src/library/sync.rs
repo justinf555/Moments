@@ -552,6 +552,10 @@ impl SyncManager {
             self.flush_acks(&mut acks).await?;
         }
 
+        if person_count > 0 || face_count > 0 {
+            let _ = self.events.send(LibraryEvent::PeopleSyncComplete);
+        }
+
         if asset_count > 0 || error_count > 0 {
             info!(
                 synced = asset_count,

@@ -547,6 +547,11 @@ impl MomentsApplication {
                                     Ok(LibraryEvent::AlbumMediaChanged { album_id }) => {
                                         registry.on_album_media_changed(&album_id);
                                     }
+                                    Ok(LibraryEvent::PeopleSyncComplete) => {
+                                        if let Some(win) = win_for_idle.upgrade() {
+                                            win.reload_people();
+                                        }
+                                    }
                                     Ok(_) => {}
                                     Err(std::sync::mpsc::TryRecvError::Empty) => break,
                                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {

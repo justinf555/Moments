@@ -61,6 +61,10 @@ pub enum LibraryEvent {
     /// grid updates without full reload.
     AssetSynced { item: MediaItem },
 
+    /// People data changed during sync (new/updated/deleted people or faces).
+    /// The People collection grid should reload.
+    PeopleSyncComplete,
+
     /// An asset was permanently deleted on the server.
     AssetDeletedRemote { media_id: MediaId },
 }

@@ -28,6 +28,8 @@ use item::{CollectionItemData, CollectionItemObject};
 /// to show that item's media.
 pub struct CollectionGridView {
     widget: gtk::Widget,
+    store: gio::ListStore,
+    library: Arc<dyn Library>,
 }
 
 impl std::fmt::Debug for CollectionGridView {
@@ -324,12 +326,18 @@ impl CollectionGridView {
         }
 
         // Load people asynchronously.
-        {
-            let lib = Arc::clone(&library);
-            load_people(&store, &lib);
-        }
+        load_people(&store, &library);
 
-        Self { widget }
+        Self {
+            widget,
+            store,
+            library,
+        }
+    }
+
+    /// Reload the people grid from the database.
+    pub fn reload(&self) {
+        reload_people(&self.store, &self.library);
     }
 }
 
@@ -376,10 +384,85 @@ fn load_people(store: &gio::ListStore, library: &Arc<dyn Library>) {
     });
 }
 
-/// Clear and reload the people store after a management action.
+/// Incrementally update the people store: insert new, remove deleted, update changed.
 fn reload_people(store: &gio::ListStore, library: &Arc<dyn Library>) {
-    store.remove_all();
-    load_people(store, library);
+    use std::collections::HashMap;
+
+    let lib = Arc::clone(library);
+    let store = store.clone();
+    let lib_thumb = Arc::clone(library);
+    glib::MainContext::default().spawn_local(async move {
+        let lib_q = Arc::clone(&lib);
+        let result = crate::application::MomentsApplication::default()
+            .tokio_handle()
+            .spawn(async move { lib_q.list_people(false, false).await })
+            .await;
+
+        let people = match result {
+            Ok(Ok(p)) => p,
+            Ok(Err(e)) => {
+                tracing::error!("list_people failed: {e}");
+                return;
+            }
+            Err(e) => {
+                tracing::error!("list_people join failed: {e}");
+                return;
+            }
+        };
+
+        // Build a map of fresh data keyed by person ID.
+        let fresh: HashMap<String, _> = people
+            .iter()
+            .map(|p| (p.id.as_str().to_string(), p))
+            .collect();
+
+        // Build a map of existing store items keyed by person ID → position.
+        let mut existing: HashMap<String, u32> = HashMap::new();
+        for i in 0..store.n_items() {
+            if let Some(obj) = store
+                .item(i)
+                .and_then(|o| o.downcast::<CollectionItemObject>().ok())
+            {
+                existing.insert(obj.data().id.clone(), i);
+            }
+        }
+
+        // Remove items no longer in the fresh data (iterate in reverse to keep indices stable).
+        let mut to_remove: Vec<u32> = existing
+            .iter()
+            .filter(|(id, _)| !fresh.contains_key(id.as_str()))
+            .map(|(_, &pos)| pos)
+            .collect();
+        to_remove.sort_unstable_by(|a, b| b.cmp(a)); // reverse order
+        for pos in &to_remove {
+            debug!(position = pos, "removing person from grid");
+            store.remove(*pos);
+        }
+
+        // Insert new items not already in the store.
+        for person in &people {
+            let pid = person.id.as_str().to_string();
+            if existing.contains_key(&pid) {
+                continue;
+            }
+
+            let thumbnail_path = lib_thumb.person_thumbnail_path(&person.id);
+            let subtitle = format!(
+                "{} {}",
+                person.face_count,
+                if person.face_count == 1 { "photo" } else { "photos" }
+            );
+
+            let item = CollectionItemObject::new(CollectionItemData {
+                id: pid,
+                name: person.name.clone(),
+                subtitle,
+                thumbnail_path,
+            });
+            debug!(person = %person.name, "inserting person into grid");
+            store.append(&item);
+        }
+    });
 }
 
 impl ContentView for CollectionGridView {

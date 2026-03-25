@@ -28,6 +28,31 @@ use gtk::{gio, glib};
 use tracing::{debug, instrument};
 
 use crate::library::album::AlbumId;
+
+/// Wrapper for a reload callback that implements `Debug` and `Default`.
+pub struct ReloadCallback(Box<dyn Fn()>);
+
+impl ReloadCallback {
+    pub fn new(f: impl Fn() + 'static) -> Self {
+        Self(Box::new(f))
+    }
+
+    pub fn call(&self) {
+        (self.0)();
+    }
+}
+
+impl std::fmt::Debug for ReloadCallback {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ReloadCallback(..)")
+    }
+}
+
+impl Default for ReloadCallback {
+    fn default() -> Self {
+        Self(Box::new(|| {}))
+    }
+}
 use crate::library::Library;
 
 use crate::ui::album_dialogs;
@@ -59,6 +84,10 @@ mod imp {
 
         /// GSettings instance for persisting window geometry.
         pub settings: OnceCell<gio::Settings>,
+
+        /// Callback to reload the People collection grid after sync.
+        #[allow(missing_debug_implementations)]
+        pub people_reload: RefCell<Option<super::ReloadCallback>>,
     }
 
     #[glib::object_subclass]
@@ -393,8 +422,17 @@ impl MomentsWindow {
             let s = settings.clone();
             let reg = Rc::clone(&registry);
             let tc = Rc::clone(&texture_cache);
+            let win_weak = self.downgrade();
             coordinator.register_lazy("people", move || {
-                Rc::new(CollectionGridView::new_people(lib, tk, s, reg, tc))
+                let view = Rc::new(CollectionGridView::new_people(lib, tk, s, reg, tc));
+                // Store reload callback so PeopleSyncComplete can refresh the grid.
+                if let Some(win) = win_weak.upgrade() {
+                    let view_ref = Rc::clone(&view);
+                    *win.imp().people_reload.borrow_mut() = Some(ReloadCallback::new(move || {
+                        view_ref.reload();
+                    }));
+                }
+                view
             });
         }
 
@@ -493,6 +531,13 @@ impl MomentsWindow {
             if let Some(actions) = coordinator.borrow_mut().navigate(route_id) {
                 self.insert_action_group("view", Some(&actions));
             }
+        }
+    }
+
+    /// Reload the People collection grid if it has been materialised.
+    pub fn reload_people(&self) {
+        if let Some(reload) = self.imp().people_reload.borrow().as_ref() {
+            reload.call();
         }
     }
 
