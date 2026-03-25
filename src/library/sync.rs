@@ -10,6 +10,7 @@ use tokio::sync::Semaphore;
 use tracing::{debug, error, info, instrument, warn};
 
 use super::db::Database;
+use super::db::faces::AssetFaceRow;
 use super::error::LibraryError;
 use super::album::{AlbumId, LibraryAlbums};
 use super::event::LibraryEvent;
@@ -47,6 +48,7 @@ impl SyncHandle {
         let (thumb_tx, thumb_rx) = tokio::sync::mpsc::channel::<MediaId>(THUMBNAIL_QUEUE_SIZE);
 
         // Spawn the thumbnail downloader.
+        let manager_thumbnails_dir = thumbnails_dir.clone();
         let downloader = ThumbnailDownloader {
             client: client.clone(),
             db: db.clone(),
@@ -66,6 +68,7 @@ impl SyncHandle {
             events,
             shutdown_rx,
             thumbnail_tx: thumb_tx,
+            thumbnails_dir: manager_thumbnails_dir,
         };
 
         tokio.spawn(async move {
@@ -94,6 +97,7 @@ struct SyncManager {
     events: Sender<LibraryEvent>,
     shutdown_rx: tokio::sync::watch::Receiver<bool>,
     thumbnail_tx: tokio::sync::mpsc::Sender<MediaId>,
+    thumbnails_dir: PathBuf,
 }
 
 impl SyncManager {
@@ -144,6 +148,8 @@ impl SyncManager {
                 "AssetExifsV1".to_string(),
                 "AlbumsV1".to_string(),
                 "AlbumToAssetsV1".to_string(),
+                "PeopleV1".to_string(),
+                "AssetFacesV1".to_string(),
             ],
         };
 
@@ -162,6 +168,8 @@ impl SyncManager {
         let mut asset_count: usize = 0;
         let mut exif_count: usize = 0;
         let mut delete_count: usize = 0;
+        let mut person_count: usize = 0;
+        let mut face_count: usize = 0;
         let mut album_count: usize = 0;
         let mut error_count: usize = 0;
         let mut is_reset = false;
@@ -191,6 +199,8 @@ impl SyncManager {
                     let ids = self.db.all_media_ids().await?;
                     info!(existing_count = ids.len(), "loaded existing media IDs for reset tracking");
                     existing_ids = Some(ids);
+                    self.db.clear_asset_faces().await?;
+                    self.db.clear_people().await?;
                     self.db.clear_sync_checkpoints().await?;
                     acks.push(sync_line.ack);
                 }
@@ -392,12 +402,118 @@ impl SyncManager {
                         }
                     }
                 }
+                "PersonV1" => {
+                    let person: SyncPersonV1 = serde_json::from_value(sync_line.data)
+                        .map_err(|e| {
+                            error!(line_number, "failed to deserialize PersonV1: {e}");
+                            LibraryError::Immich(format!("invalid PersonV1 at line {line_number}: {e}"))
+                        })?;
+                    let person_id = person.id.clone();
+                    let audit_id = self.db.start_sync_audit("PersonV1", &person_id, &sync_cycle).await.ok();
+
+                    match self.handle_person(person).await {
+                        Ok(()) => {
+                            if let Some(aid) = audit_id {
+                                let _ = self.db.complete_sync_audit(aid, "upsert").await;
+                            }
+                            acks.push(sync_line.ack);
+                            person_count += 1;
+                        }
+                        Err(e) => {
+                            warn!(person_id = %person_id, error = %e, "skipping person");
+                            if let Some(aid) = audit_id {
+                                let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
+                            }
+                            error_count += 1;
+                        }
+                    }
+                }
+                "PersonDeleteV1" => {
+                    let delete: SyncPersonDeleteV1 = serde_json::from_value(sync_line.data)
+                        .map_err(|e| {
+                            error!(line_number, "failed to deserialize PersonDeleteV1: {e}");
+                            LibraryError::Immich(format!("invalid PersonDeleteV1 at line {line_number}: {e}"))
+                        })?;
+                    let person_id = delete.person_id.clone();
+                    let audit_id = self.db.start_sync_audit("PersonDeleteV1", &person_id, &sync_cycle).await.ok();
+
+                    match self.db.delete_person(&person_id).await {
+                        Ok(()) => {
+                            if let Some(aid) = audit_id {
+                                let _ = self.db.complete_sync_audit(aid, "delete").await;
+                            }
+                            acks.push(sync_line.ack);
+                            delete_count += 1;
+                        }
+                        Err(e) => {
+                            warn!(person_id = %person_id, error = %e, "skipping person delete");
+                            if let Some(aid) = audit_id {
+                                let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
+                            }
+                            error_count += 1;
+                        }
+                    }
+                }
+                "AssetFaceV1" => {
+                    let face: SyncAssetFaceV1 = serde_json::from_value(sync_line.data)
+                        .map_err(|e| {
+                            error!(line_number, "failed to deserialize AssetFaceV1: {e}");
+                            LibraryError::Immich(format!("invalid AssetFaceV1 at line {line_number}: {e}"))
+                        })?;
+                    let face_id = face.id.clone();
+                    let audit_id = self.db.start_sync_audit("AssetFaceV1", &face_id, &sync_cycle).await.ok();
+
+                    match self.handle_asset_face(face).await {
+                        Ok(()) => {
+                            if let Some(aid) = audit_id {
+                                let _ = self.db.complete_sync_audit(aid, "upsert").await;
+                            }
+                            acks.push(sync_line.ack);
+                            face_count += 1;
+                        }
+                        Err(e) => {
+                            warn!(face_id = %face_id, error = %e, "skipping asset face");
+                            if let Some(aid) = audit_id {
+                                let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
+                            }
+                            error_count += 1;
+                        }
+                    }
+                }
+                "AssetFaceDeleteV1" => {
+                    let delete: SyncAssetFaceDeleteV1 = serde_json::from_value(sync_line.data)
+                        .map_err(|e| {
+                            error!(line_number, "failed to deserialize AssetFaceDeleteV1: {e}");
+                            LibraryError::Immich(format!("invalid AssetFaceDeleteV1 at line {line_number}: {e}"))
+                        })?;
+                    let face_id = delete.asset_face_id.clone();
+                    let audit_id = self.db.start_sync_audit("AssetFaceDeleteV1", &face_id, &sync_cycle).await.ok();
+
+                    match self.db.delete_asset_face(&face_id).await {
+                        Ok(()) => {
+                            if let Some(aid) = audit_id {
+                                let _ = self.db.complete_sync_audit(aid, "delete").await;
+                            }
+                            acks.push(sync_line.ack);
+                            delete_count += 1;
+                        }
+                        Err(e) => {
+                            warn!(face_id = %face_id, error = %e, "skipping asset face delete");
+                            if let Some(aid) = audit_id {
+                                let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
+                            }
+                            error_count += 1;
+                        }
+                    }
+                }
                 "SyncCompleteV1" => {
                     info!(
                         assets = asset_count,
                         exifs = exif_count,
                         deletes = delete_count,
                         albums = album_count,
+                        people = person_count,
+                        faces = face_count,
                         errors = error_count,
                         lines = line_number,
                         "sync stream complete"
@@ -619,6 +735,69 @@ impl SyncManager {
         Ok(())
     }
 
+    /// Upsert a person from the sync stream and download their face thumbnail.
+    #[instrument(skip(self, person), fields(person_id = %person.id, name = %person.name))]
+    async fn handle_person(&self, person: SyncPersonV1) -> Result<(), LibraryError> {
+        self.db
+            .upsert_person(
+                &person.id,
+                &person.name,
+                person.birth_date.as_deref(),
+                person.is_hidden,
+                person.is_favorite,
+                person.color.as_deref(),
+                person.face_asset_id.as_deref(),
+            )
+            .await?;
+
+        // Download person face thumbnail (250×250 JPEG from Immich).
+        let person_thumb_dir = self.thumbnails_dir.join("people");
+        let thumb_path = person_thumb_dir.join(format!("{}.jpg", person.id));
+        if !thumb_path.exists() {
+            let api_path = format!("/people/{}/thumbnail", person.id);
+            match self.client.get_bytes(&api_path).await {
+                Ok(bytes) => {
+                    if let Some(parent) = thumb_path.parent() {
+                        let _ = tokio::fs::create_dir_all(parent).await;
+                    }
+                    let _ = tokio::fs::write(&thumb_path, &bytes).await;
+                    debug!(person_id = %person.id, "person thumbnail downloaded");
+                }
+                Err(e) => {
+                    debug!(person_id = %person.id, "person thumbnail download failed: {e}");
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Upsert an asset face from the sync stream and update the person's face count.
+    #[instrument(skip(self, face), fields(face_id = %face.id, asset_id = %face.asset_id))]
+    async fn handle_asset_face(&self, face: SyncAssetFaceV1) -> Result<(), LibraryError> {
+        let row = AssetFaceRow {
+            id: face.id,
+            asset_id: face.asset_id,
+            person_id: face.person_id.clone(),
+            image_width: face.image_width,
+            image_height: face.image_height,
+            bbox_x1: face.bounding_box_x1,
+            bbox_y1: face.bounding_box_y1,
+            bbox_x2: face.bounding_box_x2,
+            bbox_y2: face.bounding_box_y2,
+            source_type: face.source_type.unwrap_or_else(|| "MachineLearning".to_string()),
+        };
+
+        self.db.upsert_asset_face(&row).await?;
+
+        // Update denormalised face count on the person.
+        if let Some(ref person_id) = face.person_id {
+            self.db.update_face_count(person_id).await?;
+        }
+
+        Ok(())
+    }
+
     /// Remove an asset from an album from the sync stream.
     async fn handle_album_asset_delete(
         &self,
@@ -832,6 +1011,56 @@ struct SyncAlbumToAssetDeleteV1 {
     album_id: String,
     #[serde(rename = "assetId")]
     asset_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SyncPersonV1 {
+    id: String,
+    name: String,
+    #[serde(rename = "birthDate")]
+    birth_date: Option<String>,
+    #[serde(rename = "isHidden")]
+    is_hidden: bool,
+    #[serde(rename = "isFavorite")]
+    is_favorite: bool,
+    color: Option<String>,
+    #[serde(rename = "faceAssetId")]
+    face_asset_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SyncPersonDeleteV1 {
+    #[serde(rename = "personId")]
+    person_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SyncAssetFaceV1 {
+    id: String,
+    #[serde(rename = "assetId")]
+    asset_id: String,
+    #[serde(rename = "personId")]
+    person_id: Option<String>,
+    #[serde(rename = "imageWidth")]
+    image_width: i32,
+    #[serde(rename = "imageHeight")]
+    image_height: i32,
+    #[serde(rename = "boundingBoxX1")]
+    bounding_box_x1: i32,
+    #[serde(rename = "boundingBoxY1")]
+    bounding_box_y1: i32,
+    #[serde(rename = "boundingBoxX2")]
+    bounding_box_x2: i32,
+    #[serde(rename = "boundingBoxY2")]
+    bounding_box_y2: i32,
+    #[serde(rename = "sourceType")]
+    source_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SyncAssetFaceDeleteV1 {
+    #[serde(rename = "assetFaceId")]
+    asset_face_id: String,
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
