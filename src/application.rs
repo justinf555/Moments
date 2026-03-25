@@ -104,6 +104,17 @@ mod imp {
         fn activate(&self) {
             let app = self.obj();
 
+            // Load custom CSS (selection highlighting, etc.).
+            let provider = gtk::CssProvider::new();
+            provider.load_from_resource("/io/github/justinf555/Moments/style.css");
+            if let Some(display) = gtk::gdk::Display::default() {
+                gtk::style_context_add_provider_for_display(
+                    &display,
+                    &provider,
+                    gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+                );
+            }
+
             // Present existing window if the app is already running.
             if let Some(window) = app.active_window() {
                 window.present();
