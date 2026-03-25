@@ -429,7 +429,8 @@ impl SyncManager {
     #[instrument(skip(self))]
     async fn handle_asset_delete(&self, asset_id: &str) -> Result<(), LibraryError> {
         let id = MediaId::new(asset_id.to_owned());
-        self.db.delete_permanently(&[id]).await?;
+        self.db.delete_permanently(&[id.clone()]).await?;
+        let _ = self.events.send(LibraryEvent::AssetDeletedRemote { media_id: id });
         Ok(())
     }
 

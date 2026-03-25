@@ -60,6 +60,9 @@ pub enum LibraryEvent {
     /// A single asset was synced from the server. Used for incremental
     /// grid updates without full reload.
     AssetSynced { item: MediaItem },
+
+    /// An asset was permanently deleted on the server.
+    AssetDeletedRemote { media_id: MediaId },
 }
 
 #[cfg(test)]
