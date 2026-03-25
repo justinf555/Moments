@@ -510,6 +510,9 @@ impl LibraryFaces for ImmichLibrary {
         person_id: &PersonId,
         name: &str,
     ) -> Result<(), LibraryError> {
+        let path = format!("/people/{}", person_id.as_str());
+        let body = serde_json::json!({ "name": name });
+        self.client.put_no_content(&path, &body).await?;
         self.db.rename_person(person_id.as_str(), name).await
     }
 
@@ -518,6 +521,9 @@ impl LibraryFaces for ImmichLibrary {
         person_id: &PersonId,
         hidden: bool,
     ) -> Result<(), LibraryError> {
+        let path = format!("/people/{}", person_id.as_str());
+        let body = serde_json::json!({ "isHidden": hidden });
+        self.client.put_no_content(&path, &body).await?;
         self.db.set_person_hidden(person_id.as_str(), hidden).await
     }
 
