@@ -2,6 +2,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gtk::{glib, prelude::*, subclass::prelude::*};
+use tokio::sync::Semaphore;
 use tracing::{debug, error};
 
 use crate::library::media::MediaFilter;
@@ -11,6 +12,15 @@ use crate::ui::model_registry::ModelRegistry;
 use super::cell::PhotoGridCell;
 use super::item::MediaItemObject;
 use super::texture_cache::TextureCache;
+
+/// Concurrent thumbnail decodes: half of available cores, minimum 2.
+fn max_decode_workers() -> usize {
+    (std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        / 2)
+    .max(2)
+}
 
 /// Build the `SignalListItemFactory` for the photo grid.
 ///
@@ -38,6 +48,7 @@ pub fn build_factory(
     cache: Rc<TextureCache>,
 ) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
+    let decode_semaphore = Arc::new(Semaphore::new(max_decode_workers()));
 
     factory.connect_setup(move |_, obj| {
         let list_item = obj
@@ -57,6 +68,8 @@ pub fn build_factory(
         registry,
         #[strong]
         cache,
+        #[strong]
+        decode_semaphore,
         move |_, obj| {
             let list_item = obj
                 .downcast_ref::<gtk::ListItem>()
@@ -100,6 +113,7 @@ pub fn build_factory(
                     let item_weak = item.downgrade();
                     let cell_weak = cell.downgrade();
                     let cache_insert = Rc::clone(&cache);
+                    let sem = Arc::clone(&decode_semaphore);
 
                     let source_id = glib::timeout_add_local_once(
                         std::time::Duration::from_millis(100),
@@ -113,6 +127,8 @@ pub fn build_factory(
                                 let decode_start = std::time::Instant::now();
                                 let result = tk
                                     .spawn(async move {
+                                        // Limit concurrent decodes to avoid CPU contention.
+                                        let _permit = sem.acquire().await.ok()?;
                                         tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, u32, u32)> {
                                             let data = std::fs::read(&path).ok()?;
                                             let img = image::load_from_memory(&data).ok()?;
@@ -121,11 +137,11 @@ pub fn build_factory(
                                             Some((rgba.into_raw(), w, h))
                                         })
                                         .await
-                                        .ok()
+                                        .ok()?
                                     })
                                     .await
                                     .ok();
-                                if let Some(Some(Some((pixels, width, height)))) = result {
+                                if let Some(Some((pixels, width, height))) = result {
                                     debug!(
                                         id = %id_for_cache,
                                         decode_ms = decode_start.elapsed().as_millis(),

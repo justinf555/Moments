@@ -221,16 +221,31 @@ impl PhotoGrid {
         model.load_more();
 
         // Load further pages as the user scrolls toward the bottom.
+        // Triggers when the scroll position passes 75% of the loaded content,
+        // which gives enough lead time for the next page to load before the
+        // user reaches the end — even during fast scrollbar drags.
         let model_scroll = Rc::clone(&model);
-        scrolled
-            .vadjustment()
-            .connect_value_changed(move |adj| {
-                // Trigger when within half a page of the bottom.
-                let threshold = adj.upper() - adj.page_size() - (adj.page_size() * 0.5);
-                if adj.value() >= threshold {
-                    model_scroll.load_more();
-                }
-            });
+        let adj = scrolled.vadjustment();
+        adj.connect_value_changed(move |adj| {
+            let visible_end = adj.value() + adj.page_size();
+            let trigger_point = adj.upper() * 0.75;
+            if visible_end >= trigger_point {
+                model_scroll.load_more();
+            }
+        });
+
+        // After each page loads, re-check whether more pages are needed.
+        // Handles fast scrollbar drags where the user jumps far past the
+        // loaded content in a single gesture.
+        let model_ready = Rc::clone(&model);
+        let adj_ready = scrolled.vadjustment();
+        model.set_on_page_ready(move || {
+            let visible_end = adj_ready.value() + adj_ready.page_size();
+            let trigger_point = adj_ready.upper() * 0.75;
+            if visible_end >= trigger_point {
+                model_ready.load_more();
+            }
+        });
 
         // Wire item activation — snapshot all items, then call on_activate.
         let selection_ref = selection.clone();
