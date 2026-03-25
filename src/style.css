@@ -22,3 +22,10 @@ collection-grid-cell .collection-thumbnail-frame {
 collection-grid-cell.hidden-person {
     opacity: 0.4;
 }
+
+/* Eye-slash overlay icon on hidden person thumbnails. */
+collection-grid-cell .hidden-icon {
+    color: white;
+    opacity: 1;
+    -gtk-icon-shadow: 0 1px 3px rgba(0,0,0,0.6);
+}
