@@ -463,6 +463,9 @@ impl MomentsApplication {
                                     Ok(LibraryEvent::AssetSynced { item }) => {
                                         registry.on_asset_synced(&item);
                                     }
+                                    Ok(LibraryEvent::AssetDeletedRemote { media_id }) => {
+                                        registry.on_deleted(&media_id);
+                                    }
                                     Ok(LibraryEvent::AlbumCreated { id, name }) => {
                                         if let Some(win) = win_for_idle.upgrade() {
                                             if let Some(sb) = win.sidebar() {
