@@ -334,6 +334,10 @@ impl LibraryFaces for LocalLibrary {
     ) -> Result<(), LibraryError> {
         Ok(())
     }
+
+    fn person_thumbnail_path(&self, _person_id: &PersonId) -> Option<std::path::PathBuf> {
+        None
+    }
 }
 
 #[cfg(test)]

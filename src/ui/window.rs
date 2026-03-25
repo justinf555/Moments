@@ -31,6 +31,7 @@ use crate::library::album::AlbumId;
 use crate::library::Library;
 
 use crate::ui::album_dialogs;
+use crate::ui::collection_grid::CollectionGridView;
 use crate::ui::coordinator::ContentCoordinator;
 use crate::ui::empty_library::EmptyLibraryView;
 use crate::ui::model_registry::ModelRegistry;
@@ -382,6 +383,18 @@ impl MomentsWindow {
                 view.set_model(Rc::clone(&model), Rc::clone(&reg));
                 reg.register(&model);
                 view
+            });
+        }
+
+        // Register the People collection view (lazy — created on first click).
+        {
+            let lib = Arc::clone(&library);
+            let tk = tokio.clone();
+            let s = settings.clone();
+            let reg = Rc::clone(&registry);
+            let tc = Rc::clone(&texture_cache);
+            coordinator.register_lazy("people", move || {
+                Rc::new(CollectionGridView::new_people(lib, tk, s, reg, tc))
             });
         }
 

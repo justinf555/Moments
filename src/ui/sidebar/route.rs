@@ -25,6 +25,11 @@ pub const TOP_ROUTES: &[SidebarRoute] = &[
         label: "Recent Imports",
         icon: "document-open-recent-symbolic",
     },
+    SidebarRoute {
+        id: "people",
+        label: "People",
+        icon: "system-users-symbolic",
+    },
 ];
 
 /// Bottom sidebar routes, displayed below the Albums section.
