@@ -56,6 +56,8 @@ impl CollectionGridView {
         );
         grid_view.set_min_columns(3);
         grid_view.set_max_columns(8);
+        grid_view.set_valign(gtk::Align::Center);
+        grid_view.set_vexpand(true);
 
         let cell_size = 140;
         let factory = factory::build_factory(cell_size, ThumbnailStyle::Circular);
