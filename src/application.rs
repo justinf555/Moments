@@ -552,6 +552,41 @@ impl MomentsApplication {
                                             win.reload_people();
                                         }
                                     }
+                                    Ok(LibraryEvent::SyncStarted) => {
+                                        if let Some(win) = win_for_idle.upgrade() {
+                                            if let Some(sb) = win.sidebar() {
+                                                sb.show_sync_started();
+                                            }
+                                        }
+                                    }
+                                    Ok(LibraryEvent::SyncProgress { assets, people, faces }) => {
+                                        if let Some(win) = win_for_idle.upgrade() {
+                                            if let Some(sb) = win.sidebar() {
+                                                sb.show_sync_progress(assets, people, faces);
+                                            }
+                                        }
+                                    }
+                                    Ok(LibraryEvent::SyncComplete { assets, .. }) => {
+                                        if let Some(win) = win_for_idle.upgrade() {
+                                            if let Some(sb) = win.sidebar() {
+                                                sb.show_sync_complete(assets);
+                                            }
+                                        }
+                                    }
+                                    Ok(LibraryEvent::ThumbnailDownloadProgress { completed, total }) => {
+                                        if let Some(win) = win_for_idle.upgrade() {
+                                            if let Some(sb) = win.sidebar() {
+                                                sb.show_thumbnail_progress(completed, total);
+                                            }
+                                        }
+                                    }
+                                    Ok(LibraryEvent::ThumbnailDownloadsComplete { total }) => {
+                                        if let Some(win) = win_for_idle.upgrade() {
+                                            if let Some(sb) = win.sidebar() {
+                                                sb.show_thumbnails_complete(total);
+                                            }
+                                        }
+                                    }
                                     Ok(_) => {}
                                     Err(std::sync::mpsc::TryRecvError::Empty) => break,
                                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {

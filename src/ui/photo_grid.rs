@@ -308,14 +308,6 @@ impl PhotoGridView {
         // ── Grid header bar ──────────────────────────────────────────────────
         let header = adw::HeaderBar::new();
 
-        let import_button = gtk::Button::builder()
-            .icon_name("list-add-symbolic")
-            .tooltip_text("Import Photos")
-            .action_name("app.import")
-            .build();
-        import_button.add_css_class("flat");
-        header.pack_start(&import_button);
-
         // ── Zoom controls ───────────────────────────────────────────────────
         let zoom_out_btn = gtk::Button::builder()
             .icon_name("zoom-out-symbolic")
@@ -392,20 +384,6 @@ impl PhotoGridView {
             .build();
         album_btn.add_css_class("flat");
         header.pack_end(&album_btn);
-
-        let menu_button = gtk::MenuButton::builder()
-            .primary(true)
-            .icon_name("open-menu-symbolic")
-            .tooltip_text("Main Menu")
-            .build();
-        let menu = gio::Menu::new();
-        let section = gio::Menu::new();
-        section.append(Some("_Preferences"), Some("app.preferences"));
-        section.append(Some("_Keyboard Shortcuts"), Some("app.shortcuts"));
-        section.append(Some("_About Moments"), Some("app.about"));
-        menu.append_section(None, &section);
-        menu_button.set_menu_model(Some(&menu));
-        header.pack_end(&menu_button);
 
         // ── Grid toolbar view (root nav page content) ────────────────────────
         let photo_grid = PhotoGrid::new();

@@ -1,10 +1,10 @@
 pub mod route;
 pub mod row;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
-use gtk::{glib, prelude::*, subclass::prelude::*};
+use gtk::{gio, glib, prelude::*, subclass::prelude::*};
 use adw::prelude::*;
 use tracing::debug;
 
@@ -33,13 +33,37 @@ mod imp {
         pub add_button: OnceCell<gtk::Button>,
         /// Stored context menu callbacks (set once via set_album_context_callbacks).
         pub(super) context_menu: RefCell<Option<AlbumContextMenu>>,
-        /// Bottom sheet for upload progress.
+
+        // ── Bottom sheet (upload detail) ──────────────────────────────────
         pub bottom_sheet: OnceCell<adw::BottomSheet>,
-        /// Progress widgets inside the bottom sheet.
         pub progress_label: OnceCell<gtk::Label>,
         pub progress_bar: OnceCell<gtk::ProgressBar>,
         pub detail_label: OnceCell<gtk::Label>,
-        pub bar_label: OnceCell<gtk::Label>,
+
+        // ── Status bar stack ──────────────────────────────────────────────
+        pub bar_stack: OnceCell<gtk::Stack>,
+        pub idle_label: OnceCell<gtk::Label>,
+        pub sync_label: OnceCell<gtk::Label>,
+        pub thumb_label: OnceCell<gtk::Label>,
+        pub upload_label: OnceCell<gtk::Label>,
+        pub complete_label: OnceCell<gtk::Label>,
+
+        /// Unix timestamp of last successful sync completion.
+        pub last_synced_at: Cell<Option<i64>>,
+        /// Timer ID for updating the "Synced X ago" label.
+        pub sync_timer: RefCell<Option<glib::SourceId>>,
+        /// Current status bar state (for priority logic).
+        pub current_state: Cell<StatusState>,
+    }
+
+    /// Tracks the active bottom bar state for priority-based switching.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    pub enum StatusState {
+        Idle = 0,
+        Thumbnails = 1,
+        Sync = 2,
+        Complete = 3,
+        Upload = 4,
     }
 
     impl Default for MomentsSidebar {
@@ -55,7 +79,15 @@ mod imp {
                 progress_label: OnceCell::new(),
                 progress_bar: OnceCell::new(),
                 detail_label: OnceCell::new(),
-                bar_label: OnceCell::new(),
+                bar_stack: OnceCell::new(),
+                idle_label: OnceCell::new(),
+                sync_label: OnceCell::new(),
+                thumb_label: OnceCell::new(),
+                upload_label: OnceCell::new(),
+                complete_label: OnceCell::new(),
+                last_synced_at: Cell::new(None),
+                sync_timer: RefCell::new(None),
+                current_state: Cell::new(StatusState::Idle),
             }
         }
     }
@@ -75,14 +107,42 @@ mod imp {
             obj.set_title("Moments");
 
             let toolbar_view = adw::ToolbarView::new();
+
+            // ── Sidebar header bar ───────────────────────────────────────
             let header = adw::HeaderBar::new();
+
+            // Import button (LHS).
+            let import_button = gtk::Button::builder()
+                .icon_name("go-up-symbolic")
+                .tooltip_text("Import Photos")
+                .action_name("app.import")
+                .build();
+            import_button.add_css_class("flat");
+            header.pack_start(&import_button);
+
+            // Hamburger menu (RHS).
+            let menu_button = gtk::MenuButton::builder()
+                .primary(true)
+                .icon_name("open-menu-symbolic")
+                .tooltip_text("Main Menu")
+                .build();
+            let menu = gio::Menu::new();
+            let section = gio::Menu::new();
+            section.append(Some("_Preferences"), Some("app.preferences"));
+            section.append(Some("_Keyboard Shortcuts"), Some("app.shortcuts"));
+            section.append(Some("_About Moments"), Some("app.about"));
+            menu.append_section(None, &section);
+            menu_button.set_menu_model(Some(&menu));
+            header.pack_end(&menu_button);
+
             toolbar_view.add_top_bar(&header);
 
+            // ── Route list ───────────────────────────────────────────────
             let list_box = gtk::ListBox::new();
             list_box.set_selection_mode(gtk::SelectionMode::Single);
             list_box.add_css_class("navigation-sidebar");
 
-            // ── Top routes (Photos, Favorites, Recent Imports) ──────────
+            // Top routes (Photos, Favorites, Recent Imports, People).
             for route in TOP_ROUTES {
                 let row = MomentsSidebarRow::new(route.id, route.label, route.icon);
                 let list_row = gtk::ListBoxRow::new();
@@ -90,7 +150,7 @@ mod imp {
                 list_box.append(&list_row);
             }
 
-            // ── Albums header row ───────────────────────────────────────
+            // Albums header row.
             let (header_row, add_button) = Self::make_albums_header();
             list_box.append(&header_row);
             self.albums_header
@@ -100,8 +160,7 @@ mod imp {
                 .set(add_button)
                 .expect("add_button set once");
 
-            // ── Bottom spacer (albums are inserted before this) ─────────
-            // Non-visible spacer row used as an insertion anchor.
+            // Bottom spacer (albums are inserted before this).
             let spacer = gtk::ListBoxRow::new();
             spacer.set_selectable(false);
             spacer.set_activatable(false);
@@ -111,13 +170,13 @@ mod imp {
                 .set(spacer)
                 .expect("bottom_separator set once");
 
-            // ── Bottom routes (Trash) ───────────────────────────────────
+            // Bottom routes (Trash).
             for (i, route) in BOTTOM_ROUTES.iter().enumerate() {
                 let row = MomentsSidebarRow::new(route.id, route.label, route.icon);
                 let list_row = gtk::ListBoxRow::new();
                 list_row.set_child(Some(&row));
                 if i == 0 {
-                    list_row.set_margin_top(12); // visual gap from Albums section
+                    list_row.set_margin_top(12);
                 }
                 list_box.append(&list_row);
             }
@@ -129,23 +188,89 @@ mod imp {
 
             toolbar_view.set_content(Some(&scrolled));
 
-            // ── Upload progress bottom sheet ──────────────────────────────
-            // Bottom bar: compact one-line summary shown during uploads.
-            let bar_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-            bar_box.set_margin_start(12);
-            bar_box.set_margin_end(12);
-            bar_box.set_margin_top(8);
-            bar_box.set_margin_bottom(8);
+            // ── Status bar (bottom bar of the BottomSheet) ───────────────
+            let bar_stack = gtk::Stack::new();
+            bar_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
+            bar_stack.set_transition_duration(200);
 
-            let bar_icon = gtk::Image::from_icon_name("go-up-symbolic");
-            bar_box.append(&bar_icon);
+            // Idle page: "Synced X ago" or "Waiting for sync..."
+            let idle_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            idle_box.set_margin_start(12);
+            idle_box.set_margin_end(12);
+            idle_box.set_margin_top(8);
+            idle_box.set_margin_bottom(8);
+            let idle_icon = gtk::Image::from_icon_name("emblem-ok-symbolic");
+            idle_icon.add_css_class("dim-label");
+            idle_box.append(&idle_icon);
+            let idle_label = gtk::Label::new(Some("Waiting for sync..."));
+            idle_label.set_hexpand(true);
+            idle_label.set_xalign(0.0);
+            idle_label.add_css_class("dim-label");
+            idle_label.add_css_class("caption");
+            idle_box.append(&idle_label);
+            bar_stack.add_named(&idle_box, Some("idle"));
 
-            let bar_label = gtk::Label::new(Some("Uploading..."));
-            bar_label.set_hexpand(true);
-            bar_label.set_xalign(0.0);
-            bar_box.append(&bar_label);
+            // Sync page: "Syncing..."
+            let sync_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            sync_box.set_margin_start(12);
+            sync_box.set_margin_end(12);
+            sync_box.set_margin_top(8);
+            sync_box.set_margin_bottom(8);
+            let sync_icon = gtk::Image::from_icon_name("emblem-synchronizing-symbolic");
+            sync_box.append(&sync_icon);
+            let sync_label = gtk::Label::new(Some("Syncing..."));
+            sync_label.set_hexpand(true);
+            sync_label.set_xalign(0.0);
+            sync_label.add_css_class("caption");
+            sync_box.append(&sync_label);
+            bar_stack.add_named(&sync_box, Some("sync"));
 
-            // Sheet: expanded detail view.
+            // Thumbnails page: "Thumbnails X/Y"
+            let thumb_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            thumb_box.set_margin_start(12);
+            thumb_box.set_margin_end(12);
+            thumb_box.set_margin_top(8);
+            thumb_box.set_margin_bottom(8);
+            let thumb_icon = gtk::Image::from_icon_name("folder-download-symbolic");
+            thumb_box.append(&thumb_icon);
+            let thumb_label = gtk::Label::new(Some("Downloading thumbnails..."));
+            thumb_label.set_hexpand(true);
+            thumb_label.set_xalign(0.0);
+            thumb_label.add_css_class("caption");
+            thumb_box.append(&thumb_label);
+            bar_stack.add_named(&thumb_box, Some("thumbnails"));
+
+            // Upload page: "Uploading X/Y"
+            let upload_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            upload_box.set_margin_start(12);
+            upload_box.set_margin_end(12);
+            upload_box.set_margin_top(8);
+            upload_box.set_margin_bottom(8);
+            let upload_icon = gtk::Image::from_icon_name("go-up-symbolic");
+            upload_box.append(&upload_icon);
+            let upload_label = gtk::Label::new(Some("Uploading..."));
+            upload_label.set_hexpand(true);
+            upload_label.set_xalign(0.0);
+            upload_label.add_css_class("caption");
+            upload_box.append(&upload_label);
+            bar_stack.add_named(&upload_box, Some("upload"));
+
+            // Complete page: "✓ X imported"
+            let complete_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            complete_box.set_margin_start(12);
+            complete_box.set_margin_end(12);
+            complete_box.set_margin_top(8);
+            complete_box.set_margin_bottom(8);
+            let complete_icon = gtk::Image::from_icon_name("emblem-ok-symbolic");
+            complete_box.append(&complete_icon);
+            let complete_label = gtk::Label::new(Some("Import complete"));
+            complete_label.set_hexpand(true);
+            complete_label.set_xalign(0.0);
+            complete_label.add_css_class("caption");
+            complete_box.append(&complete_label);
+            bar_stack.add_named(&complete_box, Some("complete"));
+
+            // ── Upload detail sheet (expanded view) ──────────────────────
             let sheet_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
             sheet_box.set_margin_start(16);
             sheet_box.set_margin_end(16);
@@ -167,16 +292,17 @@ mod imp {
             detail_label.add_css_class("caption");
             sheet_box.append(&detail_label);
 
+            // ── Bottom sheet ─────────────────────────────────────────────
             let bottom_sheet = adw::BottomSheet::new();
             bottom_sheet.set_content(Some(&toolbar_view));
             bottom_sheet.set_sheet(Some(&sheet_box));
-            bottom_sheet.set_bottom_bar(Some(&bar_box));
+            bottom_sheet.set_bottom_bar(Some(&bar_stack));
             bottom_sheet.set_open(false);
             bottom_sheet.set_show_drag_handle(true);
             bottom_sheet.set_modal(false);
             bottom_sheet.set_full_width(true);
-            // Hide the bottom bar initially — revealed when upload starts.
-            bottom_sheet.set_reveal_bottom_bar(false);
+            // Always visible — shows status at all times.
+            bottom_sheet.set_reveal_bottom_bar(true);
 
             obj.set_child(Some(&bottom_sheet));
 
@@ -185,15 +311,17 @@ mod imp {
             let _ = self.progress_label.set(progress_label);
             let _ = self.progress_bar.set(progress_bar);
             let _ = self.detail_label.set(detail_label);
-            let _ = self.bar_label.set(bar_label);
+            let _ = self.bar_stack.set(bar_stack);
+            let _ = self.idle_label.set(idle_label);
+            let _ = self.sync_label.set(sync_label);
+            let _ = self.thumb_label.set(thumb_label);
+            let _ = self.upload_label.set(upload_label);
+            let _ = self.complete_label.set(complete_label);
         }
     }
 
     impl imp::MomentsSidebar {
         /// Create the "Albums" header row with a "+" button.
-        ///
-        /// Uses top margin for visual separation from the routes above —
-        /// no hard separator lines, following the GNOME spacing convention.
         fn make_albums_header() -> (gtk::ListBoxRow, gtk::Button) {
             let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             hbox.set_margin_start(12);
@@ -217,7 +345,7 @@ mod imp {
             row.set_child(Some(&hbox));
             row.set_selectable(false);
             row.set_activatable(false);
-            row.set_margin_top(12); // visual gap from top routes
+            row.set_margin_top(12);
 
             (row, add_btn)
         }
@@ -239,9 +367,6 @@ impl MomentsSidebar {
     }
 
     /// Connect a callback that fires when the user selects a row.
-    ///
-    /// The callback receives the route `id` of the selected entry.
-    /// Album rows emit `"album:{uuid}"` as their route id.
     pub fn connect_route_selected<F: Fn(&str) + 'static>(&self, f: F) {
         let list_box = self.imp().list_box.get().unwrap().clone();
         list_box.connect_row_selected(move |_, row| {
@@ -264,9 +389,8 @@ impl MomentsSidebar {
         }
     }
 
-    /// Populate all album rows at startup. Clears any existing album rows first.
+    /// Populate all album rows at startup.
     pub fn set_albums(&self, albums: &[(String, String)]) {
-        // Clear existing album rows.
         let imp = self.imp();
         let mut album_rows = imp.album_rows.borrow_mut();
         let list_box = imp.list_box.get().unwrap();
@@ -275,17 +399,13 @@ impl MomentsSidebar {
         }
         drop(album_rows);
 
-        // Add each album.
         for (id, name) in albums {
             self.add_album(id, name);
         }
     }
 
     /// Add a single album row to the Albums section.
-    ///
-    /// Idempotent — if an album with this ID already exists, updates its name instead.
     pub fn add_album(&self, album_id: &str, name: &str) {
-        // If already present, just update the name (handles sync re-delivering existing albums).
         if self.imp().album_rows.borrow().contains_key(album_id) {
             self.rename_album(album_id, name);
             return;
@@ -300,10 +420,8 @@ impl MomentsSidebar {
         let list_row = gtk::ListBoxRow::new();
         list_row.set_child(Some(&sidebar_row));
 
-        // Insert before the bottom separator.
         list_box.insert(&list_row, bottom_sep.index());
 
-        // Attach right-click context menu if callbacks are set.
         self.attach_row_context_menu(&list_row, album_id, name);
 
         imp.album_rows
@@ -317,7 +435,6 @@ impl MomentsSidebar {
         let list_box = imp.list_box.get().unwrap();
 
         if let Some(row) = imp.album_rows.borrow_mut().remove(album_id) {
-            // If this row is currently selected, fall back to "photos".
             let is_selected = list_box
                 .selected_row()
                 .map(|sel| sel == row)
@@ -352,9 +469,6 @@ impl MomentsSidebar {
     }
 
     /// Store callbacks for album context menu actions.
-    ///
-    /// When `add_album` creates a row, it attaches a right-click gesture
-    /// that shows a popover with Rename/Delete using these callbacks.
     pub fn set_album_context_callbacks(
         &self,
         on_rename: impl Fn(String, String) + 'static,
@@ -434,15 +548,76 @@ impl MomentsSidebar {
         list_row.add_controller(gesture);
     }
 
-    // ── Upload progress bottom sheet ────────────────────────────────
+    // ── Status bar methods ───────────────────────────────────────────
+
+    /// Switch the status bar to a named state, respecting priority.
+    ///
+    /// Higher-priority states (upload) can't be overridden by lower
+    /// (sync, thumbnails). Setting idle always succeeds.
+    fn set_status(&self, state: imp::StatusState, page: &str) {
+        let imp = self.imp();
+        let current = imp.current_state.get();
+
+        // Allow transition if: same or higher priority, or resetting to idle.
+        if state >= current || state == imp::StatusState::Idle {
+            imp.current_state.set(state);
+            if let Some(stack) = imp.bar_stack.get() {
+                stack.set_visible_child_name(page);
+            }
+        }
+    }
+
+    /// Set idle state with "Synced X ago" label.
+    pub fn set_idle(&self) {
+        self.set_status(imp::StatusState::Idle, "idle");
+        self.update_idle_label();
+        self.start_idle_timer();
+    }
+
+    /// Show sync started status.
+    pub fn show_sync_started(&self) {
+        let imp = self.imp();
+        if let Some(label) = imp.sync_label.get() {
+            label.set_text("Syncing...");
+        }
+        self.set_status(imp::StatusState::Sync, "sync");
+    }
+
+    /// Show sync progress.
+    pub fn show_sync_progress(&self, assets: usize, people: usize, faces: usize) {
+        let imp = self.imp();
+        let total = assets + people + faces;
+        if let Some(label) = imp.sync_label.get() {
+            label.set_text(&format!("Syncing... {total} items"));
+        }
+        self.set_status(imp::StatusState::Sync, "sync");
+    }
+
+    /// Show sync complete — transition to idle.
+    pub fn show_sync_complete(&self, _assets: usize) {
+        let imp = self.imp();
+        imp.last_synced_at.set(Some(chrono::Utc::now().timestamp()));
+        self.set_idle();
+    }
+
+    /// Show thumbnail download progress.
+    pub fn show_thumbnail_progress(&self, completed: usize, total: usize) {
+        let imp = self.imp();
+        if let Some(label) = imp.thumb_label.get() {
+            label.set_text(&format!("Thumbnails {completed}/{total}"));
+        }
+        self.set_status(imp::StatusState::Thumbnails, "thumbnails");
+    }
+
+    /// Show thumbnails complete — transition to idle.
+    pub fn show_thumbnails_complete(&self, _total: usize) {
+        self.set_idle();
+    }
 
     /// Show upload progress in the sidebar bottom sheet.
     pub fn show_upload_progress(&self, current: usize, total: usize) {
         let imp = self.imp();
-        if let Some(sheet) = imp.bottom_sheet.get() {
-            sheet.set_reveal_bottom_bar(true);
-        }
-        if let Some(label) = imp.bar_label.get() {
+        if let Some(label) = imp.upload_label.get() {
             label.set_text(&format!("{current}/{total}"));
         }
         if let Some(label) = imp.progress_label.get() {
@@ -453,12 +628,13 @@ impl MomentsSidebar {
                 bar.set_fraction(current as f64 / total as f64);
             }
         }
+        self.set_status(imp::StatusState::Upload, "upload");
     }
 
-    /// Show upload complete summary, then auto-hide after 3 seconds.
+    /// Show upload complete summary, then auto-revert to idle after 5 seconds.
     pub fn show_upload_complete(&self, summary: &crate::library::import::ImportSummary) {
         let imp = self.imp();
-        if let Some(label) = imp.bar_label.get() {
+        if let Some(label) = imp.complete_label.get() {
             label.set_text(&format!("{} imported", summary.imported));
         }
         if let Some(label) = imp.progress_label.get() {
@@ -478,26 +654,72 @@ impl MomentsSidebar {
             label.set_text(&detail);
         }
 
-        // Close sheet if open.
+        // Close expanded sheet.
         if let Some(sheet) = imp.bottom_sheet.get() {
             sheet.set_open(false);
         }
 
-        // Auto-hide the bottom bar after 3 seconds.
+        self.set_status(imp::StatusState::Complete, "complete");
+
+        // Auto-revert to idle after 5 seconds.
         let obj_weak = self.downgrade();
-        glib::timeout_add_local_once(std::time::Duration::from_secs(3), move || {
+        glib::timeout_add_local_once(std::time::Duration::from_secs(5), move || {
             if let Some(obj) = obj_weak.upgrade() {
-                obj.hide_upload_progress();
+                obj.set_idle();
             }
         });
     }
 
-    /// Hide the upload progress bottom bar.
+    /// Hide the upload progress bottom bar (legacy — now reverts to idle).
     pub fn hide_upload_progress(&self) {
+        self.set_idle();
+    }
+
+    // ── Idle timer ───────────────────────────────────────────────────
+
+    /// Update the idle label with "Synced X ago" or "Waiting for sync...".
+    fn update_idle_label(&self) {
         let imp = self.imp();
-        if let Some(sheet) = imp.bottom_sheet.get() {
-            sheet.set_reveal_bottom_bar(false);
-            sheet.set_open(false);
+        let Some(label) = imp.idle_label.get() else { return };
+
+        let Some(synced_at) = imp.last_synced_at.get() else {
+            label.set_text("Waiting for sync...");
+            return;
+        };
+
+        let elapsed = chrono::Utc::now().timestamp() - synced_at;
+        let text = if elapsed < 10 {
+            "Synced just now".to_string()
+        } else if elapsed < 60 {
+            format!("Synced {}s ago", elapsed)
+        } else if elapsed < 3600 {
+            format!("Synced {}m ago", elapsed / 60)
+        } else {
+            format!("Synced {}h ago", elapsed / 3600)
+        };
+        label.set_text(&text);
+    }
+
+    /// Start a 10-second timer to keep the "Synced X ago" label current.
+    fn start_idle_timer(&self) {
+        let imp = self.imp();
+
+        // Cancel any existing timer.
+        if let Some(id) = imp.sync_timer.borrow_mut().take() {
+            id.remove();
         }
+
+        let obj_weak = self.downgrade();
+        let id = glib::timeout_add_local(std::time::Duration::from_secs(10), move || {
+            let Some(obj) = obj_weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            // Only update if we're still in idle state.
+            if obj.imp().current_state.get() == imp::StatusState::Idle {
+                obj.update_idle_label();
+            }
+            glib::ControlFlow::Continue
+        });
+        *imp.sync_timer.borrow_mut() = Some(id);
     }
 }
