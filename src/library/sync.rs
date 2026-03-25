@@ -138,6 +138,12 @@ impl SyncManager {
             ],
         };
 
+        // Debug: log server-side checkpoints before syncing.
+        match self.client.get::<Vec<serde_json::Value>>("/sync/ack").await {
+            Ok(acks) => info!(server_checkpoints = ?acks, "server-side sync checkpoints"),
+            Err(e) => warn!("failed to read server checkpoints: {e}"),
+        }
+
         debug!("starting sync stream");
         let response = self.client.post_stream("/sync/stream", &request).await?;
 
@@ -304,7 +310,15 @@ impl SyncManager {
 
         // Acknowledge processed changes (batched — Immich limits to 1000 per request).
         if !acks.is_empty() {
-            info!(count = acks.len(), "sending sync acks to server");
+            // Debug: log the ack types we're about to send.
+            let mut ack_summary: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+            for ack in &acks {
+                if let Some(entity_type) = ack.split('|').next() {
+                    *ack_summary.entry(entity_type.to_string()).or_default() += 1;
+                }
+            }
+            info!(count = acks.len(), summary = ?ack_summary, "sending sync acks to server");
+
             for chunk in acks.chunks(1000) {
                 let ack_request = SyncAckRequest { acks: chunk.to_vec() };
                 if let Err(e) = self.client.post_no_content("/sync/ack", &ack_request).await {
@@ -312,7 +326,12 @@ impl SyncManager {
                     return Err(e);
                 }
             }
-            debug!("acks sent successfully");
+
+            // Debug: verify server received our acks.
+            match self.client.get::<Vec<serde_json::Value>>("/sync/ack").await {
+                Ok(server_acks) => info!(server_checkpoints = ?server_acks, "server checkpoints after ack"),
+                Err(e) => warn!("failed to verify server checkpoints: {e}"),
+            }
 
             // Persist checkpoints locally for delta sync on next launch.
             let mut checkpoints: std::collections::HashMap<String, String> =
@@ -323,7 +342,7 @@ impl SyncManager {
                 }
             }
             let pairs: Vec<(String, String)> = checkpoints.into_iter().collect();
-            info!(count = pairs.len(), "saving sync checkpoints locally");
+            info!(count = pairs.len(), checkpoints = ?pairs, "saving sync checkpoints locally");
             self.db.save_sync_checkpoints(&pairs).await?;
         }
 
