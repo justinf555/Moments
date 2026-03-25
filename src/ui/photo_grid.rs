@@ -792,6 +792,213 @@ impl PhotoGridView {
             });
         }
 
+        // ── Right-click context menu on grid cells ─────────────────────
+        {
+            let gesture = gtk::GestureClick::new();
+            gesture.set_button(3);
+
+            let grid_view = self.photo_grid.imp().grid_view.get().unwrap().clone();
+            let selection = selection.clone();
+            let lib = Arc::clone(&self.library);
+            let tk = self.tokio.clone();
+            let reg = Rc::clone(&registry);
+            let filter_for_ctx = self.photo_grid.imp().filter.borrow().clone();
+
+            gesture.connect_pressed(move |gesture, _, x, y| {
+                // Find the grid child widget at the click position, then walk up
+                // to the direct child of the GridView to determine its index.
+                let Some(picked) = grid_view.pick(x, y, gtk::PickFlags::DEFAULT) else { return };
+
+                // Walk up to the direct child of the GridView.
+                let grid_widget = grid_view.upcast_ref::<gtk::Widget>();
+                let mut target = Some(picked);
+                while let Some(ref w) = target {
+                    if w.parent().as_ref() == Some(grid_widget) {
+                        break;
+                    }
+                    target = w.parent();
+                }
+                let Some(target) = target else { return };
+
+                // Find the position by counting siblings.
+                let mut pos = 0u32;
+                let mut child = grid_view.first_child();
+                loop {
+                    let Some(c) = child else { return };
+                    if c == target { break; }
+                    pos += 1;
+                    child = c.next_sibling();
+                }
+
+                let Some(pos) = Some(pos) else { return };
+
+                // Select the item if not already selected.
+                if !selection.is_selected(pos) {
+                    selection.unselect_all();
+                    selection.select_item(pos, true);
+                }
+
+                // Get the item for context.
+                let Some(obj) = selection.item(pos)
+                    .and_then(|o| o.downcast::<item::MediaItemObject>().ok()) else { return };
+
+                let is_favorite = obj.is_favorite();
+                let is_trash = matches!(filter_for_ctx, MediaFilter::Trashed);
+                let is_album = matches!(filter_for_ctx, MediaFilter::Album { .. });
+
+                // Build popover with action buttons.
+                let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                vbox.set_margin_top(6);
+                vbox.set_margin_bottom(6);
+                vbox.set_margin_start(6);
+                vbox.set_margin_end(6);
+
+                if is_trash {
+                    // Trash view: Restore, Delete Permanently
+                    let restore_btn = gtk::Button::with_label("Restore");
+                    restore_btn.add_css_class("flat");
+                    vbox.append(&restore_btn);
+
+                    let delete_btn = gtk::Button::with_label("Delete Permanently");
+                    delete_btn.add_css_class("flat");
+                    delete_btn.add_css_class("error");
+                    vbox.append(&delete_btn);
+
+                    let sel = selection.clone();
+                    let lib_r = Arc::clone(&lib);
+                    let tk_r = tk.clone();
+                    let reg_r = Rc::clone(&reg);
+                    restore_btn.connect_clicked(move |_| {
+                        let ids = collect_selected_ids(&sel);
+                        if ids.is_empty() { return; }
+                        sel.unselect_all();
+                        let lib = Arc::clone(&lib_r);
+                        let tk = tk_r.clone();
+                        let reg = Rc::clone(&reg_r);
+                        glib::MainContext::default().spawn_local(async move {
+                            let ids_bc = ids.clone();
+                            if let Ok(Ok(())) = tk.spawn(async move { lib.restore(&ids).await }).await {
+                                for id in &ids_bc { reg.on_trashed(id, false); }
+                            }
+                        });
+                    });
+
+                    let sel = selection.clone();
+                    let lib_d = Arc::clone(&lib);
+                    let tk_d = tk.clone();
+                    let reg_d = Rc::clone(&reg);
+                    delete_btn.connect_clicked(move |_| {
+                        let ids = collect_selected_ids(&sel);
+                        if ids.is_empty() { return; }
+                        sel.unselect_all();
+                        let lib = Arc::clone(&lib_d);
+                        let tk = tk_d.clone();
+                        let reg = Rc::clone(&reg_d);
+                        glib::MainContext::default().spawn_local(async move {
+                            let ids_bc = ids.clone();
+                            if let Ok(Ok(())) = tk.spawn(async move { lib.delete_permanently(&ids).await }).await {
+                                for id in &ids_bc { reg.on_deleted(id); }
+                            }
+                        });
+                    });
+                } else {
+                    // Non-trash: Favourite toggle, Trash
+                    let fav_label = if is_favorite { "Unfavourite" } else { "Favourite" };
+                    let fav_btn = gtk::Button::with_label(fav_label);
+                    fav_btn.add_css_class("flat");
+                    vbox.append(&fav_btn);
+
+                    let trash_ctx_btn = gtk::Button::with_label("Move to Trash");
+                    trash_ctx_btn.add_css_class("flat");
+                    trash_ctx_btn.add_css_class("error");
+                    vbox.append(&trash_ctx_btn);
+
+                    if is_album {
+                        let remove_btn = gtk::Button::with_label("Remove from Album");
+                        remove_btn.add_css_class("flat");
+                        vbox.append(&remove_btn);
+
+                        if let MediaFilter::Album { ref album_id } = filter_for_ctx {
+                            let sel = selection.clone();
+                            let lib_ra = Arc::clone(&lib);
+                            let tk_ra = tk.clone();
+                            let reg_ra = Rc::clone(&reg);
+                            let aid = album_id.clone();
+                            remove_btn.connect_clicked(move |_| {
+                                let ids = collect_selected_ids(&sel);
+                                if ids.is_empty() { return; }
+                                sel.unselect_all();
+                                let lib = Arc::clone(&lib_ra);
+                                let tk = tk_ra.clone();
+                                let reg = Rc::clone(&reg_ra);
+                                let aid = aid.clone();
+                                glib::MainContext::default().spawn_local(async move {
+                                    let aid_bc = aid.clone();
+                                    if let Ok(Ok(())) = tk.spawn(async move { lib.remove_from_album(&aid, &ids).await }).await {
+                                        reg.on_album_media_changed(&aid_bc);
+                                    }
+                                });
+                            });
+                        }
+                    }
+
+                    let new_fav = !is_favorite;
+                    let sel = selection.clone();
+                    let lib_f = Arc::clone(&lib);
+                    let tk_f = tk.clone();
+                    let reg_f = Rc::clone(&reg);
+                    fav_btn.connect_clicked(move |_| {
+                        let ids = collect_selected_ids(&sel);
+                        if ids.is_empty() { return; }
+                        let lib = Arc::clone(&lib_f);
+                        let tk = tk_f.clone();
+                        let reg = Rc::clone(&reg_f);
+                        glib::MainContext::default().spawn_local(async move {
+                            let ids_bc = ids.clone();
+                            if let Ok(Ok(())) = tk.spawn(async move { lib.set_favorite(&ids, new_fav).await }).await {
+                                for id in &ids_bc { reg.on_favorite_changed(id, new_fav); }
+                            }
+                        });
+                    });
+
+                    let sel = selection.clone();
+                    let lib_t = Arc::clone(&lib);
+                    let tk_t = tk.clone();
+                    let reg_t = Rc::clone(&reg);
+                    trash_ctx_btn.connect_clicked(move |_| {
+                        let ids = collect_selected_ids(&sel);
+                        if ids.is_empty() { return; }
+                        sel.unselect_all();
+                        let lib = Arc::clone(&lib_t);
+                        let tk = tk_t.clone();
+                        let reg = Rc::clone(&reg_t);
+                        glib::MainContext::default().spawn_local(async move {
+                            let ids_bc = ids.clone();
+                            if let Ok(Ok(())) = tk.spawn(async move { lib.trash(&ids).await }).await {
+                                for id in &ids_bc { reg.on_trashed(id, true); }
+                            }
+                        });
+                    });
+                }
+
+                // Show the popover on the grid view.
+                let popover = gtk::Popover::new();
+                popover.set_child(Some(&vbox));
+                popover.set_parent(&grid_view);
+                popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+                popover.set_has_arrow(true);
+
+                popover.connect_closed(move |p| {
+                    p.unparent();
+                });
+
+                popover.popup();
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+            });
+
+            self.photo_grid.imp().grid_view.get().unwrap().add_controller(gesture);
+        }
+
         // ── "Remove from Album" button ──────────────────────────────────
         if let MediaFilter::Album { album_id } = filter {
             let selection = selection.clone();
