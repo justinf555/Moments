@@ -3,7 +3,18 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use tokio::sync::Semaphore;
 use tracing::{debug, info, instrument, warn};
+
+/// Maximum concurrent thumbnail generation tasks during import.
+/// Uses half of available cores (minimum 2), same logic as the UI decode pool.
+fn max_thumbnail_workers() -> usize {
+    (std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        / 2)
+    .max(2)
+}
 
 use super::db::Database;
 use super::error::LibraryError;
@@ -31,6 +42,8 @@ pub struct ImportJob {
     events: Sender<LibraryEvent>,
     /// Format registry — drives extension filtering and thumbnail decode dispatch.
     formats: Arc<FormatRegistry>,
+    /// Limits concurrent thumbnail generation to avoid CPU/memory spikes.
+    thumbnail_semaphore: Arc<Semaphore>,
 }
 
 impl ImportJob {
@@ -47,6 +60,7 @@ impl ImportJob {
             db,
             events,
             formats,
+            thumbnail_semaphore: Arc::new(Semaphore::new(max_thumbnail_workers())),
         }
     }
 
@@ -244,13 +258,18 @@ impl ImportJob {
         // ── 8. Spawn thumbnail generation (non-blocking, best-effort) ─────────
         // Images use image-crate decode; videos use GStreamer poster frame.
         // Both go through the same FormatRegistry → resize → WebP pipeline.
+        // Bounded by semaphore to avoid CPU/memory spikes on large imports.
         let thumb_job = ThumbnailJob::new(
             self.thumbnails_dir.clone(),
             self.db.clone(),
             self.events.clone(),
             Arc::clone(&self.formats),
         );
-        tokio::spawn(async move { thumb_job.generate(media_id, target).await });
+        let permit = Arc::clone(&self.thumbnail_semaphore);
+        tokio::spawn(async move {
+            let _permit = permit.acquire().await;
+            thumb_job.generate(media_id, target).await;
+        });
 
         // Increment summary via the Ok(None) sentinel — summary is updated
         // by the caller when it sees AssetImported was emitted.
