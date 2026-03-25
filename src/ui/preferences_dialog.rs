@@ -252,6 +252,59 @@ pub fn show_preferences(
         sync_group.add(&interval_row);
 
         immich_page.add(&sync_group);
+
+        // Server stats group — populated async alongside library stats.
+        let server_group = adw::PreferencesGroup::new();
+        server_group.set_title("Server");
+
+        let server_photos_row = adw::ActionRow::new();
+        server_photos_row.set_title("Photos");
+        server_photos_row.set_subtitle("Loading...");
+        server_group.add(&server_photos_row);
+
+        let server_videos_row = adw::ActionRow::new();
+        server_videos_row.set_title("Videos");
+        server_videos_row.set_subtitle("Loading...");
+        server_group.add(&server_videos_row);
+
+        let server_disk_row = adw::ActionRow::new();
+        server_disk_row.set_title("Disk Usage");
+        server_disk_row.set_subtitle("Loading...");
+        server_group.add(&server_disk_row);
+
+        immich_page.add(&server_group);
+
+        // Load server stats async (reuses the same library_stats call).
+        if let Some(lib) = library.clone() {
+            let tokio = crate::application::MomentsApplication::default().tokio_handle();
+            let sp_weak = server_photos_row.downgrade();
+            let sv_weak = server_videos_row.downgrade();
+            let sd_weak = server_disk_row.downgrade();
+            glib::MainContext::default().spawn_local(async move {
+                let result = tokio
+                    .spawn(async move { lib.library_stats().await })
+                    .await;
+                if let Ok(Ok(stats)) = result {
+                    if let Some(server) = stats.server {
+                        if let Some(r) = sp_weak.upgrade() {
+                            r.set_subtitle(&format_count(server.server_photos, "photo"));
+                        }
+                        if let Some(r) = sv_weak.upgrade() {
+                            r.set_subtitle(&format_count(server.server_videos, "video"));
+                        }
+                        if let Some(r) = sd_weak.upgrade() {
+                            r.set_subtitle(&format!(
+                                "{} / {} ({:.1}%)",
+                                format_bytes(server.disk_use),
+                                format_bytes(server.disk_size),
+                                server.disk_usage_percentage
+                            ));
+                        }
+                    }
+                }
+            });
+        }
+
         dialog.add(&immich_page);
     }
 

@@ -27,6 +27,23 @@ pub struct LibraryStats {
     pub cache_used_bytes: u64,
     /// People count (named, non-hidden).
     pub people_count: u64,
+    /// Server-side statistics (Immich only).
+    pub server: Option<ServerStats>,
+}
+
+/// Statistics from the Immich server (populated via API calls).
+#[derive(Debug, Clone)]
+pub struct ServerStats {
+    /// Server photo count for the authenticated user.
+    pub server_photos: u64,
+    /// Server video count for the authenticated user.
+    pub server_videos: u64,
+    /// Server total disk size in bytes.
+    pub disk_size: u64,
+    /// Server used disk space in bytes.
+    pub disk_use: u64,
+    /// Server disk usage percentage (0–100).
+    pub disk_usage_percentage: f64,
 }
 
 /// Manages the library's SQLite database.

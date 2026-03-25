@@ -35,6 +35,7 @@ impl Database {
             total_file_size: row.2 as u64,
             cache_used_bytes: 0, // Set by the backend, not the DB.
             people_count: people_count.0 as u64,
+            server: None, // Set by the Immich backend.
         })
     }
 }

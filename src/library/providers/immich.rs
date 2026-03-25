@@ -232,11 +232,36 @@ impl LibraryMedia for ImmichLibrary {
 
     async fn library_stats(&self) -> Result<crate::library::db::LibraryStats, LibraryError> {
         let mut stats = self.db.library_stats().await?;
+
         // Calculate originals cache disk usage.
         let originals_dir = self.bundle.originals.clone();
         if let Ok(size) = tokio::task::spawn_blocking(move || dir_size(&originals_dir)).await {
             stats.cache_used_bytes = size;
         }
+
+        // Fetch server-side statistics.
+        let mut server = crate::library::db::ServerStats {
+            server_photos: 0,
+            server_videos: 0,
+            disk_size: 0,
+            disk_use: 0,
+            disk_usage_percentage: 0.0,
+        };
+
+        // GET /assets/statistics — user-scoped photo/video counts.
+        if let Ok(asset_stats) = self.client.get::<AssetStatistics>("/assets/statistics").await {
+            server.server_photos = asset_stats.images as u64;
+            server.server_videos = asset_stats.videos as u64;
+        }
+
+        // GET /server/storage — disk usage.
+        if let Ok(storage) = self.client.get::<ServerStorage>("/server/storage").await {
+            server.disk_size = storage.disk_size_raw;
+            server.disk_use = storage.disk_use_raw;
+            server.disk_usage_percentage = storage.disk_usage_percentage;
+        }
+
+        stats.server = Some(server);
         Ok(stats)
     }
 }
@@ -341,6 +366,24 @@ fn sharded_original_path(originals_dir: &std::path::Path, id: &MediaId, ext: &st
         .join(&hex[..2])
         .join(&hex[2..4])
         .join(format!("{hex}.{ext}"))
+}
+
+/// Response from `GET /assets/statistics`.
+#[derive(Debug, serde::Deserialize)]
+struct AssetStatistics {
+    images: i64,
+    videos: i64,
+}
+
+/// Response from `GET /server/storage`.
+#[derive(Debug, serde::Deserialize)]
+struct ServerStorage {
+    #[serde(rename = "diskSizeRaw")]
+    disk_size_raw: u64,
+    #[serde(rename = "diskUseRaw")]
+    disk_use_raw: u64,
+    #[serde(rename = "diskUsagePercentage")]
+    disk_usage_percentage: f64,
 }
 
 /// Calculate total disk usage of a directory (recursive).
