@@ -75,7 +75,7 @@ impl SyncHandle {
             shutdown_rx,
             thumbnail_tx: thumb_tx,
             thumbnails_dir: manager_thumbnails_dir,
-            interval_rx,
+            interval_rx: tokio::sync::Mutex::new(interval_rx),
         };
 
         tokio.spawn(async move {
@@ -111,7 +111,7 @@ struct SyncManager {
     shutdown_rx: tokio::sync::watch::Receiver<bool>,
     thumbnail_tx: tokio::sync::mpsc::Sender<MediaId>,
     thumbnails_dir: PathBuf,
-    interval_rx: tokio::sync::watch::Receiver<u64>,
+    interval_rx: tokio::sync::Mutex<tokio::sync::watch::Receiver<u64>>,
 }
 
 impl SyncManager {
@@ -134,7 +134,11 @@ impl SyncManager {
             }
 
             // Read the current interval (may have changed via preferences).
-            let interval_secs = *self.interval_rx.borrow();
+            let interval_secs: u64 = {
+                let mut rx = self.interval_rx.lock().await;
+                let val = *rx.borrow_and_update();
+                val
+            };
             if interval_secs == 0 {
                 info!("sync polling disabled (interval=0), stopping after initial sync");
                 break;
@@ -143,18 +147,13 @@ impl SyncManager {
             let interval = std::time::Duration::from_secs(interval_secs);
             debug!(interval_secs, "waiting for next sync cycle");
 
-            // Wait for the next cycle, but break early on shutdown or interval change.
+            // Wait for the next cycle, but break early on shutdown.
             let mut shutdown = self.shutdown_rx.clone();
-            let mut interval_watch = self.interval_rx.clone();
             tokio::select! {
                 _ = tokio::time::sleep(interval) => {}
                 _ = shutdown.changed() => {
                     info!("sync manager shutting down during sleep");
                     break;
-                }
-                _ = interval_watch.changed() => {
-                    debug!("sync interval changed, restarting cycle immediately");
-                    // New interval takes effect — loop back to run_sync.
                 }
             }
         }
