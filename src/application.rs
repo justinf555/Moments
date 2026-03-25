@@ -367,21 +367,8 @@ impl MomentsApplication {
             None => return,
         };
 
-        let dialog = ImportDialog::new();
-
-        // Clear our reference when the user dismisses the dialog early so the
-        // idle loop stops trying to forward events to a closed widget.
-        dialog.connect_closed(glib::clone!(
-            #[weak(rename_to = app)]
-            self,
-            move |_| {
-                app.imp().import_dialog.borrow_mut().take();
-            }
-        ));
-
-        dialog.present(Some(&window));
-        *self.imp().import_dialog.borrow_mut() = Some(dialog);
-
+        // Progress is shown in the sidebar bottom sheet (non-modal).
+        // The modal ImportDialog is no longer presented.
         info!(path = %folder.display(), "starting import");
         glib::MainContext::default().spawn_local(async move {
             let result = tokio
@@ -451,12 +438,26 @@ impl MomentsApplication {
                                         registry.on_thumbnail_ready(&media_id);
                                     }
                                     Ok(LibraryEvent::ImportProgress { current, total }) => {
+                                        // Update sidebar bottom sheet (non-modal).
+                                        if let Some(win) = win_for_idle.upgrade() {
+                                            if let Some(sb) = win.sidebar() {
+                                                sb.show_upload_progress(current, total);
+                                            }
+                                        }
+                                        // Also update modal dialog if present.
                                         let borrow = app.imp().import_dialog.borrow();
                                         if let Some(d) = borrow.as_ref() {
                                             d.set_progress(current, total);
                                         }
                                     }
                                     Ok(LibraryEvent::ImportComplete(summary)) => {
+                                        // Update sidebar bottom sheet.
+                                        if let Some(win) = win_for_idle.upgrade() {
+                                            if let Some(sb) = win.sidebar() {
+                                                sb.show_upload_complete(&summary);
+                                            }
+                                        }
+                                        // Also update modal dialog if present.
                                         {
                                             let borrow = app.imp().import_dialog.borrow();
                                             if let Some(d) = borrow.as_ref() {

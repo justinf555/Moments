@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use gtk::{glib, prelude::*, subclass::prelude::*};
-use adw::prelude::NavigationPageExt;
+use adw::prelude::*;
 use tracing::debug;
 
 use route::{TOP_ROUTES, BOTTOM_ROUTES};
@@ -33,6 +33,13 @@ mod imp {
         pub add_button: OnceCell<gtk::Button>,
         /// Stored context menu callbacks (set once via set_album_context_callbacks).
         pub(super) context_menu: RefCell<Option<AlbumContextMenu>>,
+        /// Bottom sheet for upload progress.
+        pub bottom_sheet: OnceCell<adw::BottomSheet>,
+        /// Progress widgets inside the bottom sheet.
+        pub progress_label: OnceCell<gtk::Label>,
+        pub progress_bar: OnceCell<gtk::ProgressBar>,
+        pub detail_label: OnceCell<gtk::Label>,
+        pub bar_label: OnceCell<gtk::Label>,
     }
 
     impl Default for MomentsSidebar {
@@ -44,6 +51,11 @@ mod imp {
                 bottom_separator: OnceCell::new(),
                 add_button: OnceCell::new(),
                 context_menu: RefCell::new(None),
+                bottom_sheet: OnceCell::new(),
+                progress_label: OnceCell::new(),
+                progress_bar: OnceCell::new(),
+                detail_label: OnceCell::new(),
+                bar_label: OnceCell::new(),
             }
         }
     }
@@ -116,9 +128,64 @@ mod imp {
             scrolled.set_child(Some(&list_box));
 
             toolbar_view.set_content(Some(&scrolled));
-            obj.set_child(Some(&toolbar_view));
+
+            // ── Upload progress bottom sheet ──────────────────────────────
+            // Bottom bar: compact one-line summary shown during uploads.
+            let bar_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            bar_box.set_margin_start(12);
+            bar_box.set_margin_end(12);
+            bar_box.set_margin_top(8);
+            bar_box.set_margin_bottom(8);
+
+            let bar_icon = gtk::Image::from_icon_name("go-up-symbolic");
+            bar_box.append(&bar_icon);
+
+            let bar_label = gtk::Label::new(Some("Uploading..."));
+            bar_label.set_hexpand(true);
+            bar_label.set_xalign(0.0);
+            bar_box.append(&bar_label);
+
+            // Sheet: expanded detail view.
+            let sheet_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
+            sheet_box.set_margin_start(16);
+            sheet_box.set_margin_end(16);
+            sheet_box.set_margin_top(16);
+            sheet_box.set_margin_bottom(16);
+
+            let progress_label = gtk::Label::new(Some("Uploading..."));
+            progress_label.set_xalign(0.0);
+            progress_label.add_css_class("heading");
+            sheet_box.append(&progress_label);
+
+            let progress_bar = gtk::ProgressBar::new();
+            progress_bar.set_fraction(0.0);
+            sheet_box.append(&progress_bar);
+
+            let detail_label = gtk::Label::new(Some(""));
+            detail_label.set_xalign(0.0);
+            detail_label.add_css_class("dim-label");
+            detail_label.add_css_class("caption");
+            sheet_box.append(&detail_label);
+
+            let bottom_sheet = adw::BottomSheet::new();
+            bottom_sheet.set_content(Some(&toolbar_view));
+            bottom_sheet.set_sheet(Some(&sheet_box));
+            bottom_sheet.set_bottom_bar(Some(&bar_box));
+            bottom_sheet.set_open(false);
+            bottom_sheet.set_show_drag_handle(true);
+            bottom_sheet.set_modal(false);
+            bottom_sheet.set_full_width(true);
+            // Hide the bottom bar initially — revealed when upload starts.
+            bottom_sheet.set_reveal_bottom_bar(false);
+
+            obj.set_child(Some(&bottom_sheet));
 
             self.list_box.set(list_box).unwrap();
+            let _ = self.bottom_sheet.set(bottom_sheet);
+            let _ = self.progress_label.set(progress_label);
+            let _ = self.progress_bar.set(progress_bar);
+            let _ = self.detail_label.set(detail_label);
+            let _ = self.bar_label.set(bar_label);
         }
     }
 
@@ -365,5 +432,72 @@ impl MomentsSidebar {
         });
 
         list_row.add_controller(gesture);
+    }
+
+    // ── Upload progress bottom sheet ────────────────────────────────
+
+    /// Show upload progress in the sidebar bottom sheet.
+    pub fn show_upload_progress(&self, current: usize, total: usize) {
+        let imp = self.imp();
+        if let Some(sheet) = imp.bottom_sheet.get() {
+            sheet.set_reveal_bottom_bar(true);
+        }
+        if let Some(label) = imp.bar_label.get() {
+            label.set_text(&format!("{current}/{total}"));
+        }
+        if let Some(label) = imp.progress_label.get() {
+            label.set_text(&format!("Uploading {current} of {total}"));
+        }
+        if let Some(bar) = imp.progress_bar.get() {
+            if total > 0 {
+                bar.set_fraction(current as f64 / total as f64);
+            }
+        }
+    }
+
+    /// Show upload complete summary, then auto-hide after 3 seconds.
+    pub fn show_upload_complete(&self, summary: &crate::library::import::ImportSummary) {
+        let imp = self.imp();
+        if let Some(label) = imp.bar_label.get() {
+            label.set_text(&format!("{} imported", summary.imported));
+        }
+        if let Some(label) = imp.progress_label.get() {
+            label.set_text("Upload Complete");
+        }
+        if let Some(bar) = imp.progress_bar.get() {
+            bar.set_fraction(1.0);
+        }
+        let mut detail = format!("{} imported", summary.imported);
+        if summary.skipped_duplicates > 0 {
+            detail.push_str(&format!(", {} skipped", summary.skipped_duplicates));
+        }
+        if summary.failed > 0 {
+            detail.push_str(&format!(", {} failed", summary.failed));
+        }
+        if let Some(label) = imp.detail_label.get() {
+            label.set_text(&detail);
+        }
+
+        // Close sheet if open.
+        if let Some(sheet) = imp.bottom_sheet.get() {
+            sheet.set_open(false);
+        }
+
+        // Auto-hide the bottom bar after 3 seconds.
+        let obj_weak = self.downgrade();
+        glib::timeout_add_local_once(std::time::Duration::from_secs(3), move || {
+            if let Some(obj) = obj_weak.upgrade() {
+                obj.hide_upload_progress();
+            }
+        });
+    }
+
+    /// Hide the upload progress bottom bar.
+    pub fn hide_upload_progress(&self) {
+        let imp = self.imp();
+        if let Some(sheet) = imp.bottom_sheet.get() {
+            sheet.set_reveal_bottom_bar(false);
+            sheet.set_open(false);
+        }
     }
 }
