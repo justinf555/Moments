@@ -268,10 +268,11 @@ impl CollectionGridView {
                 let lib_r = Arc::clone(&lib);
                 let tk_r = tk.clone();
                 let store_r = store_ctx.clone();
-                let lib_r2 = Arc::clone(&lib);
                 let pid_r = person_id.clone();
                 let gv_ref = gv.clone();
-                let filter_r = Rc::clone(&filter_ctx);
+                let item_subtitle = data.subtitle.clone();
+                let item_thumb = data.thumbnail_path.clone();
+                let item_hidden = data.is_hidden;
                 rename_btn.connect_clicked(move |_| {
                     if let Some(p) = pop_weak.upgrade() {
                         p.popdown();
@@ -295,8 +296,9 @@ impl CollectionGridView {
                     let tk = tk_r.clone();
                     let store = store_r.clone();
                     let pid = pid_r.clone();
-                    let lib_reload = Arc::clone(&lib_r2);
-                    let f = Rc::clone(&filter_r);
+                    let subtitle = item_subtitle.clone();
+                    let thumb = item_thumb.clone();
+                    let hidden = item_hidden;
                     dialog.connect_response(None, move |_, response| {
                         if response != "rename" {
                             return;
@@ -305,12 +307,13 @@ impl CollectionGridView {
                         if new_name.is_empty() {
                             return;
                         }
+                        let pid_str = pid.clone();
                         let pid = PersonId::from_raw(pid.clone());
                         let lib = Arc::clone(&lib);
                         let tk = tk.clone();
                         let store = store.clone();
-                        let lib_reload = Arc::clone(&lib_reload);
-                        let f = Rc::clone(&f);
+                        let subtitle = subtitle.clone();
+                        let thumb = thumb.clone();
                         debug!(person_id = %pid, name = %new_name, "renaming person");
                         glib::MainContext::default().spawn_local(async move {
                             let name = new_name.clone();
@@ -320,7 +323,13 @@ impl CollectionGridView {
                             match result {
                                 Ok(Ok(())) => {
                                     info!("person renamed successfully");
-                                    full_reload(&store, &lib_reload, &f);
+                                    replace_item(&store, &pid_str, CollectionItemData {
+                                        id: pid_str.clone(),
+                                        name: new_name,
+                                        subtitle,
+                                        thumbnail_path: thumb,
+                                        is_hidden: hidden,
+                                    });
                                 }
                                 Ok(Err(e)) => tracing::error!("rename_person failed: {e}"),
                                 Err(e) => tracing::error!("rename_person join failed: {e}"),
@@ -461,6 +470,23 @@ fn remove_by_id(store: &gio::ListStore, person_id: &str) {
         {
             if obj.data().id == person_id {
                 store.remove(i);
+                return;
+            }
+        }
+    }
+}
+
+/// Replace an item in the store with updated data, preserving its position.
+fn replace_item(store: &gio::ListStore, person_id: &str, data: CollectionItemData) {
+    for i in 0..store.n_items() {
+        if let Some(obj) = store
+            .item(i)
+            .and_then(|o| o.downcast::<CollectionItemObject>().ok())
+        {
+            if obj.data().id == person_id {
+                store.remove(i);
+                let new_item = CollectionItemObject::new(data);
+                store.insert(i, &new_item);
                 return;
             }
         }
