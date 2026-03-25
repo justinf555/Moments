@@ -50,6 +50,7 @@ The Immich backend works fully offline after initial sync. All data — assets, 
 | `LibraryThumbnail` | Local file path (cached) | Downloaded by ThumbnailDownloader | ✅ Done |
 | `LibraryViewer` | On-demand download with LRU disk cache | N/A | ✅ Done |
 | `LibraryImport` | N/A | Upload via `POST /assets` | 🔜 #106 |
+| `LibraryFaces` | `self.db.list_people(...)` | API call → update local cache | 🔜 #178 |
 
 All reads delegate to `self.db` — identical SQL to `LocalLibrary`. Writes go to the Immich API first, then update the local cache to match.
 
