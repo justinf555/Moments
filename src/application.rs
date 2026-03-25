@@ -468,7 +468,7 @@ impl MomentsApplication {
 
                         let app_for_idle = app.downgrade();
                         let win_for_idle = window.downgrade();
-                        let source_id = glib::idle_add_local(move || {
+                        let source_id = glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
                             let app = match app_for_idle.upgrade() {
                                 Some(a) => a,
                                 None => return glib::ControlFlow::Break,

@@ -37,6 +37,9 @@ pub struct PhotoGridModel {
     has_more: Cell<bool>,
     /// O(1) lookup: `MediaId` → weak reference to the corresponding GObject.
     id_index: RefCell<HashMap<MediaId, glib::WeakRef<MediaItemObject>>>,
+    /// Called after each page loads so the scroll handler can re-check
+    /// whether more pages are needed (e.g. after a fast scrollbar drag).
+    on_page_ready: RefCell<Option<Box<dyn Fn()>>>,
 }
 
 impl PhotoGridModel {
@@ -54,12 +57,18 @@ impl PhotoGridModel {
             loading: Cell::new(false),
             has_more: Cell::new(true),
             id_index: RefCell::new(HashMap::new()),
+            on_page_ready: RefCell::new(None),
         }
     }
 
     /// The filter this model was constructed with.
     pub fn filter(&self) -> MediaFilter {
         self.filter.borrow().clone()
+    }
+
+    /// Register a callback invoked after each page loads.
+    pub fn set_on_page_ready(&self, cb: impl Fn() + 'static) {
+        *self.on_page_ready.borrow_mut() = Some(Box::new(cb));
     }
 
     /// Clear all items and reload from the first page.
@@ -328,6 +337,13 @@ impl PhotoGridModel {
             debug!("all pages exhausted");
         }
         self.loading.set(false);
+
+        // Signal that a page has loaded so the scroll handler can re-evaluate
+        // whether another page is needed (the user may have scrolled far ahead
+        // while this page was loading).
+        if let Some(cb) = self.on_page_ready.borrow().as_ref() {
+            cb();
+        }
     }
 }
 
