@@ -34,7 +34,6 @@ pub struct ImmichLibrary {
     db: Database,
     events: Sender<LibraryEvent>,
     tokio: Handle,
-    #[allow(dead_code)] // shutdown signalled in close()
     sync_handle: SyncHandle,
 }
 
@@ -123,6 +122,7 @@ impl LibraryStorage for ImmichLibrary {
     #[instrument(skip(self))]
     async fn close(&self) -> Result<(), LibraryError> {
         info!("closing immich library");
+        self.sync_handle.shutdown();
         self.events
             .send(LibraryEvent::ShutdownComplete)
             .map_err(|_| LibraryError::Bundle("event channel closed".to_string()))?;
