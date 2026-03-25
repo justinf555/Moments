@@ -209,7 +209,7 @@ impl MomentsApplication {
     }
 
     fn show_about(&self) {
-        let window = self.active_window().unwrap();
+        let Some(window) = self.active_window() else { return };
         let about = adw::AboutDialog::builder()
             .application_name("moments")
             .application_icon("io.github.justinf555.Moments")

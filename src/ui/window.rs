@@ -82,20 +82,20 @@ mod imp {
             if let Some(settings) = self.settings.get() {
                 let win = self.obj();
                 let is_maximized = win.is_maximized();
-                settings
-                    .set_boolean("is-maximized", is_maximized)
-                    .expect("failed to save is-maximized");
+                if let Err(e) = settings.set_boolean("is-maximized", is_maximized) {
+                    tracing::warn!("failed to save is-maximized: {e}");
+                }
 
                 // Only save dimensions when not maximized, so we preserve
                 // the pre-maximized size for next launch.
                 if !is_maximized {
                     let (width, height) = win.default_size();
-                    settings
-                        .set_int("window-width", width)
-                        .expect("failed to save window-width");
-                    settings
-                        .set_int("window-height", height)
-                        .expect("failed to save window-height");
+                    if let Err(e) = settings.set_int("window-width", width) {
+                        tracing::warn!("failed to save window-width: {e}");
+                    }
+                    if let Err(e) = settings.set_int("window-height", height) {
+                        tracing::warn!("failed to save window-height: {e}");
+                    }
                 }
                 debug!(is_maximized, "saved window state on close");
             }
