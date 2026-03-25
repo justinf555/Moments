@@ -340,7 +340,6 @@ impl CollectionGridView {
                 let lib_h = Arc::clone(&lib);
                 let tk_h = tk.clone();
                 let store_h = store_ctx.clone();
-                let lib_h2 = Arc::clone(&lib);
                 let filter_h = Rc::clone(&filter_ctx);
                 let new_hidden = !is_hidden;
                 hide_btn.connect_clicked(move |_| {
@@ -351,10 +350,10 @@ impl CollectionGridView {
                     let lib = Arc::clone(&lib_h);
                     let tk = tk_h.clone();
                     let store = store_h.clone();
-                    let lib_reload = Arc::clone(&lib_h2);
                     let f = Rc::clone(&filter_h);
                     let action = if new_hidden { "hiding" } else { "unhiding" };
                     debug!(person_id = %pid, action, "toggling person visibility");
+                    let pid_for_remove = pid.to_string();
                     glib::MainContext::default().spawn_local(async move {
                         let result = tk
                             .spawn(async move { lib.set_person_hidden(&pid, new_hidden).await })
@@ -362,7 +361,13 @@ impl CollectionGridView {
                         match result {
                             Ok(Ok(())) => {
                                 info!("person visibility changed successfully");
-                                full_reload(&store, &lib_reload, &f);
+                                // If hiding and "Show Hidden" is off, just remove the item.
+                                // If unhiding and "Show Hidden" is on, item stays — no change needed.
+                                if new_hidden && !f.include_hidden.get() {
+                                    remove_by_id(&store, &pid_for_remove);
+                                } else if !new_hidden && f.include_hidden.get() {
+                                    // Unhiding while showing hidden — item stays, no action needed.
+                                }
                             }
                             Ok(Err(e)) => tracing::error!("set_person_hidden failed: {e}"),
                             Err(e) => tracing::error!("set_person_hidden join failed: {e}"),
@@ -445,6 +450,21 @@ fn load_people(store: &gio::ListStore, library: &Arc<dyn Library>, filter: &Rc<P
             Err(e) => tracing::error!("list_people join failed: {e}"),
         }
     });
+}
+
+/// Remove a single item from the store by person ID.
+fn remove_by_id(store: &gio::ListStore, person_id: &str) {
+    for i in 0..store.n_items() {
+        if let Some(obj) = store
+            .item(i)
+            .and_then(|o| o.downcast::<CollectionItemObject>().ok())
+        {
+            if obj.data().id == person_id {
+                store.remove(i);
+                return;
+            }
+        }
+    }
 }
 
 /// Full reload: clear store and re-populate (used when filter toggles change).
