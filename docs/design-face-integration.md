@@ -8,7 +8,7 @@
 
 Integrate Immich's face detection and people management into Moments. Immich performs face detection and recognition server-side using machine learning — Moments consumes this data via the sync stream and presents it in the UI.
 
-This is an **Immich-only feature**. The local backend has no face detection capability and returns empty results for all `LibraryFaces` methods.
+The initial implementation targets the **Immich backend** only. The local backend returns empty results for all `LibraryFaces` methods. However, `LibraryFaces` is part of the `Library` supertrait — the intent is feature parity for the local backend in future (likely via a local ML pipeline).
 
 ## Core Principle: Sync, Don't Compute
 
@@ -422,7 +422,7 @@ Phase 7 is a polish enhancement.
 - **Hidden people**: Respect the `isHidden` flag from Immich. Don't show in sidebar by default.
 - **No faces detected**: Some assets have no face data. The People section simply shows fewer results.
 - **Person with no assets**: Can occur after face reassignment. Show in sidebar with count 0; grid view shows empty state.
-- **Local backend**: All `LibraryFaces` methods return empty results. The sidebar People section is hidden when using the local backend.
+- **Local backend**: All `LibraryFaces` methods return empty results for now. The sidebar People section is hidden when no people exist. Future work will add local face detection for feature parity.
 - **Large face counts**: Users with 50+ people — sidebar should be scrollable or collapsible, not an unbounded list.
 - **Sync ordering**: `AssetFaceV1` records reference `person_id` which may arrive before the corresponding `PersonV1`. Use `ON DELETE SET NULL` foreign key and tolerate NULL `person_id` values.
 
