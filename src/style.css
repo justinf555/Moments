@@ -8,3 +8,12 @@ gridview > child:selected photo-grid-cell {
     border: 3px solid @accent_bg_color;
     border-radius: 6px;
 }
+
+/* Collection grid: circular face thumbnails for People view. */
+collection-grid-cell.circular .collection-thumbnail-frame {
+    border-radius: 50%;
+}
+
+collection-grid-cell .collection-thumbnail-frame {
+    border-radius: 8px;
+}

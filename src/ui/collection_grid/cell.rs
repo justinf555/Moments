@@ -41,7 +41,7 @@ mod imp {
         type ParentType = gtk::Widget;
 
         fn class_init(klass: &mut Self::Class) {
-            klass.set_layout_manager_type::<gtk::BinLayout>();
+            klass.set_layout_manager_type::<gtk::BoxLayout>();
             klass.set_css_name("collection-grid-cell");
         }
     }
@@ -51,16 +51,23 @@ mod imp {
             self.parent_constructed();
             let obj = self.obj();
 
-            // Vertical box: thumbnail on top, name + subtitle below.
-            let vbox = gtk::Box::new(gtk::Orientation::Vertical, 4);
-            vbox.set_halign(gtk::Align::Center);
-            vbox.set_valign(gtk::Align::Start);
-            vbox.set_margin_top(8);
-            vbox.set_margin_bottom(8);
+            // Use BoxLayout vertical orientation.
+            let layout = obj
+                .layout_manager()
+                .and_downcast::<gtk::BoxLayout>()
+                .unwrap();
+            layout.set_orientation(gtk::Orientation::Vertical);
+            layout.set_spacing(4);
 
-            // Thumbnail container — overlay picture on placeholder.
+            // Thumbnail frame — a fixed-size box that clips its child.
+            let frame = gtk::Frame::new(None);
+            frame.set_halign(gtk::Align::Center);
+            frame.set_size_request(96, 96);
+            frame.set_overflow(gtk::Overflow::Hidden);
+            frame.add_css_class("collection-thumbnail-frame");
+
+            // Overlay: placeholder behind picture.
             let overlay = gtk::Overlay::new();
-            overlay.set_halign(gtk::Align::Center);
 
             self.placeholder.set_pixel_size(96);
             self.placeholder.add_css_class("dim-label");
@@ -69,23 +76,17 @@ mod imp {
             self.picture.set_size_request(96, 96);
             self.picture.set_content_fit(gtk::ContentFit::Cover);
             self.picture.set_visible(false);
-            self.picture.add_css_class("collection-thumbnail");
             overlay.add_overlay(&self.picture);
 
-            // Circular clipping frame.
-            let frame = adw::Clamp::new();
-            frame.set_maximum_size(96);
             frame.set_child(Some(&overlay));
-            frame.set_halign(gtk::Align::Center);
-            frame.add_css_class("collection-thumbnail-frame");
-            vbox.append(&frame);
+            frame.set_parent(&*obj);
 
             // Name label.
             self.name_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
             self.name_label.set_max_width_chars(14);
             self.name_label.set_halign(gtk::Align::Center);
             self.name_label.add_css_class("caption-heading");
-            vbox.append(&self.name_label);
+            self.name_label.set_parent(&*obj);
 
             // Subtitle label.
             self.subtitle_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
@@ -93,13 +94,11 @@ mod imp {
             self.subtitle_label.set_halign(gtk::Align::Center);
             self.subtitle_label.add_css_class("dim-label");
             self.subtitle_label.add_css_class("caption");
-            vbox.append(&self.subtitle_label);
-
-            vbox.set_parent(&*obj);
+            self.subtitle_label.set_parent(&*obj);
         }
 
         fn dispose(&self) {
-            if let Some(child) = self.obj().first_child() {
+            while let Some(child) = self.obj().first_child() {
                 child.unparent();
             }
         }
@@ -124,7 +123,6 @@ impl CollectionGridCell {
         let imp = self.imp();
         let data = item.data();
 
-        // Set labels.
         let display_name = if data.name.is_empty() {
             "Unnamed"
         } else {
@@ -133,14 +131,12 @@ impl CollectionGridCell {
         imp.name_label.set_text(display_name);
         imp.subtitle_label.set_text(&data.subtitle);
 
-        // Show texture if already loaded.
         if let Some(texture) = item.texture() {
             imp.picture.set_paintable(Some(&texture));
             imp.picture.set_visible(true);
             imp.placeholder.set_visible(false);
         }
 
-        // React to texture becoming available.
         let picture = imp.picture.clone();
         let placeholder = imp.placeholder.clone();
         let texture_handler = item.connect_texture_notify(move |item| {
