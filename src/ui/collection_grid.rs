@@ -28,6 +28,8 @@ use item::{CollectionItemData, CollectionItemObject};
 /// to show that item's media.
 pub struct CollectionGridView {
     widget: gtk::Widget,
+    store: gio::ListStore,
+    library: Arc<dyn Library>,
 }
 
 impl std::fmt::Debug for CollectionGridView {
@@ -324,12 +326,18 @@ impl CollectionGridView {
         }
 
         // Load people asynchronously.
-        {
-            let lib = Arc::clone(&library);
-            load_people(&store, &lib);
-        }
+        load_people(&store, &library);
 
-        Self { widget }
+        Self {
+            widget,
+            store,
+            library,
+        }
+    }
+
+    /// Reload the people grid from the database.
+    pub fn reload(&self) {
+        reload_people(&self.store, &self.library);
     }
 }
 
