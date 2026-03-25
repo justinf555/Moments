@@ -111,6 +111,8 @@ pub enum MediaFilter {
     RecentImports { since: i64 },
     /// Items belonging to a specific album. Excludes trashed.
     Album { album_id: super::album::AlbumId },
+    /// Items containing a specific person's face. Excludes trashed.
+    Person { person_id: super::faces::PersonId },
 }
 
 impl MediaFilter {
@@ -125,6 +127,7 @@ impl MediaFilter {
             MediaFilter::Trashed => item.is_trashed,
             MediaFilter::RecentImports { since } => !item.is_trashed && item.imported_at > *since,
             MediaFilter::Album { .. } => false,
+            MediaFilter::Person { .. } => false,
         }
     }
 }

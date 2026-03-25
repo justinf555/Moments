@@ -176,11 +176,16 @@ impl LibraryMedia for Database {
                 " AND is_trashed = 0 AND id IN (SELECT media_id FROM album_media WHERE album_id = ?)",
                 "COALESCE(taken_at, 0)",
             ),
+            MediaFilter::Person { .. } => (
+                " AND is_trashed = 0 AND id IN (SELECT DISTINCT asset_id FROM asset_faces WHERE person_id = ?)",
+                "COALESCE(taken_at, 0)",
+            ),
         };
 
         let extra_bind: Option<String> = match &filter {
             MediaFilter::RecentImports { since } => Some(since.to_string()),
             MediaFilter::Album { album_id } => Some(album_id.as_str().to_owned()),
+            MediaFilter::Person { person_id } => Some(person_id.as_str().to_owned()),
             _ => None,
         };
 
@@ -647,5 +652,90 @@ mod tests {
         db.add_to_album(&album_id, &[media_id.clone()]).await.unwrap();
         db.trash(&[media_id]).await.unwrap();
         assert!(db.list_media(MediaFilter::Album { album_id }, None, 50).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_media_person_filter() {
+        use crate::library::db::faces::AssetFaceRow;
+        use crate::library::faces::PersonId;
+
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+
+        db.upsert_person("p1", "Alice", None, false, false, None, None)
+            .await
+            .unwrap();
+
+        let id_in = MediaId::new("i".repeat(64));
+        let id_out = MediaId::new("o".repeat(64));
+        db.insert_media(&record_with_taken_at(id_in.clone(), "in.jpg", Some(2000)))
+            .await
+            .unwrap();
+        db.insert_media(&record_with_taken_at(id_out.clone(), "out.jpg", Some(1000)))
+            .await
+            .unwrap();
+
+        let face = AssetFaceRow {
+            id: "f1".to_string(),
+            asset_id: "i".repeat(64),
+            person_id: Some("p1".to_string()),
+            image_width: 100,
+            image_height: 100,
+            bbox_x1: 0,
+            bbox_y1: 0,
+            bbox_x2: 50,
+            bbox_y2: 50,
+            source_type: "MachineLearning".to_string(),
+        };
+        db.upsert_asset_face(&face).await.unwrap();
+
+        let person_id = PersonId::from_raw("p1".to_string());
+        let items = db
+            .list_media(MediaFilter::Person { person_id }, None, 50)
+            .await
+            .unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, id_in);
+    }
+
+    #[tokio::test]
+    async fn list_media_person_filter_excludes_trashed() {
+        use crate::library::db::faces::AssetFaceRow;
+        use crate::library::faces::PersonId;
+
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+
+        db.upsert_person("p1", "Alice", None, false, false, None, None)
+            .await
+            .unwrap();
+
+        let media_id = MediaId::new("t".repeat(64));
+        db.insert_media(&test_record(media_id.clone()))
+            .await
+            .unwrap();
+
+        let face = AssetFaceRow {
+            id: "f1".to_string(),
+            asset_id: "t".repeat(64),
+            person_id: Some("p1".to_string()),
+            image_width: 100,
+            image_height: 100,
+            bbox_x1: 0,
+            bbox_y1: 0,
+            bbox_x2: 50,
+            bbox_y2: 50,
+            source_type: "MachineLearning".to_string(),
+        };
+        db.upsert_asset_face(&face).await.unwrap();
+
+        db.trash(&[media_id]).await.unwrap();
+
+        let person_id = PersonId::from_raw("p1".to_string());
+        assert!(db
+            .list_media(MediaFilter::Person { person_id }, None, 50)
+            .await
+            .unwrap()
+            .is_empty());
     }
 }

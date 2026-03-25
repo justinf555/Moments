@@ -255,7 +255,7 @@ impl PhotoGridModel {
 
     pub fn on_favorite_changed(self: &Rc<Self>, id: &MediaId, is_favorite: bool) {
         match self.filter.borrow().clone() {
-            MediaFilter::All | MediaFilter::RecentImports { .. } | MediaFilter::Album { .. } => {
+            MediaFilter::All | MediaFilter::RecentImports { .. } | MediaFilter::Album { .. } | MediaFilter::Person { .. } => {
                 let weak = self.id_index.borrow().get(id).cloned();
                 if let Some(obj) = weak.and_then(|w| w.upgrade()) {
                     obj.set_is_favorite(is_favorite);
@@ -276,7 +276,7 @@ impl PhotoGridModel {
     /// Called when an item is trashed or restored in any view.
     pub fn on_trashed(self: &Rc<Self>, id: &MediaId, is_trashed: bool) {
         match self.filter.borrow().clone() {
-            MediaFilter::All | MediaFilter::Favorites | MediaFilter::RecentImports { .. } | MediaFilter::Album { .. } => {
+            MediaFilter::All | MediaFilter::Favorites | MediaFilter::RecentImports { .. } | MediaFilter::Album { .. } | MediaFilter::Person { .. } => {
                 if is_trashed {
                     // Item moved to trash — remove from this view.
                     self.remove_item(id);
