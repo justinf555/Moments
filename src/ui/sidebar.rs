@@ -298,7 +298,7 @@ mod imp {
             bottom_sheet.set_sheet(Some(&sheet_box));
             bottom_sheet.set_bottom_bar(Some(&bar_stack));
             bottom_sheet.set_open(false);
-            bottom_sheet.set_show_drag_handle(true);
+            bottom_sheet.set_show_drag_handle(false);
             bottom_sheet.set_modal(false);
             bottom_sheet.set_full_width(true);
             // Always visible — shows status at all times.
@@ -564,12 +564,12 @@ impl MomentsSidebar {
             if let Some(stack) = imp.bar_stack.get() {
                 stack.set_visible_child_name(page);
             }
-            // Only allow expanding the sheet during uploads.
-            if let Some(sheet) = imp.bottom_sheet.get() {
-                let can_expand = state == imp::StatusState::Upload;
-                sheet.set_show_drag_handle(can_expand);
-                if !can_expand && sheet.is_open() {
-                    sheet.set_open(false);
+            // Close the sheet when leaving upload state.
+            if state != imp::StatusState::Upload {
+                if let Some(sheet) = imp.bottom_sheet.get() {
+                    if sheet.is_open() {
+                        sheet.set_open(false);
+                    }
                 }
             }
         }
@@ -656,7 +656,7 @@ impl MomentsSidebar {
     pub fn show_upload_progress(&self, current: usize, total: usize) {
         let imp = self.imp();
         if let Some(label) = imp.upload_label.get() {
-            label.set_text(&format!("{current}/{total}"));
+            label.set_text(&format!("Uploading {current}/{total}"));
         }
         if let Some(label) = imp.progress_label.get() {
             label.set_text(&format!("Uploading {current} of {total}"));
@@ -664,6 +664,15 @@ impl MomentsSidebar {
         if let Some(bar) = imp.progress_bar.get() {
             if total > 0 {
                 bar.set_fraction(current as f64 / total as f64);
+            }
+        }
+        if let Some(label) = imp.detail_label.get() {
+            label.set_text(&format!("{current} imported, {} remaining", total - current));
+        }
+        // Auto-open the sheet during upload so progress is always visible.
+        if let Some(sheet) = imp.bottom_sheet.get() {
+            if !sheet.is_open() {
+                sheet.set_open(true);
             }
         }
         self.set_status(imp::StatusState::Upload, "upload");
