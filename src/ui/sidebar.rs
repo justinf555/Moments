@@ -216,7 +216,7 @@ mod imp {
             sync_box.set_margin_end(12);
             sync_box.set_margin_top(8);
             sync_box.set_margin_bottom(8);
-            let sync_icon = gtk::Image::from_icon_name("emblem-synchronizing-symbolic");
+            let sync_icon = gtk::Image::from_icon_name("view-refresh-symbolic");
             sync_box.append(&sync_icon);
             let sync_label = gtk::Label::new(Some("Syncing..."));
             sync_label.set_hexpand(true);
