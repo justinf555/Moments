@@ -83,7 +83,13 @@ impl ImportJob {
         for (idx, path) in candidates.into_iter().enumerate() {
             let current = idx + 1;
             self.events
-                .send(LibraryEvent::ImportProgress { current, total })
+                .send(LibraryEvent::ImportProgress {
+                    current,
+                    total,
+                    imported: summary.imported,
+                    skipped: summary.skipped_duplicates + summary.skipped_unsupported,
+                    failed: summary.failed,
+                })
                 .ok();
 
             match self.import_one(&path).await {

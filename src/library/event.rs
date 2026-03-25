@@ -31,7 +31,13 @@ pub enum LibraryEvent {
     AssetImported { media_id: MediaId, path: PathBuf },
 
     /// Periodic progress update during a batch import.
-    ImportProgress { current: usize, total: usize },
+    ImportProgress {
+        current: usize,
+        total: usize,
+        imported: usize,
+        skipped: usize,
+        failed: usize,
+    },
 
     /// Import pipeline finished (successfully or with per-file failures).
     ImportComplete(ImportSummary),
@@ -122,6 +128,9 @@ mod tests {
         let event = LibraryEvent::ImportProgress {
             current: 3,
             total: 10,
+            imported: 2,
+            skipped: 1,
+            failed: 0,
         };
         assert!(format!("{event:?}").contains("ImportProgress"));
     }

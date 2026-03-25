@@ -478,11 +478,11 @@ impl MomentsApplication {
                                     Ok(LibraryEvent::ThumbnailReady { media_id }) => {
                                         registry.on_thumbnail_ready(&media_id);
                                     }
-                                    Ok(LibraryEvent::ImportProgress { current, total }) => {
+                                    Ok(LibraryEvent::ImportProgress { current, total, imported, skipped, failed }) => {
                                         // Update sidebar bottom sheet (non-modal).
                                         if let Some(win) = win_for_idle.upgrade() {
                                             if let Some(sb) = win.sidebar() {
-                                                sb.show_upload_progress(current, total);
+                                                sb.show_upload_progress(current, total, imported, skipped, failed);
                                             }
                                         }
                                         // Also update modal dialog if present.

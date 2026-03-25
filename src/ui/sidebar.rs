@@ -653,7 +653,7 @@ impl MomentsSidebar {
     }
 
     /// Show upload progress in the sidebar bottom sheet.
-    pub fn show_upload_progress(&self, current: usize, total: usize) {
+    pub fn show_upload_progress(&self, current: usize, total: usize, imported: usize, skipped: usize, failed: usize) {
         let imp = self.imp();
         if let Some(label) = imp.upload_label.get() {
             label.set_text(&format!("Uploading {current}/{total}"));
@@ -666,8 +666,19 @@ impl MomentsSidebar {
                 bar.set_fraction(current as f64 / total as f64);
             }
         }
+        let mut detail = format!("{imported} imported");
+        if skipped > 0 {
+            detail.push_str(&format!(", {skipped} skipped"));
+        }
+        if failed > 0 {
+            detail.push_str(&format!(", {failed} failed"));
+        }
+        let remaining = total.saturating_sub(current);
+        if remaining > 0 {
+            detail.push_str(&format!(", {remaining} remaining"));
+        }
         if let Some(label) = imp.detail_label.get() {
-            label.set_text(&format!("{current} imported, {} remaining", total - current));
+            label.set_text(&detail);
         }
         // Auto-open the sheet during upload so progress is always visible.
         if let Some(sheet) = imp.bottom_sheet.get() {
