@@ -1,0 +1,10 @@
+/* Selection highlighting for the photo grid.
+ *
+ * GTK4 GridView applies :selected on the child widget when using
+ * MultiSelection. The default styling is subtle against photo
+ * thumbnails, so we add a visible border in the accent colour.
+ */
+gridview > child:selected photo-grid-cell {
+    border: 3px solid @accent_bg_color;
+    border-radius: 6px;
+}
