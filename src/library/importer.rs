@@ -282,7 +282,7 @@ impl ImportJob {
 // ── Candidate collection ───────────────────────────────────────────────────────
 
 /// Recursively collect all files reachable from `sources`.
-fn collect_candidates(sources: Vec<PathBuf>) -> Vec<PathBuf> {
+pub fn collect_candidates(sources: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for source in sources {
         if source.is_file() {
@@ -294,7 +294,7 @@ fn collect_candidates(sources: Vec<PathBuf>) -> Vec<PathBuf> {
     out
 }
 
-fn walk_dir(dir: &Path, out: &mut Vec<PathBuf>) {
+pub fn walk_dir(dir: &Path, out: &mut Vec<PathBuf>) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(e) => {
