@@ -44,7 +44,13 @@ impl ImmichImportJob {
 
         for (idx, path) in candidates.iter().enumerate() {
             let current = idx + 1;
-            let _ = self.events.send(LibraryEvent::ImportProgress { current, total });
+            let _ = self.events.send(LibraryEvent::ImportProgress {
+                current,
+                total,
+                imported: summary.imported,
+                skipped: summary.skipped_duplicates + summary.skipped_unsupported,
+                failed: summary.failed,
+            });
 
             match self.upload_one(&registry, path).await {
                 Ok(UploadResult::Created) => summary.imported += 1,

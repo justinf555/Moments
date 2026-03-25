@@ -31,7 +31,13 @@ pub enum LibraryEvent {
     AssetImported { media_id: MediaId, path: PathBuf },
 
     /// Periodic progress update during a batch import.
-    ImportProgress { current: usize, total: usize },
+    ImportProgress {
+        current: usize,
+        total: usize,
+        imported: usize,
+        skipped: usize,
+        failed: usize,
+    },
 
     /// Import pipeline finished (successfully or with per-file failures).
     ImportComplete(ImportSummary),
@@ -40,6 +46,12 @@ pub enum LibraryEvent {
 
     /// The grid thumbnail for an asset has been generated and written to disk.
     ThumbnailReady { media_id: MediaId },
+
+    /// Thumbnail download progress (Immich sync).
+    ThumbnailDownloadProgress { completed: usize, total: usize },
+
+    /// All queued thumbnail downloads have finished.
+    ThumbnailDownloadsComplete { total: usize },
 
     // ── Album events ────────────────────────────────────────────────────────
 
@@ -56,6 +68,17 @@ pub enum LibraryEvent {
     AlbumMediaChanged { album_id: AlbumId },
 
     // ── Sync events ─────────────────────────────────────────────────────────
+
+    // ── Sync lifecycle events ────────────────────────────────────────────
+
+    /// The sync stream has connected and is processing records.
+    SyncStarted,
+
+    /// Periodic sync progress (emitted every ack flush).
+    SyncProgress { assets: usize, people: usize, faces: usize },
+
+    /// The sync stream has finished processing.
+    SyncComplete { assets: usize, people: usize, faces: usize, errors: usize },
 
     /// A single asset was synced from the server. Used for incremental
     /// grid updates without full reload.
@@ -105,6 +128,9 @@ mod tests {
         let event = LibraryEvent::ImportProgress {
             current: 3,
             total: 10,
+            imported: 2,
+            skipped: 1,
+            failed: 0,
         };
         assert!(format!("{event:?}").contains("ImportProgress"));
     }

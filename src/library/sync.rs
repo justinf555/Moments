@@ -154,6 +154,7 @@ impl SyncManager {
         };
 
         debug!("starting sync stream");
+        let _ = self.events.send(LibraryEvent::SyncStarted);
         let response = self.client.post_stream("/sync/stream", &request).await?;
 
         let byte_stream = response
@@ -530,6 +531,11 @@ impl SyncManager {
             // Flush acks incrementally so progress is preserved.
             if acks.len() >= ACK_FLUSH_THRESHOLD {
                 self.flush_acks(&mut acks).await?;
+                let _ = self.events.send(LibraryEvent::SyncProgress {
+                    assets: asset_count,
+                    people: person_count,
+                    faces: face_count,
+                });
             }
         }
 
@@ -552,6 +558,15 @@ impl SyncManager {
             self.flush_acks(&mut acks).await?;
         }
 
+        // Emit sync complete — always, so the status bar reverts to idle.
+        let _ = self.events.send(LibraryEvent::SyncComplete {
+            assets: asset_count,
+            people: person_count,
+            faces: face_count,
+            errors: error_count,
+        });
+
+        // Also emit people-specific event for grid refresh.
         if person_count > 0 || face_count > 0 {
             let _ = self.events.send(LibraryEvent::PeopleSyncComplete);
         }
@@ -860,6 +875,15 @@ impl ThumbnailDownloader {
             });
 
             download_count += 1;
+
+            // Emit progress every 10 thumbnails to update the status bar.
+            if download_count % 10 == 0 {
+                let _ = self.events.send(LibraryEvent::ThumbnailDownloadProgress {
+                    completed: download_count,
+                    total: download_count, // Total not known upfront; shows running count.
+                });
+            }
+
             if download_count % 100 == 0 {
                 info!(queued = download_count, "thumbnail download progress");
             }
@@ -868,6 +892,9 @@ impl ThumbnailDownloader {
             tokio::time::sleep(THUMBNAIL_THROTTLE).await;
         }
 
+        let _ = self.events.send(LibraryEvent::ThumbnailDownloadsComplete {
+            total: download_count,
+        });
         info!(total = download_count, "thumbnail downloader finished");
     }
 }

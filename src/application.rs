@@ -478,11 +478,11 @@ impl MomentsApplication {
                                     Ok(LibraryEvent::ThumbnailReady { media_id }) => {
                                         registry.on_thumbnail_ready(&media_id);
                                     }
-                                    Ok(LibraryEvent::ImportProgress { current, total }) => {
+                                    Ok(LibraryEvent::ImportProgress { current, total, imported, skipped, failed }) => {
                                         // Update sidebar bottom sheet (non-modal).
                                         if let Some(win) = win_for_idle.upgrade() {
                                             if let Some(sb) = win.sidebar() {
-                                                sb.show_upload_progress(current, total);
+                                                sb.show_upload_progress(current, total, imported, skipped, failed);
                                             }
                                         }
                                         // Also update modal dialog if present.
@@ -550,6 +550,41 @@ impl MomentsApplication {
                                     Ok(LibraryEvent::PeopleSyncComplete) => {
                                         if let Some(win) = win_for_idle.upgrade() {
                                             win.reload_people();
+                                        }
+                                    }
+                                    Ok(LibraryEvent::SyncStarted) => {
+                                        if let Some(win) = win_for_idle.upgrade() {
+                                            if let Some(sb) = win.sidebar() {
+                                                sb.show_sync_started();
+                                            }
+                                        }
+                                    }
+                                    Ok(LibraryEvent::SyncProgress { assets, people, faces }) => {
+                                        if let Some(win) = win_for_idle.upgrade() {
+                                            if let Some(sb) = win.sidebar() {
+                                                sb.show_sync_progress(assets, people, faces);
+                                            }
+                                        }
+                                    }
+                                    Ok(LibraryEvent::SyncComplete { assets, .. }) => {
+                                        if let Some(win) = win_for_idle.upgrade() {
+                                            if let Some(sb) = win.sidebar() {
+                                                sb.show_sync_complete(assets);
+                                            }
+                                        }
+                                    }
+                                    Ok(LibraryEvent::ThumbnailDownloadProgress { completed, total }) => {
+                                        if let Some(win) = win_for_idle.upgrade() {
+                                            if let Some(sb) = win.sidebar() {
+                                                sb.show_thumbnail_progress(completed, total);
+                                            }
+                                        }
+                                    }
+                                    Ok(LibraryEvent::ThumbnailDownloadsComplete { total }) => {
+                                        if let Some(win) = win_for_idle.upgrade() {
+                                            if let Some(sb) = win.sidebar() {
+                                                sb.show_thumbnails_complete(total);
+                                            }
                                         }
                                     }
                                     Ok(_) => {}
