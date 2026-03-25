@@ -2,7 +2,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gtk::{glib, prelude::*, subclass::prelude::*};
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::library::media::MediaFilter;
 use crate::library::Library;
@@ -10,6 +10,7 @@ use crate::ui::model_registry::ModelRegistry;
 
 use super::cell::PhotoGridCell;
 use super::item::MediaItemObject;
+use super::texture_cache::TextureCache;
 
 /// Build the `SignalListItemFactory` for the photo grid.
 ///
@@ -34,6 +35,7 @@ pub fn build_factory(
     tokio: tokio::runtime::Handle,
     registry: Rc<ModelRegistry>,
     filter: MediaFilter,
+    cache: Rc<TextureCache>,
 ) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
 
@@ -53,6 +55,8 @@ pub fn build_factory(
         tokio,
         #[strong]
         registry,
+        #[strong]
+        cache,
         move |_, obj| {
             let list_item = obj
                 .downcast_ref::<gtk::ListItem>()
@@ -72,58 +76,82 @@ pub fn build_factory(
 
             cell.bind(&item);
 
-            // Debounced thumbnail loading — wait 100ms before decoding.
-            // If the cell scrolls off-screen before the timer fires (fast scroll),
-            // the timer is cancelled in unbind and no decode happens.
-            // This eliminates the stutter from decoding 20-30 thumbnails at once.
             if item.texture().is_none() {
                 let id = item.item().id.clone();
-                let path = library.thumbnail_path(&id);
-                let tk = tokio.clone();
-                let item_weak = item.downgrade();
-                let cell_weak = cell.downgrade();
 
-                let source_id = glib::timeout_add_local_once(
-                    std::time::Duration::from_millis(100),
-                    move || {
-                        // Clear the timer reference now that it has fired.
-                        if let Some(cell) = cell_weak.upgrade() {
-                            cell.imp().texture_timer.borrow_mut().take();
-                        }
+                // Fast path: cache hit — create GdkTexture from cached RGBA bytes.
+                // No debounce needed since this is sub-millisecond.
+                if let Some((pixels, width, height)) = cache.get(&id) {
+                    let gbytes = glib::Bytes::from_owned(pixels);
+                    let texture = gtk::gdk::MemoryTexture::new(
+                        width as i32,
+                        height as i32,
+                        gtk::gdk::MemoryFormat::R8g8b8a8,
+                        &gbytes,
+                        (width as usize) * 4,
+                    );
+                    item.set_texture(Some(texture.upcast::<gtk::gdk::Texture>()));
+                } else {
+                    // Cache miss: debounced disk read + decode.
+                    // Wait 100ms before decoding — if the cell scrolls off-screen
+                    // before the timer fires, the timer is cancelled in unbind.
+                    let path = library.thumbnail_path(&id);
+                    let tk = tokio.clone();
+                    let item_weak = item.downgrade();
+                    let cell_weak = cell.downgrade();
+                    let cache_insert = Rc::clone(&cache);
 
-                        glib::MainContext::default().spawn_local(async move {
-                            let result = tk
-                                .spawn(async move {
-                                    tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, u32, u32)> {
-                                        let data = std::fs::read(&path).ok()?;
-                                        let img = image::load_from_memory(&data).ok()?;
-                                        let rgba = img.to_rgba8();
-                                        let (w, h) = rgba.dimensions();
-                                        Some((rgba.into_raw(), w, h))
+                    let source_id = glib::timeout_add_local_once(
+                        std::time::Duration::from_millis(100),
+                        move || {
+                            if let Some(cell) = cell_weak.upgrade() {
+                                cell.imp().texture_timer.borrow_mut().take();
+                            }
+
+                            glib::MainContext::default().spawn_local(async move {
+                                let id_for_cache = id.clone();
+                                let decode_start = std::time::Instant::now();
+                                let result = tk
+                                    .spawn(async move {
+                                        tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, u32, u32)> {
+                                            let data = std::fs::read(&path).ok()?;
+                                            let img = image::load_from_memory(&data).ok()?;
+                                            let rgba = img.to_rgba8();
+                                            let (w, h) = rgba.dimensions();
+                                            Some((rgba.into_raw(), w, h))
+                                        })
+                                        .await
+                                        .ok()
                                     })
                                     .await
-                                    .ok()
-                                })
-                                .await
-                                .ok();
-                            if let Some(Some(Some((pixels, width, height)))) = result {
-                                if let Some(item) = item_weak.upgrade() {
-                                    let gbytes = glib::Bytes::from_owned(pixels);
-                                    let texture = gtk::gdk::MemoryTexture::new(
-                                        width as i32,
-                                        height as i32,
-                                        gtk::gdk::MemoryFormat::R8g8b8a8,
-                                        &gbytes,
-                                        (width as usize) * 4,
+                                    .ok();
+                                if let Some(Some(Some((pixels, width, height)))) = result {
+                                    debug!(
+                                        id = %id_for_cache,
+                                        decode_ms = decode_start.elapsed().as_millis(),
+                                        "thumbnail decoded (cache miss)"
                                     );
-                                    item.set_texture(Some(texture.upcast::<gtk::gdk::Texture>()));
-                                }
-                            }
-                        });
-                    },
-                );
+                                    // Insert into LRU cache before creating GdkTexture.
+                                    cache_insert.insert(id_for_cache, pixels.clone(), width, height);
 
-                *cell.imp().texture_timer.borrow_mut() = Some(source_id);
+                                    if let Some(item) = item_weak.upgrade() {
+                                        let gbytes = glib::Bytes::from_owned(pixels);
+                                        let texture = gtk::gdk::MemoryTexture::new(
+                                            width as i32,
+                                            height as i32,
+                                            gtk::gdk::MemoryFormat::R8g8b8a8,
+                                            &gbytes,
+                                            (width as usize) * 4,
+                                        );
+                                        item.set_texture(Some(texture.upcast::<gtk::gdk::Texture>()));
+                                    }
+                                }
+                            });
+                        },
+                    );
+
+                    *cell.imp().texture_timer.borrow_mut() = Some(source_id);
+                }
             }
 
             // In Trash view: days label is shown by bind.

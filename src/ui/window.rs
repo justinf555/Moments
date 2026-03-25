@@ -35,6 +35,7 @@ use crate::ui::coordinator::ContentCoordinator;
 use crate::ui::empty_library::EmptyLibraryView;
 use crate::ui::model_registry::ModelRegistry;
 use crate::ui::photo_grid::{PhotoGridModel, PhotoGridView};
+use crate::ui::photo_grid::texture_cache::TextureCache;
 use crate::ui::sidebar::MomentsSidebar;
 
 mod imp {
@@ -298,6 +299,10 @@ impl MomentsWindow {
         content_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
         let mut coordinator = ContentCoordinator::new(content_stack.clone());
 
+        // Shared LRU cache for decoded thumbnail pixels — avoids re-decoding
+        // when scrolling back through previously-visible cells.
+        let texture_cache = Rc::new(TextureCache::new());
+
         // Register the empty-library view (eager, no model).
         coordinator.register("empty", Rc::new(EmptyLibraryView::new()));
 
@@ -312,6 +317,7 @@ impl MomentsWindow {
             tokio.clone(),
             settings.clone(),
             Rc::clone(&registry),
+            Rc::clone(&texture_cache),
         ));
         photos_view.set_model(Rc::clone(&photos_model), Rc::clone(&registry));
         self.insert_action_group("view", Some(photos_view.view_actions()));
@@ -324,13 +330,14 @@ impl MomentsWindow {
             let tk = tokio.clone();
             let s = settings.clone();
             let reg = Rc::clone(&registry);
+            let tc = Rc::clone(&texture_cache);
             coordinator.register_lazy("favorites", move || {
                 let model = Rc::new(PhotoGridModel::new(
                     Arc::clone(&lib),
                     tk.clone(),
                     MediaFilter::Favorites,
                 ));
-                let view = Rc::new(PhotoGridView::new(lib, tk, s, Rc::clone(&reg)));
+                let view = Rc::new(PhotoGridView::new(lib, tk, s, Rc::clone(&reg), tc));
                 view.set_model(Rc::clone(&model), Rc::clone(&reg));
                 reg.register(&model);
                 view
@@ -343,6 +350,7 @@ impl MomentsWindow {
             let tk = tokio.clone();
             let s = settings.clone();
             let reg = Rc::clone(&registry);
+            let tc = Rc::clone(&texture_cache);
             coordinator.register_lazy("recent", move || {
                 let days = s.uint("recent-imports-days") as i64;
                 let since = chrono::Utc::now().timestamp() - days * 86400;
@@ -351,7 +359,7 @@ impl MomentsWindow {
                     tk.clone(),
                     MediaFilter::RecentImports { since },
                 ));
-                let view = Rc::new(PhotoGridView::new(lib, tk, s, Rc::clone(&reg)));
+                let view = Rc::new(PhotoGridView::new(lib, tk, s, Rc::clone(&reg), tc));
                 view.set_model(Rc::clone(&model), Rc::clone(&reg));
                 reg.register(&model);
                 view
@@ -364,13 +372,14 @@ impl MomentsWindow {
             let tk = tokio.clone();
             let s = settings.clone();
             let reg = Rc::clone(&registry);
+            let tc = Rc::clone(&texture_cache);
             coordinator.register_lazy("trash", move || {
                 let model = Rc::new(PhotoGridModel::new(
                     Arc::clone(&lib),
                     tk.clone(),
                     MediaFilter::Trashed,
                 ));
-                let view = Rc::new(PhotoGridView::new(lib, tk, s, Rc::clone(&reg)));
+                let view = Rc::new(PhotoGridView::new(lib, tk, s, Rc::clone(&reg), tc));
                 view.set_model(Rc::clone(&model), Rc::clone(&reg));
                 reg.register(&model);
                 view
@@ -412,6 +421,7 @@ impl MomentsWindow {
             let tk = tokio.clone();
             let s = settings.clone();
             let reg = Rc::clone(&registry);
+            let tc = Rc::clone(&texture_cache);
             sidebar.connect_route_selected(move |id| {
                 let Some(win) = obj_weak.upgrade() else { return };
                 let Some(coordinator) = win.imp().coordinator.get() else { return };
@@ -431,6 +441,7 @@ impl MomentsWindow {
                             tk.clone(),
                             s.clone(),
                             Rc::clone(&reg),
+                            Rc::clone(&tc),
                         ));
                         view.set_model(Rc::clone(&model), Rc::clone(&reg));
                         reg.register(&model);
