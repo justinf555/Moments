@@ -13,20 +13,11 @@ pub struct EmptyLibraryView {
 
 impl EmptyLibraryView {
     pub fn new() -> Self {
-        let import_btn = gtk::Button::builder()
-            .label("Import Photos\u{2026}")
-            .halign(gtk::Align::Center)
-            .action_name("app.import")
-            .build();
-        import_btn.add_css_class("suggested-action");
-        import_btn.add_css_class("pill");
-
         let page = adw::StatusPage::builder()
             .icon_name("camera-photo-symbolic")
             .title("No Photos Yet")
-            .description("Import a folder of photos to get started.")
+            .description("Import photos or wait for sync to populate your library.")
             .vexpand(true)
-            .child(&import_btn)
             .build();
 
         let widget = page.upcast::<gtk::Widget>();
