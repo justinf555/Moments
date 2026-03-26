@@ -66,8 +66,45 @@ pub trait LibraryThumbnail: Send + Sync {
 /// can use the same logic without coupling to a specific type.
 pub fn sharded_thumbnail_path(thumbnails_dir: &std::path::Path, id: &MediaId) -> PathBuf {
     let hex = id.as_str();
+    if hex.len() < 4 {
+        return thumbnails_dir.join(format!("{hex}.webp"));
+    }
     thumbnails_dir
         .join(&hex[..2])
         .join(&hex[2..4])
         .join(format!("{hex}.webp"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn sharded_path_normal_id() {
+        let id = MediaId::new("abcdef1234567890".to_string());
+        let path = sharded_thumbnail_path(Path::new("/thumbs"), &id);
+        assert_eq!(path, Path::new("/thumbs/ab/cd/abcdef1234567890.webp"));
+    }
+
+    #[test]
+    fn sharded_path_short_id_no_panic() {
+        let id = MediaId::new("ab".to_string());
+        let path = sharded_thumbnail_path(Path::new("/thumbs"), &id);
+        assert_eq!(path, Path::new("/thumbs/ab.webp"));
+    }
+
+    #[test]
+    fn sharded_path_empty_id_no_panic() {
+        let id = MediaId::new(String::new());
+        let path = sharded_thumbnail_path(Path::new("/thumbs"), &id);
+        assert_eq!(path, Path::new("/thumbs/.webp"));
+    }
+
+    #[test]
+    fn sharded_path_exactly_four_chars() {
+        let id = MediaId::new("abcd".to_string());
+        let path = sharded_thumbnail_path(Path::new("/thumbs"), &id);
+        assert_eq!(path, Path::new("/thumbs/ab/cd/abcd.webp"));
+    }
 }
