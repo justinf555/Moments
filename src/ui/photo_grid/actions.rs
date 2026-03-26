@@ -275,6 +275,7 @@ pub(super) fn wire_album_controls(ctx: &ActionContext, album_btn: &gtk::Button) 
     let tk = ctx.tokio.clone();
     let reg = Rc::clone(&ctx.registry);
     let selection = ctx.selection.clone();
+    let grid_ref = ctx.grid_view.clone();
 
     album_btn.connect_clicked(move |btn: &gtk::Button| {
         debug!("album button clicked, loading albums async");
@@ -284,6 +285,7 @@ pub(super) fn wire_album_controls(ctx: &ActionContext, album_btn: &gtk::Button) 
         let reg = Rc::clone(&reg);
         let sel = selection.clone();
         let btn_weak: glib::WeakRef<gtk::Button> = btn.downgrade();
+        let grid_ref = grid_ref.clone();
 
         glib::MainContext::default().spawn_local(async move {
             let lib_q = Arc::clone(&lib);
@@ -386,6 +388,7 @@ pub(super) fn wire_album_controls(ctx: &ActionContext, album_btn: &gtk::Button) 
                 let tk_new = tk.clone();
                 let reg_new = Rc::clone(&reg);
                 let sel_new = sel.clone();
+                let grid_new = grid_ref.clone();
                 new_album_btn.connect_clicked(move |btn| {
                     if let Some(p) = pop_weak.upgrade() {
                         p.popdown();
@@ -409,7 +412,7 @@ pub(super) fn wire_album_controls(ctx: &ActionContext, album_btn: &gtk::Button) 
                     let tk = tk_new.clone();
                     let reg = Rc::clone(&reg_new);
                     let sel = sel_new.clone();
-                    let btn_weak = btn.downgrade();
+                    let grid_action = grid_new.clone();
                     dialog.connect_response(None, move |_, response| {
                         if response != "create" {
                             return;
@@ -422,7 +425,7 @@ pub(super) fn wire_album_controls(ctx: &ActionContext, album_btn: &gtk::Button) 
                         let lib = Arc::clone(&lib);
                         let tk = tk.clone();
                         let reg = Rc::clone(&reg);
-                        let btn_weak = btn_weak.clone();
+                        let grid_action = grid_action.clone();
                         glib::MainContext::default().spawn_local(async move {
                             let n = name.clone();
                             let lib_add = Arc::clone(&lib);
@@ -431,10 +434,8 @@ pub(super) fn wire_album_controls(ctx: &ActionContext, album_btn: &gtk::Button) 
                                 Ok(Ok(aid)) => {
                                     debug!(album_id = %aid, name = %name, "album created inline");
                                     // Notify sidebar via GAction.
-                                    if let Some(btn) = btn_weak.upgrade() {
-                                        let payload = format!("{}\n{}", aid.as_str(), name);
-                                        let _ = btn.activate_action("win.album-created", Some(&payload.to_variant()));
-                                    }
+                                    let payload = format!("{}\n{}", aid.as_str(), name);
+                                    let _ = grid_action.activate_action("win.album-created", Some(&payload.to_variant()));
                                     // Add selected photos to the new album.
                                     if !ids.is_empty() {
                                         let aid_bc = aid.clone();
@@ -453,9 +454,7 @@ pub(super) fn wire_album_controls(ctx: &ActionContext, album_btn: &gtk::Button) 
                                 }
                                 Ok(Err(e)) => {
                                     tracing::error!("create_album failed: {e}");
-                                    if let Some(btn) = btn_weak.upgrade() {
-                                        let _ = btn.activate_action("win.show-toast", Some(&"Failed to create album".to_variant()));
-                                    }
+                                    let _ = grid_action.activate_action("win.show-toast", Some(&"Failed to create album".to_variant()));
                                 }
                                 Err(e) => tracing::error!("create_album join failed: {e}"),
                             }
