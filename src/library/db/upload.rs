@@ -52,19 +52,6 @@ impl Database {
         Ok(())
     }
 
-    /// Return all pending uploads (status = 0) for resume after crash.
-    pub async fn get_pending_uploads(
-        &self,
-    ) -> Result<Vec<(String, Option<String>)>, LibraryError> {
-        let rows: Vec<(String, Option<String>)> = sqlx::query_as(
-            "SELECT file_path, sha1_hash FROM upload_queue WHERE status = 0 ORDER BY created_at",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(LibraryError::Db)?;
-        Ok(rows)
-    }
-
     /// Remove all completed/duplicate uploads from the queue.
     pub async fn clear_completed_uploads(&self) -> Result<(), LibraryError> {
         sqlx::query("DELETE FROM upload_queue WHERE status IN (1, 3)")
