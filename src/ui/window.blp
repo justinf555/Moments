@@ -25,7 +25,9 @@ template $MomentsWindow : Adw.ApplicationWindow {
     Gtk.StackPage {
       name: "content";
 
-      child: Adw.NavigationSplitView split_view {};
+      child: Adw.ToastOverlay toast_overlay {
+        Adw.NavigationSplitView split_view {}
+      };
     }
   };
 }

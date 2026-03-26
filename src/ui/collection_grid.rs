@@ -321,6 +321,7 @@ impl CollectionGridView {
                     let subtitle = item_subtitle.clone();
                     let thumb = item_thumb.clone();
                     let hidden = item_hidden;
+                    let gv_toast = gv_ref.clone();
                     dialog.connect_response(None, move |_, response| {
                         if response != "rename" {
                             return;
@@ -336,6 +337,7 @@ impl CollectionGridView {
                         let store = store.clone();
                         let subtitle = subtitle.clone();
                         let thumb = thumb.clone();
+                        let gv_toast = gv_toast.clone();
                         debug!(person_id = %pid, name = %new_name, "renaming person");
                         glib::MainContext::default().spawn_local(async move {
                             let name = new_name.clone();
@@ -353,7 +355,10 @@ impl CollectionGridView {
                                         is_hidden: hidden,
                                     });
                                 }
-                                Ok(Err(e)) => tracing::error!("rename_person failed: {e}"),
+                                Ok(Err(e)) => {
+                                    tracing::error!("rename_person failed: {e}");
+                                    let _ = gv_toast.activate_action("win.show-toast", Some(&"Failed to rename person".to_variant()));
+                                }
                                 Err(e) => tracing::error!("rename_person join failed: {e}"),
                             }
                         });
@@ -373,6 +378,7 @@ impl CollectionGridView {
                 let store_h = store_ctx.clone();
                 let filter_h = Rc::clone(&filter_ctx);
                 let new_hidden = !is_hidden;
+                let gv_hide = gv.clone();
                 hide_btn.connect_clicked(move |_| {
                     if let Some(p) = pop_weak.upgrade() {
                         p.popdown();
@@ -385,6 +391,7 @@ impl CollectionGridView {
                     let action = if new_hidden { "hiding" } else { "unhiding" };
                     debug!(person_id = %pid, action, "toggling person visibility");
                     let pid_for_remove = pid.to_string();
+                    let gv_hide = gv_hide.clone();
                     glib::MainContext::default().spawn_local(async move {
                         let result = tk
                             .spawn(async move { lib.set_person_hidden(&pid, new_hidden).await })
@@ -400,7 +407,10 @@ impl CollectionGridView {
                                     // Unhiding while showing hidden — item stays, no action needed.
                                 }
                             }
-                            Ok(Err(e)) => tracing::error!("set_person_hidden failed: {e}"),
+                            Ok(Err(e)) => {
+                                tracing::error!("set_person_hidden failed: {e}");
+                                let _ = gv_hide.activate_action("win.show-toast", Some(&"Failed to update person visibility".to_variant()));
+                            }
                             Err(e) => tracing::error!("set_person_hidden join failed: {e}"),
                         }
                     });

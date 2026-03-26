@@ -168,7 +168,7 @@ pub fn build_factory(
                 let lib = Arc::clone(&library);
                 let tk = tokio.clone();
                 let reg = Rc::clone(&registry);
-                let handler_id = star_btn.connect_clicked(move |_| {
+                let handler_id = star_btn.connect_clicked(move |btn| {
                     let Some(item) = item_weak.upgrade() else { return };
                     let new_fav = !item.is_favorite();
 
@@ -181,13 +181,19 @@ pub fn build_factory(
                     let lib = Arc::clone(&lib);
                     let tk = tk.clone();
                     let reg = Rc::clone(&reg);
+                    let btn_weak = btn.downgrade();
                     glib::MainContext::default().spawn_local(async move {
                         let result = tk
                             .spawn(async move { lib.set_favorite(&[id.clone()], new_fav).await.map(|_| id) })
                             .await;
                         match result {
                             Ok(Ok(id)) => reg.on_favorite_changed(&id, new_fav),
-                            Ok(Err(e)) => error!("set_favorite failed: {e}"),
+                            Ok(Err(e)) => {
+                                error!("set_favorite failed: {e}");
+                                if let Some(btn) = btn_weak.upgrade() {
+                                    let _ = btn.activate_action("win.show-toast", Some(&"Failed to update favourite".to_variant()));
+                                }
+                            }
                             Err(e) => error!("set_favorite join failed: {e}"),
                         }
                     });
