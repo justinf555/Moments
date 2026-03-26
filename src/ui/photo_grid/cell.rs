@@ -212,10 +212,13 @@ impl PhotoGridCell {
         let imp = self.imp();
         let trashed_at = item.trashed_at();
         if trashed_at > 0 {
-            let retention_days = {
-                let settings = gtk::gio::Settings::new("io.github.justinf555.Moments");
-                settings.uint("trash-retention-days") as i64
-            };
+            let retention_days = gtk::gio::SettingsSchemaSource::default()
+                .and_then(|src| src.lookup("io.github.justinf555.Moments", true))
+                .map(|_| {
+                    gtk::gio::Settings::new("io.github.justinf555.Moments")
+                        .uint("trash-retention-days") as i64
+                })
+                .unwrap_or(30);
             let now = chrono::Utc::now().timestamp();
             let elapsed_days = (now - trashed_at) / (24 * 60 * 60);
             let remaining = (retention_days - elapsed_days).max(0);

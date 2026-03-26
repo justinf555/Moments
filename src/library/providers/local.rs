@@ -73,8 +73,13 @@ impl LibraryStorage for LocalLibrary {
         {
             let retention_days = {
                 use gtk::prelude::SettingsExt;
-                let settings = gtk::gio::Settings::new("io.github.justinf555.Moments");
-                settings.uint("trash-retention-days") as i64
+                gtk::gio::SettingsSchemaSource::default()
+                    .and_then(|src| src.lookup("io.github.justinf555.Moments", true))
+                    .map(|_| {
+                        gtk::gio::Settings::new("io.github.justinf555.Moments")
+                            .uint("trash-retention-days") as i64
+                    })
+                    .unwrap_or(30)
             };
             let db = library.db.clone();
             let originals = library.bundle.originals.clone();
