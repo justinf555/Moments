@@ -526,9 +526,6 @@ impl MomentsWindow {
         self.install_show_toast_action();
         self.install_toggle_sidebar_action();
 
-        // TODO: remove — temporary test toast to verify overlay works.
-        self.show_toast("Toast overlay is working!");
-
         debug!("switching main window to content page");
         imp.main_stack.set_visible_child_name("content");
 
@@ -557,8 +554,11 @@ impl MomentsWindow {
     }
 
     /// Show a toast message in the window's toast overlay.
+    ///
+    /// Auto-dismisses after 5 seconds.
     pub fn show_toast(&self, message: &str) {
         let toast = adw::Toast::new(message);
+        toast.set_timeout(5);
         self.imp().toast_overlay.add_toast(toast);
     }
 
@@ -573,6 +573,7 @@ impl MomentsWindow {
             let Some(overlay) = overlay_weak.upgrade() else { return };
             let Some(msg) = param.and_then(|v| v.get::<String>()) else { return };
             let toast = adw::Toast::new(&msg);
+            toast.set_timeout(5);
             overlay.add_toast(toast);
         });
         self.add_action(&action);
