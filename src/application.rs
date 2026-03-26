@@ -405,12 +405,16 @@ impl MomentsApplication {
         // Progress is shown in the sidebar bottom sheet (non-modal).
         // The modal ImportDialog is no longer presented.
         info!(path = %folder.display(), "starting import");
+        let win_weak = window.downgrade();
         glib::MainContext::default().spawn_local(async move {
             let result = tokio
                 .spawn(async move { library.import(vec![folder]).await })
                 .await;
             if let Ok(Err(e)) = result {
                 error!("import pipeline error: {e}");
+                if let Some(win) = win_weak.upgrade() {
+                    let _ = win.activate_action("win.show-toast", Some(&"Import failed".to_variant()));
+                }
             }
         });
     }

@@ -74,6 +74,8 @@ mod imp {
         #[template_child]
         pub main_stack: TemplateChild<gtk::Stack>,
         #[template_child]
+        pub toast_overlay: TemplateChild<adw::ToastOverlay>,
+        #[template_child]
         pub split_view: TemplateChild<adw::NavigationSplitView>,
 
         /// Set up once in `setup()` — holds live references to all registered views.
@@ -241,7 +243,10 @@ impl MomentsWindow {
                                 debug!(album_id = %id, name = %name, "album created");
                                 sb.add_album(id.as_str(), &name);
                             }
-                            Ok(Err(e)) => tracing::error!("failed to create album: {e}"),
+                            Ok(Err(e)) => {
+                                tracing::error!("failed to create album: {e}");
+                                let _ = sb.activate_action("win.show-toast", Some(&"Failed to create album".to_variant()));
+                            }
                             Err(e) => tracing::error!("tokio join error: {e}"),
                         }
                     });
@@ -282,7 +287,10 @@ impl MomentsWindow {
                                     debug!(album_id = %aid, name = %new_name, "album renamed");
                                     sb.rename_album(&aid, &new_name);
                                 }
-                                Ok(Err(e)) => tracing::error!("failed to rename album: {e}"),
+                                Ok(Err(e)) => {
+                                    tracing::error!("failed to rename album: {e}");
+                                    let _ = sb.activate_action("win.show-toast", Some(&"Failed to rename album".to_variant()));
+                                }
                                 Err(e) => tracing::error!("tokio join error: {e}"),
                             }
                         });
@@ -315,7 +323,10 @@ impl MomentsWindow {
                                         }
                                     }
                                 }
-                                Ok(Err(e)) => tracing::error!("failed to delete album: {e}"),
+                                Ok(Err(e)) => {
+                                    tracing::error!("failed to delete album: {e}");
+                                    let _ = sb.activate_action("win.show-toast", Some(&"Failed to delete album".to_variant()));
+                                }
                                 Err(e) => tracing::error!("tokio join error: {e}"),
                             }
                         });
@@ -511,7 +522,8 @@ impl MomentsWindow {
 
         sidebar.select_first();
 
-        // Add the `win.toggle-sidebar` stateful action.
+        // Add window-level actions.
+        self.install_show_toast_action();
         self.install_toggle_sidebar_action();
 
         debug!("switching main window to content page");
@@ -539,6 +551,32 @@ impl MomentsWindow {
         if let Some(reload) = self.imp().people_reload.borrow().as_ref() {
             reload.call();
         }
+    }
+
+    /// Show a toast message in the window's toast overlay.
+    ///
+    /// Auto-dismisses after 5 seconds.
+    pub fn show_toast(&self, message: &str) {
+        let toast = adw::Toast::new(message);
+        toast.set_timeout(5);
+        self.imp().toast_overlay.add_toast(toast);
+    }
+
+    /// Install the `win.show-toast` action (string parameter).
+    ///
+    /// Any widget in the window hierarchy can activate this action to surface
+    /// an error or informational message without needing a direct window ref.
+    fn install_show_toast_action(&self) {
+        let action = gio::SimpleAction::new("show-toast", Some(glib::VariantTy::STRING));
+        let overlay_weak = self.imp().toast_overlay.downgrade();
+        action.connect_activate(move |_, param| {
+            let Some(overlay) = overlay_weak.upgrade() else { return };
+            let Some(msg) = param.and_then(|v| v.get::<String>()) else { return };
+            let toast = adw::Toast::new(&msg);
+            toast.set_timeout(5);
+            overlay.add_toast(toast);
+        });
+        self.add_action(&action);
     }
 
     /// Install a `win.toggle-sidebar` boolean action wired to the split view.

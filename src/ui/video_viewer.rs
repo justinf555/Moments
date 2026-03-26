@@ -311,13 +311,19 @@ impl VideoViewer {
                 let lib = Arc::clone(&inner.library);
                 let tk = inner.tokio.clone();
                 let reg = Rc::clone(&inner.registry);
+                let btn_weak = btn.downgrade();
                 glib::MainContext::default().spawn_local(async move {
                     let result = tk
                         .spawn(async move { lib.set_favorite(&[id.clone()], new_fav).await.map(|_| id) })
                         .await;
                     match result {
                         Ok(Ok(id)) => reg.on_favorite_changed(&id, new_fav),
-                        Ok(Err(e)) => error!("set_favorite failed: {e}"),
+                        Ok(Err(e)) => {
+                            error!("set_favorite failed: {e}");
+                            if let Some(btn) = btn_weak.upgrade() {
+                                let _ = btn.activate_action("win.show-toast", Some(&"Failed to update favourite".to_variant()));
+                            }
+                        }
                         Err(e) => error!("set_favorite join failed: {e}"),
                     }
                 });
@@ -354,7 +360,10 @@ impl VideoViewer {
                                 nav_view.pop();
                             }
                         }
-                        Ok(Err(e)) => error!("trash failed: {e}"),
+                        Ok(Err(e)) => {
+                            error!("trash failed: {e}");
+                            let _ = nav.activate_action("win.show-toast", Some(&"Failed to move to trash".to_variant()));
+                        }
                         Err(e) => error!("trash join failed: {e}"),
                     }
                 });

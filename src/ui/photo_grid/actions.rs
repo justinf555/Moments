@@ -55,12 +55,18 @@ pub(super) fn run_action<F, Fut>(
     let lib = Arc::clone(&ctx.library);
     let tk = ctx.tokio.clone();
     let reg = Rc::clone(&ctx.registry);
+    let grid_weak = ctx.grid_view.downgrade();
     glib::MainContext::default().spawn_local(async move {
         let ids_bc = ids.clone();
         let result = tk.spawn(async move { action(lib, ids).await }).await;
         match result {
             Ok(Ok(())) => on_success(&ids_bc, &reg),
-            Ok(Err(e)) => tracing::error!("action failed: {e}"),
+            Ok(Err(e)) => {
+                tracing::error!("action failed: {e}");
+                if let Some(grid) = grid_weak.upgrade() {
+                    let _ = grid.activate_action("win.show-toast", Some(&"Operation failed".to_variant()));
+                }
+            }
             Err(e) => tracing::error!("action join failed: {e}"),
         }
     });
@@ -180,6 +186,7 @@ fn wire_delete_button(ctx: &ActionContext, btn: gtk::Button) {
             let lib = Arc::clone(&lib);
             let tk = tk.clone();
             let reg = Rc::clone(&reg);
+            let btn_toast = btn.clone();
             glib::MainContext::default().spawn_local(async move {
                 let ids_bc = ids.clone();
                 let result = tk
@@ -191,7 +198,10 @@ fn wire_delete_button(ctx: &ActionContext, btn: gtk::Button) {
                             reg.on_deleted(id);
                         }
                     }
-                    Ok(Err(e)) => tracing::error!("delete_permanently failed: {e}"),
+                    Ok(Err(e)) => {
+                        tracing::error!("delete_permanently failed: {e}");
+                        let _ = btn_toast.activate_action("win.show-toast", Some(&"Failed to delete permanently".to_variant()));
+                    }
                     Err(e) => tracing::error!("delete_permanently join failed: {e}"),
                 }
             });
@@ -337,6 +347,7 @@ pub(super) fn wire_album_controls(ctx: &ActionContext, album_btn: &gtk::Button) 
                         let tk = tk_add.clone();
                         let reg = Rc::clone(&reg_add);
                         let aid = aid.clone();
+                        let pop_toast = pop_weak.clone();
                         glib::MainContext::default().spawn_local(async move {
                             let aid_bc = aid.clone();
                             let result = tk
@@ -347,7 +358,12 @@ pub(super) fn wire_album_controls(ctx: &ActionContext, album_btn: &gtk::Button) 
                                     debug!(album_id = %aid_bc, "photos added to album");
                                     reg.on_album_media_changed(&aid_bc);
                                 }
-                                Ok(Err(e)) => tracing::error!("add_to_album failed: {e}"),
+                                Ok(Err(e)) => {
+                                    tracing::error!("add_to_album failed: {e}");
+                                    if let Some(p) = pop_toast.upgrade() {
+                                        let _ = p.activate_action("win.show-toast", Some(&"Failed to add to album".to_variant()));
+                                    }
+                                }
                                 Err(e) => tracing::error!("add_to_album join failed: {e}"),
                             }
                         });
