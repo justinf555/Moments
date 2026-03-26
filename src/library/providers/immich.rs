@@ -394,6 +394,9 @@ impl LibraryViewer for ImmichLibrary {
 /// Path: `originals/{hex[..2]}/{hex[2..4]}/{id}.{ext}`
 fn sharded_original_path(originals_dir: &std::path::Path, id: &MediaId, ext: &str) -> PathBuf {
     let hex = id.as_str();
+    if hex.len() < 4 {
+        return originals_dir.join(format!("{hex}.{ext}"));
+    }
     originals_dir
         .join(&hex[..2])
         .join(&hex[2..4])
