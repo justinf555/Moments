@@ -2,6 +2,12 @@
 name = "moments"
 version = "0.1.0"
 edition = "2021"
+description = "A GNOME photo management app with local and Immich server support"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/justinf555/Moments"
+authors = ["justinf555"]
+keywords = ["photos", "gnome", "gtk4", "image-management"]
+categories = ["multimedia::images"]
 
 [dependencies]
 
