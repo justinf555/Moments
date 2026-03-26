@@ -69,14 +69,19 @@ impl LibraryStorage for LocalLibrary {
             tokio,
             formats,
         };
-        // Fire-and-forget: purge items trashed > 30 days on background thread.
+        // Fire-and-forget: purge items past the configured trash retention period.
         {
+            let retention_days = {
+                use gtk::prelude::SettingsExt;
+                let settings = gtk::gio::Settings::new("io.github.justinf555.Moments");
+                settings.uint("trash-retention-days") as i64
+            };
             let db = library.db.clone();
             let originals = library.bundle.originals.clone();
             let thumbnails = library.bundle.thumbnails.clone();
             library.tokio.spawn(async move {
-                const THIRTY_DAYS: i64 = 30 * 24 * 60 * 60;
-                match db.expired_trash(THIRTY_DAYS).await {
+                let max_age_secs = retention_days * 24 * 60 * 60;
+                match db.expired_trash(max_age_secs).await {
                     Ok(ids) if !ids.is_empty() => {
                         info!(count = ids.len(), "auto-purging expired trash");
                         for id in &ids {
