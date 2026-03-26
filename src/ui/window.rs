@@ -526,6 +526,9 @@ impl MomentsWindow {
         self.install_show_toast_action();
         self.install_toggle_sidebar_action();
 
+        // TODO: remove — temporary test toast to verify overlay works.
+        self.show_toast("Toast overlay is working!");
+
         debug!("switching main window to content page");
         imp.main_stack.set_visible_child_name("content");
 
