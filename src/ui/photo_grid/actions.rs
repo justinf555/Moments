@@ -372,6 +372,105 @@ pub(super) fn wire_album_controls(ctx: &ActionContext, album_btn: &gtk::Button) 
                 }
             }
 
+            // Separator + "New Album..." button.
+            let sep = gtk::Separator::new(gtk::Orientation::Horizontal);
+            sep.set_margin_top(4);
+            sep.set_margin_bottom(4);
+            vbox.append(&sep);
+
+            let new_album_btn = gtk::Button::with_label("New Album…");
+            new_album_btn.add_css_class("flat");
+            {
+                let pop_weak = popover.downgrade();
+                let lib_new = Arc::clone(&lib);
+                let tk_new = tk.clone();
+                let reg_new = Rc::clone(&reg);
+                let sel_new = sel.clone();
+                new_album_btn.connect_clicked(move |btn| {
+                    if let Some(p) = pop_weak.upgrade() {
+                        p.popdown();
+                    }
+
+                    let dialog = adw::AlertDialog::builder()
+                        .heading("New Album")
+                        .build();
+                    dialog.add_response("cancel", "Cancel");
+                    dialog.add_response("create", "Create");
+                    dialog.set_response_appearance("create", adw::ResponseAppearance::Suggested);
+                    dialog.set_default_response(Some("create"));
+                    dialog.set_close_response("cancel");
+
+                    let entry = gtk::Entry::new();
+                    entry.set_placeholder_text(Some("Album name"));
+                    entry.set_activates_default(true);
+                    dialog.set_extra_child(Some(&entry));
+
+                    let lib = Arc::clone(&lib_new);
+                    let tk = tk_new.clone();
+                    let reg = Rc::clone(&reg_new);
+                    let sel = sel_new.clone();
+                    let btn_weak = btn.downgrade();
+                    dialog.connect_response(None, move |_, response| {
+                        if response != "create" {
+                            return;
+                        }
+                        let name = entry.text().to_string();
+                        if name.is_empty() {
+                            return;
+                        }
+                        let ids = super::collect_selected_ids(&sel);
+                        let lib = Arc::clone(&lib);
+                        let tk = tk.clone();
+                        let reg = Rc::clone(&reg);
+                        let btn_weak = btn_weak.clone();
+                        glib::MainContext::default().spawn_local(async move {
+                            let n = name.clone();
+                            let lib_add = Arc::clone(&lib);
+                            let tk_add = tk.clone();
+                            match tk.spawn(async move { lib.create_album(&n).await }).await {
+                                Ok(Ok(aid)) => {
+                                    debug!(album_id = %aid, name = %name, "album created inline");
+                                    // Notify sidebar via GAction.
+                                    if let Some(btn) = btn_weak.upgrade() {
+                                        let payload = format!("{}\n{}", aid.as_str(), name);
+                                        let _ = btn.activate_action("win.album-created", Some(&payload.to_variant()));
+                                    }
+                                    // Add selected photos to the new album.
+                                    if !ids.is_empty() {
+                                        let aid_bc = aid.clone();
+                                        let result = tk_add
+                                            .spawn(async move { lib_add.add_to_album(&aid, &ids).await })
+                                            .await;
+                                        match result {
+                                            Ok(Ok(())) => {
+                                                debug!(album_id = %aid_bc, "photos added to new album");
+                                                reg.on_album_media_changed(&aid_bc);
+                                            }
+                                            Ok(Err(e)) => tracing::error!("add_to_album failed: {e}"),
+                                            Err(e) => tracing::error!("add_to_album join failed: {e}"),
+                                        }
+                                    }
+                                }
+                                Ok(Err(e)) => {
+                                    tracing::error!("create_album failed: {e}");
+                                    if let Some(btn) = btn_weak.upgrade() {
+                                        let _ = btn.activate_action("win.show-toast", Some(&"Failed to create album".to_variant()));
+                                    }
+                                }
+                                Err(e) => tracing::error!("create_album join failed: {e}"),
+                            }
+                        });
+                    });
+
+                    dialog.present(
+                        btn.root()
+                            .as_ref()
+                            .and_then(|r| r.downcast_ref::<gtk::Window>()),
+                    );
+                });
+            }
+            vbox.append(&new_album_btn);
+
             popover.set_child(Some(&vbox));
 
             popover.connect_closed(move |p| {
