@@ -16,7 +16,9 @@ A photo management application for the GNOME desktop. Organize, browse, and mana
 
 ## Screenshots
 
-<!-- TODO: Add screenshots of the app -->
+![Moments photo grid with sidebar and albums](data/screenshots/moments_1.png)
+
+![Moments preferences dialog with library stats](data/screenshots/moments_2.png)
 
 ## Installation
 
