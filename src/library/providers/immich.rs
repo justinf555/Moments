@@ -36,6 +36,7 @@ pub struct ImmichLibrary {
     events: Sender<LibraryEvent>,
     tokio: Handle,
     sync_handle: SyncHandle,
+    cache_limit_tx: tokio::sync::watch::Sender<u32>,
 }
 
 impl ImmichLibrary {
@@ -61,17 +62,18 @@ impl ImmichLibrary {
             .await
             .map_err(|e| LibraryError::Runtime(e.to_string()))??;
 
-        // Fire-and-forget: evict old originals cache entries if over the limit.
-        // Read GSettings on the GTK thread before spawning onto Tokio.
-        {
+        // Periodic cache evictor — delayed startup, runs every 10 minutes.
+        let cache_limit_tx = {
             use gtk::prelude::SettingsExt;
             let settings = gtk::gio::Settings::new("io.github.justinf555.Moments");
             let max_mb = settings.uint("originals-cache-max-mb");
+            let (tx, rx) = tokio::sync::watch::channel(max_mb);
             let originals_dir = bundle.originals.clone();
             tokio.spawn(async move {
-                evict_originals_cache(&originals_dir, max_mb).await;
+                run_cache_evictor(originals_dir, rx).await;
             });
-        }
+            tx
+        };
 
         // Read sync interval from GSettings (must be on GTK thread).
         let sync_interval_secs = {
@@ -97,6 +99,7 @@ impl ImmichLibrary {
             events,
             tokio,
             sync_handle,
+            cache_limit_tx,
         };
 
         library
@@ -140,6 +143,10 @@ impl LibraryStorage for ImmichLibrary {
 
     fn set_sync_interval(&self, secs: u64) {
         self.sync_handle.set_interval(secs);
+    }
+
+    fn set_cache_limit(&self, mb: u32) {
+        let _ = self.cache_limit_tx.send(mb);
     }
 }
 
@@ -432,6 +439,39 @@ fn dir_size(path: &std::path::Path) -> u64 {
         }
     }
     total
+}
+
+/// Periodic cache eviction loop.
+///
+/// Waits 30 seconds after startup (to avoid competing with sync/thumbnail
+/// downloads), then runs eviction every 10 minutes. Also triggers immediately
+/// when the cache limit changes via the watch channel.
+const EVICTION_STARTUP_DELAY: std::time::Duration = std::time::Duration::from_secs(30);
+const EVICTION_INTERVAL: std::time::Duration = std::time::Duration::from_secs(600);
+
+async fn run_cache_evictor(
+    originals_dir: PathBuf,
+    mut limit_rx: tokio::sync::watch::Receiver<u32>,
+) {
+    // Delay startup to avoid competing with sync/thumbnail downloads.
+    tokio::time::sleep(EVICTION_STARTUP_DELAY).await;
+    info!("cache evictor started");
+
+    loop {
+        let max_mb = {
+            let val = *limit_rx.borrow_and_update();
+            val
+        };
+        evict_originals_cache(&originals_dir, max_mb).await;
+
+        // Wait for the next cycle or a limit change.
+        tokio::select! {
+            _ = tokio::time::sleep(EVICTION_INTERVAL) => {}
+            _ = limit_rx.changed() => {
+                debug!("cache limit changed, running eviction immediately");
+            }
+        }
+    }
 }
 
 /// Evict oldest cached originals until the cache is under the configured limit.

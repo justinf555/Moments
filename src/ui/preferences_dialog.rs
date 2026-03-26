@@ -142,8 +142,14 @@ pub fn show_preferences(
         cache_row.set_subtitle("Maximum disk cache for downloaded originals (MB)");
         cache_row.set_value(settings.uint("originals-cache-max-mb") as f64);
         let settings_cache = settings.clone();
+        let lib_cache = library.clone();
         cache_row.connect_changed(move |row| {
-            let _ = settings_cache.set_uint("originals-cache-max-mb", row.value() as u32);
+            let mb = row.value() as u32;
+            let _ = settings_cache.set_uint("originals-cache-max-mb", mb);
+            // Live-update the cache evictor without restart.
+            if let Some(ref lib) = lib_cache {
+                lib.set_cache_limit(mb);
+            }
         });
         storage_group.add(&cache_row);
 
