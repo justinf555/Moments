@@ -45,4 +45,8 @@ pub trait LibraryStorage: Send + Sync + 'static {
     /// Update the sync polling interval (seconds). Takes effect on the next cycle.
     /// Set to 0 to disable polling. Default implementation is a no-op (local backend).
     fn set_sync_interval(&self, _secs: u64) {}
+
+    /// Update the originals cache size limit (MB). Triggers an immediate eviction
+    /// if the cache exceeds the new limit. Default implementation is a no-op.
+    fn set_cache_limit(&self, _mb: u32) {}
 }
