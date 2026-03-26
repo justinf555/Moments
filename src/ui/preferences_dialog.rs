@@ -134,8 +134,8 @@ pub fn show_preferences(
 
     let cache_usage_row = if is_immich {
         let cache_row = adw::SpinRow::new(
-            Some(&gtk::Adjustment::new(2048.0, 0.0, 50000.0, 256.0, 1024.0, 0.0)),
-            256.0,
+            Some(&gtk::Adjustment::new(2048.0, 0.0, 50000.0, 1.0, 256.0, 0.0)),
+            1.0,
             0,
         );
         cache_row.set_title("Originals Cache Limit");
