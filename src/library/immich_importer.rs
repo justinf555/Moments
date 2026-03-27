@@ -22,8 +22,6 @@ pub struct ImmichImportJob {
 
 impl ImmichImportJob {
     pub async fn run(&self, sources: Vec<PathBuf>) {
-        use sha1::Digest;
-
         let mut registry = FormatRegistry::new();
         registry.register(Arc::new(StandardHandler));
         registry.register(Arc::new(RawHandler));

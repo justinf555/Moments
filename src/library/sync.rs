@@ -24,9 +24,6 @@ pub struct SyncHandle {
     interval_tx: tokio::sync::watch::Sender<u64>,
 }
 
-/// Default interval between sync cycles (seconds).
-const DEFAULT_SYNC_INTERVAL_SECS: u64 = 30;
-
 /// Maximum concurrent thumbnail downloads.
 const MAX_THUMBNAIL_WORKERS: usize = 4;
 /// Bounded channel capacity for thumbnail download queue.

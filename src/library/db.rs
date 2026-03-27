@@ -6,7 +6,6 @@ use sqlx::SqlitePool;
 use tracing::{info, instrument};
 
 use super::error::LibraryError;
-use super::media::{MediaId, MediaRecord};
 
 mod albums;
 pub(crate) mod faces;

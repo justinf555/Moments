@@ -143,7 +143,7 @@ impl ImportJob {
             Some(mt) => mt,
             None => return Ok(Some(SkipReason::UnsupportedFormat)),
         };
-        let is_video = media_type == MediaType::Video;
+        let _is_video = media_type == MediaType::Video;
 
         // ── 2. Hash + metadata extract ───────────────────────────────────────
         // Images: extract EXIF. Videos: extract duration via GStreamer.
