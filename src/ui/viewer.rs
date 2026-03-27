@@ -11,8 +11,10 @@ use crate::library::Library;
 use crate::ui::model_registry::ModelRegistry;
 use crate::ui::photo_grid::item::MediaItemObject;
 
+pub mod edit_panel;
 pub mod info_panel;
 
+use edit_panel::EditPanel;
 use info_panel::InfoPanel;
 
 // ── Inner state ───────────────────────────────────────────────────────────────
@@ -33,6 +35,11 @@ struct ViewerInner {
     trash_btn: gtk::Button,
     info_split: adw::OverlaySplitView,
     info_panel: InfoPanel,
+    edit_panel: EditPanel,
+    /// Stack in the sidebar to switch between info and edit panels.
+    sidebar_stack: gtk::Stack,
+    info_toggle: gtk::ToggleButton,
+    edit_toggle: gtk::ToggleButton,
     /// Snapshot of the grid's item list taken at activation time.
     items: RefCell<Vec<MediaItemObject>>,
     current_index: Cell<usize>,
@@ -256,6 +263,94 @@ impl ViewerInner {
         });
     }
 
+    /// Start an edit session by loading the full-res image and existing edit state.
+    fn start_edit_session(self: &Rc<Self>) {
+        let id = {
+            let items = self.items.borrow();
+            let idx = self.current_index.get();
+            items.get(idx).map(|obj| obj.item().id.clone())
+        };
+        let Some(id) = id else { return };
+
+        let inner = Rc::clone(self);
+        let library = Arc::clone(&self.library);
+        let tokio = self.tokio.clone();
+        let id_for_state = id.clone();
+
+        glib::MainContext::default().spawn_local(async move {
+            // Load existing edit state and the original image in parallel.
+            let lib = Arc::clone(&library);
+            let tk = tokio.clone();
+
+            let state_result = tk
+                .spawn({
+                    let lib = Arc::clone(&lib);
+                    let id = id_for_state.clone();
+                    async move { lib.get_edit_state(&id).await }
+                })
+                .await;
+
+            let path = tk
+                .spawn({
+                    let lib = Arc::clone(&lib);
+                    let id = id.clone();
+                    async move { lib.original_path(&id).await }
+                })
+                .await
+                .ok()
+                .and_then(|r| r.ok())
+                .flatten();
+
+            let Some(path) = path else {
+                error!("could not resolve original path for edit session");
+                return;
+            };
+
+            // Decode the full-res image on a blocking thread.
+            let full_res = tk
+                .spawn(async move {
+                    tokio::task::spawn_blocking(move || -> Option<image::DynamicImage> {
+                        let img = image::open(&path)
+                            .map_err(|e| error!("edit session decode failed: {e}"))
+                            .ok()?;
+                        // Apply EXIF orientation (skip for HEIC).
+                        let ext = path
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .map(|e| e.to_lowercase())
+                            .unwrap_or_default();
+                        let img = if matches!(ext.as_str(), "heic" | "heif") {
+                            img
+                        } else {
+                            let orientation = crate::library::exif::extract_exif(&path)
+                                .orientation
+                                .unwrap_or(1);
+                            crate::library::thumbnailer::apply_orientation(img, orientation)
+                        };
+                        Some(img)
+                    })
+                    .await
+                    .ok()?
+                })
+                .await
+                .ok()
+                .flatten();
+
+            let Some(full_res) = full_res else {
+                error!("failed to decode image for edit session");
+                return;
+            };
+
+            let existing_state = state_result.ok().and_then(|r| r.ok()).flatten();
+
+            inner.edit_panel.begin_session(
+                id,
+                Arc::new(full_res),
+                existing_state,
+            );
+        });
+    }
+
     /// Asynchronously fetch EXIF metadata and cache it for the info panel.
     fn load_metadata_async(
         self: &Rc<Self>,
@@ -309,6 +404,13 @@ impl PhotoViewer {
     pub fn new(library: Arc<dyn Library>, tokio: tokio::runtime::Handle, registry: Rc<ModelRegistry>) -> Self {
         // ── Header bar ───────────────────────────────────────────────────────
         let header = adw::HeaderBar::new();
+
+        let edit_toggle = gtk::ToggleButton::builder()
+            .icon_name("document-edit-symbolic")
+            .tooltip_text("Edit Photo")
+            .build();
+        header.pack_end(&edit_toggle);
+
         let info_toggle = gtk::ToggleButton::builder()
             .icon_name("info-symbolic")
             .tooltip_text("Photo Information")
@@ -386,10 +488,23 @@ impl PhotoViewer {
         // ── Info panel ───────────────────────────────────────────────────────
         let info_panel = InfoPanel::new();
 
-        // ── Overlay split view (content | info sidebar) ──────────────────────
+        // ── Edit panel ──────────────────────────────────────────────────────
+        let edit_panel = EditPanel::new(
+            picture.clone(),
+            Arc::clone(&library),
+            tokio.clone(),
+        );
+
+        // ── Sidebar stack (info | edit) ──────────────────────────────────────
+        let sidebar_stack = gtk::Stack::new();
+        sidebar_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
+        sidebar_stack.add_named(info_panel.widget(), Some("info"));
+        sidebar_stack.add_named(edit_panel.widget(), Some("edit"));
+
+        // ── Overlay split view (content | sidebar stack) ─────────────────────
         let info_split = adw::OverlaySplitView::new();
         info_split.set_content(Some(&overlay));
-        info_split.set_sidebar(Some(info_panel.widget()));
+        info_split.set_sidebar(Some(&sidebar_stack));
         info_split.set_sidebar_position(gtk::PackType::End);
         info_split.set_show_sidebar(false);
 
@@ -417,6 +532,10 @@ impl PhotoViewer {
             trash_btn,
             info_split,
             info_panel,
+            edit_panel,
+            sidebar_stack,
+            info_toggle: info_toggle.clone(),
+            edit_toggle: edit_toggle.clone(),
             items: RefCell::new(Vec::new()),
             current_index: Cell::new(0),
             load_gen: Cell::new(0),
@@ -548,28 +667,63 @@ impl PhotoViewer {
             });
         }
 
-        // Info toggle → split view
+        // Info toggle → show info sidebar
         {
-            let split = inner.info_split.clone();
+            let i = Rc::downgrade(&inner);
             info_toggle.connect_toggled(move |btn| {
-                split.set_show_sidebar(btn.is_active());
+                let Some(inner) = i.upgrade() else { return };
+                if btn.is_active() {
+                    // Deactivate edit toggle (mutually exclusive).
+                    inner.edit_toggle.set_active(false);
+                    inner.sidebar_stack.set_visible_child_name("info");
+                    inner.info_split.set_show_sidebar(true);
+
+                    // Populate info panel.
+                    let items = inner.items.borrow();
+                    let idx = inner.current_index.get();
+                    if let Some(obj) = items.get(idx) {
+                        let item = obj.item().clone();
+                        let meta = inner.current_metadata.borrow();
+                        inner.info_panel.populate(&item, meta.as_ref());
+                    }
+                } else if !inner.edit_toggle.is_active() {
+                    inner.info_split.set_show_sidebar(false);
+                }
             });
         }
 
-        // Split view sidebar visible change → sync toggle + populate if open
+        // Edit toggle → show edit sidebar and start edit session
         {
             let i = Rc::downgrade(&inner);
-            let toggle = info_toggle.clone();
+            edit_toggle.connect_toggled(move |btn| {
+                let Some(inner) = i.upgrade() else { return };
+                if btn.is_active() {
+                    // Deactivate info toggle (mutually exclusive).
+                    inner.info_toggle.set_active(false);
+                    inner.sidebar_stack.set_visible_child_name("edit");
+                    inner.info_split.set_show_sidebar(true);
+
+                    // Start edit session — load original image for preview.
+                    inner.start_edit_session();
+                } else {
+                    if !inner.info_toggle.is_active() {
+                        inner.info_split.set_show_sidebar(false);
+                    }
+                    inner.edit_panel.end_session();
+                }
+            });
+        }
+
+        // Split view sidebar closed externally → sync toggles
+        {
+            let i = Rc::downgrade(&inner);
             inner.info_split.connect_show_sidebar_notify(move |split| {
-                toggle.set_active(split.shows_sidebar());
-                if split.shows_sidebar() {
+                if !split.shows_sidebar() {
                     if let Some(inner) = i.upgrade() {
-                        let items = inner.items.borrow();
-                        let idx = inner.current_index.get();
-                        if let Some(obj) = items.get(idx) {
-                            let item = obj.item().clone();
-                            let meta = inner.current_metadata.borrow();
-                            inner.info_panel.populate(&item, meta.as_ref());
+                        inner.info_toggle.set_active(false);
+                        if inner.edit_toggle.is_active() {
+                            inner.edit_toggle.set_active(false);
+                            inner.edit_panel.end_session();
                         }
                     }
                 }
