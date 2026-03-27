@@ -413,7 +413,7 @@ impl PhotoViewer {
         header.pack_end(&edit_toggle);
 
         let info_toggle = gtk::ToggleButton::builder()
-            .icon_name("info-symbolic")
+            .icon_name("help-about-symbolic")
             .tooltip_text("Photo Information")
             .build();
         header.pack_end(&info_toggle);
