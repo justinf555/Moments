@@ -338,7 +338,7 @@ impl EditPanel {
         let scale = gtk::Scale::builder()
             .orientation(gtk::Orientation::Horizontal)
             .hexpand(true)
-            .width_request(180)
+            .width_request(140)
             .build();
         scale.set_range(-1.0, 1.0);
         scale.set_value(0.0);
