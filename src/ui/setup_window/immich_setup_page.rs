@@ -255,5 +255,5 @@ impl Default for MomentsImmichSetupPage {
 }
 
 fn default_immich_library_path() -> std::path::PathBuf {
-    glib::home_dir().join("Pictures").join("Moments-Immich.library")
+    glib::user_data_dir().join("moments").join("immich.library")
 }
