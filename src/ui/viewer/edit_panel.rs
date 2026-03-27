@@ -175,6 +175,121 @@ impl EditPanel {
         vbox.set_margin_start(12);
         vbox.set_margin_end(12);
 
+        // ── Transform group ──────────────────────────────────────────────────
+        let transform_group = adw::PreferencesGroup::builder()
+            .title("Transform")
+            .build();
+
+        // Rotate buttons.
+        let rotate_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(8)
+            .halign(gtk::Align::Center)
+            .margin_top(4)
+            .margin_bottom(4)
+            .build();
+
+        let rotate_ccw_btn = gtk::Button::builder()
+            .icon_name("object-rotate-left-symbolic")
+            .tooltip_text("Rotate 90° Counter-Clockwise")
+            .build();
+        rotate_ccw_btn.add_css_class("flat");
+
+        let rotate_cw_btn = gtk::Button::builder()
+            .icon_name("object-rotate-right-symbolic")
+            .tooltip_text("Rotate 90° Clockwise")
+            .build();
+        rotate_cw_btn.add_css_class("flat");
+
+        let flip_h_btn = gtk::ToggleButton::builder()
+            .icon_name("object-flip-horizontal-symbolic")
+            .tooltip_text("Flip Horizontal")
+            .build();
+        flip_h_btn.add_css_class("flat");
+
+        let flip_v_btn = gtk::ToggleButton::builder()
+            .icon_name("object-flip-vertical-symbolic")
+            .tooltip_text("Flip Vertical")
+            .build();
+        flip_v_btn.add_css_class("flat");
+
+        rotate_box.append(&rotate_ccw_btn);
+        rotate_box.append(&rotate_cw_btn);
+        rotate_box.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+        rotate_box.append(&flip_h_btn);
+        rotate_box.append(&flip_v_btn);
+
+        transform_group.add(&rotate_box);
+        vbox.append(&transform_group);
+
+        // Wire rotate CCW.
+        {
+            let session = Rc::clone(&self.session);
+            let picture = self.picture.clone();
+            let tokio = self.tokio.clone();
+            rotate_ccw_btn.connect_clicked(move |_| {
+                let preview = {
+                    let mut session = session.borrow_mut();
+                    let Some(s) = session.as_mut() else { return };
+                    s.state.transforms.rotate_degrees = (s.state.transforms.rotate_degrees - 90).rem_euclid(360);
+                    s.render_gen += 1;
+                    (Arc::clone(&s.preview_image), s.state.clone(), s.render_gen)
+                };
+                render_to_picture(&picture, &tokio, &session, preview);
+            });
+        }
+
+        // Wire rotate CW.
+        {
+            let session = Rc::clone(&self.session);
+            let picture = self.picture.clone();
+            let tokio = self.tokio.clone();
+            rotate_cw_btn.connect_clicked(move |_| {
+                let preview = {
+                    let mut session = session.borrow_mut();
+                    let Some(s) = session.as_mut() else { return };
+                    s.state.transforms.rotate_degrees = (s.state.transforms.rotate_degrees + 90).rem_euclid(360);
+                    s.render_gen += 1;
+                    (Arc::clone(&s.preview_image), s.state.clone(), s.render_gen)
+                };
+                render_to_picture(&picture, &tokio, &session, preview);
+            });
+        }
+
+        // Wire flip horizontal.
+        {
+            let session = Rc::clone(&self.session);
+            let picture = self.picture.clone();
+            let tokio = self.tokio.clone();
+            flip_h_btn.connect_toggled(move |btn| {
+                let preview = {
+                    let mut session = session.borrow_mut();
+                    let Some(s) = session.as_mut() else { return };
+                    s.state.transforms.flip_horizontal = btn.is_active();
+                    s.render_gen += 1;
+                    (Arc::clone(&s.preview_image), s.state.clone(), s.render_gen)
+                };
+                render_to_picture(&picture, &tokio, &session, preview);
+            });
+        }
+
+        // Wire flip vertical.
+        {
+            let session = Rc::clone(&self.session);
+            let picture = self.picture.clone();
+            let tokio = self.tokio.clone();
+            flip_v_btn.connect_toggled(move |btn| {
+                let preview = {
+                    let mut session = session.borrow_mut();
+                    let Some(s) = session.as_mut() else { return };
+                    s.state.transforms.flip_vertical = btn.is_active();
+                    s.render_gen += 1;
+                    (Arc::clone(&s.preview_image), s.state.clone(), s.render_gen)
+                };
+                render_to_picture(&picture, &tokio, &session, preview);
+            });
+        }
+
         // ── Exposure group ────────────────────────────────────────────────────
         let exposure_group = adw::PreferencesGroup::builder()
             .title("Exposure")
@@ -365,11 +480,8 @@ impl EditPanel {
 
         scale.connect_value_changed(move |scale| {
             let value = scale.value();
-
-            // Snap to 0.
             let value = if value.abs() < 0.02 { 0.0 } else { value };
 
-            // Update the edit state.
             let preview = {
                 let mut session = session.borrow_mut();
                 let Some(s) = session.as_mut() else { return };
@@ -378,43 +490,7 @@ impl EditPanel {
                 (Arc::clone(&s.preview_image), s.state.clone(), s.render_gen)
             };
 
-            // Debounced render on background thread.
-            let pic = picture.clone();
-            let tk = tokio.clone();
-            let session_ref = Rc::clone(&session);
-            let (preview_img, state, gen) = preview;
-
-            glib::MainContext::default().spawn_local(async move {
-                let result = tk
-                    .spawn(async move {
-                        tokio::task::spawn_blocking(move || {
-                            let img = (*preview_img).clone();
-                            let edited = apply_edits(img, &state);
-                            let rgba = edited.into_rgba8();
-                            let (w, h) = image::GenericImageView::dimensions(&rgba);
-                            (rgba.into_raw(), w as i32, h as i32)
-                        })
-                        .await
-                    })
-                    .await;
-
-                // Check generation to discard stale renders.
-                let current_gen = session_ref.borrow().as_ref().map(|s| s.render_gen);
-                if current_gen != Some(gen) {
-                    return;
-                }
-
-                if let Ok(Ok((raw, w, h))) = result {
-                    let gbytes = glib::Bytes::from_owned(raw);
-                    let texture = gdk::MemoryTexture::new(
-                        w, h,
-                        gdk::MemoryFormat::R8g8b8a8,
-                        &gbytes,
-                        (w as usize) * 4,
-                    );
-                    pic.set_paintable(Some(texture.upcast_ref::<gdk::Paintable>()));
-                }
-            });
+            render_to_picture(&picture, &tokio, &session, preview);
         });
 
         row
@@ -474,6 +550,52 @@ impl EditPanel {
         // The current approach works because begin_session is called
         // before the panel is shown.
     }
+}
+
+/// Render an edit state preview and display it on the picture widget.
+///
+/// Shared by slider handlers and transform button handlers.
+fn render_to_picture(
+    picture: &gtk::Picture,
+    tokio: &tokio::runtime::Handle,
+    session: &Rc<RefCell<Option<EditSession>>>,
+    preview: (Arc<DynamicImage>, EditState, u64),
+) {
+    let pic = picture.clone();
+    let tk = tokio.clone();
+    let session_ref = Rc::clone(session);
+    let (preview_img, state, gen) = preview;
+
+    glib::MainContext::default().spawn_local(async move {
+        let result = tk
+            .spawn(async move {
+                tokio::task::spawn_blocking(move || {
+                    let img = (*preview_img).clone();
+                    let edited = apply_edits(img, &state);
+                    let rgba = edited.into_rgba8();
+                    let (w, h) = image::GenericImageView::dimensions(&rgba);
+                    (rgba.into_raw(), w as i32, h as i32)
+                })
+                .await
+            })
+            .await;
+
+        let current_gen = session_ref.borrow().as_ref().map(|s| s.render_gen);
+        if current_gen != Some(gen) {
+            return;
+        }
+
+        if let Ok(Ok((raw, w, h))) = result {
+            let gbytes = glib::Bytes::from_owned(raw);
+            let texture = gdk::MemoryTexture::new(
+                w, h,
+                gdk::MemoryFormat::R8g8b8a8,
+                &gbytes,
+                (w as usize) * 4,
+            );
+            pic.set_paintable(Some(texture.upcast_ref::<gdk::Paintable>()));
+        }
+    });
 }
 
 /// Create a downscaled preview image with longest edge at most `max_edge` pixels.
