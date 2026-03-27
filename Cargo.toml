@@ -9,6 +9,9 @@ authors = ["justinf555"]
 keywords = ["photos", "gnome", "gtk4", "image-management"]
 categories = ["multimedia::images"]
 
+[features]
+editing = []
+
 [dependencies]
 
 # GTK/GNOME — keep these version-aligned
