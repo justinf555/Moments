@@ -2,6 +2,7 @@ pub mod album;
 pub mod bundle;
 pub mod config;
 pub mod db;
+pub mod editing;
 pub mod error;
 pub mod event;
 pub mod exif;
@@ -23,6 +24,7 @@ pub mod video_meta;
 pub mod viewer;
 
 use album::LibraryAlbums;
+use editing::LibraryEditing;
 use faces::LibraryFaces;
 use import::LibraryImport;
 use media::LibraryMedia;
@@ -44,6 +46,7 @@ use viewer::LibraryViewer;
 /// - [`LibraryViewer`]    — detail-view data access (issue #10)
 /// - [`LibraryAlbums`]    — album management (issue #11)
 /// - [`LibraryFaces`]     — face/people management (issue #178)
+/// - [`LibraryEditing`]   — non-destructive photo editing (issue #17)
 ///
 /// `close()` is inherited from `LibraryStorage` and is not duplicated here.
 pub trait Library:
@@ -54,6 +57,7 @@ pub trait Library:
     + LibraryViewer
     + LibraryAlbums
     + LibraryFaces
+    + LibraryEditing
     + Send
     + Sync
 {
@@ -67,6 +71,7 @@ impl<
         + LibraryViewer
         + LibraryAlbums
         + LibraryFaces
+        + LibraryEditing
         + Send
         + Sync,
 > Library for T

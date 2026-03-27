@@ -8,6 +8,7 @@ use tracing::{debug, info, instrument};
 use crate::library::album::{Album, AlbumId, LibraryAlbums};
 use crate::library::bundle::Bundle;
 use crate::library::db::Database;
+use crate::library::editing::{EditState, LibraryEditing};
 use crate::library::error::LibraryError;
 use crate::library::event::LibraryEvent;
 use crate::library::faces::{LibraryFaces, Person, PersonId};
@@ -686,5 +687,30 @@ impl LibraryFaces for ImmichLibrary {
         } else {
             None
         }
+    }
+}
+
+#[async_trait]
+impl LibraryEditing for ImmichLibrary {
+    async fn get_edit_state(&self, id: &MediaId) -> Result<Option<EditState>, LibraryError> {
+        self.db.get_edit_state(id).await
+    }
+
+    async fn save_edit_state(&self, id: &MediaId, state: &EditState) -> Result<(), LibraryError> {
+        self.db.upsert_edit_state(id, state).await
+    }
+
+    async fn revert_edits(&self, id: &MediaId) -> Result<(), LibraryError> {
+        // TODO: wire to Immich API to remove edited version (#224)
+        self.db.delete_edit_state(id).await
+    }
+
+    async fn render_and_save(&self, _id: &MediaId) -> Result<(), LibraryError> {
+        // TODO: render edits and upload to Immich (#224)
+        Ok(())
+    }
+
+    async fn has_pending_edits(&self, id: &MediaId) -> Result<bool, LibraryError> {
+        self.db.has_pending_edits(id).await
     }
 }

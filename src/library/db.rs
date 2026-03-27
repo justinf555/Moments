@@ -8,6 +8,7 @@ use tracing::{info, instrument};
 use super::error::LibraryError;
 
 mod albums;
+mod edits;
 pub(crate) mod faces;
 mod media;
 mod stats;
