@@ -14,6 +14,11 @@ subdir('data')
 subdir('src')
 subdir('po')
 
+install_data(
+  'COPYING',
+  install_dir: get_option('datadir') / 'licenses' / meson.project_name()
+)
+
 gnome.post_install(
      glib_compile_schemas: true,
     gtk_update_icon_cache: true,
