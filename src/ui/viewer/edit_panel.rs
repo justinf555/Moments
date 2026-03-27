@@ -330,28 +330,33 @@ impl EditPanel {
         }
     }
 
-    /// Create a slider row for a specific edit parameter.
-    fn make_slider<F>(&self, label: &str, accessor: F) -> adw::ActionRow
+    /// Create a slider with label above and scale below.
+    fn make_slider<F>(&self, label: &str, accessor: F) -> gtk::Box
     where
         F: Fn(&mut EditState) -> &mut f64 + 'static,
     {
+        let label_widget = gtk::Label::builder()
+            .label(label)
+            .halign(gtk::Align::Start)
+            .build();
+        label_widget.add_css_class("dim-label");
+        label_widget.add_css_class("caption");
+
         let scale = gtk::Scale::builder()
             .orientation(gtk::Orientation::Horizontal)
             .hexpand(true)
-            .width_request(140)
             .build();
         scale.set_range(-1.0, 1.0);
         scale.set_value(0.0);
         scale.set_draw_value(false);
-
-        // Snap to 0 when close to center.
         scale.set_increments(0.01, 0.1);
 
-        let row = adw::ActionRow::builder()
-            .title(label)
-            .title_lines(1)
+        let row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(2)
             .build();
-        row.add_suffix(&scale);
+        row.append(&label_widget);
+        row.append(&scale);
 
         // Connect value-changed to update the edit state and trigger preview.
         let session = Rc::clone(&self.session);
