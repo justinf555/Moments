@@ -16,7 +16,6 @@ use crate::library::import::LibraryImport;
 use crate::library::sync::SyncHandle;
 use crate::library::media::{
     LibraryMedia, MediaCursor, MediaFilter, MediaId, MediaItem, MediaMetadataRecord, MediaRecord,
-    MediaType,
 };
 use crate::library::storage::LibraryStorage;
 use crate::library::thumbnail::{sharded_thumbnail_path, LibraryThumbnail, ThumbnailStatus};

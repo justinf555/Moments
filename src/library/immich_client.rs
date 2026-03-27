@@ -93,6 +93,7 @@ impl ImmichClient {
         Ok(login)
     }
 
+    #[allow(dead_code)]
     /// The base server URL (without trailing slash).
     pub fn base_url(&self) -> &str {
         &self.base_url
@@ -103,6 +104,7 @@ impl ImmichClient {
         format!("{}/api{}", self.base_url, path)
     }
 
+    #[allow(dead_code)]
     /// Ping the server to check connectivity.
     ///
     /// Returns `Ok(())` if the server responds with `{"res": "pong"}`.
@@ -170,6 +172,7 @@ impl ImmichClient {
         Ok(about)
     }
 
+    #[allow(dead_code)]
     /// Validate the connection by pinging and fetching server info.
     ///
     /// Used by the setup wizard to test that the server URL and API key
@@ -246,6 +249,7 @@ impl ImmichClient {
         self.send_json(self.client.post(&self.url(path)).json(body), "POST", path).await
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn put<B: serde::Serialize, T: serde::de::DeserializeOwned>(
         &self,
         path: &str,
@@ -254,6 +258,7 @@ impl ImmichClient {
         self.send_json(self.client.put(&self.url(path)).json(body), "PUT", path).await
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn delete<T: serde::de::DeserializeOwned>(
         &self,
         path: &str,
@@ -405,6 +410,7 @@ pub struct LoginResponse {
     /// Session token — use as `Authorization: Bearer {access_token}`.
     #[serde(rename = "accessToken")]
     pub access_token: String,
+    #[allow(dead_code)]
     /// Immich user ID (UUID).
     #[serde(rename = "userId")]
     pub user_id: String,
@@ -421,6 +427,7 @@ pub struct UploadResponse {
     pub status: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct PingResponse {
     res: String,
@@ -430,6 +437,7 @@ struct PingResponse {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerAbout {
     pub version: String,
+    #[allow(dead_code)]
     #[serde(default)]
     pub licensed: bool,
 }

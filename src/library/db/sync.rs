@@ -1,5 +1,5 @@
 use crate::library::error::LibraryError;
-use crate::library::media::{MediaId, MediaMetadataRecord, MediaRecord};
+use crate::library::media::{MediaMetadataRecord, MediaRecord};
 
 use super::Database;
 
@@ -128,18 +128,6 @@ impl Database {
             .await
             .map_err(LibraryError::Db)?;
         Ok(rows.into_iter().map(|(id,)| id).collect())
-    }
-
-    /// Retrieve all sync checkpoints.
-    pub async fn get_sync_checkpoints(
-        &self,
-    ) -> Result<std::collections::HashMap<String, String>, LibraryError> {
-        let rows: Vec<(String, String)> =
-            sqlx::query_as("SELECT entity_type, ack FROM sync_checkpoints")
-                .fetch_all(&self.pool)
-                .await
-                .map_err(LibraryError::Db)?;
-        Ok(rows.into_iter().collect())
     }
 
     /// Save sync checkpoints (batch upsert).

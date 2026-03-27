@@ -1,4 +1,4 @@
-use gtk::{glib, prelude::*};
+use gtk::prelude::*;
 
 use super::cell::CollectionGridCell;
 use super::item::CollectionItemObject;

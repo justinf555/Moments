@@ -30,7 +30,7 @@ pub trait FormatHandler: Send + Sync {
 /// Single source of truth for all supported image formats.
 ///
 /// Owns a map from extension → handler. Used by:
-/// - The import scanner, via [`FormatRegistry::is_supported`], to decide
+/// - The import scanner, via [`FormatRegistry::media_type`], to decide
 ///   which files to accept.
 /// - The thumbnail pipeline, via [`FormatRegistry::decode`], to dispatch
 ///   to the correct decoder.
@@ -52,11 +52,6 @@ impl FormatRegistry {
         for ext in handler.extensions() {
             self.handlers.insert(ext.to_string(), Arc::clone(&handler));
         }
-    }
-
-    /// Returns `true` if any registered handler claims `ext` (case-insensitive).
-    pub fn is_supported(&self, ext: &str) -> bool {
-        self.handlers.contains_key(ext)
     }
 
     /// Decode the file at `path` using the handler registered for its extension.
@@ -141,11 +136,11 @@ mod tests {
     }
 
     #[test]
-    fn is_supported_returns_true_for_registered_extension() {
+    fn media_type_returns_some_for_registered_extension() {
         let mut reg = FormatRegistry::new();
         reg.register(Arc::new(FakeHandler));
-        assert!(reg.is_supported("fake"));
-        assert!(!reg.is_supported("jpg"));
+        assert!(reg.media_type("fake").is_some());
+        assert!(reg.media_type("jpg").is_none());
     }
 
     #[test]
