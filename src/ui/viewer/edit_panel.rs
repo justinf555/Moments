@@ -349,6 +349,7 @@ impl EditPanel {
 
         let row = adw::ActionRow::builder()
             .title(label)
+            .title_lines(1)
             .build();
         row.add_suffix(&scale);
 
