@@ -409,6 +409,7 @@ impl PhotoViewer {
             .icon_name("document-edit-symbolic")
             .tooltip_text("Edit Photo")
             .build();
+        #[cfg(feature = "editing")]
         header.pack_end(&edit_toggle);
 
         let info_toggle = gtk::ToggleButton::builder()
