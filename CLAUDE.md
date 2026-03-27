@@ -14,7 +14,7 @@ make run
 make clean
 ```
 
-The Flatpak manifest is `io.github.justinf555.Moments.json`. It pulls source from the local git repo (`file:///home/justin/Projects/Moments`, branch `main`), so **changes must be committed before rebuilding**.
+The Flatpak manifest is `io.github.justinf555.Moments.json` (local dev) and `io.github.justinf555.Moments.flathub.json` (Flathub submission). The local manifest pulls source from the local git repo (`file:///home/justin/Projects/Moments`, branch `main`), so **changes must be committed before rebuilding**. The `make run` command installs the Flatpak locally (`--user --install`) so icons are exported to GNOME Shell.
 
 Instruct the user to test via GNOME Builder or `make run` — do not attempt to run the app binary directly.
 
@@ -42,6 +42,8 @@ src/
     media.rs           — MediaId, MediaItem, MediaFilter, LibraryMedia trait (incl. library_stats)
     album.rs           — AlbumId, Album, LibraryAlbums trait
     faces.rs           — PersonId, Person, LibraryFaces trait
+    editing.rs         — EditState types, LibraryEditing trait (non-destructive editing)
+    edit_renderer.rs   — apply_edits() pure function (exposure, color, transforms, filters)
     import.rs          — LibraryImport trait
     thumbnail.rs       — LibraryThumbnail trait, sharded path helpers
     viewer.rs          — LibraryViewer trait (original file access)
@@ -50,12 +52,13 @@ src/
     db.rs              — Database struct (sqlx::SqlitePool), LibraryStats, ServerStats
     db/media.rs        — LibraryMedia impl, MediaRow, filter_clause/sort_expr
     db/albums.rs       — LibraryAlbums impl
+    db/edits.rs        — Edit state CRUD (get/upsert/delete/mark_rendered)
     db/faces.rs        — People/face CRUD (upsert, list, face_count maintenance)
     db/sync.rs         — Sync upserts, checkpoints, audit methods
     db/thumbnails.rs   — Thumbnail status tracking
     db/stats.rs        — Aggregate library statistics query
     db/upload.rs       — Upload queue CRUD
-    db/migrations/     — Numbered SQL migrations (001–013)
+    db/migrations/     — Numbered SQL migrations (001–014)
     bundle.rs          — Library bundle on disk (manifest, paths)
     config.rs          — LibraryConfig enum (Local / Immich)
     factory.rs         — LibraryFactory (creates backends by config type)
@@ -89,7 +92,10 @@ src/
       cell.rs          — PhotoGridCell widget (placeholder → thumbnail → star)
       item.rs          — MediaItemObject (GObject wrapper for grid items)
       texture_cache.rs — LRU cache for decoded RGBA thumbnail pixels
-    viewer.rs          — PhotoViewer (full-res image display)
+    viewer.rs          — PhotoViewer (full-res image display, edit session management)
+    viewer/
+      info_panel.rs    — EXIF metadata display panel
+      edit_panel.rs    — Edit panel with exposure/color sliders, transform controls
     video_viewer.rs    — VideoViewer (GStreamer playback)
     album_dialogs.rs   — Create/rename/delete album dialogs
     import_dialog.rs   — Import progress dialog
@@ -116,7 +122,7 @@ Results flow back from Tokio → GTK via `Sender<LibraryEvent>` (a `std::sync::m
 
 ### Library abstraction layer
 
-`Library` (in `library.rs`) is a blanket-impl composition of feature sub-traits: `LibraryStorage + LibraryImport + LibraryMedia + LibraryThumbnail + LibraryViewer + LibraryAlbums + LibraryFaces`. All backend work runs on the Tokio executor. `LibraryStorage::open()` receives a `tokio::runtime::Handle` which is stored for the backend's lifetime.
+`Library` (in `library.rs`) is a blanket-impl composition of feature sub-traits: `LibraryStorage + LibraryImport + LibraryMedia + LibraryThumbnail + LibraryViewer + LibraryAlbums + LibraryFaces + LibraryEditing`. All backend work runs on the Tokio executor. `LibraryStorage::open()` receives a `tokio::runtime::Handle` which is stored for the backend's lifetime.
 
 Two backends exist:
 - **`LocalLibrary`** (`providers/local.rs`) — stores originals on disk, generates thumbnails locally
@@ -172,7 +178,7 @@ Use only icons confirmed to exist in the Adwaita icon theme. Common ones: `objec
 
 All log output uses the `tracing` crate — never `println!` or `eprintln!`.
 
-- `tracing_subscriber` is initialised in `main()` with `EnvFilter::from_default_env()`; control verbosity with `RUST_LOG=moments=debug`
+- `tracing_subscriber` is initialised in `main()` with `EnvFilter::from_default_env()`; default level is `info`, control verbosity with `RUST_LOG=moments=debug`
 - Use `#[instrument]` on every function worth timing (async backend methods, factory calls, bundle open/create)
 - Use `#[instrument(skip(field))]` to omit large or sensitive parameters from spans
 - Level guidance: `error!` — unrecoverable; `warn!` — degraded but continuing; `info!` — lifecycle milestones (start, open, close); `debug!` — per-operation detail
@@ -193,3 +199,8 @@ Design docs live in `docs/` and follow a consistent format with issue links, sta
 - `docs/design-sidebar-status-bar.md` — Persistent status bar states, button relocation, event flow
 - `docs/design-lazy-view-loading.md` — Lazy view registration pattern
 - `docs/design-video-import.md` — Video format detection and import
+- `docs/design-photo-editing.md` — Non-destructive editing: data model, renderer, UI, Immich integration
+
+### Feature flags
+
+The `editing` Cargo feature gates the edit button in the viewer. It is disabled by default (not shipped to Flathub). Enable with `cargo run --features editing` for development.
