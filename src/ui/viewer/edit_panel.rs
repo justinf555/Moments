@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -12,13 +12,17 @@ use crate::library::editing::EditState;
 use crate::library::media::MediaId;
 use crate::library::Library;
 
+/// Delay before rendering after the last slider change (milliseconds).
+const DEBOUNCE_MS: u32 = 50;
+
 /// Mutable state for an active editing session.
 pub struct EditSession {
     /// Current edit state modified by sliders.
     pub state: EditState,
     /// Downscaled preview image (~1200px) for fast rendering.
+    /// Shared via `Arc` — render tasks read from it without cloning.
     pub preview_image: Arc<DynamicImage>,
-    /// Generation counter for debouncing stale renders.
+    /// Generation counter for discarding stale render results.
     render_gen: u64,
 }
 
@@ -38,6 +42,8 @@ pub struct EditPanel {
     library: Arc<dyn Library>,
     /// The media ID being edited.
     media_id: Rc<RefCell<Option<MediaId>>>,
+    /// Source ID of the pending debounce timer, if any.
+    debounce_source: Rc<Cell<Option<glib::SourceId>>>,
 }
 
 impl EditPanel {
@@ -53,6 +59,7 @@ impl EditPanel {
 
         let session: Rc<RefCell<Option<EditSession>>> = Rc::new(RefCell::new(None));
         let media_id: Rc<RefCell<Option<MediaId>>> = Rc::new(RefCell::new(None));
+        let debounce_source: Rc<Cell<Option<glib::SourceId>>> = Rc::new(Cell::new(None));
 
         let panel = Self {
             scrolled,
@@ -61,6 +68,7 @@ impl EditPanel {
             tokio,
             library,
             media_id,
+            debounce_source,
         };
 
         panel.build_ui();
@@ -409,8 +417,7 @@ impl EditPanel {
                         let result = tk
                             .spawn(async move {
                                 tokio::task::spawn_blocking(move || {
-                                    let img = (*preview).clone();
-                                    let edited = apply_edits(img, &state);
+                                    let edited = apply_edits(&preview, &state);
                                     let rgba = edited.into_rgba8();
                                     let (w, h) = image::GenericImageView::dimensions(&rgba);
                                     (rgba.into_raw(), w as i32, h as i32)
@@ -473,24 +480,49 @@ impl EditPanel {
         row.append(&label_widget);
         row.append(&scale);
 
-        // Connect value-changed to update the edit state and trigger preview.
+        // Connect value-changed to update the edit state and schedule a
+        // debounced render. The state is updated immediately so it's always
+        // current, but the expensive render only fires after the slider stops
+        // moving for DEBOUNCE_MS milliseconds.
         let session = Rc::clone(&self.session);
         let picture = self.picture.clone();
         let tokio = self.tokio.clone();
+        let debounce = Rc::clone(&self.debounce_source);
 
         scale.connect_value_changed(move |scale| {
             let value = scale.value();
             let value = if value.abs() < 0.02 { 0.0 } else { value };
 
-            let preview = {
+            {
                 let mut session = session.borrow_mut();
                 let Some(s) = session.as_mut() else { return };
                 *accessor(&mut s.state) = value;
                 s.render_gen += 1;
-                (Arc::clone(&s.preview_image), s.state.clone(), s.render_gen)
-            };
+            }
 
-            render_to_picture(&picture, &tokio, &session, preview);
+            // Cancel any pending debounce timer.
+            if let Some(id) = debounce.take() {
+                id.remove();
+            }
+
+            // Schedule a new render after the debounce period.
+            let session = Rc::clone(&session);
+            let picture = picture.clone();
+            let tokio = tokio.clone();
+            let debounce_cell = Rc::clone(&debounce);
+            let source_id = glib::timeout_add_local_once(
+                std::time::Duration::from_millis(DEBOUNCE_MS as u64),
+                move || {
+                    debounce_cell.set(None);
+                    let preview = {
+                        let session = session.borrow();
+                        let Some(s) = session.as_ref() else { return };
+                        (Arc::clone(&s.preview_image), s.state.clone(), s.render_gen)
+                    };
+                    render_to_picture(&picture, &tokio, &session, preview);
+                },
+            );
+            debounce.set(Some(source_id));
         });
 
         row
@@ -512,8 +544,7 @@ impl EditPanel {
             let result = tk
                 .spawn(async move {
                     tokio::task::spawn_blocking(move || {
-                        let img = (*preview_img).clone();
-                        let edited = apply_edits(img, &state);
+                        let edited = apply_edits(&preview_img, &state);
                         let rgba = edited.into_rgba8();
                         let (w, h) = image::GenericImageView::dimensions(&rgba);
                         (rgba.into_raw(), w as i32, h as i32)
@@ -554,7 +585,9 @@ impl EditPanel {
 
 /// Render an edit state preview and display it on the picture widget.
 ///
-/// Shared by slider handlers and transform button handlers.
+/// Shared by slider handlers and transform button handlers. The preview
+/// image is passed via `Arc` and borrowed inside the blocking task —
+/// no pixel data is cloned.
 fn render_to_picture(
     picture: &gtk::Picture,
     tokio: &tokio::runtime::Handle,
@@ -570,8 +603,7 @@ fn render_to_picture(
         let result = tk
             .spawn(async move {
                 tokio::task::spawn_blocking(move || {
-                    let img = (*preview_img).clone();
-                    let edited = apply_edits(img, &state);
+                    let edited = apply_edits(&preview_img, &state);
                     let rgba = edited.into_rgba8();
                     let (w, h) = image::GenericImageView::dimensions(&rgba);
                     (rgba.into_raw(), w as i32, h as i32)

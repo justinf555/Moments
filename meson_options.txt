@@ -1,0 +1,1 @@
+option('editing', type: 'boolean', value: false, description: 'Enable the photo editing feature (WIP)')

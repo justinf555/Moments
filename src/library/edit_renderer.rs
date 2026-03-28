@@ -7,31 +7,34 @@ use super::editing::{ColorState, EditState, ExposureState, TransformState};
 /// Operations are applied in a fixed order:
 /// 1. Geometric transforms (rotate 90° steps, flip, straighten)
 /// 2. Crop (normalized coordinates → pixel coordinates)
-/// 3. Exposure adjustments (brightness, contrast, highlights, shadows, white balance)
-/// 4. Color adjustments (saturation, vibrance, hue shift, temperature, tint)
+/// 3. Pixel adjustments — exposure and color in a single pass
+///
+/// Accepts a borrowed image to avoid cloning the source. The caller
+/// retains ownership of the original (useful for preview rendering
+/// where the same source image is reused across slider changes).
 ///
 /// This is a pure function with no I/O — suitable for calling on a blocking thread.
-pub fn apply_edits(img: DynamicImage, state: &EditState) -> DynamicImage {
+pub fn apply_edits(img: &DynamicImage, state: &EditState) -> DynamicImage {
     if state.is_identity() {
-        return img;
+        return img.clone();
     }
 
     let img = apply_transforms(img, &state.transforms);
-    let img = apply_exposure(img, &state.exposure);
-    apply_color(img, &state.color)
+    apply_pixel_adjustments(img, &state.exposure, &state.color)
 }
 
 // ---------------------------------------------------------------------------
 // Geometric transforms
 // ---------------------------------------------------------------------------
 
-fn apply_transforms(img: DynamicImage, t: &TransformState) -> DynamicImage {
-    // Rotate in 90-degree steps.
+fn apply_transforms(img: &DynamicImage, t: &TransformState) -> DynamicImage {
+    // Rotate in 90-degree steps. These methods return a new image,
+    // so we only clone when no rotation is needed.
     let mut img = match t.rotate_degrees.rem_euclid(360) {
         90 => img.rotate90(),
         180 => img.rotate180(),
         270 => img.rotate270(),
-        _ => img,
+        _ => img.clone(),
     };
 
     // Flip.
@@ -64,114 +67,98 @@ fn apply_transforms(img: DynamicImage, t: &TransformState) -> DynamicImage {
 }
 
 // ---------------------------------------------------------------------------
-// Exposure adjustments
+// Merged pixel adjustments (exposure + color in a single pass)
 // ---------------------------------------------------------------------------
 
-fn apply_exposure(img: DynamicImage, e: &ExposureState) -> DynamicImage {
-    if *e == ExposureState::default() {
+fn apply_pixel_adjustments(
+    img: DynamicImage,
+    e: &ExposureState,
+    c: &ColorState,
+) -> DynamicImage {
+    let skip_exposure = *e == ExposureState::default();
+    let skip_color = *c == ColorState::default();
+
+    if skip_exposure && skip_color {
         return img;
     }
 
     let mut rgba = img.into_rgba8();
     let (w, h) = rgba.dimensions();
 
+    // Pre-compute contrast factor outside the loop.
+    let contrast_factor = 1.0 + e.contrast;
+
     for y in 0..h {
         for x in 0..w {
             let px = rgba.get_pixel(x, y);
             let [r, g, b, a] = px.0;
 
-            // Work in 0.0–1.0 linear space.
             let mut rf = r as f64 / 255.0;
             let mut gf = g as f64 / 255.0;
             let mut bf = b as f64 / 255.0;
 
-            // Brightness: shift all channels.
-            rf += e.brightness;
-            gf += e.brightness;
-            bf += e.brightness;
+            // ── Exposure ─────────────────────────────────────────────
+            if !skip_exposure {
+                // Brightness: shift all channels.
+                rf += e.brightness;
+                gf += e.brightness;
+                bf += e.brightness;
 
-            // Contrast: scale around midpoint (0.5).
-            let factor = 1.0 + e.contrast;
-            rf = (rf - 0.5) * factor + 0.5;
-            gf = (gf - 0.5) * factor + 0.5;
-            bf = (bf - 0.5) * factor + 0.5;
+                // Contrast: scale around midpoint (0.5).
+                rf = (rf - 0.5) * contrast_factor + 0.5;
+                gf = (gf - 0.5) * contrast_factor + 0.5;
+                bf = (bf - 0.5) * contrast_factor + 0.5;
 
-            // Highlights: boost bright pixels (luminance > 0.5).
-            // Shadows: boost dark pixels (luminance < 0.5).
-            let lum = 0.299 * rf + 0.587 * gf + 0.114 * bf;
-            if lum > 0.5 {
-                let t = (lum - 0.5) * 2.0; // 0..1 for bright pixels
-                rf += e.highlights * t * 0.3;
-                gf += e.highlights * t * 0.3;
-                bf += e.highlights * t * 0.3;
-            } else {
-                let t = (0.5 - lum) * 2.0; // 0..1 for dark pixels
-                rf += e.shadows * t * 0.3;
-                gf += e.shadows * t * 0.3;
-                bf += e.shadows * t * 0.3;
+                // Highlights: boost bright pixels (luminance > 0.5).
+                // Shadows: boost dark pixels (luminance < 0.5).
+                let lum = 0.299 * rf + 0.587 * gf + 0.114 * bf;
+                if lum > 0.5 {
+                    let t = (lum - 0.5) * 2.0;
+                    rf += e.highlights * t * 0.3;
+                    gf += e.highlights * t * 0.3;
+                    bf += e.highlights * t * 0.3;
+                } else {
+                    let t = (0.5 - lum) * 2.0;
+                    rf += e.shadows * t * 0.3;
+                    gf += e.shadows * t * 0.3;
+                    bf += e.shadows * t * 0.3;
+                }
+
+                // White balance: shift blue-yellow axis.
+                rf += e.white_balance * 0.1;
+                gf += e.white_balance * 0.05;
+                bf -= e.white_balance * 0.1;
             }
 
-            // White balance: shift blue-yellow axis.
-            rf += e.white_balance * 0.1;
-            gf += e.white_balance * 0.05;
-            bf -= e.white_balance * 0.1;
+            // ── Color ────────────────────────────────────────────────
+            if !skip_color {
+                let (mut h, mut s, l) = rgb_to_hsl(rf, gf, bf);
 
-            rgba.put_pixel(x, y, Rgba([
-                clamp_u8(rf),
-                clamp_u8(gf),
-                clamp_u8(bf),
-                a,
-            ]));
-        }
-    }
+                // Saturation: scale S channel.
+                s = (s + c.saturation * s.max(0.1)).clamp(0.0, 1.0);
 
-    DynamicImage::ImageRgba8(rgba)
-}
+                // Vibrance: less effect on already-saturated colors.
+                let vibrance_scale = 1.0 - s;
+                s = (s + c.vibrance * vibrance_scale * 0.5).clamp(0.0, 1.0);
 
-// ---------------------------------------------------------------------------
-// Color adjustments
-// ---------------------------------------------------------------------------
+                // Hue shift: rotate H.
+                h = (h + c.hue_shift * 180.0).rem_euclid(360.0);
 
-fn apply_color(img: DynamicImage, c: &ColorState) -> DynamicImage {
-    if *c == ColorState::default() {
-        return img;
-    }
+                let (r2, g2, b2) = hsl_to_rgb(h, s, l);
+                rf = r2;
+                gf = g2;
+                bf = b2;
 
-    let mut rgba = img.into_rgba8();
-    let (w, h) = rgba.dimensions();
+                // Temperature: warm (positive) shifts toward yellow, cool toward blue.
+                rf += c.temperature * 0.1;
+                gf += c.temperature * 0.05;
+                bf -= c.temperature * 0.1;
 
-    for y in 0..h {
-        for x in 0..w {
-            let px = rgba.get_pixel(x, y);
-            let [r, g, b, a] = px.0;
-
-            let rf = r as f64 / 255.0;
-            let gf = g as f64 / 255.0;
-            let bf = b as f64 / 255.0;
-
-            let (mut h, mut s, l) = rgb_to_hsl(rf, gf, bf);
-
-            // Saturation: scale S channel.
-            s = (s + c.saturation * s.max(0.1)).clamp(0.0, 1.0);
-
-            // Vibrance: like saturation but less effect on already-saturated colors.
-            let vibrance_scale = 1.0 - s; // low-sat pixels get more boost
-            s = (s + c.vibrance * vibrance_scale * 0.5).clamp(0.0, 1.0);
-
-            // Hue shift: rotate H.
-            h = (h + c.hue_shift * 180.0).rem_euclid(360.0);
-
-            let (mut rf, mut gf, mut bf) = hsl_to_rgb(h, s, l);
-
-            // Temperature: warm (positive) shifts toward yellow, cool toward blue.
-            rf += c.temperature * 0.1;
-            gf += c.temperature * 0.05;
-            bf -= c.temperature * 0.1;
-
-            // Tint: shift green-magenta axis.
-            gf += c.tint * 0.1;
-            rf -= c.tint * 0.05;
-            bf -= c.tint * 0.05;
+                // Tint: shift green-magenta axis.
+                gf += c.tint * 0.1;
+                rf -= c.tint * 0.05;
+                bf -= c.tint * 0.05;
+            }
 
             rgba.put_pixel(x, y, Rgba([
                 clamp_u8(rf),
@@ -327,7 +314,7 @@ mod tests {
     #[test]
     fn identity_is_noop() {
         let img = test_image();
-        let result = apply_edits(img.clone(), &EditState::default());
+        let result = apply_edits(&img, &EditState::default());
         assert_eq!(img.dimensions(), result.dimensions());
         assert_eq!(img.as_rgba8().unwrap().as_raw(), result.as_rgba8().unwrap().as_raw());
     }
@@ -337,7 +324,7 @@ mod tests {
         let img = DynamicImage::ImageRgba8(RgbaImage::new(4, 2));
         let mut state = EditState::default();
         state.transforms.rotate_degrees = 90;
-        let result = apply_edits(img, &state);
+        let result = apply_edits(&img, &state);
         assert_eq!(result.dimensions(), (2, 4));
     }
 
@@ -346,7 +333,7 @@ mod tests {
         let img = DynamicImage::ImageRgba8(RgbaImage::new(4, 2));
         let mut state = EditState::default();
         state.transforms.rotate_degrees = 180;
-        let result = apply_edits(img, &state);
+        let result = apply_edits(&img, &state);
         assert_eq!(result.dimensions(), (4, 2));
     }
 
@@ -359,7 +346,7 @@ mod tests {
 
         let mut state = EditState::default();
         state.transforms.flip_horizontal = true;
-        let result = apply_edits(img, &state);
+        let result = apply_edits(&img, &state);
         let rgba = result.as_rgba8().unwrap();
         assert_eq!(rgba.get_pixel(0, 0).0, [0, 255, 0, 255]);
         assert_eq!(rgba.get_pixel(1, 0).0, [255, 0, 0, 255]);
@@ -375,7 +362,7 @@ mod tests {
             width: 0.5,
             height: 0.5,
         });
-        let result = apply_edits(img, &state);
+        let result = apply_edits(&img, &state);
         assert_eq!(result.dimensions(), (50, 50));
     }
 
@@ -384,7 +371,7 @@ mod tests {
         let img = test_image();
         let mut state = EditState::default();
         state.exposure.brightness = 0.5;
-        let result = apply_edits(img.clone(), &state);
+        let result = apply_edits(&img, &state);
 
         let orig_px = img.as_rgba8().unwrap().get_pixel(0, 0);
         let edit_px = result.as_rgba8().unwrap().get_pixel(0, 0);
@@ -398,7 +385,7 @@ mod tests {
         let img = test_image();
         let mut state = EditState::default();
         state.exposure.brightness = -0.5;
-        let result = apply_edits(img.clone(), &state);
+        let result = apply_edits(&img, &state);
 
         let orig_px = img.as_rgba8().unwrap().get_pixel(0, 0);
         let edit_px = result.as_rgba8().unwrap().get_pixel(0, 0);
@@ -410,7 +397,7 @@ mod tests {
         let img = test_image();
         let mut state = EditState::default();
         state.color.saturation = -1.0;
-        let result = apply_edits(img, &state);
+        let result = apply_edits(&img, &state);
 
         let px = result.as_rgba8().unwrap().get_pixel(0, 0);
         // In grayscale, R ≈ G ≈ B (may differ by 1 due to rounding).
@@ -461,7 +448,7 @@ mod tests {
             width: 0.5,
             height: 1.0,
         });
-        let result = apply_edits(img, &state);
+        let result = apply_edits(&img, &state);
         assert_eq!(result.dimensions(), (25, 100));
     }
 
@@ -475,7 +462,7 @@ mod tests {
         let mut state = EditState::default();
         state.exposure.brightness = 0.5;
         state.color.saturation = 0.5;
-        let result = apply_edits(img, &state);
+        let result = apply_edits(&img, &state);
         let px = result.as_rgba8().unwrap().get_pixel(0, 0);
         assert_eq!(px[3], 128); // Alpha unchanged
     }
