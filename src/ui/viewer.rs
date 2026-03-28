@@ -306,10 +306,12 @@ impl ViewerInner {
                 return;
             };
 
-            // Decode the full-res image on a blocking thread.
-            let full_res = tk
+            // Decode the full-res image and create a downscaled preview on
+            // a blocking thread so the GTK thread is free for the sidebar
+            // slide-in animation.
+            let preview = tk
                 .spawn(async move {
-                    tokio::task::spawn_blocking(move || -> Option<image::DynamicImage> {
+                    tokio::task::spawn_blocking(move || -> Option<Arc<image::DynamicImage>> {
                         let img = image::open(&path)
                             .map_err(|e| error!("edit session decode failed: {e}"))
                             .ok()?;
@@ -327,7 +329,14 @@ impl ViewerInner {
                                 .unwrap_or(1);
                             crate::library::thumbnailer::apply_orientation(img, orientation)
                         };
-                        Some(img)
+                        // Downscale to ~1200px for fast preview rendering.
+                        let (w, h) = image::GenericImageView::dimensions(&img);
+                        let preview = if w <= 1200 && h <= 1200 {
+                            img
+                        } else {
+                            img.thumbnail(1200, 1200)
+                        };
+                        Some(Arc::new(preview))
                     })
                     .await
                     .ok()?
@@ -336,7 +345,7 @@ impl ViewerInner {
                 .ok()
                 .flatten();
 
-            let Some(full_res) = full_res else {
+            let Some(preview) = preview else {
                 error!("failed to decode image for edit session");
                 return;
             };
@@ -345,7 +354,7 @@ impl ViewerInner {
 
             inner.edit_panel.begin_session(
                 id,
-                Arc::new(full_res),
+                preview,
                 existing_state,
             );
         });
