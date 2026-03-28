@@ -239,10 +239,12 @@ impl EditPanel {
         let stack = adw::ViewStack::new();
 
         let filters_page = self.build_filters_page();
-        stack.add_titled(&filters_page, Some("filters"), "Filters");
+        let filters_stack_page = stack.add_titled(&filters_page, Some("filters"), "Filters");
+        filters_stack_page.set_icon_name(Some("color-select-symbolic"));
 
         let adjust_page = self.build_adjust_page();
-        stack.add_titled(&adjust_page, Some("adjust"), "Adjust");
+        let adjust_stack_page = stack.add_titled(&adjust_page, Some("adjust"), "Adjust");
+        adjust_stack_page.set_icon_name(Some("preferences-other-symbolic"));
 
         // ── View switcher at top ─────────────────────────────────────────────
         let switcher = adw::ViewSwitcher::builder()
@@ -268,7 +270,7 @@ impl EditPanel {
         let revert_btn = gtk::Button::builder()
             .label("Revert to Original")
             .tooltip_text("Remove all edits and restore the original image")
-            .halign(gtk::Align::Center)
+            .hexpand(true)
             .margin_top(12)
             .margin_bottom(12)
             .margin_start(12)
@@ -376,7 +378,7 @@ impl EditPanel {
 
         // ── Filter presets ───────────────────────────────────────────────────
         let filter_group = adw::PreferencesGroup::builder()
-            .title("Filter")
+            .title("Presets")
             .build();
 
         let filter_box = gtk::FlowBox::builder()
@@ -388,11 +390,8 @@ impl EditPanel {
             .column_spacing(8)
             .build();
 
-        // "Original" button to clear the filter.
-        let original_btn = gtk::ToggleButton::builder()
-            .label("Original")
-            .build();
-        original_btn.add_css_class("flat");
+        // "None" button to clear the filter.
+        let original_btn = make_filter_swatch("None", None);
         filter_box.append(&original_btn);
 
         {
@@ -401,10 +400,7 @@ impl EditPanel {
 
             for name in FILTER_NAMES {
                 let display_name = filter_display_name(name);
-                let btn = gtk::ToggleButton::builder()
-                    .label(display_name)
-                    .build();
-                btn.add_css_class("flat");
+                let btn = make_filter_swatch(display_name, Some(name));
                 filter_box.append(&btn);
                 filter_buttons.borrow_mut().push((name.to_string(), btn));
             }
@@ -487,6 +483,109 @@ impl EditPanel {
 
         filter_group.add(&filter_box);
         page.append(&filter_group);
+
+        // ── Filter strength ──────────────────────────────────────────────────
+        let strength_group = adw::PreferencesGroup::builder()
+            .title("Filter Strength")
+            .build();
+
+        let strength_header = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(8)
+            .build();
+        let strength_label = gtk::Label::builder()
+            .label("Intensity")
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .build();
+        let strength_value = gtk::Label::builder()
+            .label("100")
+            .halign(gtk::Align::End)
+            .width_chars(4)
+            .build();
+        strength_value.add_css_class("dim-label");
+        strength_header.append(&strength_label);
+        strength_header.append(&strength_value);
+
+        let strength_scale = gtk::Scale::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .hexpand(true)
+            .build();
+        strength_scale.set_range(0.0, 1.0);
+        strength_scale.set_value(1.0);
+        strength_scale.set_draw_value(false);
+        strength_scale.set_increments(0.01, 0.1);
+
+        let strength_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(2)
+            .build();
+        strength_box.append(&strength_header);
+        strength_box.append(&strength_scale);
+        strength_group.add(&strength_box);
+        page.append(&strength_group);
+
+        // Wire strength slider.
+        {
+            let session = Rc::clone(&self.session);
+            let picture = self.picture.clone();
+            let tokio = self.tokio.clone();
+            let render_debounce = Rc::clone(&self.render_debounce);
+            let auto_save = self.auto_save_closure();
+
+            strength_scale.connect_value_changed(move |scale| {
+                let strength = scale.value();
+                strength_value.set_label(&format!("{}", (strength * 100.0).round() as i32));
+
+                {
+                    let mut session = session.borrow_mut();
+                    let Some(s) = session.as_mut() else { return };
+
+                    // Re-apply the current filter at the new strength.
+                    if let Some(ref filter_name) = s.state.filter.clone() {
+                        if let Some(preset) = filter_preset(filter_name) {
+                            s.state.exposure.brightness = preset.exposure.brightness * strength;
+                            s.state.exposure.contrast = preset.exposure.contrast * strength;
+                            s.state.exposure.highlights = preset.exposure.highlights * strength;
+                            s.state.exposure.shadows = preset.exposure.shadows * strength;
+                            s.state.exposure.white_balance = preset.exposure.white_balance * strength;
+                            s.state.color.saturation = preset.color.saturation * strength;
+                            s.state.color.vibrance = preset.color.vibrance * strength;
+                            s.state.color.hue_shift = preset.color.hue_shift * strength;
+                            s.state.color.temperature = preset.color.temperature * strength;
+                            s.state.color.tint = preset.color.tint * strength;
+                        }
+                    }
+                    s.state.filter_strength = strength;
+                    s.render_gen += 1;
+                }
+
+                // Cancel any pending render debounce timer.
+                if let Some(id) = render_debounce.take() {
+                    id.remove();
+                }
+
+                let session_inner = Rc::clone(&session);
+                let picture_inner = picture.clone();
+                let tokio_inner = tokio.clone();
+                let debounce_cell = Rc::clone(&render_debounce);
+                let source_id = glib::timeout_add_local_once(
+                    std::time::Duration::from_millis(RENDER_DEBOUNCE_MS as u64),
+                    move || {
+                        debounce_cell.set(None);
+                        let preview = {
+                            let session = session_inner.borrow();
+                            let Some(s) = session.as_ref() else { return };
+                            (Arc::clone(&s.preview_image), s.state.clone(), s.render_gen)
+                        };
+                        render_to_picture(&picture_inner, &tokio_inner, &session_inner, preview);
+                    },
+                );
+                render_debounce.set(Some(source_id));
+
+                auto_save();
+            });
+        }
 
         // ── Transform group ──────────────────────────────────────────────────
         let transform_group = adw::PreferencesGroup::builder()
@@ -623,9 +722,9 @@ impl EditPanel {
         page.set_margin_start(12);
         page.set_margin_end(12);
 
-        // ── Exposure group ────────────────────────────────────────────────────
-        let exposure_group = adw::PreferencesGroup::builder()
-            .title("Exposure")
+        // ── Light group ───────────────────────────────────────────────────────
+        let light_group = adw::PreferencesGroup::builder()
+            .title("Light")
             .build();
 
         let brightness = self.make_slider("Brightness", |s| &mut s.exposure.brightness);
@@ -635,35 +734,33 @@ impl EditPanel {
         let white_balance =
             self.make_slider("White Balance", |s| &mut s.exposure.white_balance);
 
-        exposure_group.add(&brightness);
-        exposure_group.add(&contrast);
-        exposure_group.add(&highlights);
-        exposure_group.add(&shadows);
-        exposure_group.add(&white_balance);
-        page.append(&exposure_group);
+        light_group.add(&brightness);
+        light_group.add(&contrast);
+        light_group.add(&highlights);
+        light_group.add(&shadows);
+        light_group.add(&white_balance);
+        page.append(&light_group);
 
-        // ── Color group ───────────────────────────────────────────────────────
-        let color_group = adw::PreferencesGroup::builder()
-            .title("Color")
+        // ── Colour group ─────────────────────────────────────────────────────
+        let colour_group = adw::PreferencesGroup::builder()
+            .title("Colour")
             .build();
 
         let saturation = self.make_slider("Saturation", |s| &mut s.color.saturation);
         let vibrance = self.make_slider("Vibrance", |s| &mut s.color.vibrance);
-        let hue = self.make_slider("Hue", |s| &mut s.color.hue_shift);
         let temperature = self.make_slider("Temperature", |s| &mut s.color.temperature);
         let tint = self.make_slider("Tint", |s| &mut s.color.tint);
 
-        color_group.add(&saturation);
-        color_group.add(&vibrance);
-        color_group.add(&hue);
-        color_group.add(&temperature);
-        color_group.add(&tint);
-        page.append(&color_group);
+        colour_group.add(&saturation);
+        colour_group.add(&vibrance);
+        colour_group.add(&temperature);
+        colour_group.add(&tint);
+        page.append(&colour_group);
 
         page
     }
 
-    /// Create a slider with label above and scale below.
+    /// Create a slider with label left, numeric value right, and scale below.
     fn make_slider<F>(&self, label: &str, accessor: F) -> gtk::Box
     where
         F: Fn(&mut EditState) -> &mut f64 + 'static,
@@ -671,9 +768,22 @@ impl EditPanel {
         let label_widget = gtk::Label::builder()
             .label(label)
             .halign(gtk::Align::Start)
+            .hexpand(true)
             .build();
-        label_widget.add_css_class("dim-label");
-        label_widget.add_css_class("caption");
+
+        let value_label = gtk::Label::builder()
+            .label("0")
+            .halign(gtk::Align::End)
+            .width_chars(4)
+            .build();
+        value_label.add_css_class("dim-label");
+
+        let header_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(8)
+            .build();
+        header_box.append(&label_widget);
+        header_box.append(&value_label);
 
         let scale = gtk::Scale::builder()
             .orientation(gtk::Orientation::Horizontal)
@@ -688,7 +798,7 @@ impl EditPanel {
             .orientation(gtk::Orientation::Vertical)
             .spacing(2)
             .build();
-        row.append(&label_widget);
+        row.append(&header_box);
         row.append(&scale);
 
         // Connect value-changed to update the edit state and schedule a
@@ -704,6 +814,9 @@ impl EditPanel {
         scale.connect_value_changed(move |scale| {
             let value = scale.value();
             let value = if value.abs() < 0.02 { 0.0 } else { value };
+
+            // Update the numeric display (mapped to -100..100 range).
+            value_label.set_label(&format!("{}", (value * 100.0).round() as i32));
 
             {
                 let mut session = session.borrow_mut();
@@ -955,12 +1068,52 @@ fn render_to_picture(
 /// Convert a filter preset name to a user-facing display name.
 fn filter_display_name(name: &str) -> &str {
     match name {
-        "bw" => "B\u{26}W",
+        "bw" => "B&W",
         "vintage" => "Vintage",
         "warm" => "Warm",
         "cool" => "Cool",
         "vivid" => "Vivid",
         "fade" => "Fade",
+        "noir" => "Noir",
+        "chrome" => "Chrome",
+        "matte" => "Matte",
+        "golden" => "Golden",
         _ => name,
     }
+}
+
+/// Create a filter swatch toggle button with a coloured background and label.
+fn make_filter_swatch(display_name: &str, preset_name: Option<&str>) -> gtk::ToggleButton {
+    let label = gtk::Label::new(Some(display_name));
+    label.add_css_class("caption");
+
+    let swatch = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .build();
+
+    let colour_box = gtk::Box::builder()
+        .width_request(80)
+        .height_request(80)
+        .build();
+    colour_box.add_css_class("filter-swatch");
+
+    // Apply a CSS class specific to this filter for colouring.
+    let css_class = match preset_name {
+        Some(name) => format!("filter-{name}"),
+        None => "filter-none".to_string(),
+    };
+    colour_box.add_css_class(&css_class);
+
+    swatch.append(&colour_box);
+    swatch.append(&label);
+
+    let btn = gtk::ToggleButton::builder()
+        .child(&swatch)
+        .build();
+    btn.add_css_class("flat");
+    btn.add_css_class("filter-button");
+
+    btn
 }

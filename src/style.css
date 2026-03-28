@@ -29,3 +29,24 @@ collection-grid-cell .hidden-icon {
     opacity: 1;
     -gtk-icon-shadow: 0 1px 3px rgba(0,0,0,0.6);
 }
+
+/* ── Filter swatches in the edit panel ─────────────────────────────────── */
+
+.filter-swatch {
+    border-radius: 10px;
+}
+
+.filter-button {
+    padding: 2px;
+}
+
+.filter-none  { background: linear-gradient(135deg, #e8e8e8, #c0c0c0); }
+.filter-bw    { background: linear-gradient(135deg, #666666, #333333); }
+.filter-vivid { background: linear-gradient(135deg, #e07020, #3080d0); }
+.filter-cool  { background: linear-gradient(135deg, #6090c0, #90b8e0); }
+.filter-warm  { background: linear-gradient(135deg, #d09050, #e0b070); }
+.filter-fade  { background: linear-gradient(135deg, #b8b8b8, #989898); }
+.filter-noir  { background: linear-gradient(135deg, #444444, #111111); }
+.filter-chrome { background: linear-gradient(135deg, #a0a0a0, #606060); }
+.filter-matte { background: linear-gradient(135deg, #c0b8a8, #989080); }
+.filter-golden { background: linear-gradient(135deg, #d0a030, #c09020); }
