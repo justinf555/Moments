@@ -13,8 +13,6 @@ jobs:
       image: fedora:43
 
     env:
-      SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: "/usr/bin/sccache"
       SQLX_OFFLINE: "true"
 
     steps:
@@ -24,7 +22,6 @@ jobs:
         run: |
           dnf install -y \
             cargo \
-            sccache \
             gtk4-devel \
             libadwaita-devel \
             gettext-devel \
@@ -59,4 +56,5 @@ jobs:
         run: cargo test
 
       - name: Show sccache stats
+        if: always()
         run: sccache --show-stats
