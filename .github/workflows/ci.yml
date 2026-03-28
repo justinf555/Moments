@@ -12,6 +12,11 @@ jobs:
     container:
       image: fedora:43
 
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "/usr/bin/sccache"
+      SQLX_OFFLINE: "true"
+
     steps:
       - uses: actions/checkout@v4
 
@@ -19,6 +24,7 @@ jobs:
         run: |
           dnf install -y \
             cargo \
+            sccache \
             gtk4-devel \
             libadwaita-devel \
             gettext-devel \
@@ -28,13 +34,15 @@ jobs:
             libsecret-devel \
             pkg-config
 
+      - name: Configure sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
+
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
           key: fedora43-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: fedora43-cargo-
 
@@ -48,6 +56,7 @@ jobs:
           EOF
 
       - name: Run tests
-        env:
-          SQLX_OFFLINE: "true"
         run: cargo test
+
+      - name: Show sccache stats
+        run: sccache --show-stats
