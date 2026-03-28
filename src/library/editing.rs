@@ -66,6 +66,14 @@ pub struct EditState {
     /// Name of the applied filter preset, or `None`.
     #[serde(default)]
     pub filter: Option<String>,
+    /// Filter intensity (0.0–1.0). Scales the preset's exposure/color
+    /// values. Defaults to 1.0 (full strength).
+    #[serde(default = "default_filter_strength")]
+    pub filter_strength: f64,
+}
+
+fn default_filter_strength() -> f64 {
+    1.0
 }
 
 impl Default for EditState {
@@ -76,6 +84,7 @@ impl Default for EditState {
             exposure: ExposureState::default(),
             color: ColorState::default(),
             filter: None,
+            filter_strength: 1.0,
         }
     }
 }
@@ -173,6 +182,7 @@ mod tests {
                 tint: -0.05,
             },
             filter: Some("vintage".to_string()),
+            filter_strength: 0.75,
         };
 
         let json = serde_json::to_string(&state).unwrap();

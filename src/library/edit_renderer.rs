@@ -211,6 +211,28 @@ pub fn filter_preset(name: &str) -> Option<EditState> {
             state.exposure.brightness = 0.1;
             state.color.saturation = -0.2;
         }
+        "noir" => {
+            state.color.saturation = -1.0;
+            state.exposure.contrast = 0.3;
+            state.exposure.brightness = -0.05;
+        }
+        "chrome" => {
+            state.exposure.contrast = 0.25;
+            state.color.saturation = -0.15;
+            state.exposure.highlights = 0.2;
+            state.exposure.shadows = -0.2;
+        }
+        "matte" => {
+            state.exposure.contrast = -0.15;
+            state.exposure.shadows = 0.3;
+            state.color.saturation = -0.1;
+        }
+        "golden" => {
+            state.color.temperature = 0.5;
+            state.color.saturation = 0.15;
+            state.exposure.brightness = 0.05;
+            state.exposure.contrast = 0.1;
+        }
         _ => return None,
     }
 
@@ -218,7 +240,9 @@ pub fn filter_preset(name: &str) -> Option<EditState> {
 }
 
 /// Names of all built-in filter presets.
-pub const FILTER_NAMES: &[&str] = &["bw", "vintage", "warm", "cool", "vivid", "fade"];
+pub const FILTER_NAMES: &[&str] = &[
+    "bw", "vivid", "cool", "warm", "fade", "noir", "chrome", "matte", "golden",
+];
 
 // ---------------------------------------------------------------------------
 // Helpers
