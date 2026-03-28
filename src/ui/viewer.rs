@@ -517,6 +517,8 @@ impl PhotoViewer {
         info_split.set_sidebar(Some(&sidebar_stack));
         info_split.set_sidebar_position(gtk::PackType::End);
         info_split.set_show_sidebar(false);
+        info_split.set_min_sidebar_width(340.0);
+        info_split.set_max_sidebar_width(400.0);
 
         // ── Toolbar view ─────────────────────────────────────────────────────
         let toolbar_view = adw::ToolbarView::new();

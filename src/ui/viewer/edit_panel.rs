@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use adw::prelude::*;
+use glib::object::IsA;
 use gtk::{gdk, glib};
 use image::DynamicImage;
 use tracing::{debug, error, warn};
@@ -32,9 +33,10 @@ pub struct EditSession {
 
 /// Scrollable edit panel displayed in the viewer sidebar.
 ///
-/// Uses an `AdwViewSwitcher` with two pages:
-/// - **Filters**: preset filter buttons + transform controls (rotate, flip)
-/// - **Adjust**: individual exposure and color sliders
+/// Uses three `AdwExpanderRow` sections:
+/// - **Transform**: crop, rotate, flip (collapsed by default)
+/// - **Filters**: preset filter grid + strength slider (expanded by default)
+/// - **Adjust**: Light, Colour slider groups (expanded by default)
 ///
 /// Edit state is auto-saved to the database after 100ms of inactivity
 /// and on session end. No explicit Save button — follows GNOME HIG.
@@ -59,6 +61,12 @@ pub struct EditPanel {
     save_in_flight: Rc<Cell<bool>>,
     /// Filter toggle buttons, keyed by name, for programmatic updates.
     filter_buttons: Rc<RefCell<Vec<(String, gtk::ToggleButton)>>>,
+    /// Subtitle label on the Filters expander, updated when filter changes.
+    filter_subtitle: Rc<RefCell<Option<gtk::Label>>>,
+    /// Subtitle label on the Adjust expander, updated when sliders change.
+    adjust_subtitle: Rc<RefCell<Option<gtk::Label>>>,
+    /// All adjust slider scales, for resetting on revert.
+    adjust_scales: Rc<RefCell<Vec<gtk::Scale>>>,
 }
 
 impl EditPanel {
@@ -76,6 +84,9 @@ impl EditPanel {
         let save_in_flight: Rc<Cell<bool>> = Rc::new(Cell::new(false));
         let filter_buttons: Rc<RefCell<Vec<(String, gtk::ToggleButton)>>> =
             Rc::new(RefCell::new(Vec::new()));
+        let filter_subtitle: Rc<RefCell<Option<gtk::Label>>> = Rc::new(RefCell::new(None));
+        let adjust_subtitle: Rc<RefCell<Option<gtk::Label>>> = Rc::new(RefCell::new(None));
+        let adjust_scales: Rc<RefCell<Vec<gtk::Scale>>> = Rc::new(RefCell::new(Vec::new()));
 
         let panel = Self {
             root,
@@ -88,6 +99,9 @@ impl EditPanel {
             save_debounce,
             save_in_flight,
             filter_buttons,
+            filter_subtitle,
+            adjust_subtitle,
+            adjust_scales,
         };
 
         panel.build_ui();
@@ -235,38 +249,62 @@ impl EditPanel {
     // ── UI construction ──────────────────────────────────────────────────────
 
     fn build_ui(&self) {
-        // ── View stack with two pages ────────────────────────────────────────
-        let stack = adw::ViewStack::new();
+        let vbox = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        vbox.set_margin_top(12);
+        vbox.set_margin_bottom(12);
+        vbox.set_margin_start(12);
+        vbox.set_margin_end(12);
 
-        let filters_page = self.build_filters_page();
-        let filters_stack_page = stack.add_titled(&filters_page, Some("filters"), "Filters");
-        filters_stack_page.set_icon_name(Some("color-select-symbolic"));
+        // ── Transform section (collapsed by default) ─────────────────────────
+        {
+            let list = gtk::ListBox::new();
+            list.add_css_class("boxed-list");
+            list.set_selection_mode(gtk::SelectionMode::None);
 
-        let adjust_page = self.build_adjust_page();
-        let adjust_stack_page = stack.add_titled(&adjust_page, Some("adjust"), "Adjust");
-        adjust_stack_page.set_icon_name(Some("preferences-other-symbolic"));
+            let expander = expander_row("Transform", "Crop, rotate, flip", false);
+            self.build_transform_content(&expander);
 
-        // ── View switcher at top ─────────────────────────────────────────────
-        let switcher = adw::ViewSwitcher::builder()
-            .stack(&stack)
-            .policy(adw::ViewSwitcherPolicy::Wide)
-            .margin_start(12)
-            .margin_end(12)
-            .margin_top(8)
-            .margin_bottom(4)
-            .build();
+            list.append(&expander);
+            vbox.append(&list);
+        }
 
-        self.root.append(&switcher);
+        // ── Filters section (expanded by default) ────────────────────────────
+        {
+            let list = gtk::ListBox::new();
+            list.add_css_class("boxed-list");
+            list.set_selection_mode(gtk::SelectionMode::None);
 
-        // ── Scrolled stack ───────────────────────────────────────────────────
+            let (expander, subtitle_label) = expander_row_with_label("Filters", "None", true);
+            *self.filter_subtitle.borrow_mut() = Some(subtitle_label);
+            self.build_filters_content(&expander);
+
+            list.append(&expander);
+            vbox.append(&list);
+        }
+
+        // ── Adjust section (expanded by default) ─────────────────────────────
+        {
+            let list = gtk::ListBox::new();
+            list.add_css_class("boxed-list");
+            list.set_selection_mode(gtk::SelectionMode::None);
+
+            let (expander, subtitle_label) = expander_row_with_label("Adjust", "No changes", true);
+            *self.adjust_subtitle.borrow_mut() = Some(subtitle_label);
+            self.build_adjust_content(&expander);
+
+            list.append(&expander);
+            vbox.append(&list);
+        }
+
+        // ── Scrolled content ─────────────────────────────────────────────────
         let scrolled = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vexpand(true)
             .build();
-        scrolled.set_child(Some(&stack));
+        scrolled.set_child(Some(&vbox));
         self.root.append(&scrolled);
 
-        // ── Revert button (shared across both views) ─────────────────────────
+        // ── Revert button (always visible at bottom) ─────────────────────────
         let revert_btn = gtk::Button::builder()
             .label("Revert to Original")
             .tooltip_text("Remove all edits and restore the original image")
@@ -288,6 +326,9 @@ impl EditPanel {
             let picture = self.picture.clone();
             let save_debounce = Rc::clone(&self.save_debounce);
             let filter_buttons = Rc::clone(&self.filter_buttons);
+            let filter_subtitle = Rc::clone(&self.filter_subtitle);
+            let adjust_subtitle = Rc::clone(&self.adjust_subtitle);
+            let adjust_scales = Rc::clone(&self.adjust_scales);
             revert_btn.connect_clicked(move |_| {
                 // Cancel any pending auto-save.
                 if let Some(id) = save_debounce.take() {
@@ -302,9 +343,20 @@ impl EditPanel {
                     }
                 }
 
-                // Reset filter buttons.
+                // Reset filter buttons and subtitle.
                 for (_, btn) in filter_buttons.borrow().iter() {
                     btn.set_active(false);
+                }
+                if let Some(ref lbl) = *filter_subtitle.borrow() {
+                    lbl.set_label("None");
+                }
+
+                // Reset all adjust sliders to 0.
+                for scale in adjust_scales.borrow().iter() {
+                    scale.set_value(0.0);
+                }
+                if let Some(ref lbl) = *adjust_subtitle.borrow() {
+                    lbl.set_label("No changes");
                 }
 
                 // Re-render original.
@@ -368,19 +420,117 @@ impl EditPanel {
         }
     }
 
-    /// Build the "Filters" page: preset buttons + transform controls.
-    fn build_filters_page(&self) -> gtk::Box {
-        let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
-        page.set_margin_top(12);
-        page.set_margin_bottom(12);
-        page.set_margin_start(12);
-        page.set_margin_end(12);
-
-        // ── Filter presets ───────────────────────────────────────────────────
-        let filter_group = adw::PreferencesGroup::builder()
-            .title("Presets")
+    /// Populate the Transform expander with rotate/flip buttons.
+    fn build_transform_content(&self, expander: &adw::ExpanderRow) {
+        let grid = gtk::Grid::builder()
+            .column_spacing(8)
+            .row_spacing(8)
+            .margin_top(8)
+            .margin_bottom(8)
+            .margin_start(12)
+            .margin_end(12)
+            .column_homogeneous(true)
             .build();
 
+        let rotate_ccw_btn = make_transform_button("object-rotate-left-symbolic", "Rotate CCW");
+        let rotate_cw_btn = make_transform_button("object-rotate-right-symbolic", "Rotate CW");
+        let flip_h_btn = make_transform_button("object-flip-horizontal-symbolic", "Flip H");
+        let flip_v_btn = make_transform_button("object-flip-vertical-symbolic", "Flip V");
+
+        grid.attach(&rotate_ccw_btn, 0, 0, 1, 1);
+        grid.attach(&rotate_cw_btn, 1, 0, 1, 1);
+        grid.attach(&flip_h_btn, 0, 1, 1, 1);
+        grid.attach(&flip_v_btn, 1, 1, 1, 1);
+
+        let grid_row = gtk::ListBoxRow::builder()
+            .activatable(false)
+            .selectable(false)
+            .child(&grid)
+            .build();
+        expander.add_row(&grid_row);
+
+        // Wire rotate CCW.
+        {
+            let session = Rc::clone(&self.session);
+            let picture = self.picture.clone();
+            let tokio = self.tokio.clone();
+            let auto_save = self.auto_save_closure();
+            rotate_ccw_btn.connect_clicked(move |_| {
+                let preview = {
+                    let mut session = session.borrow_mut();
+                    let Some(s) = session.as_mut() else { return };
+                    s.state.transforms.rotate_degrees =
+                        (s.state.transforms.rotate_degrees - 90).rem_euclid(360);
+                    s.render_gen += 1;
+                    (Arc::clone(&s.preview_image), s.state.clone(), s.render_gen)
+                };
+                render_to_picture(&picture, &tokio, &session, preview);
+                auto_save();
+            });
+        }
+
+        // Wire rotate CW.
+        {
+            let session = Rc::clone(&self.session);
+            let picture = self.picture.clone();
+            let tokio = self.tokio.clone();
+            let auto_save = self.auto_save_closure();
+            rotate_cw_btn.connect_clicked(move |_| {
+                let preview = {
+                    let mut session = session.borrow_mut();
+                    let Some(s) = session.as_mut() else { return };
+                    s.state.transforms.rotate_degrees =
+                        (s.state.transforms.rotate_degrees + 90).rem_euclid(360);
+                    s.render_gen += 1;
+                    (Arc::clone(&s.preview_image), s.state.clone(), s.render_gen)
+                };
+                render_to_picture(&picture, &tokio, &session, preview);
+                auto_save();
+            });
+        }
+
+        // Wire flip horizontal.
+        {
+            let session = Rc::clone(&self.session);
+            let picture = self.picture.clone();
+            let tokio = self.tokio.clone();
+            let auto_save = self.auto_save_closure();
+            flip_h_btn.connect_clicked(move |_| {
+                let preview = {
+                    let mut session = session.borrow_mut();
+                    let Some(s) = session.as_mut() else { return };
+                    s.state.transforms.flip_horizontal = !s.state.transforms.flip_horizontal;
+                    s.render_gen += 1;
+                    (Arc::clone(&s.preview_image), s.state.clone(), s.render_gen)
+                };
+                render_to_picture(&picture, &tokio, &session, preview);
+                auto_save();
+            });
+        }
+
+        // Wire flip vertical.
+        {
+            let session = Rc::clone(&self.session);
+            let picture = self.picture.clone();
+            let tokio = self.tokio.clone();
+            let auto_save = self.auto_save_closure();
+            flip_v_btn.connect_clicked(move |_| {
+                let preview = {
+                    let mut session = session.borrow_mut();
+                    let Some(s) = session.as_mut() else { return };
+                    s.state.transforms.flip_vertical = !s.state.transforms.flip_vertical;
+                    s.render_gen += 1;
+                    (Arc::clone(&s.preview_image), s.state.clone(), s.render_gen)
+                };
+                render_to_picture(&picture, &tokio, &session, preview);
+                auto_save();
+            });
+        }
+    }
+
+    /// Populate the Filters expander with preset grid and strength slider.
+    fn build_filters_content(&self, expander: &adw::ExpanderRow) {
+        // ── Filter preset grid ───────────────────────────────────────────────
         let filter_box = gtk::FlowBox::builder()
             .selection_mode(gtk::SelectionMode::None)
             .homogeneous(true)
@@ -388,6 +538,10 @@ impl EditPanel {
             .min_children_per_line(2)
             .row_spacing(8)
             .column_spacing(8)
+            .margin_top(8)
+            .margin_bottom(8)
+            .margin_start(12)
+            .margin_end(12)
             .build();
 
         // "None" button to clear the filter.
@@ -413,15 +567,12 @@ impl EditPanel {
             let picture = self.picture.clone();
             let tokio = self.tokio.clone();
             let all_buttons = Rc::clone(&self.filter_buttons);
-            let save_debounce_rc = Rc::clone(&self.save_debounce);
-            let save_in_flight_rc = Rc::clone(&self.save_in_flight);
-            let library_rc = Arc::clone(&self.library);
-            let media_id_rc = Rc::clone(&self.media_id);
+            let auto_save = self.auto_save_closure();
+            let filter_subtitle = Rc::clone(&self.filter_subtitle);
             let name = name.clone();
 
             btn.connect_clicked(move |clicked_btn| {
                 if !clicked_btn.is_active() {
-                    // Allow un-toggling — treat as "Original".
                     return;
                 }
 
@@ -432,17 +583,25 @@ impl EditPanel {
                     }
                 }
 
+                // Update the expander subtitle.
+                let display = if name == "original" {
+                    "None"
+                } else {
+                    filter_display_name(&name)
+                };
+                if let Some(ref lbl) = *filter_subtitle.borrow() {
+                    lbl.set_label(display);
+                }
+
                 let preview = {
                     let mut session = session.borrow_mut();
                     let Some(s) = session.as_mut() else { return };
 
                     if name == "original" {
-                        // Clear filter, reset exposure/color to defaults.
                         s.state.filter = None;
                         s.state.exposure = Default::default();
                         s.state.color = Default::default();
                     } else if let Some(preset) = filter_preset(&name) {
-                        // Apply filter preset values.
                         s.state.exposure = preset.exposure;
                         s.state.color = preset.color;
                         s.state.filter = Some(name.clone());
@@ -453,95 +612,36 @@ impl EditPanel {
                 };
 
                 render_to_picture(&picture, &tokio, &session, preview);
-
-                // Schedule auto-save.
-                if let Some(id) = save_debounce_rc.take() {
-                    id.remove();
-                }
-                let session = Rc::clone(&session);
-                let media_id = Rc::clone(&media_id_rc);
-                let library = Arc::clone(&library_rc);
-                let tokio = tokio.clone();
-                let save_in_flight = Rc::clone(&save_in_flight_rc);
-                let save_debounce = Rc::clone(&save_debounce_rc);
-                let source_id = glib::timeout_add_local_once(
-                    std::time::Duration::from_millis(SAVE_DEBOUNCE_MS as u64),
-                    move || {
-                        save_debounce.set(None);
-                        schedule_save(
-                            &session,
-                            &media_id,
-                            &library,
-                            &tokio,
-                            &save_in_flight,
-                        );
-                    },
-                );
-                save_debounce_rc.set(Some(source_id));
+                auto_save();
             });
         }
 
-        filter_group.add(&filter_box);
-        page.append(&filter_group);
+        let grid_row = gtk::ListBoxRow::builder()
+            .activatable(false)
+            .selectable(false)
+            .child(&filter_box)
+            .build();
+        expander.add_row(&grid_row);
 
-        // ── Filter strength ──────────────────────────────────────────────────
-        let strength_group = adw::PreferencesGroup::builder()
-            .title("Filter Strength")
-            .build();
-
-        let strength_header = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(8)
-            .build();
-        let strength_label = gtk::Label::builder()
-            .label("Intensity")
-            .halign(gtk::Align::Start)
-            .hexpand(true)
-            .build();
-        let strength_value = gtk::Label::builder()
-            .label("100")
-            .halign(gtk::Align::End)
-            .width_chars(4)
-            .build();
-        strength_value.add_css_class("dim-label");
-        strength_header.append(&strength_label);
-        strength_header.append(&strength_value);
-
-        let strength_scale = gtk::Scale::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .hexpand(true)
-            .build();
-        strength_scale.set_range(0.0, 1.0);
-        strength_scale.set_value(1.0);
-        strength_scale.set_draw_value(false);
-        strength_scale.set_increments(0.01, 0.1);
-
-        let strength_box = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(2)
-            .build();
-        strength_box.append(&strength_header);
-        strength_box.append(&strength_scale);
-        strength_group.add(&strength_box);
-        page.append(&strength_group);
-
-        // Wire strength slider.
+        // ── Strength slider ──────────────────────────────────────────────────
+        let strength_row = self.make_slider_row("Strength", 0.0, 1.0, 1.0, move |val| {
+            (val * 100.0).round() as i32
+        });
         {
             let session = Rc::clone(&self.session);
             let picture = self.picture.clone();
             let tokio = self.tokio.clone();
             let render_debounce = Rc::clone(&self.render_debounce);
             let auto_save = self.auto_save_closure();
+            let scale = strength_row.1.clone();
 
-            strength_scale.connect_value_changed(move |scale| {
+            scale.connect_value_changed(move |scale| {
                 let strength = scale.value();
-                strength_value.set_label(&format!("{}", (strength * 100.0).round() as i32));
 
                 {
                     let mut session = session.borrow_mut();
                     let Some(s) = session.as_mut() else { return };
 
-                    // Re-apply the current filter at the new strength.
                     if let Some(ref filter_name) = s.state.filter.clone() {
                         if let Some(preset) = filter_preset(filter_name) {
                             s.state.exposure.brightness = preset.exposure.brightness * strength;
@@ -560,7 +660,6 @@ impl EditPanel {
                     s.render_gen += 1;
                 }
 
-                // Cancel any pending render debounce timer.
                 if let Some(id) = render_debounce.take() {
                     id.remove();
                 }
@@ -586,178 +685,104 @@ impl EditPanel {
                 auto_save();
             });
         }
+        expander.add_row(&strength_row.0);
+    }
 
-        // ── Transform group ──────────────────────────────────────────────────
-        let transform_group = adw::PreferencesGroup::builder()
-            .title("Transform")
+    /// Populate the Adjust expander with Light and Colour slider groups.
+    fn build_adjust_content(&self, expander: &adw::ExpanderRow) {
+        // ── Light group ──────────────────────────────────────────────────────
+        let light_label = section_label("LIGHT");
+        expander.add_row(&wrap_in_row(&light_label));
+
+        for (name, accessor) in [
+            ("Brightness", accessor_fn(|s: &mut EditState| &mut s.exposure.brightness)),
+            ("Contrast", accessor_fn(|s: &mut EditState| &mut s.exposure.contrast)),
+            ("Highlights", accessor_fn(|s: &mut EditState| &mut s.exposure.highlights)),
+            ("Shadows", accessor_fn(|s: &mut EditState| &mut s.exposure.shadows)),
+            ("White Balance", accessor_fn(|s: &mut EditState| &mut s.exposure.white_balance)),
+        ] {
+            let slider = self.make_slider(name, accessor);
+            expander.add_row(&wrap_in_row(&slider));
+        }
+
+        // ── Colour group ─────────────────────────────────────────────────────
+        let colour_label = section_label("COLOUR");
+        expander.add_row(&wrap_in_row(&colour_label));
+
+        for (name, accessor) in [
+            ("Saturation", accessor_fn(|s: &mut EditState| &mut s.color.saturation)),
+            ("Vibrance", accessor_fn(|s: &mut EditState| &mut s.color.vibrance)),
+            ("Temperature", accessor_fn(|s: &mut EditState| &mut s.color.temperature)),
+            ("Tint", accessor_fn(|s: &mut EditState| &mut s.color.tint)),
+        ] {
+            let slider = self.make_slider(name, accessor);
+            expander.add_row(&wrap_in_row(&slider));
+        }
+    }
+
+    /// Create a slider row with label, value label, and scale.
+    /// Returns (ListBoxRow, Scale) so callers can wire custom handlers.
+    fn make_slider_row<D: Fn(f64) -> i32 + 'static>(
+        &self,
+        label: &str,
+        min: f64,
+        max: f64,
+        initial: f64,
+        display_fn: D,
+    ) -> (gtk::ListBoxRow, gtk::Scale) {
+        let value_label = gtk::Label::builder()
+            .label(&format!("{}", display_fn(initial)))
+            .halign(gtk::Align::End)
+            .width_chars(4)
             .build();
+        value_label.add_css_class("dim-label");
 
-        let rotate_box = gtk::Box::builder()
+        let header_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(8)
-            .halign(gtk::Align::Center)
+            .margin_start(12)
+            .margin_end(12)
+            .build();
+        let label_widget = gtk::Label::builder()
+            .label(label)
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .build();
+        header_box.append(&label_widget);
+        header_box.append(&value_label);
+
+        let scale = gtk::Scale::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .hexpand(true)
+            .margin_start(12)
+            .margin_end(12)
+            .build();
+        scale.set_range(min, max);
+        scale.set_value(initial);
+        scale.set_draw_value(false);
+        scale.set_increments(0.01, 0.1);
+
+        let content = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(2)
             .margin_top(4)
             .margin_bottom(4)
             .build();
+        content.append(&header_box);
+        content.append(&scale);
 
-        let rotate_ccw_btn = gtk::Button::builder()
-            .icon_name("object-rotate-left-symbolic")
-            .tooltip_text("Rotate 90\u{b0} Counter-Clockwise")
-            .build();
-        rotate_ccw_btn.add_css_class("flat");
+        // Update numeric display on value change.
+        scale.connect_value_changed(move |s| {
+            value_label.set_label(&format!("{}", display_fn(s.value())));
+        });
 
-        let rotate_cw_btn = gtk::Button::builder()
-            .icon_name("object-rotate-right-symbolic")
-            .tooltip_text("Rotate 90\u{b0} Clockwise")
-            .build();
-        rotate_cw_btn.add_css_class("flat");
-
-        let flip_h_btn = gtk::ToggleButton::builder()
-            .icon_name("object-flip-horizontal-symbolic")
-            .tooltip_text("Flip Horizontal")
-            .build();
-        flip_h_btn.add_css_class("flat");
-
-        let flip_v_btn = gtk::ToggleButton::builder()
-            .icon_name("object-flip-vertical-symbolic")
-            .tooltip_text("Flip Vertical")
-            .build();
-        flip_v_btn.add_css_class("flat");
-
-        rotate_box.append(&rotate_ccw_btn);
-        rotate_box.append(&rotate_cw_btn);
-        rotate_box.append(&gtk::Separator::new(gtk::Orientation::Vertical));
-        rotate_box.append(&flip_h_btn);
-        rotate_box.append(&flip_v_btn);
-
-        transform_group.add(&rotate_box);
-        page.append(&transform_group);
-
-        // Wire rotate CCW.
-        {
-            let session = Rc::clone(&self.session);
-            let picture = self.picture.clone();
-            let tokio = self.tokio.clone();
-            let panel_self = self.auto_save_closure();
-            rotate_ccw_btn.connect_clicked(move |_| {
-                let preview = {
-                    let mut session = session.borrow_mut();
-                    let Some(s) = session.as_mut() else { return };
-                    s.state.transforms.rotate_degrees =
-                        (s.state.transforms.rotate_degrees - 90).rem_euclid(360);
-                    s.render_gen += 1;
-                    (Arc::clone(&s.preview_image), s.state.clone(), s.render_gen)
-                };
-                render_to_picture(&picture, &tokio, &session, preview);
-                panel_self();
-            });
-        }
-
-        // Wire rotate CW.
-        {
-            let session = Rc::clone(&self.session);
-            let picture = self.picture.clone();
-            let tokio = self.tokio.clone();
-            let panel_self = self.auto_save_closure();
-            rotate_cw_btn.connect_clicked(move |_| {
-                let preview = {
-                    let mut session = session.borrow_mut();
-                    let Some(s) = session.as_mut() else { return };
-                    s.state.transforms.rotate_degrees =
-                        (s.state.transforms.rotate_degrees + 90).rem_euclid(360);
-                    s.render_gen += 1;
-                    (Arc::clone(&s.preview_image), s.state.clone(), s.render_gen)
-                };
-                render_to_picture(&picture, &tokio, &session, preview);
-                panel_self();
-            });
-        }
-
-        // Wire flip horizontal.
-        {
-            let session = Rc::clone(&self.session);
-            let picture = self.picture.clone();
-            let tokio = self.tokio.clone();
-            let panel_self = self.auto_save_closure();
-            flip_h_btn.connect_toggled(move |btn| {
-                let preview = {
-                    let mut session = session.borrow_mut();
-                    let Some(s) = session.as_mut() else { return };
-                    s.state.transforms.flip_horizontal = btn.is_active();
-                    s.render_gen += 1;
-                    (Arc::clone(&s.preview_image), s.state.clone(), s.render_gen)
-                };
-                render_to_picture(&picture, &tokio, &session, preview);
-                panel_self();
-            });
-        }
-
-        // Wire flip vertical.
-        {
-            let session = Rc::clone(&self.session);
-            let picture = self.picture.clone();
-            let tokio = self.tokio.clone();
-            let panel_self = self.auto_save_closure();
-            flip_v_btn.connect_toggled(move |btn| {
-                let preview = {
-                    let mut session = session.borrow_mut();
-                    let Some(s) = session.as_mut() else { return };
-                    s.state.transforms.flip_vertical = btn.is_active();
-                    s.render_gen += 1;
-                    (Arc::clone(&s.preview_image), s.state.clone(), s.render_gen)
-                };
-                render_to_picture(&picture, &tokio, &session, preview);
-                panel_self();
-            });
-        }
-
-        page
-    }
-
-    /// Build the "Adjust" page: exposure and color sliders.
-    fn build_adjust_page(&self) -> gtk::Box {
-        let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
-        page.set_margin_top(12);
-        page.set_margin_bottom(12);
-        page.set_margin_start(12);
-        page.set_margin_end(12);
-
-        // ── Light group ───────────────────────────────────────────────────────
-        let light_group = adw::PreferencesGroup::builder()
-            .title("Light")
+        let row = gtk::ListBoxRow::builder()
+            .activatable(false)
+            .selectable(false)
+            .child(&content)
             .build();
 
-        let brightness = self.make_slider("Brightness", |s| &mut s.exposure.brightness);
-        let contrast = self.make_slider("Contrast", |s| &mut s.exposure.contrast);
-        let highlights = self.make_slider("Highlights", |s| &mut s.exposure.highlights);
-        let shadows = self.make_slider("Shadows", |s| &mut s.exposure.shadows);
-        let white_balance =
-            self.make_slider("White Balance", |s| &mut s.exposure.white_balance);
-
-        light_group.add(&brightness);
-        light_group.add(&contrast);
-        light_group.add(&highlights);
-        light_group.add(&shadows);
-        light_group.add(&white_balance);
-        page.append(&light_group);
-
-        // ── Colour group ─────────────────────────────────────────────────────
-        let colour_group = adw::PreferencesGroup::builder()
-            .title("Colour")
-            .build();
-
-        let saturation = self.make_slider("Saturation", |s| &mut s.color.saturation);
-        let vibrance = self.make_slider("Vibrance", |s| &mut s.color.vibrance);
-        let temperature = self.make_slider("Temperature", |s| &mut s.color.temperature);
-        let tint = self.make_slider("Tint", |s| &mut s.color.tint);
-
-        colour_group.add(&saturation);
-        colour_group.add(&vibrance);
-        colour_group.add(&temperature);
-        colour_group.add(&tint);
-        page.append(&colour_group);
-
-        page
+        (row, scale)
     }
 
     /// Create a slider with label left, numeric value right, and scale below.
@@ -805,11 +830,16 @@ impl EditPanel {
         // debounced render. The state is updated immediately so it's always
         // current, but the expensive render only fires after the slider stops
         // moving for RENDER_DEBOUNCE_MS milliseconds.
+        // Register this scale for revert.
+        self.adjust_scales.borrow_mut().push(scale.clone());
+
         let session = Rc::clone(&self.session);
         let picture = self.picture.clone();
         let tokio = self.tokio.clone();
         let render_debounce = Rc::clone(&self.render_debounce);
         let auto_save = self.auto_save_closure();
+        let adjust_subtitle = Rc::clone(&self.adjust_subtitle);
+        let adjust_scales = Rc::clone(&self.adjust_scales);
 
         scale.connect_value_changed(move |scale| {
             let value = scale.value();
@@ -824,6 +854,9 @@ impl EditPanel {
                 *accessor(&mut s.state) = value;
                 s.render_gen += 1;
             }
+
+            // Update adjust subtitle with count of non-default sliders.
+            update_adjust_subtitle(&adjust_subtitle, &adjust_scales);
 
             // Cancel any pending render debounce timer.
             if let Some(id) = render_debounce.take() {
@@ -953,6 +986,15 @@ impl EditPanel {
             };
             btn.set_active(should_be_active);
         }
+
+        // Sync filter subtitle.
+        let display = match &filter_name {
+            Some(f) => filter_display_name(f),
+            None => "None",
+        };
+        if let Some(ref lbl) = *self.filter_subtitle.borrow() {
+            lbl.set_label(display);
+        }
     }
 }
 
@@ -1063,6 +1105,127 @@ fn render_to_picture(
             pic.set_paintable(Some(texture.upcast_ref::<gdk::Paintable>()));
         }
     });
+}
+
+/// Update the Adjust expander subtitle with the count of non-default sliders.
+fn update_adjust_subtitle(
+    subtitle: &Rc<RefCell<Option<gtk::Label>>>,
+    scales: &Rc<RefCell<Vec<gtk::Scale>>>,
+) {
+    let count = scales
+        .borrow()
+        .iter()
+        .filter(|s| s.value().abs() > 0.02)
+        .count();
+
+    let text = match count {
+        0 => "No changes".to_string(),
+        1 => "1 change".to_string(),
+        n => format!("{n} changes"),
+    };
+
+    if let Some(ref lbl) = *subtitle.borrow() {
+        lbl.set_label(&text);
+    }
+}
+
+/// Create an expander row, returning both the row and the subtitle label for updates.
+fn expander_row_with_label(
+    title: &str,
+    subtitle: &str,
+    expanded: bool,
+) -> (adw::ExpanderRow, gtk::Label) {
+    let suffix = gtk::Label::builder()
+        .label(subtitle)
+        .halign(gtk::Align::End)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .max_width_chars(20)
+        .build();
+    suffix.add_css_class("dim-label");
+
+    let expander = adw::ExpanderRow::builder()
+        .title(title)
+        .show_enable_switch(false)
+        .expanded(expanded)
+        .build();
+    expander.add_suffix(&suffix);
+
+    (expander, suffix)
+}
+
+/// Create an expander row with title left and subtitle right-aligned as a suffix.
+fn expander_row(title: &str, subtitle: &str, expanded: bool) -> adw::ExpanderRow {
+    let suffix = gtk::Label::builder()
+        .label(subtitle)
+        .halign(gtk::Align::End)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .max_width_chars(20)
+        .build();
+    suffix.add_css_class("dim-label");
+
+    let expander = adw::ExpanderRow::builder()
+        .title(title)
+        .show_enable_switch(false)
+        .expanded(expanded)
+        .build();
+    expander.add_suffix(&suffix);
+
+    expander
+}
+
+/// Create a section label (e.g. "LIGHT", "COLOUR") for inside an expander.
+fn section_label(text: &str) -> gtk::Label {
+    let label = gtk::Label::builder()
+        .label(text)
+        .halign(gtk::Align::Start)
+        .margin_top(12)
+        .margin_start(12)
+        .build();
+    label.add_css_class("caption");
+    label.add_css_class("dim-label");
+    label
+}
+
+/// Wrap a widget in a non-activatable ListBoxRow for use inside an ExpanderRow.
+fn wrap_in_row(widget: &impl IsA<gtk::Widget>) -> gtk::ListBoxRow {
+    gtk::ListBoxRow::builder()
+        .activatable(false)
+        .selectable(false)
+        .child(widget)
+        .build()
+}
+
+/// Create a transform action button with icon and label for the 2×2 grid.
+fn make_transform_button(icon_name: &str, label: &str) -> gtk::Button {
+    let icon = gtk::Image::from_icon_name(icon_name);
+    icon.set_pixel_size(24);
+
+    let lbl = gtk::Label::new(Some(label));
+    lbl.add_css_class("caption");
+
+    let vbox = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(4)
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .margin_top(8)
+        .margin_bottom(8)
+        .build();
+    vbox.append(&icon);
+    vbox.append(&lbl);
+
+    let btn = gtk::Button::builder()
+        .child(&vbox)
+        .build();
+    btn.add_css_class("flat");
+    btn
+}
+
+/// Type-erased accessor closure for EditState fields.
+fn accessor_fn(
+    f: fn(&mut EditState) -> &mut f64,
+) -> Box<dyn Fn(&mut EditState) -> &mut f64> {
+    Box::new(f)
 }
 
 /// Convert a filter preset name to a user-facing display name.
