@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  tag-and-release:
+    name: Tag and release
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/v')
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from branch name
+        id: version
+        run: |
+          BRANCH="${{ github.event.pull_request.head.ref }}"
+          VERSION="${BRANCH#release/v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Create annotated tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+
+      - name: Update Flathub manifest
+        run: |
+          COMMIT=$(git rev-parse HEAD)
+          TAG="${{ steps.version.outputs.tag }}"
+          sed -i "s/\"tag\" : \"v[0-9]*\.[0-9]*\.[0-9]*\"/\"tag\" : \"$TAG\"/" io.github.justinf555.Moments.flathub.json
+          sed -i "s/\"commit\" : \"[0-9a-f]*\"/\"commit\" : \"$COMMIT\"/" io.github.justinf555.Moments.flathub.json
+          git add io.github.justinf555.Moments.flathub.json
+          git commit -m "chore: update Flathub manifest for $TAG"
+          git push origin main
+
+      - name: Create GitHub Release
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "Moments ${{ steps.version.outputs.tag }}" \
+            --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
