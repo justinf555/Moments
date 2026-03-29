@@ -14,7 +14,8 @@
         "--device=dri",
         "--socket=wayland",
         "--socket=pulseaudio",
-        "--talk-name=org.freedesktop.secrets"
+        "--talk-name=org.freedesktop.secrets",
+        "--filesystem=home:ro"
     ],
     "build-options" : {
         "append-path" : "/usr/lib/sdk/rust-stable/bin",
