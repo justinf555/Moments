@@ -73,6 +73,8 @@ pub(super) fn run_action<F, Fut>(
 }
 
 /// Wire the selection-changed signal to enable/disable header bar buttons.
+/// Temporarily unused — will be refactored into action bar wiring in PR 2.
+#[allow(dead_code)]
 pub(super) fn wire_selection_buttons(
     ctx: &ActionContext,
     trash_btn: &gtk::Button,
@@ -270,6 +272,8 @@ fn wire_remove_from_album_button(ctx: &ActionContext, btn: gtk::Button, album_id
 }
 
 /// Wire the "Add to Album" button popover.
+/// Temporarily unused — will be refactored into action bar wiring in PR 2.
+#[allow(dead_code)]
 pub(super) fn wire_album_controls(ctx: &ActionContext, album_btn: &gtk::Button) {
     let lib = Arc::clone(&ctx.library);
     let tk = ctx.tokio.clone();
