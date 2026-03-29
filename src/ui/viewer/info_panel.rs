@@ -36,13 +36,11 @@ impl InfoPanel {
         vbox.set_margin_start(12);
         vbox.set_margin_end(12);
 
-        // ── Single boxed list card for all sections ──────────────────────────
-        let list = gtk::ListBox::new();
-        list.add_css_class("boxed-list");
-        list.set_selection_mode(gtk::SelectionMode::None);
+        // Each section is a separate boxed-list card with gaps between them.
 
         // ── Date ─────────────────────────────────────────────────────────────
         {
+            let list = boxed_list();
             let (short_date, long_date, time_str) = format_date_parts(item.taken_at);
             let (expander, _) = expander_row(
                 Some("x-office-calendar-symbolic"),
@@ -53,10 +51,12 @@ impl InfoPanel {
             expander.add_row(&detail_row("Captured", &long_date));
             expander.add_row(&detail_row("Time", &time_str));
             list.append(&expander);
+            vbox.append(&list);
         }
 
         // ── Image ────────────────────────────────────────────────────────────
         {
+            let list = boxed_list();
             let mp_str = match (item.width, item.height) {
                 (Some(w), Some(h)) => {
                     let mp = (w * h) as f64 / 1_000_000.0;
@@ -86,10 +86,12 @@ impl InfoPanel {
             expander.add_row(&detail_row("Format", &format_str));
 
             list.append(&expander);
+            vbox.append(&list);
         }
 
         // ── Camera ───────────────────────────────────────────────────────────
         {
+            let list = boxed_list();
             let camera_name = metadata.and_then(|m| match (&m.camera_make, &m.camera_model) {
                 (Some(make), Some(model)) => {
                     if model.starts_with(make.as_str()) {
@@ -178,11 +180,13 @@ impl InfoPanel {
             }
 
             list.append(&expander);
+            vbox.append(&list);
         }
 
         // ── Location (only when GPS data present) ────────────────────────────
         if let Some(meta) = metadata {
             if let (Some(lat), Some(lon)) = (meta.gps_lat, meta.gps_lon) {
+                let list = boxed_list();
                 let coords_str = format!(
                     "{}\u{b0}, {}\u{b0}",
                     format_decimal(lat.abs(), 4),
@@ -236,11 +240,13 @@ impl InfoPanel {
                 expander.add_row(&btn_row);
 
                 list.append(&expander);
+                vbox.append(&list);
             }
         }
 
         // ── File (collapsed by default) ──────────────────────────────────────
         {
+            let list = boxed_list();
             let (expander, _) = expander_row(
                 Some("document-open-symbolic"),
                 "File",
@@ -249,14 +255,22 @@ impl InfoPanel {
             );
             expander.add_row(&detail_row("Filename", &item.original_filename));
             list.append(&expander);
+            vbox.append(&list);
         }
 
-        vbox.append(&list);
         self.scrolled.set_child(Some(&vbox));
     }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Create a new boxed-list ListBox for a single expander section.
+fn boxed_list() -> gtk::ListBox {
+    let list = gtk::ListBox::new();
+    list.add_css_class("boxed-list");
+    list.set_selection_mode(gtk::SelectionMode::None);
+    list
+}
 
 /// Create a compact EXIF value card for the 2-column camera grid.
 fn exif_card(label: &str, value: &str) -> gtk::Box {
