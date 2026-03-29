@@ -12,6 +12,7 @@ pub mod setup_window;
 pub mod sidebar;
 pub mod video_viewer;
 pub mod viewer;
+pub mod widgets;
 pub mod window;
 
 pub use setup_window::MomentsSetupWindow;
