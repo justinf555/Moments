@@ -118,7 +118,14 @@ pub enum AppEvent {
     ThumbnailDownloadProgress { completed: usize, total: usize },
     ThumbnailDownloadsComplete { total: usize },
 
-    // ── Media state changes ──────────────────────────
+    // ── Commands (UI intent → LibraryCommandHandler) ──
+    TrashRequested { ids: Vec<MediaId> },
+    RestoreRequested { ids: Vec<MediaId> },
+    DeleteRequested { ids: Vec<MediaId> },
+    FavoriteRequested { ids: Vec<MediaId>, state: bool },
+    RemoveFromAlbumRequested { album_id: AlbumId, ids: Vec<MediaId> },
+
+    // ── Results (LibraryCommandHandler → subscribers) ─
     FavoriteChanged { ids: Vec<MediaId>, is_favorite: bool },
     Trashed { ids: Vec<MediaId> },
     Restored { ids: Vec<MediaId> },
@@ -250,12 +257,96 @@ impl PhotoGridModel {
 }
 ```
 
-### Action handler simplification
+### Command / result event pattern
 
-With the bus, action handlers just call the library method and emit an event. No `registry`, no `exit_selection`, no clone chains:
+Events are split into two categories:
+
+- **Command events** (`*Requested`) — UI intent. Emitted by buttons. Carry the minimum data the UI can resolve (e.g. selected IDs).
+- **Result events** (`*Changed`, `*Completed`) — outcomes. Emitted by the command handler after the library operation succeeds. Consumed by models, sidebar, selection controller.
+
+This separates concerns cleanly: **UI resolves UI state → command handler does library work → result event drives all downstream effects.**
+
+#### Command handler
+
+A single `LibraryCommandHandler` component owns `library` and `tokio`. It subscribes to all `*Requested` events, executes the async library call, and emits the result event on success.
 
 ```rust
-// Before (12+ clones, 3 closure layers):
+pub struct LibraryCommandHandler;
+
+impl LibraryCommandHandler {
+    pub fn new(
+        library: Arc<dyn Library>,
+        tokio: tokio::runtime::Handle,
+        bus: broadcast::Sender<AppEvent>,
+    ) -> Self {
+        let mut rx = bus.subscribe();
+        let lib = library;
+        let tk = tokio;
+        let bus_tx = bus.clone();
+
+        // Runs on the GTK main context, polls for command events.
+        glib::timeout_add_local(Duration::from_millis(16), move || {
+            while let Ok(event) = rx.try_recv() {
+                match event {
+                    AppEvent::TrashRequested { ids } => {
+                        let lib = Arc::clone(&lib);
+                        let bus = bus_tx.clone();
+                        let ids_clone = ids.clone();
+                        tk.spawn(async move {
+                            if lib.trash(&ids_clone).await.is_ok() {
+                                let _ = bus.send(AppEvent::Trashed { ids });
+                            }
+                        });
+                    }
+                    AppEvent::FavoriteRequested { ids, state } => {
+                        let lib = Arc::clone(&lib);
+                        let bus = bus_tx.clone();
+                        let ids_clone = ids.clone();
+                        tk.spawn(async move {
+                            if lib.set_favorite(&ids_clone, state).await.is_ok() {
+                                let _ = bus.send(AppEvent::FavoriteChanged { ids, is_favorite: state });
+                            }
+                        });
+                    }
+                    AppEvent::RestoreRequested { ids } => {
+                        let lib = Arc::clone(&lib);
+                        let bus = bus_tx.clone();
+                        let ids_clone = ids.clone();
+                        tk.spawn(async move {
+                            if lib.restore(&ids_clone).await.is_ok() {
+                                let _ = bus.send(AppEvent::Restored { ids });
+                            }
+                        });
+                    }
+                    AppEvent::DeleteRequested { ids } => {
+                        let lib = Arc::clone(&lib);
+                        let bus = bus_tx.clone();
+                        let ids_clone = ids.clone();
+                        tk.spawn(async move {
+                            if lib.delete_permanently(&ids_clone).await.is_ok() {
+                                let _ = bus.send(AppEvent::Deleted { ids });
+                            }
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            glib::ControlFlow::Continue
+        });
+
+        Self
+    }
+}
+```
+
+`library` and `tokio` exist in exactly **one place** — the command handler. No other component needs them for action execution.
+
+#### Button handlers become trivial
+
+Buttons resolve UI state (selection → IDs) and emit a command. Nothing else.
+
+```rust
+// Before (12+ clones, 3 closure layers, 25 lines):
 fn wire_trash(btn, selection, library, tokio, registry, exit_selection) {
     let sel = selection.clone();
     let lib = Arc::clone(library);
@@ -278,27 +369,64 @@ fn wire_trash(btn, selection, library, tokio, registry, exit_selection) {
     });
 }
 
-// After (2 clones, 1 closure layer):
-fn wire_trash(btn, selection, library, tokio, bus) {
+// After (2 clones, 1 closure layer, 6 lines):
+fn wire_trash(btn, selection, bus) {
     let sel = selection.clone();
-    let lib = Arc::clone(library);
-    let tk = tokio.clone();
     let bus = bus.clone();
     btn.connect_clicked(move |_| {
         let ids = collect_selected_ids(&sel);
-        let lib = Arc::clone(&lib);
-        let tk = tk.clone();
-        let bus = bus.clone();
-        glib::MainContext::default().spawn_local(async move {
-            if let Ok(Ok(())) = tk.spawn(async move { lib.trash(&ids).await }).await {
-                let _ = bus.send(AppEvent::Trashed { ids });
-            }
-        });
+        if !ids.is_empty() {
+            let _ = bus.send(AppEvent::TrashRequested { ids });
+        }
     });
 }
 ```
 
-The `PhotoGridModel` subscriber handles removal. The selection mode controller subscriber handles exit. Neither needs to be passed to the button handler.
+#### ActionBarFactory simplified
+
+The factory needs only `selection` (UI state) and `bus` (communication). No `library`, no `tokio`, no `registry`, no `exit_selection`:
+
+```rust
+pub fn build_for_filter(
+    filter: &MediaFilter,
+    selection: &gtk::MultiSelection,
+    bus: &broadcast::Sender<AppEvent>,
+) -> ActionBarButtons {
+    match filter {
+        MediaFilter::Trashed => build_trash_bar(selection, bus),
+        MediaFilter::Album { album_id } => build_album_bar(selection, bus, album_id),
+        _ => build_standard_bar(selection, bus),
+    }
+}
+```
+
+#### Full event flow for "trash 3 selected items"
+
+```
+User clicks "Delete" button
+│
+├─ Button handler:
+│   ids = collect_selected_ids(selection)     // [id_1, id_2, id_3]
+│   bus.send(TrashRequested { ids })           // done, 2 lines
+│
+├─ LibraryCommandHandler receives TrashRequested:
+│   library.trash(&ids).await                  // async DB call
+│   bus.send(Trashed { ids })                  // emit result
+│
+├─ PhotoGridModel (Photos) receives Trashed:
+│   for id in ids { self.remove_item(id) }     // items disappear
+│
+├─ PhotoGridModel (Trash) receives Trashed:
+│   for id in ids { self.fetch_and_insert(id) } // items appear in trash
+│
+├─ SelectionModeController receives Trashed:
+│   exit_selection.activate(None)              // exits selection mode
+│
+└─ Sidebar receives Trashed:
+    (could update trash count badge)
+```
+
+No component knows about any other. The button doesn't know about models. The model doesn't know about the button. The command handler doesn't know about selection mode.
 
 ---
 
@@ -309,9 +437,10 @@ The `PhotoGridModel` subscriber handles removal. The selection mode controller s
 | `std::sync::mpsc` channel | `tokio::sync::broadcast` channel |
 | `application.rs` idle loop (120 lines of routing) | Per-component `subscribe()` with 16ms poll |
 | `ModelRegistry` (100 lines, 8 methods) | Direct subscriptions — each model subscribes |
-| `ActionContext` struct | `bus: broadcast::Sender<AppEvent>` passed to handlers |
-| `exit_selection` passthrough | `AppEvent::ExitSelectionMode` emitted, selection controller subscribes |
-| `registry.on_trashed()` calls in action handlers | `bus.send(AppEvent::Trashed { ids })` |
+| `ActionContext` struct | `bus: broadcast::Sender<AppEvent>` — 2 params instead of 7 |
+| `exit_selection` passthrough | `SelectionModeController` subscribes to `Trashed`/`Deleted` |
+| `library` + `tokio` in every action handler | `LibraryCommandHandler` — single component owns both |
+| `registry.on_trashed()` calls in action handlers | `bus.send(TrashRequested { ids })` — handler emits intent only |
 | `win.album-created` GAction hack | `AppEvent::AlbumCreated` — sidebar subscribes directly |
 
 ---
@@ -333,6 +462,7 @@ Each component subscribes to the events it cares about:
 
 | Subscriber | Events consumed |
 |------------|----------------|
+| `LibraryCommandHandler` | `TrashRequested`, `RestoreRequested`, `DeleteRequested`, `FavoriteRequested`, `RemoveFromAlbumRequested` → executes library calls, emits result events |
 | `PhotoGridModel` | `ThumbnailReady`, `FavoriteChanged`, `Trashed`, `Restored`, `Deleted`, `AssetSynced`, `AssetDeletedRemote`, `AlbumMediaChanged` |
 | `Sidebar` | `SyncStarted`, `SyncProgress`, `SyncComplete`, `ThumbnailDownloadProgress`, `ThumbnailDownloadsComplete`, `ImportProgress`, `ImportComplete`, `AlbumCreated`, `AlbumRenamed`, `AlbumDeleted` |
 | `SelectionModeController` | `Trashed`, `Deleted`, `ExitSelectionMode` → exits selection mode |
@@ -406,7 +536,8 @@ Incremental, one event at a time. Each step is a single PR:
 
 | File | Change |
 |------|--------|
-| `src/app_event.rs` | **New** — `AppEvent` enum |
+| `src/app_event.rs` | **New** — `AppEvent` enum (commands + results) |
+| `src/command_handler.rs` | **New** — `LibraryCommandHandler` (owns `library` + `tokio`, executes commands) |
 | `src/main.rs` | Create `broadcast::channel`, pass sender |
 | `src/application.rs` | Remove idle loop routing (120 lines), pass sender to library |
 | `src/ui/model_registry.rs` | **Delete** — replaced by direct subscriptions |
