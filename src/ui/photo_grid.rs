@@ -286,11 +286,6 @@ pub struct PhotoGridView {
     library: Arc<dyn Library>,
     tokio: tokio::runtime::Handle,
     texture_cache: Rc<texture_cache::TextureCache>,
-    trash_btn: gtk::Button,
-    restore_btn: gtk::Button,
-    delete_btn: gtk::Button,
-    album_btn: gtk::Button,
-    remove_from_album_btn: gtk::Button,
     widget: gtk::Widget,
     /// Zoom actions — must be installed on the window so accelerators work
     /// regardless of which widget has focus.
@@ -339,51 +334,19 @@ impl PhotoGridView {
 
         header.pack_start(&zoom_box);
 
-        // ── Selection action buttons (right side, before menu) ─────────
-        // Trash view gets Restore + Delete; other views get Trash.
-        let restore_btn = gtk::Button::builder()
-            .icon_name("edit-undo-symbolic")
-            .tooltip_text("Restore")
-            .sensitive(false)
-            .visible(false)
-            .build();
-        restore_btn.add_css_class("flat");
-        header.pack_end(&restore_btn);
+        // ── Content overflow menu (⋮) ────────────────────────────────────
+        let content_menu = gio::Menu::new();
+        let content_section = gio::Menu::new();
+        content_section.append(Some("_Select"), Some("view.enter-selection"));
+        content_menu.append_section(None, &content_section);
 
-        let delete_btn = gtk::Button::builder()
-            .icon_name("edit-delete-symbolic")
-            .tooltip_text("Delete Permanently")
-            .sensitive(false)
-            .visible(false)
+        let content_menu_btn = gtk::MenuButton::builder()
+            .icon_name("view-more-symbolic")
+            .tooltip_text("Menu")
+            .menu_model(&content_menu)
             .build();
-        delete_btn.add_css_class("flat");
-        delete_btn.add_css_class("error");
-        header.pack_end(&delete_btn);
-
-        let trash_btn = gtk::Button::builder()
-            .icon_name("user-trash-symbolic")
-            .tooltip_text("Move to Trash")
-            .sensitive(false)
-            .build();
-        trash_btn.add_css_class("flat");
-        header.pack_end(&trash_btn);
-
-        let remove_from_album_btn = gtk::Button::builder()
-            .icon_name("list-remove-symbolic")
-            .tooltip_text("Remove from Album")
-            .sensitive(false)
-            .visible(false)
-            .build();
-        remove_from_album_btn.add_css_class("flat");
-        header.pack_end(&remove_from_album_btn);
-
-        let album_btn = gtk::Button::builder()
-            .icon_name("folder-new-symbolic")
-            .tooltip_text("Add to Album")
-            .sensitive(false)
-            .build();
-        album_btn.add_css_class("flat");
-        header.pack_end(&album_btn);
+        content_menu_btn.add_css_class("flat");
+        header.pack_end(&content_menu_btn);
 
         // ── Grid toolbar view (root nav page content) ────────────────────────
         let photo_grid = PhotoGrid::new();
@@ -445,6 +408,10 @@ impl PhotoGridView {
         action_group.add_action(&zoom_in_action);
         action_group.add_action(&zoom_out_action);
 
+        // Stub action for "Select" menu item — implemented in PR 2.
+        let enter_selection = gio::SimpleAction::new("enter-selection", None);
+        action_group.add_action(&enter_selection);
+
         let widget = nav_view.clone().upcast::<gtk::Widget>();
 
         Self {
@@ -455,11 +422,6 @@ impl PhotoGridView {
             library,
             tokio,
             texture_cache,
-            trash_btn,
-            restore_btn,
-            delete_btn,
-            album_btn,
-            remove_from_album_btn,
             widget,
             view_actions: action_group,
         }
@@ -526,15 +488,6 @@ impl PhotoGridView {
             grid_view,
         };
 
-        actions::wire_selection_buttons(
-            &ctx,
-            &self.trash_btn,
-            &self.restore_btn,
-            &self.delete_btn,
-            &self.album_btn,
-            &self.remove_from_album_btn,
-        );
-        actions::wire_album_controls(&ctx, &self.album_btn);
         actions::wire_context_menu(&ctx);
     }
 }

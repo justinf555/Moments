@@ -111,27 +111,21 @@ mod imp {
             // ── Sidebar header bar ───────────────────────────────────────
             let header = adw::HeaderBar::new();
 
-            // Import button (LHS).
-            let import_button = gtk::Button::builder()
-                .icon_name("document-send-symbolic")
-                .tooltip_text("Import Photos")
-                .action_name("app.import")
-                .build();
-            import_button.add_css_class("flat");
-            header.pack_start(&import_button);
-
-            // Hamburger menu (RHS).
+            // Hamburger menu (RHS) — contains Import + app-level actions.
             let menu_button = gtk::MenuButton::builder()
                 .primary(true)
                 .icon_name("open-menu-symbolic")
                 .tooltip_text("Main Menu")
                 .build();
             let menu = gio::Menu::new();
-            let section = gio::Menu::new();
-            section.append(Some("_Preferences"), Some("app.preferences"));
-            section.append(Some("_Keyboard Shortcuts"), Some("app.shortcuts"));
-            section.append(Some("_About Moments"), Some("app.about"));
-            menu.append_section(None, &section);
+            let import_section = gio::Menu::new();
+            import_section.append(Some("_Import"), Some("app.import"));
+            menu.append_section(None, &import_section);
+            let app_section = gio::Menu::new();
+            app_section.append(Some("_Keyboard Shortcuts"), Some("app.shortcuts"));
+            app_section.append(Some("_About Moments"), Some("app.about"));
+            app_section.append(Some("_Preferences"), Some("app.preferences"));
+            menu.append_section(None, &app_section);
             menu_button.set_menu_model(Some(&menu));
             header.pack_end(&menu_button);
 
