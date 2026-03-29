@@ -1,7 +1,8 @@
+use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use gtk::{glib, prelude::*, subclass::prelude::*};
+use gtk::{gio, glib, prelude::*, subclass::prelude::*};
 use tokio::sync::Semaphore;
 use tracing::{debug, error};
 
@@ -46,6 +47,9 @@ pub fn build_factory(
     registry: Rc<ModelRegistry>,
     filter: MediaFilter,
     cache: Rc<TextureCache>,
+    selection_mode: Rc<Cell<bool>>,
+    selection: gtk::MultiSelection,
+    enter_selection: gio::SimpleAction,
 ) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
     let decode_semaphore = Arc::new(Semaphore::new(max_decode_workers()));
@@ -70,6 +74,12 @@ pub fn build_factory(
         cache,
         #[strong]
         decode_semaphore,
+        #[strong]
+        selection_mode,
+        #[strong]
+        selection,
+        #[strong]
+        enter_selection,
         move |_, obj| {
             let list_item = obj
                 .downcast_ref::<gtk::ListItem>()
@@ -82,10 +92,15 @@ pub fn build_factory(
                 .item()
                 .and_downcast::<MediaItemObject>()
                 .expect("item is MediaItemObject");
+            let position = list_item.position();
 
             // Configure cell for the view type before binding.
             let is_trash = filter == MediaFilter::Trashed;
             cell.imp().show_star.set(!is_trash);
+
+            // Set checkbox state based on current selection mode.
+            cell.set_selection_mode(selection_mode.get());
+            cell.set_checked(list_item.is_selected());
 
             cell.bind(&item);
 
@@ -204,6 +219,28 @@ pub fn build_factory(
                     .borrow_mut()
                     .replace(handler_id);
             }
+
+            // Wire checkbox → select/deselect item + enter selection mode.
+            {
+                let checkbox = cell.imp().checkbox.clone();
+                let sel = selection.clone();
+                let enter = enter_selection.clone();
+                let sm = Rc::clone(&selection_mode);
+                let handler_id = checkbox.connect_toggled(move |cb| {
+                    if cb.is_active() {
+                        if !sm.get() {
+                            enter.activate(None);
+                        }
+                        sel.select_item(position, false);
+                    } else {
+                        sel.unselect_item(position);
+                    }
+                });
+                cell.imp()
+                    .checkbox_handler
+                    .borrow_mut()
+                    .replace(handler_id);
+            }
         }
     ));
 
@@ -215,9 +252,12 @@ pub fn build_factory(
             .child()
             .and_downcast::<PhotoGridCell>()
             .expect("child is PhotoGridCell");
-        // Disconnect star click handler before unbinding signals.
+        // Disconnect handlers before unbinding signals.
         if let Some(handler) = cell.imp().star_click_handler.borrow_mut().take() {
             cell.imp().star_btn.disconnect(handler);
+        }
+        if let Some(handler) = cell.imp().checkbox_handler.borrow_mut().take() {
+            cell.imp().checkbox.disconnect(handler);
         }
         cell.unbind();
 

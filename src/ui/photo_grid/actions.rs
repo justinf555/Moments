@@ -766,3 +766,19 @@ pub(super) fn wire_context_menu(ctx: &ActionContext) {
 
     ctx.grid_view.add_controller(gesture);
 }
+
+/// Update the favourite button's icon and label to reflect the current state.
+/// `all_fav = true` means all selected items are favourited → show "Unfavourite".
+pub(super) fn update_fav_button(btn: &gtk::Button, all_fav: bool) {
+    let Some(content) = btn.child().and_downcast::<gtk::Box>() else { return };
+    let Some(icon) = content.first_child().and_downcast::<gtk::Image>() else { return };
+    let Some(label) = icon.next_sibling().and_downcast::<gtk::Label>() else { return };
+
+    if all_fav {
+        icon.set_icon_name(Some("non-starred-symbolic"));
+        label.set_label("Unfavourite");
+    } else {
+        icon.set_icon_name(Some("starred-symbolic"));
+        label.set_label("Favourite");
+    }
+}

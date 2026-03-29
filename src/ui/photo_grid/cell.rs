@@ -22,19 +22,25 @@ mod imp {
         pub picture: gtk::Picture,
         pub placeholder: gtk::Image,
         pub star_btn: gtk::Button,
+        pub checkbox: gtk::CheckButton,
         pub days_label: gtk::Label,
         pub duration_label: gtk::Label,
         pub overlay: gtk::Overlay,
         pub bindings: RefCell<Option<CellBindings>>,
         /// Whether to show the star button (false in Trash view).
         pub show_star: Cell<bool>,
-        /// Whether the cell has a loaded texture (star hover only works when visible).
+        /// Whether the cell has a loaded texture.
         pub has_texture: Cell<bool>,
-        /// Whether the item is currently favourited (show star without hover).
+        /// Whether the item is currently favourited.
         pub is_favorited: Cell<bool>,
+        /// Whether the grid is in selection mode (checkbox always visible).
+        pub in_selection_mode: Cell<bool>,
         /// Click handler for the star button — connected in factory `bind`,
         /// disconnected in factory `unbind`.
         pub star_click_handler: RefCell<Option<glib::SignalHandlerId>>,
+        /// Click handler for the checkbox — connected in factory `bind`,
+        /// disconnected in factory `unbind`.
+        pub checkbox_handler: RefCell<Option<glib::SignalHandlerId>>,
         /// Debounce timer for thumbnail loading — cancelled on unbind so
         /// fast-scrolled cells never decode textures.
         pub texture_timer: RefCell<Option<glib::SourceId>>,
@@ -71,7 +77,7 @@ mod imp {
             self.placeholder.set_valign(gtk::Align::Center);
             self.placeholder.add_css_class("dim-label");
 
-            // Star button — bottom-left, shown on hover or when favourited.
+            // Star button — bottom-left, only shown when favourited (no hover).
             self.star_btn.set_icon_name("non-starred-symbolic");
             self.star_btn.set_halign(gtk::Align::Start);
             self.star_btn.set_valign(gtk::Align::End);
@@ -80,6 +86,15 @@ mod imp {
             self.star_btn.add_css_class("circular");
             self.star_btn.add_css_class("osd");
             self.star_btn.set_visible(false);
+
+            // Checkbox — top-left, shown on hover or always in selection mode.
+            self.checkbox.set_halign(gtk::Align::Start);
+            self.checkbox.set_valign(gtk::Align::Start);
+            self.checkbox.set_margin_start(6);
+            self.checkbox.set_margin_top(6);
+            self.checkbox.add_css_class("selection-mode");
+            self.checkbox.add_css_class("osd");
+            self.checkbox.set_visible(false);
 
             // Trash days-remaining — bottom-right (Trash view only).
             self.days_label.set_halign(gtk::Align::End);
@@ -104,30 +119,30 @@ mod imp {
             self.overlay.set_child(Some(&self.picture));
             self.overlay.add_overlay(&self.placeholder);
             self.overlay.add_overlay(&self.star_btn);
+            self.overlay.add_overlay(&self.checkbox);
             self.overlay.add_overlay(&self.days_label);
             self.overlay.add_overlay(&self.duration_label);
 
             self.overlay.set_parent(&*obj);
 
-            // Hover controller — show star button on mouse enter/leave.
-            // Uses weak ref to the cell to read live imp state (show_star,
-            // has_texture, is_favorited are set later during factory bind).
+            // Hover controller — show checkbox on mouse enter/leave.
             let motion = gtk::EventControllerMotion::new();
             motion.set_propagation_phase(gtk::PropagationPhase::Capture);
             let cell_weak = obj.downgrade();
             motion.connect_enter(move |_, _x, _y| {
                 let Some(cell) = cell_weak.upgrade() else { return };
                 let imp = cell.imp();
-                if imp.show_star.get() && imp.has_texture.get() {
-                    imp.star_btn.set_visible(true);
+                if imp.has_texture.get() {
+                    imp.checkbox.set_visible(true);
                 }
             });
             let cell_weak = obj.downgrade();
             motion.connect_leave(move |_| {
                 let Some(cell) = cell_weak.upgrade() else { return };
                 let imp = cell.imp();
-                if !imp.is_favorited.get() {
-                    imp.star_btn.set_visible(false);
+                // Only hide checkbox if NOT in selection mode.
+                if !imp.in_selection_mode.get() {
+                    imp.checkbox.set_visible(false);
                 }
             });
             obj.add_controller(motion);
@@ -191,6 +206,8 @@ impl PhotoGridCell {
         imp.picture.set_visible(false);
         imp.placeholder.set_visible(true);
         imp.star_btn.set_visible(false);
+        imp.checkbox.set_visible(false);
+        imp.checkbox.set_active(false);
         imp.days_label.set_visible(false);
         imp.duration_label.set_visible(false);
         imp.has_texture.set(false);
@@ -234,19 +251,32 @@ impl PhotoGridCell {
         }
     }
 
+    /// Set whether the cell is in selection mode (checkbox always visible).
+    pub fn set_selection_mode(&self, active: bool) {
+        let imp = self.imp();
+        imp.in_selection_mode.set(active);
+        if active && imp.has_texture.get() {
+            imp.checkbox.set_visible(true);
+        } else if !active {
+            imp.checkbox.set_visible(false);
+            imp.checkbox.set_active(false);
+        }
+    }
+
+    /// Set the checkbox checked state (reflects MultiSelection).
+    pub fn set_checked(&self, checked: bool) {
+        self.imp().checkbox.set_active(checked);
+    }
+
     fn update_star(&self, item: &MediaItemObject) {
         let imp = self.imp();
         let fav = item.is_favorite();
         imp.is_favorited.set(fav);
-        if fav {
+        if fav && imp.show_star.get() && imp.has_texture.get() {
             imp.star_btn.set_icon_name("starred-symbolic");
-            // Show starred indicator even without hover.
-            if imp.show_star.get() && imp.has_texture.get() {
-                imp.star_btn.set_visible(true);
-            }
+            imp.star_btn.set_visible(true);
         } else {
             imp.star_btn.set_icon_name("non-starred-symbolic");
-            // Hide unless hovering (hover controller handles visibility).
             imp.star_btn.set_visible(false);
         }
     }
