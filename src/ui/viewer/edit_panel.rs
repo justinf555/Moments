@@ -261,7 +261,7 @@ impl EditPanel {
         list_transform.set_selection_mode(gtk::SelectionMode::None);
 
         let (transform_exp, _) = expander_row(
-            Some("crop-symbolic"),
+            Some("object-rotate-right-symbolic"),
             "Transform",
             "Crop, rotate, flip",
             false,
