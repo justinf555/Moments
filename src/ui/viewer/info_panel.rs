@@ -2,6 +2,7 @@ use adw::prelude::*;
 use gtk::gio;
 
 use crate::library::media::{MediaItem, MediaMetadataRecord};
+use crate::ui::widgets::{detail_row, expander_row};
 
 /// Scrollable metadata panel displayed in the [`super::PhotoViewer`] info sidebar.
 ///
@@ -43,8 +44,8 @@ impl InfoPanel {
         // ── Date ─────────────────────────────────────────────────────────────
         {
             let (short_date, long_date, time_str) = format_date_parts(item.taken_at);
-            let expander = expander_row_with_icon(
-                "x-office-calendar-symbolic",
+            let (expander, _) = expander_row(
+                Some("x-office-calendar-symbolic"),
                 "Date",
                 &short_date,
                 true,
@@ -64,8 +65,8 @@ impl InfoPanel {
                 _ => "Unknown".to_string(),
             };
 
-            let expander = expander_row_with_icon(
-                "image-x-generic-symbolic",
+            let (expander, _) = expander_row(
+                Some("image-x-generic-symbolic"),
                 "Image",
                 &mp_str,
                 true,
@@ -103,8 +104,8 @@ impl InfoPanel {
             });
 
             let subtitle = camera_name.as_deref().unwrap_or("No data");
-            let expander = expander_row_with_icon(
-                "camera-photo-symbolic",
+            let (expander, _) = expander_row(
+                Some("camera-photo-symbolic"),
                 "Camera",
                 subtitle,
                 true,
@@ -188,8 +189,8 @@ impl InfoPanel {
                     format_decimal(lon.abs(), 4),
                 );
 
-                let expander = expander_row_with_icon(
-                    "mark-location-symbolic",
+                let (expander, _) = expander_row(
+                    Some("mark-location-symbolic"),
                     "Location",
                     &coords_str,
                     true,
@@ -240,8 +241,8 @@ impl InfoPanel {
 
         // ── File (collapsed by default) ──────────────────────────────────────
         {
-            let expander = expander_row_with_icon(
-                "document-open-symbolic",
+            let (expander, _) = expander_row(
+                Some("document-open-symbolic"),
                 "File",
                 &item.original_filename,
                 false,
@@ -256,70 +257,6 @@ impl InfoPanel {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-/// Create an expander row with an icon prefix, title left, and subtitle right.
-fn expander_row_with_icon(
-    icon_name: &str,
-    title: &str,
-    subtitle: &str,
-    expanded: bool,
-) -> adw::ExpanderRow {
-    let suffix = gtk::Label::builder()
-        .label(subtitle)
-        .halign(gtk::Align::End)
-        .ellipsize(gtk::pango::EllipsizeMode::End)
-        .max_width_chars(20)
-        .build();
-    suffix.add_css_class("dim-label");
-
-    let icon = gtk::Image::from_icon_name(icon_name);
-
-    let expander = adw::ExpanderRow::builder()
-        .title(title)
-        .show_enable_switch(false)
-        .expanded(expanded)
-        .build();
-    expander.add_prefix(&icon);
-    expander.add_suffix(&suffix);
-
-    expander
-}
-
-/// Create a detail row — label left (dimmed), value right (selectable).
-fn detail_row(label: &str, value: &str) -> gtk::ListBoxRow {
-    let hbox = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(12)
-        .margin_start(12)
-        .margin_end(12)
-        .margin_top(8)
-        .margin_bottom(8)
-        .build();
-
-    let label_widget = gtk::Label::builder()
-        .label(label)
-        .halign(gtk::Align::Start)
-        .hexpand(true)
-        .build();
-    label_widget.add_css_class("dim-label");
-
-    let value_widget = gtk::Label::builder()
-        .label(value)
-        .halign(gtk::Align::End)
-        .selectable(true)
-        .ellipsize(gtk::pango::EllipsizeMode::End)
-        .max_width_chars(24)
-        .build();
-
-    hbox.append(&label_widget);
-    hbox.append(&value_widget);
-
-    gtk::ListBoxRow::builder()
-        .activatable(false)
-        .selectable(false)
-        .child(&hbox)
-        .build()
-}
 
 /// Create a compact EXIF value card for the 2-column camera grid.
 fn exif_card(label: &str, value: &str) -> gtk::Box {

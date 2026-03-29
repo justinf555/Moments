@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use adw::prelude::*;
-use glib::object::IsA;
 use gtk::{gdk, glib};
 use image::DynamicImage;
 use tracing::{debug, error, warn};
@@ -13,6 +12,7 @@ use crate::library::edit_renderer::{apply_edits, filter_preset, FILTER_NAMES};
 use crate::library::editing::EditState;
 use crate::library::media::MediaId;
 use crate::library::Library;
+use crate::ui::widgets::{expander_row, section_label, wire_single_expansion, wrap_in_row};
 
 /// Delay before rendering preview after the last slider change (milliseconds).
 const RENDER_DEBOUNCE_MS: u32 = 50;
@@ -256,45 +256,54 @@ impl EditPanel {
         vbox.set_margin_end(12);
 
         // ── Transform section (collapsed by default) ─────────────────────────
-        {
-            let list = gtk::ListBox::new();
-            list.add_css_class("boxed-list");
-            list.set_selection_mode(gtk::SelectionMode::None);
+        let list_transform = gtk::ListBox::new();
+        list_transform.add_css_class("boxed-list");
+        list_transform.set_selection_mode(gtk::SelectionMode::None);
 
-            let expander = expander_row("Transform", "Crop, rotate, flip", false);
-            self.build_transform_content(&expander);
-
-            list.append(&expander);
-            vbox.append(&list);
-        }
+        let (transform_exp, _) = expander_row(
+            Some("crop-symbolic"),
+            "Transform",
+            "Crop, rotate, flip",
+            false,
+        );
+        self.build_transform_content(&transform_exp);
+        list_transform.append(&transform_exp);
+        vbox.append(&list_transform);
 
         // ── Filters section (expanded by default) ────────────────────────────
-        {
-            let list = gtk::ListBox::new();
-            list.add_css_class("boxed-list");
-            list.set_selection_mode(gtk::SelectionMode::None);
+        let list_filters = gtk::ListBox::new();
+        list_filters.add_css_class("boxed-list");
+        list_filters.set_selection_mode(gtk::SelectionMode::None);
 
-            let (expander, subtitle_label) = expander_row_with_label("Filters", "None", true);
-            *self.filter_subtitle.borrow_mut() = Some(subtitle_label);
-            self.build_filters_content(&expander);
+        let (filters_exp, filter_subtitle_label) = expander_row(
+            Some("color-select-symbolic"),
+            "Filters",
+            "None",
+            true,
+        );
+        *self.filter_subtitle.borrow_mut() = Some(filter_subtitle_label);
+        self.build_filters_content(&filters_exp);
+        list_filters.append(&filters_exp);
+        vbox.append(&list_filters);
 
-            list.append(&expander);
-            vbox.append(&list);
-        }
+        // ── Adjust section (collapsed by default) ────────────────────────────
+        let list_adjust = gtk::ListBox::new();
+        list_adjust.add_css_class("boxed-list");
+        list_adjust.set_selection_mode(gtk::SelectionMode::None);
 
-        // ── Adjust section (expanded by default) ─────────────────────────────
-        {
-            let list = gtk::ListBox::new();
-            list.add_css_class("boxed-list");
-            list.set_selection_mode(gtk::SelectionMode::None);
+        let (adjust_exp, adjust_subtitle_label) = expander_row(
+            Some("preferences-other-symbolic"),
+            "Adjust",
+            "No changes",
+            false,
+        );
+        *self.adjust_subtitle.borrow_mut() = Some(adjust_subtitle_label);
+        self.build_adjust_content(&adjust_exp);
+        list_adjust.append(&adjust_exp);
+        vbox.append(&list_adjust);
 
-            let (expander, subtitle_label) = expander_row_with_label("Adjust", "No changes", true);
-            *self.adjust_subtitle.borrow_mut() = Some(subtitle_label);
-            self.build_adjust_content(&expander);
-
-            list.append(&expander);
-            vbox.append(&list);
-        }
+        // Wire single-expansion: only one section open at a time.
+        wire_single_expansion(&[&transform_exp, &filters_exp, &adjust_exp]);
 
         // ── Scrolled content ─────────────────────────────────────────────────
         let scrolled = gtk::ScrolledWindow::builder()
@@ -1127,72 +1136,6 @@ fn update_adjust_subtitle(
     if let Some(ref lbl) = *subtitle.borrow() {
         lbl.set_label(&text);
     }
-}
-
-/// Create an expander row, returning both the row and the subtitle label for updates.
-fn expander_row_with_label(
-    title: &str,
-    subtitle: &str,
-    expanded: bool,
-) -> (adw::ExpanderRow, gtk::Label) {
-    let suffix = gtk::Label::builder()
-        .label(subtitle)
-        .halign(gtk::Align::End)
-        .ellipsize(gtk::pango::EllipsizeMode::End)
-        .max_width_chars(20)
-        .build();
-    suffix.add_css_class("dim-label");
-
-    let expander = adw::ExpanderRow::builder()
-        .title(title)
-        .show_enable_switch(false)
-        .expanded(expanded)
-        .build();
-    expander.add_suffix(&suffix);
-
-    (expander, suffix)
-}
-
-/// Create an expander row with title left and subtitle right-aligned as a suffix.
-fn expander_row(title: &str, subtitle: &str, expanded: bool) -> adw::ExpanderRow {
-    let suffix = gtk::Label::builder()
-        .label(subtitle)
-        .halign(gtk::Align::End)
-        .ellipsize(gtk::pango::EllipsizeMode::End)
-        .max_width_chars(20)
-        .build();
-    suffix.add_css_class("dim-label");
-
-    let expander = adw::ExpanderRow::builder()
-        .title(title)
-        .show_enable_switch(false)
-        .expanded(expanded)
-        .build();
-    expander.add_suffix(&suffix);
-
-    expander
-}
-
-/// Create a section label (e.g. "LIGHT", "COLOUR") for inside an expander.
-fn section_label(text: &str) -> gtk::Label {
-    let label = gtk::Label::builder()
-        .label(text)
-        .halign(gtk::Align::Start)
-        .margin_top(12)
-        .margin_start(12)
-        .build();
-    label.add_css_class("caption");
-    label.add_css_class("dim-label");
-    label
-}
-
-/// Wrap a widget in a non-activatable ListBoxRow for use inside an ExpanderRow.
-fn wrap_in_row(widget: &impl IsA<gtk::Widget>) -> gtk::ListBoxRow {
-    gtk::ListBoxRow::builder()
-        .activatable(false)
-        .selectable(false)
-        .child(widget)
-        .build()
 }
 
 /// Create a transform action button with icon and label for the 2×2 grid.
