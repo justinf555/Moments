@@ -149,7 +149,71 @@ Key changes from `LibraryEvent`:
 - `AppEvent` must be `Clone` (required by `broadcast`)
 - `MediaItem` in `AssetSynced` must be `Clone`
 
-### Subscription pattern
+### Design principle: self-contained components
+
+**Event handlers must live inside the component that owns the behaviour, never in a parent.**
+
+Parent components (`window.rs`, `application.rs`) are responsible for **assembly only** — creating child components and placing them in the layout. They must never route events to children or wire callbacks between siblings. Each component subscribes to the bus in its own constructor and handles its own events internally.
+
+This ensures separation of concerns: adding a new event or changing how a component reacts to an event requires modifying only that component's file, not the parent that assembled it.
+
+```rust
+// ✅ CORRECT — component subscribes internally
+let sidebar = MomentsSidebar::new(bus.clone());
+// Done. Parent has no knowledge of what events sidebar handles.
+
+// ❌ WRONG — parent routes events to child
+let sidebar = MomentsSidebar::new();
+// ...later in an idle loop or callback in window.rs:
+match event {
+    SyncStarted => sidebar.show_sync_started(),  // parent knows too much
+    AlbumCreated { id, name } => sidebar.add_album(id, &name),
+}
+```
+
+Every component constructor takes `bus: broadcast::Sender<AppEvent>` and calls `bus.subscribe()` internally to create its own receiver. When the component is dropped, the weak ref fails to upgrade and the polling stops automatically — no manual cleanup.
+
+```rust
+// Self-contained component pattern:
+impl MomentsSidebar {
+    pub fn new(bus: broadcast::Sender<AppEvent>) -> Self {
+        let sidebar = Self { /* build UI */ };
+
+        let mut rx = bus.subscribe();
+        let weak = sidebar.downgrade();
+        glib::timeout_add_local(Duration::from_millis(16), move || {
+            let Some(s) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            while let Ok(event) = rx.try_recv() {
+                match event {
+                    AppEvent::SyncStarted => s.show_sync_started(),
+                    AppEvent::SyncProgress { .. } => s.show_sync_progress(..),
+                    AppEvent::AlbumCreated { id, name } => s.add_album(id, &name),
+                    AppEvent::ImportProgress { .. } => s.show_upload_progress(..),
+                    _ => {}
+                }
+            }
+            glib::ControlFlow::Continue
+        });
+
+        sidebar
+    }
+}
+```
+
+This pattern applies to every component that reacts to events:
+
+| Component | Constructor | Events handled internally |
+|-----------|------------|--------------------------|
+| `MomentsSidebar::new(bus)` | Sync, import, album events | Yes |
+| `PhotoGridModel::new(lib, tk, filter, bus)` | Thumbnail, media state events | Yes |
+| `PhotoGridView::new(lib, tk, bus)` | Selection exit events | Yes |
+| `ImportDialog::new(bus)` | Import progress/complete | Yes |
+
+`window.rs` becomes pure assembly — create components, place in layout, done.
+
+### Subscription polling
 
 Each component creates its own receiver and polls it via `glib::timeout_add_local`:
 
