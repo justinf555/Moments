@@ -1,12 +1,14 @@
 use adw::prelude::*;
+use gtk::gio;
 
 use crate::library::media::{MediaItem, MediaMetadataRecord};
 
 /// Scrollable metadata panel displayed in the [`super::PhotoViewer`] info sidebar.
 ///
-/// Uses `AdwExpanderRow` sections for Date, Image, Camera, and File metadata.
-/// Each section shows a subtitle summary when collapsed, with full details
-/// when expanded. Call [`InfoPanel::populate`] whenever the viewed item changes.
+/// Uses `AdwExpanderRow` sections inside a single boxed list card:
+/// Date, Image, Camera, Location (conditional), and File.
+/// Each section shows a subtitle summary when collapsed.
+/// Call [`InfoPanel::populate`] whenever the viewed item changes.
 pub struct InfoPanel {
     scrolled: gtk::ScrolledWindow,
 }
@@ -33,29 +35,27 @@ impl InfoPanel {
         vbox.set_margin_start(12);
         vbox.set_margin_end(12);
 
-        // ── Date section ─────────────────────────────────────────────────────
+        // ── Single boxed list card for all sections ──────────────────────────
+        let list = gtk::ListBox::new();
+        list.add_css_class("boxed-list");
+        list.set_selection_mode(gtk::SelectionMode::None);
+
+        // ── Date ─────────────────────────────────────────────────────────────
         {
-            let list = gtk::ListBox::new();
-            list.add_css_class("boxed-list");
-            list.set_selection_mode(gtk::SelectionMode::None);
-
             let (short_date, long_date, time_str) = format_date_parts(item.taken_at);
-
-            let expander = expander_row("Date", &short_date, true);
-
+            let expander = expander_row_with_icon(
+                "x-office-calendar-symbolic",
+                "Date",
+                &short_date,
+                true,
+            );
             expander.add_row(&detail_row("Captured", &long_date));
             expander.add_row(&detail_row("Time", &time_str));
-
             list.append(&expander);
-            vbox.append(&list);
         }
 
-        // ── Image section ────────────────────────────────────────────────────
+        // ── Image ────────────────────────────────────────────────────────────
         {
-            let list = gtk::ListBox::new();
-            list.add_css_class("boxed-list");
-            list.set_selection_mode(gtk::SelectionMode::None);
-
             let mp_str = match (item.width, item.height) {
                 (Some(w), Some(h)) => {
                     let mp = (w * h) as f64 / 1_000_000.0;
@@ -64,14 +64,18 @@ impl InfoPanel {
                 _ => "Unknown".to_string(),
             };
 
-            let expander = expander_row("Image", &mp_str, true);
+            let expander = expander_row_with_icon(
+                "image-x-generic-symbolic",
+                "Image",
+                &mp_str,
+                true,
+            );
 
             if let (Some(w), Some(h)) = (item.width, item.height) {
                 expander.add_row(&detail_row("Dimensions", &format!("{w} \u{d7} {h}")));
             }
             expander.add_row(&detail_row("Resolution", &mp_str));
 
-            // Derive format from filename extension.
             let format_str = item
                 .original_filename
                 .rsplit('.')
@@ -81,36 +85,30 @@ impl InfoPanel {
             expander.add_row(&detail_row("Format", &format_str));
 
             list.append(&expander);
-            vbox.append(&list);
         }
 
-        // ── Camera section ───────────────────────────────────────────────────
+        // ── Camera ───────────────────────────────────────────────────────────
         {
-            let camera_name = metadata.and_then(|m| {
-                match (&m.camera_make, &m.camera_model) {
-                    (Some(make), Some(model)) => {
-                        // Avoid duplication like "Apple Apple iPhone 13"
-                        if model.starts_with(make.as_str()) {
-                            Some(model.clone())
-                        } else {
-                            Some(format!("{make} {model}"))
-                        }
+            let camera_name = metadata.and_then(|m| match (&m.camera_make, &m.camera_model) {
+                (Some(make), Some(model)) => {
+                    if model.starts_with(make.as_str()) {
+                        Some(model.clone())
+                    } else {
+                        Some(format!("{make} {model}"))
                     }
-                    (Some(make), None) => Some(make.clone()),
-                    (None, Some(model)) => Some(model.clone()),
-                    _ => None,
                 }
+                (Some(make), None) => Some(make.clone()),
+                (None, Some(model)) => Some(model.clone()),
+                _ => None,
             });
 
-            let subtitle = camera_name
-                .as_deref()
-                .unwrap_or("No data");
-
-            let list = gtk::ListBox::new();
-            list.add_css_class("boxed-list");
-            list.set_selection_mode(gtk::SelectionMode::None);
-
-            let expander = expander_row("Camera", subtitle, true);
+            let subtitle = camera_name.as_deref().unwrap_or("No data");
+            let expander = expander_row_with_icon(
+                "camera-photo-symbolic",
+                "Camera",
+                subtitle,
+                true,
+            );
 
             if let Some(ref name) = camera_name {
                 expander.add_row(&detail_row("Camera", name));
@@ -165,7 +163,6 @@ impl InfoPanel {
                         grid.attach(&exif_card("Focal", &format!("{fl:.0}mm")), col, row, 1, 1);
                     }
 
-                    // Wrap grid in a ListBoxRow so it can be added to the expander.
                     let grid_row = gtk::ListBoxRow::builder()
                         .activatable(false)
                         .selectable(false)
@@ -175,37 +172,98 @@ impl InfoPanel {
                 }
             }
 
-            // Show "No data" if no camera metadata at all.
-            if camera_name.is_none()
-                && metadata.map(|m| !m.has_data()).unwrap_or(true)
-            {
+            if camera_name.is_none() && metadata.map(|m| !m.has_data()).unwrap_or(true) {
                 expander.add_row(&detail_row("", "No EXIF data available"));
             }
 
             list.append(&expander);
-            vbox.append(&list);
         }
 
-        // ── File section (collapsed by default) ──────────────────────────────
+        // ── Location (only when GPS data present) ────────────────────────────
+        if let Some(meta) = metadata {
+            if let (Some(lat), Some(lon)) = (meta.gps_lat, meta.gps_lon) {
+                let coords_str = format!(
+                    "{}\u{b0}, {}\u{b0}",
+                    format_decimal(lat.abs(), 4),
+                    format_decimal(lon.abs(), 4),
+                );
+
+                let expander = expander_row_with_icon(
+                    "mark-location-symbolic",
+                    "Location",
+                    &coords_str,
+                    true,
+                );
+
+                expander.add_row(&detail_row("Latitude", &format_coordinate(lat, 'N', 'S')));
+                expander.add_row(&detail_row("Longitude", &format_coordinate(lon, 'E', 'W')));
+
+                if let Some(alt) = meta.gps_alt {
+                    expander.add_row(&detail_row("Altitude", &format!("{alt:.0} m")));
+                }
+
+                // "Open in Maps" button.
+                let btn_content = gtk::Box::builder()
+                    .orientation(gtk::Orientation::Horizontal)
+                    .spacing(8)
+                    .halign(gtk::Align::Center)
+                    .build();
+                btn_content.append(&gtk::Image::from_icon_name("find-location-symbolic"));
+                btn_content.append(&gtk::Label::new(Some("Open in Maps")));
+
+                let map_btn = gtk::Button::builder()
+                    .child(&btn_content)
+                    .margin_top(4)
+                    .margin_bottom(8)
+                    .margin_start(12)
+                    .margin_end(12)
+                    .build();
+                map_btn.add_css_class("outlined");
+
+                let geo_uri = format!("geo:{lat},{lon}");
+                map_btn.connect_clicked(move |btn| {
+                    let launcher = gtk::UriLauncher::new(&geo_uri);
+                    let window = btn.root().and_downcast::<gtk::Window>();
+                    launcher.launch(window.as_ref(), gio::Cancellable::NONE, |_| {});
+                });
+
+                let btn_row = gtk::ListBoxRow::builder()
+                    .activatable(false)
+                    .selectable(false)
+                    .child(&map_btn)
+                    .build();
+                expander.add_row(&btn_row);
+
+                list.append(&expander);
+            }
+        }
+
+        // ── File (collapsed by default) ──────────────────────────────────────
         {
-            let list = gtk::ListBox::new();
-            list.add_css_class("boxed-list");
-            list.set_selection_mode(gtk::SelectionMode::None);
-
-            let expander = expander_row("File", &item.original_filename, false);
-
+            let expander = expander_row_with_icon(
+                "document-open-symbolic",
+                "File",
+                &item.original_filename,
+                false,
+            );
             expander.add_row(&detail_row("Filename", &item.original_filename));
-
             list.append(&expander);
-            vbox.append(&list);
         }
 
+        vbox.append(&list);
         self.scrolled.set_child(Some(&vbox));
     }
 }
 
-/// Create an expander row with title left and subtitle right-aligned as a suffix.
-fn expander_row(title: &str, subtitle: &str, expanded: bool) -> adw::ExpanderRow {
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Create an expander row with an icon prefix, title left, and subtitle right.
+fn expander_row_with_icon(
+    icon_name: &str,
+    title: &str,
+    subtitle: &str,
+    expanded: bool,
+) -> adw::ExpanderRow {
     let suffix = gtk::Label::builder()
         .label(subtitle)
         .halign(gtk::Align::End)
@@ -214,17 +272,20 @@ fn expander_row(title: &str, subtitle: &str, expanded: bool) -> adw::ExpanderRow
         .build();
     suffix.add_css_class("dim-label");
 
+    let icon = gtk::Image::from_icon_name(icon_name);
+
     let expander = adw::ExpanderRow::builder()
         .title(title)
         .show_enable_switch(false)
         .expanded(expanded)
         .build();
+    expander.add_prefix(&icon);
     expander.add_suffix(&suffix);
 
     expander
 }
 
-/// Create a detail row for inside an expander — label left, value right.
+/// Create a detail row — label left (dimmed), value right (selectable).
 fn detail_row(label: &str, value: &str) -> gtk::ListBoxRow {
     let hbox = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -290,6 +351,17 @@ fn exif_card(label: &str, value: &str) -> gtk::Box {
     card
 }
 
+/// Format a GPS coordinate with direction suffix (e.g. "48.8584° N").
+fn format_coordinate(value: f64, pos_dir: char, neg_dir: char) -> String {
+    let dir = if value >= 0.0 { pos_dir } else { neg_dir };
+    format!("{}\u{b0} {dir}", format_decimal(value.abs(), 4))
+}
+
+/// Format a float to a fixed number of decimal places without trailing zeros.
+fn format_decimal(value: f64, decimals: usize) -> String {
+    format!("{:.prec$}", value, prec = decimals)
+}
+
 /// Split a Unix timestamp into (short date, long date, time) strings.
 fn format_date_parts(ts: Option<i64>) -> (String, String, String) {
     use chrono::{DateTime, Utc};
@@ -322,7 +394,6 @@ mod tests {
 
     #[test]
     fn format_timestamp_known_value() {
-        // 2017-03-26 12:00:00 UTC
         let s = format_timestamp(1_490_529_600).unwrap();
         assert!(s.contains("2017"), "expected year 2017 in {s:?}");
         assert!(s.contains("March"), "expected month in {s:?}");
@@ -348,5 +419,33 @@ mod tests {
         assert_eq!(short, "Unknown");
         assert_eq!(long, "Unknown");
         assert_eq!(time, "Unknown");
+    }
+
+    #[test]
+    fn format_coordinate_north() {
+        let s = format_coordinate(48.8584, 'N', 'S');
+        assert!(s.contains("48.8584"));
+        assert!(s.contains("N"));
+    }
+
+    #[test]
+    fn format_coordinate_south() {
+        let s = format_coordinate(-33.8432, 'N', 'S');
+        assert!(s.contains("33.8432"));
+        assert!(s.contains("S"));
+    }
+
+    #[test]
+    fn format_coordinate_east() {
+        let s = format_coordinate(151.2419, 'E', 'W');
+        assert!(s.contains("151.2419"));
+        assert!(s.contains("E"));
+    }
+
+    #[test]
+    fn format_coordinate_west() {
+        let s = format_coordinate(-0.1278, 'E', 'W');
+        assert!(s.contains("0.1278"));
+        assert!(s.contains("W"));
     }
 }
