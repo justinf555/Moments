@@ -644,7 +644,7 @@ impl PhotoGridView {
             &self.library,
             &self.tokio,
             &Rc::clone(&registry),
-            &self.nav_view,
+            &self.exit_selection,
         );
         self.bar_box.append(&bar_buttons.container);
         *self.fav_btn.borrow_mut() = bar_buttons.fav_btn;
