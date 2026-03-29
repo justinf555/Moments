@@ -266,69 +266,106 @@ Events are split into two categories:
 
 This separates concerns cleanly: **UI resolves UI state → command handler does library work → result event drives all downstream effects.**
 
-#### Command handler
+#### Command handler: trait-based dispatch
 
-A single `LibraryCommandHandler` component owns `library` and `tokio`. It subscribes to all `*Requested` events, executes the async library call, and emits the result event on success.
+Each command is its own struct implementing the `CommandHandler` trait. A `CommandDispatcher` owns `library` and `tokio`, subscribes to the bus, and routes each event to the handler that claims it.
+
+This follows the Strategy/Command pattern: adding a new command means creating one struct in one file and registering one line. Zero modification to existing commands.
 
 ```rust
-pub struct LibraryCommandHandler;
+// src/commands/mod.rs
 
-impl LibraryCommandHandler {
+/// Trait for a single command handler.
+#[async_trait]
+pub trait CommandHandler: Send + Sync {
+    /// Returns true if this handler can process the given event.
+    fn handles(&self, event: &AppEvent) -> bool;
+
+    /// Execute the command. Called on the Tokio runtime.
+    async fn execute(
+        &self,
+        event: AppEvent,
+        library: &Arc<dyn Library>,
+        bus: &broadcast::Sender<AppEvent>,
+    );
+}
+```
+
+Each command is a small, single-responsibility struct:
+
+```rust
+// src/commands/trash.rs
+pub struct TrashCommand;
+
+#[async_trait]
+impl CommandHandler for TrashCommand {
+    fn handles(&self, event: &AppEvent) -> bool {
+        matches!(event, AppEvent::TrashRequested { .. })
+    }
+
+    async fn execute(&self, event: AppEvent, library: &Arc<dyn Library>, bus: &Sender<AppEvent>) {
+        let AppEvent::TrashRequested { ids } = event else { return };
+        if library.trash(&ids).await.is_ok() {
+            let _ = bus.send(AppEvent::Trashed { ids });
+        }
+    }
+}
+
+// src/commands/favorite.rs
+pub struct FavoriteCommand;
+
+#[async_trait]
+impl CommandHandler for FavoriteCommand {
+    fn handles(&self, event: &AppEvent) -> bool {
+        matches!(event, AppEvent::FavoriteRequested { .. })
+    }
+
+    async fn execute(&self, event: AppEvent, library: &Arc<dyn Library>, bus: &Sender<AppEvent>) {
+        let AppEvent::FavoriteRequested { ids, state } = event else { return };
+        if library.set_favorite(&ids, state).await.is_ok() {
+            let _ = bus.send(AppEvent::FavoriteChanged { ids, is_favorite: state });
+        }
+    }
+}
+```
+
+The dispatcher iterates handlers — no match block, no routing logic:
+
+```rust
+// src/commands/dispatcher.rs
+pub struct CommandDispatcher;
+
+impl CommandDispatcher {
     pub fn new(
         library: Arc<dyn Library>,
         tokio: tokio::runtime::Handle,
         bus: broadcast::Sender<AppEvent>,
     ) -> Self {
+        let handlers: Vec<Box<dyn CommandHandler>> = vec![
+            Box::new(TrashCommand),
+            Box::new(RestoreCommand),
+            Box::new(DeleteCommand),
+            Box::new(FavoriteCommand),
+            Box::new(AddToAlbumCommand),
+            Box::new(RemoveFromAlbumCommand),
+            // Adding a new command = one line here + one file.
+        ];
+
         let mut rx = bus.subscribe();
-        let lib = library;
-        let tk = tokio;
         let bus_tx = bus.clone();
 
-        // Runs on the GTK main context, polls for command events.
         glib::timeout_add_local(Duration::from_millis(16), move || {
             while let Ok(event) = rx.try_recv() {
-                match event {
-                    AppEvent::TrashRequested { ids } => {
-                        let lib = Arc::clone(&lib);
+                for handler in &handlers {
+                    if handler.handles(&event) {
+                        let lib = Arc::clone(&library);
                         let bus = bus_tx.clone();
-                        let ids_clone = ids.clone();
-                        tk.spawn(async move {
-                            if lib.trash(&ids_clone).await.is_ok() {
-                                let _ = bus.send(AppEvent::Trashed { ids });
-                            }
+                        let evt = event.clone();
+                        tokio.spawn(async move {
+                            handler.execute(evt, &lib, &bus).await;
                         });
+                        break; // one handler per event
                     }
-                    AppEvent::FavoriteRequested { ids, state } => {
-                        let lib = Arc::clone(&lib);
-                        let bus = bus_tx.clone();
-                        let ids_clone = ids.clone();
-                        tk.spawn(async move {
-                            if lib.set_favorite(&ids_clone, state).await.is_ok() {
-                                let _ = bus.send(AppEvent::FavoriteChanged { ids, is_favorite: state });
-                            }
-                        });
-                    }
-                    AppEvent::RestoreRequested { ids } => {
-                        let lib = Arc::clone(&lib);
-                        let bus = bus_tx.clone();
-                        let ids_clone = ids.clone();
-                        tk.spawn(async move {
-                            if lib.restore(&ids_clone).await.is_ok() {
-                                let _ = bus.send(AppEvent::Restored { ids });
-                            }
-                        });
-                    }
-                    AppEvent::DeleteRequested { ids } => {
-                        let lib = Arc::clone(&lib);
-                        let bus = bus_tx.clone();
-                        let ids_clone = ids.clone();
-                        tk.spawn(async move {
-                            if lib.delete_permanently(&ids_clone).await.is_ok() {
-                                let _ = bus.send(AppEvent::Deleted { ids });
-                            }
-                        });
-                    }
-                    _ => {}
                 }
             }
             glib::ControlFlow::Continue
@@ -339,7 +376,22 @@ impl LibraryCommandHandler {
 }
 ```
 
-`library` and `tokio` exist in exactly **one place** — the command handler. No other component needs them for action execution.
+**Scaling:** Adding sharing support means creating `ShareCommand`, `CreateSharedAlbumCommand`, etc. — one file each, one registration line, zero changes to existing commands.
+
+```
+src/commands/
+  mod.rs              — CommandHandler trait + CommandDispatcher
+  trash.rs            — TrashCommand
+  restore.rs          — RestoreCommand
+  delete.rs           — DeleteCommand
+  favorite.rs         — FavoriteCommand
+  add_to_album.rs     — AddToAlbumCommand
+  remove_from_album.rs — RemoveFromAlbumCommand
+  share.rs            — ShareCommand (future)
+  shared_album.rs     — CreateSharedAlbumCommand (future)
+```
+
+`library` and `tokio` exist in exactly **one place** — the dispatcher. No other component needs them for action execution.
 
 #### Button handlers become trivial
 
@@ -439,7 +491,7 @@ No component knows about any other. The button doesn't know about models. The mo
 | `ModelRegistry` (100 lines, 8 methods) | Direct subscriptions — each model subscribes |
 | `ActionContext` struct | `bus: broadcast::Sender<AppEvent>` — 2 params instead of 7 |
 | `exit_selection` passthrough | `SelectionModeController` subscribes to `Trashed`/`Deleted` |
-| `library` + `tokio` in every action handler | `LibraryCommandHandler` — single component owns both |
+| `library` + `tokio` in every action handler | `CommandDispatcher` — single component owns both, routes to `CommandHandler` impls |
 | `registry.on_trashed()` calls in action handlers | `bus.send(TrashRequested { ids })` — handler emits intent only |
 | `win.album-created` GAction hack | `AppEvent::AlbumCreated` — sidebar subscribes directly |
 
@@ -537,7 +589,13 @@ Incremental, one event at a time. Each step is a single PR:
 | File | Change |
 |------|--------|
 | `src/app_event.rs` | **New** — `AppEvent` enum (commands + results) |
-| `src/command_handler.rs` | **New** — `LibraryCommandHandler` (owns `library` + `tokio`, executes commands) |
+| `src/commands/mod.rs` | **New** — `CommandHandler` trait + `CommandDispatcher` |
+| `src/commands/trash.rs` | **New** — `TrashCommand` |
+| `src/commands/restore.rs` | **New** — `RestoreCommand` |
+| `src/commands/delete.rs` | **New** — `DeleteCommand` |
+| `src/commands/favorite.rs` | **New** — `FavoriteCommand` |
+| `src/commands/add_to_album.rs` | **New** — `AddToAlbumCommand` |
+| `src/commands/remove_from_album.rs` | **New** — `RemoveFromAlbumCommand` |
 | `src/main.rs` | Create `broadcast::channel`, pass sender |
 | `src/application.rs` | Remove idle loop routing (120 lines), pass sender to library |
 | `src/ui/model_registry.rs` | **Delete** — replaced by direct subscriptions |
