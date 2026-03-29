@@ -33,16 +33,6 @@ jobs:
           git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
           git push origin "${{ steps.version.outputs.tag }}"
 
-      - name: Update Flathub manifest
-        run: |
-          COMMIT=$(git rev-parse HEAD)
-          TAG="${{ steps.version.outputs.tag }}"
-          sed -i "s/\"tag\" : \"v[0-9]*\.[0-9]*\.[0-9]*\"/\"tag\" : \"$TAG\"/" io.github.justinf555.Moments.flathub.json
-          sed -i "s/\"commit\" : \"[0-9a-f]*\"/\"commit\" : \"$COMMIT\"/" io.github.justinf555.Moments.flathub.json
-          git add io.github.justinf555.Moments.flathub.json
-          git commit -m "chore: update Flathub manifest for $TAG"
-          git push origin main
-
       - name: Create GitHub Release
         run: |
           gh release create "${{ steps.version.outputs.tag }}" \
