@@ -11,6 +11,7 @@ categories = ["multimedia::images"]
 
 [features]
 editing = []
+integration-tests = []
 
 [dependencies]
 

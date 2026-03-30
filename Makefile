@@ -9,6 +9,20 @@ run-dev:
 clean:
 	rm -rf flatpak-build-dir
 
+# ── Testing ──────────────────────────────────────────────────────────────────
+
+test:
+	cargo test
+
+test-integration:
+	GSK_RENDERER=cairo cargo test --features integration-tests -- --test-threads=1
+
+test-integration-headless:
+	dbus-run-session mutter --headless --wayland --no-x11 --virtual-monitor 1024x768 -- \
+	  env GSK_RENDERER=cairo cargo test --features integration-tests -- --test-threads=1
+
+test-all: test test-integration
+
 # ── Release ───────────────────────────────────────────────────────────────────
 #
 # Usage: make release VERSION=0.2.0
