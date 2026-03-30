@@ -183,24 +183,26 @@ The library layer continues to send `LibraryEvent` via `std::sync::mpsc` (or `gl
 This preserves the dependency hierarchy: **library knows nothing about `AppEvent`**. The translator is a simple match that maps variants 1:1. It replaces the god dispatcher's routing logic with pure translation — no references to models, sidebar, or dialogs.
 
 ```rust
-// In application.rs — replaces the idle loop
+// In application.rs — replaces the idle loop.
+// The library sends LibraryEvent via glib::Sender<LibraryEvent> (migrated
+// from std::sync::mpsc), so delivery is push-based all the way through —
+// no polling timer needed.
 fn start_event_translator(
-    library_rx: Receiver<LibraryEvent>,
+    library_rx: glib::Receiver<LibraryEvent>,
     bus: &EventBus,
 ) {
     let tx = bus.sender();
-    // Poll the library channel and translate
-    glib::timeout_add_local(Duration::from_millis(16), move || {
-        while let Ok(event) = library_rx.try_recv() {
-            let app_event = match event {
-                LibraryEvent::ThumbnailReady { media_id } => AppEvent::ThumbnailReady { media_id },
-                LibraryEvent::SyncStarted => AppEvent::SyncStarted,
-                LibraryEvent::ImportComplete(summary) => AppEvent::ImportComplete { summary },
-                // ... 1:1 mapping, no routing logic
-                _ => continue,
-            };
-            let _ = tx.send(app_event);
-        }
+    // Push-based: rx.attach runs the callback whenever an event arrives,
+    // driven by the GLib main loop — no polling, no wasted cycles at idle.
+    library_rx.attach(None, move |event| {
+        let app_event = match event {
+            LibraryEvent::ThumbnailReady { media_id } => AppEvent::ThumbnailReady { media_id },
+            LibraryEvent::SyncStarted => AppEvent::SyncStarted,
+            LibraryEvent::ImportComplete(summary) => AppEvent::ImportComplete { summary },
+            // ... 1:1 mapping, no routing logic
+            _ => return glib::ControlFlow::Continue,
+        };
+        let _ = tx.send(app_event);
         glib::ControlFlow::Continue
     });
 }
@@ -256,7 +258,8 @@ pub enum AppEvent {
 Key design decisions:
 - **No `ExitSelectionMode`** — selection mode is pure view state. Use the existing `view.exit-selection` GAction directly. Components that need to exit selection mode after an action (e.g. after `Trashed`) call the GAction in their subscriber, not via the bus.
 - **`LibraryEvent` stays** as the library-layer type. `AppEvent` is application-layer only.
-- **No `Clone` requirement** — `glib::MainContext::channel` doesn't require `Clone` on the event type.
+- **`AppEvent` must be `Clone`** — the `CommandDispatcher` clones the event before spawning a Tokio task (`let evt = event.clone()`). `MediaItem`, `MediaId`, `AlbumId`, and `ImportSummary` all need `#[derive(Clone)]`.
+- **Library channel migrated to `glib::Sender`** — the library sends `LibraryEvent` via `glib::Sender` (not `std::sync::mpsc`), so the translator uses push-based `rx.attach()` with no polling timer. Push delivery all the way through.
 
 ---
 
@@ -376,7 +379,7 @@ impl CommandHandler for TrashCommand {
 }
 ```
 
-The dispatcher subscribes to the bus and routes commands to handlers. It processes commands **sequentially** to avoid unbounded task spawning under burst:
+The dispatcher subscribes to the bus and routes commands to handlers. Each command is spawned as an independent Tokio task — this is concurrent, not sequential. The burst rate for commands is user-driven (button clicks), so unbounded spawning is acceptable in practice. If burst concerns arise (e.g. batch operations), a `tokio::sync::mpsc` queue drained by a single worker can be added later.
 
 ```rust
 // src/commands/dispatcher.rs
@@ -610,7 +613,7 @@ Incremental, one event at a time. Each step is a single PR:
 |------|------------|
 | `glib::MainContext::channel` is unbounded | Photo apps don't generate unbounded events; sync bursts are ~100 events max |
 | Fan-out dispatcher iterates all subscribers for every event | Subscribers do a cheap `match` and ignore irrelevant events; ~6 subscribers total |
-| `AppEvent` must be `Clone` for the command dispatcher | `MediaItem` and `MediaId` are already `Clone`; `ImportSummary` needs `#[derive(Clone)]` |
+| `AppEvent` must be `Clone` for the command dispatcher | `MediaItem` and `MediaId` are already `Clone`; `ImportSummary` and `AlbumId` need `#[derive(Clone)]` |
 | Migration breaks existing functionality | Incremental — one event at a time, old path as fallback |
 | Circular event loops (handler emits event, subscriber handles it, emits again) | Convention: command handlers emit result events only, subscribers never emit commands in response |
 | Command handler errors silently swallowed | Every `CommandHandler::execute` must send `AppEvent::Error` on failure — enforced by code review |
@@ -640,7 +643,7 @@ Incremental, one event at a time. Each step is a single PR:
 | `src/ui/sidebar.rs` | Subscribe to bus in constructor |
 | `src/ui/window.rs` | Remove `win.album-created` action, pass `bus` to components |
 | `src/library/event.rs` | **Unchanged** — `LibraryEvent` stays as library-layer type |
-| `src/library/sync.rs` | **Unchanged** — continues sending `LibraryEvent` |
-| `src/library/importer.rs` | **Unchanged** — continues sending `LibraryEvent` |
-| `src/library/thumbnailer.rs` | **Unchanged** — continues sending `LibraryEvent` |
-| `src/library/providers/*.rs` | **Unchanged** — continues sending `LibraryEvent` |
+| `src/library/sync.rs` | Migrate `std::sync::mpsc::Sender` → `glib::Sender<LibraryEvent>` |
+| `src/library/importer.rs` | Migrate `std::sync::mpsc::Sender` → `glib::Sender<LibraryEvent>` |
+| `src/library/thumbnailer.rs` | Migrate `std::sync::mpsc::Sender` → `glib::Sender<LibraryEvent>` |
+| `src/library/providers/*.rs` | Migrate `std::sync::mpsc::Sender` → `glib::Sender<LibraryEvent>` |
