@@ -1,6 +1,6 @@
 # Design: Centralised Event Bus (#230)
 
-**Status:** Proposed
+**Status:** Proposed (revised after external review)
 **Issue:** [#230](https://github.com/justinf555/Moments/issues/230)
 
 ---
@@ -82,25 +82,131 @@ A single "trash selected items" action requires **12+ clones** across 3 nested c
 
 ## Proposed Architecture
 
-Replace the single-consumer `mpsc` channel with a `tokio::sync::broadcast` channel. Each component subscribes directly to the events it cares about.
+### Channel primitive: `glib::MainContext::channel`
+
+Use GLib's native async channel — **not** `tokio::sync::broadcast`. GLib channels deliver events directly into the main loop via its native dispatch mechanism. No polling timers, no wasted CPU when idle, no lagged receivers.
+
+```rust
+let (tx, rx) = glib::MainContext::channel::<AppEvent>(glib::Priority::DEFAULT);
+
+// Background sender (any thread):
+tx.send(AppEvent::ThumbnailReady { media_id }).unwrap();
+
+// GTK main thread — push-based, zero latency:
+rx.attach(None, move |event| {
+    // handle event
+    glib::ControlFlow::Continue
+});
+```
+
+Key properties:
+- **Push, not poll** — events delivered via the main loop's native dispatch, not a 16ms timer
+- **Unbounded** — correctness-critical events (trash, delete, favourite) are never dropped
+- **Thread-safe sender** — `glib::Sender` is `Send`, can be used from Tokio tasks
+- **Single receiver** — each channel has one consumer (see multi-subscriber pattern below)
+
+### Multi-subscriber pattern
+
+`glib::MainContext::channel` has one receiver per channel. To support multiple subscribers, we use a **fan-out dispatcher**: one channel receives all events, one dispatcher callback routes to registered subscribers.
+
+```rust
+pub struct EventBus {
+    tx: glib::Sender<AppEvent>,
+    subscribers: Rc<RefCell<Vec<Box<dyn Fn(&AppEvent)>>>>,
+}
+
+impl EventBus {
+    pub fn new() -> Self {
+        let (tx, rx) = glib::MainContext::channel::<AppEvent>(glib::Priority::DEFAULT);
+        let subscribers: Rc<RefCell<Vec<Box<dyn Fn(&AppEvent)>>>> =
+            Rc::new(RefCell::new(Vec::new()));
+
+        let subs = Rc::clone(&subscribers);
+        rx.attach(None, move |event| {
+            for handler in subs.borrow().iter() {
+                handler(&event);
+            }
+            glib::ControlFlow::Continue
+        });
+
+        Self { tx, subscribers }
+    }
+
+    /// Get a sender for producing events (thread-safe, cloneable).
+    pub fn sender(&self) -> glib::Sender<AppEvent> {
+        self.tx.clone()
+    }
+
+    /// Register a subscriber callback. Called on the GTK main thread.
+    pub fn subscribe(&self, handler: impl Fn(&AppEvent) + 'static) {
+        self.subscribers.borrow_mut().push(Box::new(handler));
+    }
+}
+```
+
+Each component calls `bus.subscribe(...)` with a closure that handles the events it cares about. The fan-out happens in one place — no per-component timers.
+
+### Layer boundary: LibraryEvent stays in the library
+
+The library layer continues to send `LibraryEvent` via `std::sync::mpsc` (or `glib::Sender<LibraryEvent>` if we migrate the channel type). A thin **event translator** at the application boundary converts `LibraryEvent` → `AppEvent` and forwards to the bus:
 
 ```
 ┌──────────────────────────────────────────────────────┐
 │                    Library Backend                     │
 │  ImportJob · SyncManager · Thumbnailer                │
 │                      │                                │
-│           broadcast::Sender<AppEvent>                 │
+│          Sender<LibraryEvent>  (library-layer type)   │
 └──────────────────────────────────────────────────────┘
                        │
-              ┌────────┼────────┬────────┬────────┐
-              ▼        ▼        ▼        ▼        ▼
-          PhotoGrid  Sidebar  People   Album    App
-          Model      Status   Grid     Grid    (lifecycle)
+                       ▼
+┌──────────────────────────────────────────────────────┐
+│              Event Translator (application.rs)        │
+│                                                       │
+│  LibraryEvent::ThumbnailReady → AppEvent::ThumbnailReady
+│  LibraryEvent::SyncStarted   → AppEvent::SyncStarted │
+│  (thin mapping, no routing logic)                     │
+└──────────────────────────────────────────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────┐
+│                    EventBus                            │
+│              glib::MainContext::channel                │
+│                      │                                │
+│              fan-out to subscribers                    │
+└──────────────────────────────────────────────────────┘
+              │        │        │        │
+              ▼        ▼        ▼        ▼
+          PhotoGrid  Sidebar  Command   Selection
+          Model      Status   Dispatch  Controller
+```
+
+This preserves the dependency hierarchy: **library knows nothing about `AppEvent`**. The translator is a simple match that maps variants 1:1. It replaces the god dispatcher's routing logic with pure translation — no references to models, sidebar, or dialogs.
+
+```rust
+// In application.rs — replaces the idle loop
+fn start_event_translator(
+    library_rx: Receiver<LibraryEvent>,
+    bus: &EventBus,
+) {
+    let tx = bus.sender();
+    // Poll the library channel and translate
+    glib::timeout_add_local(Duration::from_millis(16), move || {
+        while let Ok(event) = library_rx.try_recv() {
+            let app_event = match event {
+                LibraryEvent::ThumbnailReady { media_id } => AppEvent::ThumbnailReady { media_id },
+                LibraryEvent::SyncStarted => AppEvent::SyncStarted,
+                LibraryEvent::ImportComplete(summary) => AppEvent::ImportComplete { summary },
+                // ... 1:1 mapping, no routing logic
+                _ => continue,
+            };
+            let _ = tx.send(app_event);
+        }
+        glib::ControlFlow::Continue
+    });
+}
 ```
 
 ### AppEvent enum
-
-Unifies library events and UI events into a single typed enum:
 
 ```rust
 pub enum AppEvent {
@@ -118,14 +224,14 @@ pub enum AppEvent {
     ThumbnailDownloadProgress { completed: usize, total: usize },
     ThumbnailDownloadsComplete { total: usize },
 
-    // ── Commands (UI intent → LibraryCommandHandler) ──
+    // ── Commands (UI intent → CommandDispatcher) ─────
     TrashRequested { ids: Vec<MediaId> },
     RestoreRequested { ids: Vec<MediaId> },
     DeleteRequested { ids: Vec<MediaId> },
     FavoriteRequested { ids: Vec<MediaId>, state: bool },
     RemoveFromAlbumRequested { album_id: AlbumId, ids: Vec<MediaId> },
 
-    // ── Results (LibraryCommandHandler → subscribers) ─
+    // ── Results (CommandDispatcher → subscribers) ────
     FavoriteChanged { ids: Vec<MediaId>, is_favorite: bool },
     Trashed { ids: Vec<MediaId> },
     Restored { ids: Vec<MediaId> },
@@ -144,17 +250,15 @@ pub enum AppEvent {
     SyncProgress { assets: usize, people: usize, faces: usize },
     SyncComplete { assets: usize, people: usize, faces: usize, errors: usize },
     PeopleSyncComplete,
-
-    // ── UI state ─────────────────────────────────────
-    ExitSelectionMode,
 }
 ```
 
-Key changes from `LibraryEvent`:
-- `FavoriteChanged`, `Trashed`, `Restored`, `Deleted` carry `Vec<MediaId>` (batch operations)
-- `ExitSelectionMode` is a UI event — no library involvement
-- `AppEvent` must be `Clone` (required by `broadcast`)
-- `MediaItem` in `AssetSynced` must be `Clone`
+Key design decisions:
+- **No `ExitSelectionMode`** — selection mode is pure view state. Use the existing `view.exit-selection` GAction directly. Components that need to exit selection mode after an action (e.g. after `Trashed`) call the GAction in their subscriber, not via the bus.
+- **`LibraryEvent` stays** as the library-layer type. `AppEvent` is application-layer only.
+- **No `Clone` requirement** — `glib::MainContext::channel` doesn't require `Clone` on the event type.
+
+---
 
 ### Design principle: self-contained components
 
@@ -166,7 +270,7 @@ This ensures separation of concerns: adding a new event or changing how a compon
 
 ```rust
 // ✅ CORRECT — component subscribes internally
-let sidebar = MomentsSidebar::new(bus.clone());
+let sidebar = MomentsSidebar::new(&bus);
 // Done. Parent has no knowledge of what events sidebar handles.
 
 // ❌ WRONG — parent routes events to child
@@ -174,34 +278,26 @@ let sidebar = MomentsSidebar::new();
 // ...later in an idle loop or callback in window.rs:
 match event {
     SyncStarted => sidebar.show_sync_started(),  // parent knows too much
-    AlbumCreated { id, name } => sidebar.add_album(id, &name),
 }
 ```
 
-Every component constructor takes `bus: broadcast::Sender<AppEvent>` and calls `bus.subscribe()` internally to create its own receiver. When the component is dropped, the weak ref fails to upgrade and the polling stops automatically — no manual cleanup.
+Every component constructor takes `bus: &EventBus` and calls `bus.subscribe(...)` internally. The subscriber closure captures a weak reference to the component — when the component is dropped, the callback becomes a no-op.
 
 ```rust
-// Self-contained component pattern:
 impl MomentsSidebar {
-    pub fn new(bus: broadcast::Sender<AppEvent>) -> Self {
+    pub fn new(bus: &EventBus) -> Self {
         let sidebar = Self { /* build UI */ };
 
-        let mut rx = bus.subscribe();
         let weak = sidebar.downgrade();
-        glib::timeout_add_local(Duration::from_millis(16), move || {
-            let Some(s) = weak.upgrade() else {
-                return glib::ControlFlow::Break;
-            };
-            while let Ok(event) = rx.try_recv() {
-                match event {
-                    AppEvent::SyncStarted => s.show_sync_started(),
-                    AppEvent::SyncProgress { .. } => s.show_sync_progress(..),
-                    AppEvent::AlbumCreated { id, name } => s.add_album(id, &name),
-                    AppEvent::ImportProgress { .. } => s.show_upload_progress(..),
-                    _ => {}
-                }
+        bus.subscribe(move |event| {
+            let Some(s) = weak.upgrade() else { return };
+            match event {
+                AppEvent::SyncStarted => s.show_sync_started(),
+                AppEvent::SyncProgress { .. } => s.show_sync_progress(..),
+                AppEvent::AlbumCreated { id, name } => s.add_album(id, name),
+                AppEvent::ImportProgress { .. } => s.show_upload_progress(..),
+                _ => {}
             }
-            glib::ControlFlow::Continue
         });
 
         sidebar
@@ -215,58 +311,23 @@ This pattern applies to every component that reacts to events:
 |-----------|------------|--------------------------|
 | `MomentsSidebar::new(bus)` | Sync, import, album events | Yes |
 | `PhotoGridModel::new(lib, tk, filter, bus)` | Thumbnail, media state events | Yes |
-| `PhotoGridView::new(lib, tk, bus)` | Selection exit events | Yes |
+| `PhotoGridView::new(lib, tk, bus)` | `Trashed`/`Deleted` → activates `view.exit-selection` GAction | Yes |
 | `ImportDialog::new(bus)` | Import progress/complete | Yes |
 
 `window.rs` becomes pure assembly — create components, place in layout, done.
 
-### Subscription polling
-
-Each component creates its own receiver and polls it via `glib::timeout_add_local`:
-
-```rust
-impl PhotoGridModel {
-    pub fn subscribe(self: &Rc<Self>, bus: &broadcast::Sender<AppEvent>) {
-        let mut rx = bus.subscribe();
-        let model = Rc::downgrade(self);
-
-        glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
-            let Some(model) = model.upgrade() else {
-                return glib::ControlFlow::Break;
-            };
-            while let Ok(event) = rx.try_recv() {
-                match event {
-                    AppEvent::ThumbnailReady { media_id } => model.on_thumbnail_ready(&media_id),
-                    AppEvent::FavoriteChanged { ids, is_favorite } => {
-                        for id in &ids {
-                            model.on_favorite_changed(id, is_favorite);
-                        }
-                    }
-                    AppEvent::Trashed { ids } | AppEvent::Deleted { ids } => {
-                        for id in &ids {
-                            model.remove_item(id);
-                        }
-                    }
-                    AppEvent::AssetSynced { item } => model.on_asset_synced(&item),
-                    _ => {} // Ignore events this component doesn't care about
-                }
-            }
-            glib::ControlFlow::Continue
-        });
-    }
-}
-```
+---
 
 ### Command / result event pattern
 
 Events are split into two categories:
 
 - **Command events** (`*Requested`) — UI intent. Emitted by buttons. Carry the minimum data the UI can resolve (e.g. selected IDs).
-- **Result events** (`*Changed`, `*Completed`) — outcomes. Emitted by the command handler after the library operation succeeds. Consumed by models, sidebar, selection controller.
+- **Result events** (`*Changed`, `*Completed`) — outcomes. Emitted by the command dispatcher after the library operation succeeds. Consumed by models, sidebar, selection controller.
 
-This separates concerns cleanly: **UI resolves UI state → command handler does library work → result event drives all downstream effects.**
+This separates concerns cleanly: **UI resolves UI state → command dispatcher does library work → result event drives all downstream effects.**
 
-#### Command handler: trait-based dispatch
+#### Command dispatcher: trait-based dispatch
 
 Each command is its own struct implementing the `CommandHandler` trait. A `CommandDispatcher` owns `library` and `tokio`, subscribes to the bus, and routes each event to the handler that claims it.
 
@@ -282,11 +343,13 @@ pub trait CommandHandler: Send + Sync {
     fn handles(&self, event: &AppEvent) -> bool;
 
     /// Execute the command. Called on the Tokio runtime.
+    /// On success, sends the result event via the bus sender.
+    /// On failure, sends AppEvent::Error with a user-facing message.
     async fn execute(
         &self,
         event: AppEvent,
         library: &Arc<dyn Library>,
-        bus: &broadcast::Sender<AppEvent>,
+        bus: &glib::Sender<AppEvent>,
     );
 }
 ```
@@ -303,33 +366,17 @@ impl CommandHandler for TrashCommand {
         matches!(event, AppEvent::TrashRequested { .. })
     }
 
-    async fn execute(&self, event: AppEvent, library: &Arc<dyn Library>, bus: &Sender<AppEvent>) {
+    async fn execute(&self, event: AppEvent, library: &Arc<dyn Library>, bus: &glib::Sender<AppEvent>) {
         let AppEvent::TrashRequested { ids } = event else { return };
-        if library.trash(&ids).await.is_ok() {
-            let _ = bus.send(AppEvent::Trashed { ids });
-        }
-    }
-}
-
-// src/commands/favorite.rs
-pub struct FavoriteCommand;
-
-#[async_trait]
-impl CommandHandler for FavoriteCommand {
-    fn handles(&self, event: &AppEvent) -> bool {
-        matches!(event, AppEvent::FavoriteRequested { .. })
-    }
-
-    async fn execute(&self, event: AppEvent, library: &Arc<dyn Library>, bus: &Sender<AppEvent>) {
-        let AppEvent::FavoriteRequested { ids, state } = event else { return };
-        if library.set_favorite(&ids, state).await.is_ok() {
-            let _ = bus.send(AppEvent::FavoriteChanged { ids, is_favorite: state });
+        match library.trash(&ids).await {
+            Ok(()) => { let _ = bus.send(AppEvent::Trashed { ids }); }
+            Err(e) => { let _ = bus.send(AppEvent::Error(format!("Failed to move to trash: {e}"))); }
         }
     }
 }
 ```
 
-The dispatcher iterates handlers — no match block, no routing logic:
+The dispatcher subscribes to the bus and routes commands to handlers. It processes commands **sequentially** to avoid unbounded task spawning under burst:
 
 ```rust
 // src/commands/dispatcher.rs
@@ -339,7 +386,7 @@ impl CommandDispatcher {
     pub fn new(
         library: Arc<dyn Library>,
         tokio: tokio::runtime::Handle,
-        bus: broadcast::Sender<AppEvent>,
+        bus: &EventBus,
     ) -> Self {
         let handlers: Vec<Box<dyn CommandHandler>> = vec![
             Box::new(TrashCommand),
@@ -351,24 +398,20 @@ impl CommandDispatcher {
             // Adding a new command = one line here + one file.
         ];
 
-        let mut rx = bus.subscribe();
-        let bus_tx = bus.clone();
+        let tx = bus.sender();
 
-        glib::timeout_add_local(Duration::from_millis(16), move || {
-            while let Ok(event) = rx.try_recv() {
-                for handler in &handlers {
-                    if handler.handles(&event) {
-                        let lib = Arc::clone(&library);
-                        let bus = bus_tx.clone();
-                        let evt = event.clone();
-                        tokio.spawn(async move {
-                            handler.execute(evt, &lib, &bus).await;
-                        });
-                        break; // one handler per event
-                    }
+        bus.subscribe(move |event| {
+            for handler in &handlers {
+                if handler.handles(event) {
+                    let lib = Arc::clone(&library);
+                    let bus_tx = tx.clone();
+                    let evt = event.clone();
+                    tokio.spawn(async move {
+                        handler.execute(evt, &lib, &bus_tx).await;
+                    });
+                    break;
                 }
             }
-            glib::ControlFlow::Continue
         });
 
         Self
@@ -393,42 +436,37 @@ src/commands/
 
 `library` and `tokio` exist in exactly **one place** — the dispatcher. No other component needs them for action execution.
 
+#### Error handling
+
+Every command handler must handle failure explicitly. On error, the handler sends `AppEvent::Error(message)` with a user-facing message. The `Application` component subscribes and shows a toast:
+
+```rust
+// In application.rs subscriber:
+AppEvent::Error(msg) => {
+    if let Some(win) = app.active_window() {
+        win.activate_action("win.show-toast", Some(&msg.to_variant()));
+    }
+}
+```
+
+No command failure is ever silently swallowed.
+
 #### Button handlers become trivial
 
 Buttons resolve UI state (selection → IDs) and emit a command. Nothing else.
 
 ```rust
 // Before (12+ clones, 3 closure layers, 25 lines):
-fn wire_trash(btn, selection, library, tokio, registry, exit_selection) {
-    let sel = selection.clone();
-    let lib = Arc::clone(library);
-    let tk = tokio.clone();
-    let reg = Rc::clone(registry);
-    let exit = exit_selection.clone();
-    btn.connect_clicked(move |_| {
-        let ids = collect_selected_ids(&sel);
-        let lib = Arc::clone(&lib);
-        let tk = tk.clone();
-        let reg = Rc::clone(&reg);
-        let exit = exit.clone();
-        glib::MainContext::default().spawn_local(async move {
-            let result = tk.spawn(async move { lib.trash(&ids).await }).await;
-            if let Ok(Ok(())) = result {
-                for id in &ids { reg.on_trashed(&id, true); }
-                exit.activate(None);
-            }
-        });
-    });
-}
+fn wire_trash(btn, selection, library, tokio, registry, exit_selection) { ... }
 
 // After (2 clones, 1 closure layer, 6 lines):
-fn wire_trash(btn, selection, bus) {
+fn wire_trash(btn: &gtk::Button, selection: &gtk::MultiSelection, bus: &EventBus) {
     let sel = selection.clone();
-    let bus = bus.clone();
+    let tx = bus.sender();
     btn.connect_clicked(move |_| {
         let ids = collect_selected_ids(&sel);
         if !ids.is_empty() {
-            let _ = bus.send(AppEvent::TrashRequested { ids });
+            let _ = tx.send(AppEvent::TrashRequested { ids });
         }
     });
 }
@@ -442,7 +480,7 @@ The factory needs only `selection` (UI state) and `bus` (communication). No `lib
 pub fn build_for_filter(
     filter: &MediaFilter,
     selection: &gtk::MultiSelection,
-    bus: &broadcast::Sender<AppEvent>,
+    bus: &EventBus,
 ) -> ActionBarButtons {
     match filter {
         MediaFilter::Trashed => build_trash_bar(selection, bus),
@@ -457,28 +495,33 @@ pub fn build_for_filter(
 ```
 User clicks "Delete" button
 │
-├─ Button handler:
-│   ids = collect_selected_ids(selection)     // [id_1, id_2, id_3]
-│   bus.send(TrashRequested { ids })           // done, 2 lines
+├─ Button handler (action_bar.rs):
+│   ids = collect_selected_ids(selection)        // [id_1, id_2, id_3]
+│   tx.send(TrashRequested { ids })              // done, 2 lines
 │
-├─ LibraryCommandHandler receives TrashRequested:
-│   library.trash(&ids).await                  // async DB call
-│   bus.send(Trashed { ids })                  // emit result
+├─ CommandDispatcher receives TrashRequested:
+│   TrashCommand.execute() on Tokio:
+│     library.trash(&ids).await                  // async DB call
+│     tx.send(Trashed { ids })                   // emit result
+│     (or on failure: tx.send(Error("..."))      // emit error
 │
 ├─ PhotoGridModel (Photos) receives Trashed:
-│   for id in ids { self.remove_item(id) }     // items disappear
+│   for id in ids { self.remove_item(id) }       // items disappear
 │
 ├─ PhotoGridModel (Trash) receives Trashed:
-│   for id in ids { self.fetch_and_insert(id) } // items appear in trash
+│   for id in ids { self.fetch_and_insert(id) }  // items appear in trash
 │
-├─ SelectionModeController receives Trashed:
-│   exit_selection.activate(None)              // exits selection mode
+├─ PhotoGridView receives Trashed:
+│   view.exit-selection GAction activated         // exits selection mode
+│
+├─ Application receives Error (if failed):
+│   shows toast via win.show-toast GAction
 │
 └─ Sidebar receives Trashed:
     (could update trash count badge)
 ```
 
-No component knows about any other. The button doesn't know about models. The model doesn't know about the button. The command handler doesn't know about selection mode.
+No component knows about any other. The button doesn't know about models. The model doesn't know about the button. The command handler doesn't know about selection mode. Selection mode exit uses the GAction — not the bus.
 
 ---
 
@@ -486,13 +529,13 @@ No component knows about any other. The button doesn't know about models. The mo
 
 | Current | Replaced by |
 |---------|-------------|
-| `std::sync::mpsc` channel | `tokio::sync::broadcast` channel |
-| `application.rs` idle loop (120 lines of routing) | Per-component `subscribe()` with 16ms poll |
-| `ModelRegistry` (100 lines, 8 methods) | Direct subscriptions — each model subscribes |
-| `ActionContext` struct | `bus: broadcast::Sender<AppEvent>` — 2 params instead of 7 |
-| `exit_selection` passthrough | `SelectionModeController` subscribes to `Trashed`/`Deleted` |
+| `std::sync::mpsc` channel | `glib::MainContext::channel` (push-based, unbounded) |
+| `application.rs` idle loop (120 lines of routing) | Event translator (thin 1:1 mapping) + per-component subscriptions |
+| `ModelRegistry` (100 lines, 8 methods) | Direct subscriptions via `EventBus` |
+| `ActionContext` struct | `bus: &EventBus` — 2 params instead of 7 |
+| `exit_selection` passthrough | `PhotoGridView` subscribes to `Trashed`/`Deleted`, activates `view.exit-selection` GAction |
 | `library` + `tokio` in every action handler | `CommandDispatcher` — single component owns both, routes to `CommandHandler` impls |
-| `registry.on_trashed()` calls in action handlers | `bus.send(TrashRequested { ids })` — handler emits intent only |
+| `registry.on_trashed()` calls in action handlers | `tx.send(TrashRequested { ids })` — handler emits intent only |
 | `win.album-created` GAction hack | `AppEvent::AlbumCreated` — sidebar subscribes directly |
 
 ---
@@ -501,10 +544,10 @@ No component knows about any other. The button doesn't know about models. The mo
 
 | Component | Why |
 |-----------|-----|
-| `win.show-toast` GAction | Simple fire-and-forget UI notification, not an event |
+| `win.show-toast` GAction | Simple fire-and-forget UI notification |
 | `view.zoom-in/out` GActions | View-scoped state, not cross-component |
-| `view.enter/exit-selection` GActions | View-scoped state, but `ExitSelectionMode` event replaces the passthrough pattern |
-| `LibraryEvent` enum | Stays as the library-level event type; `AppEvent` wraps/replaces it at the application level |
+| `view.enter/exit-selection` GActions | View-scoped state — selection mode is not an application event |
+| `LibraryEvent` enum | Library-layer type — library must not depend on `AppEvent` |
 
 ---
 
@@ -514,12 +557,12 @@ Each component subscribes to the events it cares about:
 
 | Subscriber | Events consumed |
 |------------|----------------|
-| `LibraryCommandHandler` | `TrashRequested`, `RestoreRequested`, `DeleteRequested`, `FavoriteRequested`, `RemoveFromAlbumRequested` → executes library calls, emits result events |
+| `CommandDispatcher` | `TrashRequested`, `RestoreRequested`, `DeleteRequested`, `FavoriteRequested`, `RemoveFromAlbumRequested` → executes library calls, emits result events |
 | `PhotoGridModel` | `ThumbnailReady`, `FavoriteChanged`, `Trashed`, `Restored`, `Deleted`, `AssetSynced`, `AssetDeletedRemote`, `AlbumMediaChanged` |
 | `Sidebar` | `SyncStarted`, `SyncProgress`, `SyncComplete`, `ThumbnailDownloadProgress`, `ThumbnailDownloadsComplete`, `ImportProgress`, `ImportComplete`, `AlbumCreated`, `AlbumRenamed`, `AlbumDeleted` |
-| `SelectionModeController` | `Trashed`, `Deleted`, `ExitSelectionMode` → exits selection mode |
+| `PhotoGridView` | `Trashed`, `Deleted` → activates `view.exit-selection` GAction |
 | `PeopleGrid` | `PeopleSyncComplete` → reloads |
-| `Application` | `Ready`, `ShutdownComplete`, `Error` → lifecycle only |
+| `Application` | `Ready`, `ShutdownComplete`, `Error` → lifecycle + error toasts |
 
 ---
 
@@ -529,36 +572,35 @@ Incremental, one event at a time. Each step is a single PR:
 
 ### Phase 1: Infrastructure
 - Create `src/app_event.rs` with `AppEvent` enum
-- Create `broadcast::channel` in `main.rs`, pass `Sender` to library and `Sender` to UI components
-- Add `subscribe()` method to `PhotoGridModel`
+- Create `EventBus` with `glib::MainContext::channel` + fan-out dispatcher
+- Create event translator in `application.rs` (LibraryEvent → AppEvent)
 - Keep the idle loop as fallback for unmigrated events
 
 ### Phase 2: Thumbnail events
-- Migrate `ThumbnailReady` to broadcast
-- `PhotoGridModel::subscribe()` handles it directly
+- Migrate `ThumbnailReady` — `PhotoGridModel` subscribes via bus
 - Remove `ThumbnailReady` arm from idle loop
 - Remove `ModelRegistry::on_thumbnail_ready()`
 
-### Phase 3: Media state events
-- Migrate `FavoriteChanged`, `Trashed`, `Deleted`
-- Action handlers emit `AppEvent` instead of calling `registry`
+### Phase 3: Command dispatcher + media commands
+- Create `CommandHandler` trait and `CommandDispatcher`
+- Implement `TrashCommand`, `RestoreCommand`, `DeleteCommand`, `FavoriteCommand`
+- Action handlers emit `*Requested` instead of calling library directly
 - Remove `ModelRegistry::on_favorite_changed()`, `on_trashed()`, `on_deleted()`
-- Add `ExitSelectionMode` event, selection controller subscribes
+- `PhotoGridView` subscribes to `Trashed`/`Deleted` → activates `view.exit-selection`
 
 ### Phase 4: Sync and import events
-- Migrate `SyncStarted/Progress/Complete`, `ImportProgress/Complete`
-- Sidebar subscribes directly
+- Sidebar subscribes directly to sync/import events
 - Remove sync/import routing from idle loop
 
-### Phase 5: Album events
-- Migrate `AlbumCreated/Renamed/Deleted/MediaChanged`
-- Sidebar subscribes directly
+### Phase 5: Album events + commands
+- Implement `AddToAlbumCommand`, `RemoveFromAlbumCommand`
+- Sidebar subscribes to album events
 - Remove `win.album-created` GAction hack
 
 ### Phase 6: Cleanup
 - Remove `ModelRegistry` entirely
-- Remove idle loop (or reduce to lifecycle-only)
-- Remove `ActionContext` struct — handlers take `bus: Sender<AppEvent>` instead
+- Remove idle loop (reduce to translator only)
+- Remove `ActionContext` struct — handlers take `bus: &EventBus` only
 
 ---
 
@@ -566,21 +608,12 @@ Incremental, one event at a time. Each step is a single PR:
 
 | Risk | Mitigation |
 |------|------------|
-| `broadcast` receivers can lag | Set capacity to 256; handle `RecvError::Lagged` by logging and continuing |
-| Multiple idle callbacks (one per subscriber) | Each polls at 16ms, same as current; total CPU cost similar |
-| `AppEvent` must be `Clone` | `MediaItem` and `MediaId` are already `Clone`; `ImportSummary` needs `#[derive(Clone)]` |
+| `glib::MainContext::channel` is unbounded | Photo apps don't generate unbounded events; sync bursts are ~100 events max |
+| Fan-out dispatcher iterates all subscribers for every event | Subscribers do a cheap `match` and ignore irrelevant events; ~6 subscribers total |
+| `AppEvent` must be `Clone` for the command dispatcher | `MediaItem` and `MediaId` are already `Clone`; `ImportSummary` needs `#[derive(Clone)]` |
 | Migration breaks existing functionality | Incremental — one event at a time, old path as fallback |
-| Circular event loops (handler emits event, subscriber handles it, emits again) | Convention: handlers emit events, subscribers never emit in response |
-
----
-
-## Channel capacity
-
-`broadcast::channel(256)` — based on:
-- Sync can emit ~100 `AssetSynced` events in a burst
-- Thumbnail generation emits one event per asset
-- 256 provides headroom for burst + normal flow
-- `Lagged` errors mean a subscriber fell behind — log and continue (stale thumbnails will be caught on next scroll)
+| Circular event loops (handler emits event, subscriber handles it, emits again) | Convention: command handlers emit result events only, subscribers never emit commands in response |
+| Command handler errors silently swallowed | Every `CommandHandler::execute` must send `AppEvent::Error` on failure — enforced by code review |
 
 ---
 
@@ -589,6 +622,7 @@ Incremental, one event at a time. Each step is a single PR:
 | File | Change |
 |------|--------|
 | `src/app_event.rs` | **New** — `AppEvent` enum (commands + results) |
+| `src/event_bus.rs` | **New** — `EventBus` (glib channel + fan-out subscriber registry) |
 | `src/commands/mod.rs` | **New** — `CommandHandler` trait + `CommandDispatcher` |
 | `src/commands/trash.rs` | **New** — `TrashCommand` |
 | `src/commands/restore.rs` | **New** — `RestoreCommand` |
@@ -596,17 +630,17 @@ Incremental, one event at a time. Each step is a single PR:
 | `src/commands/favorite.rs` | **New** — `FavoriteCommand` |
 | `src/commands/add_to_album.rs` | **New** — `AddToAlbumCommand` |
 | `src/commands/remove_from_album.rs` | **New** — `RemoveFromAlbumCommand` |
-| `src/main.rs` | Create `broadcast::channel`, pass sender |
-| `src/application.rs` | Remove idle loop routing (120 lines), pass sender to library |
+| `src/main.rs` | Create `EventBus`, pass to application |
+| `src/application.rs` | Replace idle loop with event translator (LibraryEvent → AppEvent); subscribe for lifecycle + errors |
 | `src/ui/model_registry.rs` | **Delete** — replaced by direct subscriptions |
-| `src/ui/photo_grid/model.rs` | Add `subscribe()` method |
-| `src/ui/photo_grid/action_bar.rs` | Replace `registry` + `exit_selection` with `bus` |
+| `src/ui/photo_grid/model.rs` | Subscribe to bus in constructor |
+| `src/ui/photo_grid/action_bar.rs` | Replace `library` + `tokio` + `registry` + `exit_selection` with `bus` |
 | `src/ui/photo_grid/actions.rs` | Replace `ActionContext` with `bus` |
-| `src/ui/photo_grid.rs` | Pass `bus` instead of `registry`, subscribe selection controller |
-| `src/ui/sidebar.rs` | Add `subscribe()` for sync/import/album events |
+| `src/ui/photo_grid.rs` | Pass `bus` instead of `registry`; subscribe for `Trashed`/`Deleted` → GAction |
+| `src/ui/sidebar.rs` | Subscribe to bus in constructor |
 | `src/ui/window.rs` | Remove `win.album-created` action, pass `bus` to components |
-| `src/library/event.rs` | Keep as-is or merge into `AppEvent` |
-| `src/library/sync.rs` | Send `AppEvent` instead of `LibraryEvent` |
-| `src/library/importer.rs` | Send `AppEvent` instead of `LibraryEvent` |
-| `src/library/thumbnailer.rs` | Send `AppEvent` instead of `LibraryEvent` |
-| `src/library/providers/*.rs` | Send `AppEvent` instead of `LibraryEvent` |
+| `src/library/event.rs` | **Unchanged** — `LibraryEvent` stays as library-layer type |
+| `src/library/sync.rs` | **Unchanged** — continues sending `LibraryEvent` |
+| `src/library/importer.rs` | **Unchanged** — continues sending `LibraryEvent` |
+| `src/library/thumbnailer.rs` | **Unchanged** — continues sending `LibraryEvent` |
+| `src/library/providers/*.rs` | **Unchanged** — continues sending `LibraryEvent` |
