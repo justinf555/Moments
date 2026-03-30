@@ -58,3 +58,67 @@ jobs:
       - name: Show sccache stats
         if: always()
         run: sccache --show-stats
+
+  integration-tests:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:43
+
+    env:
+      SQLX_OFFLINE: "true"
+      GSK_RENDERER: "cairo"
+      GTK_A11Y: "none"
+      GIO_USE_VFS: "local"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          dnf install -y \
+            cargo \
+            gtk4-devel \
+            libadwaita-devel \
+            gettext-devel \
+            libheif-devel \
+            gstreamer1-devel \
+            gstreamer1-plugins-base-devel \
+            libsecret-devel \
+            pkg-config \
+            mutter \
+            dbus-x11
+
+      - name: Configure sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: fedora43-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: fedora43-cargo-
+
+      - name: Generate config.rs stub
+        run: |
+          cat > src/config.rs <<'EOF'
+          pub static VERSION: &str = env!("CARGO_PKG_VERSION");
+          pub static GETTEXT_PACKAGE: &str = "moments";
+          pub static LOCALEDIR: &str = "/usr/share/locale";
+          pub static PKGDATADIR: &str = "/usr/share/moments";
+          EOF
+
+      - name: Run integration tests
+        run: |
+          export XDG_RUNTIME_DIR=/tmp/runtime-$$
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          dbus-run-session \
+            mutter --headless --wayland --no-x11 --virtual-monitor 1024x768 -- \
+            cargo test --features integration-tests -- --test-threads=1
+
+      - name: Show sccache stats
+        if: always()
+        run: sccache --show-stats
