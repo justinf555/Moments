@@ -506,6 +506,11 @@ impl MomentsApplication {
                             .take()
                             .expect("receiver set above");
 
+                        // ── Event translator ─────────────────────────────
+                        // Thin 1:1 mapping from LibraryEvent → AppEvent.
+                        // The idle loop is now a pure translator — no routing
+                        // logic, no references to models, sidebar, or dialogs.
+                        // Subscribers handle their own events via the bus.
                         let app_for_idle = app.downgrade();
                         let win_for_idle = window.downgrade();
                         let source_id = glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
@@ -519,35 +524,22 @@ impl MomentsApplication {
                                         bus_tx.send(AppEvent::ThumbnailReady { media_id });
                                     }
                                     Ok(LibraryEvent::ImportProgress { current, total, imported, skipped, failed }) => {
-                                        // Update sidebar bottom sheet (non-modal).
-                                        if let Some(win) = win_for_idle.upgrade() {
-                                            if let Some(sb) = win.sidebar() {
-                                                sb.show_upload_progress(current, total, imported, skipped, failed);
-                                            }
-                                        }
-                                        // Also update modal dialog if present.
+                                        // Import dialog is app-level (not a bus subscriber).
                                         let borrow = app.imp().import_dialog.borrow();
                                         if let Some(d) = borrow.as_ref() {
                                             d.set_progress(current, total);
                                         }
+                                        bus_tx.send(AppEvent::ImportProgress { current, total, imported, skipped, failed });
                                     }
                                     Ok(LibraryEvent::ImportComplete(summary)) => {
-                                        // Update sidebar bottom sheet.
-                                        if let Some(win) = win_for_idle.upgrade() {
-                                            if let Some(sb) = win.sidebar() {
-                                                sb.show_upload_complete(&summary);
-                                            }
-                                        }
-                                        // Also update modal dialog if present.
+                                        // Import dialog is app-level (not a bus subscriber).
                                         {
                                             let borrow = app.imp().import_dialog.borrow();
                                             if let Some(d) = borrow.as_ref() {
                                                 d.set_complete(&summary);
                                             }
                                         }
-                                        // Release strong ref — dialog stays open until user dismisses.
                                         app.imp().import_dialog.borrow_mut().take();
-                                        // Notify models via bus (replaces registry.reload_all()).
                                         bus_tx.send(AppEvent::ImportComplete { summary });
                                         // Navigate to Recent Imports so the user sees what arrived.
                                         if let Some(win) = win_for_idle.upgrade() {
@@ -561,72 +553,44 @@ impl MomentsApplication {
                                         bus_tx.send(AppEvent::AssetDeletedRemote { media_id });
                                     }
                                     Ok(LibraryEvent::AlbumCreated { id, name }) => {
-                                        if let Some(win) = win_for_idle.upgrade() {
-                                            if let Some(sb) = win.sidebar() {
-                                                sb.add_album(id.as_str(), &name);
-                                            }
-                                        }
+                                        bus_tx.send(AppEvent::AlbumCreated { id, name });
                                     }
                                     Ok(LibraryEvent::AlbumDeleted { id }) => {
+                                        // Unregister the coordinator route (app-level concern).
                                         if let Some(win) = win_for_idle.upgrade() {
-                                            if let Some(sb) = win.sidebar() {
-                                                sb.remove_album(id.as_str());
-                                            }
                                             if let Some(coord) = win.imp().coordinator.get() {
                                                 let route = format!("album:{}", id.as_str());
                                                 coord.borrow_mut().unregister(&route);
                                             }
                                         }
+                                        bus_tx.send(AppEvent::AlbumDeleted { id });
                                     }
                                     Ok(LibraryEvent::AlbumRenamed { id, name }) => {
-                                        if let Some(win) = win_for_idle.upgrade() {
-                                            if let Some(sb) = win.sidebar() {
-                                                sb.rename_album(id.as_str(), &name);
-                                            }
-                                        }
+                                        bus_tx.send(AppEvent::AlbumRenamed { id, name });
                                     }
                                     Ok(LibraryEvent::AlbumMediaChanged { album_id }) => {
                                         bus_tx.send(AppEvent::AlbumMediaChanged { album_id });
                                     }
                                     Ok(LibraryEvent::PeopleSyncComplete) => {
+                                        bus_tx.send(AppEvent::PeopleSyncComplete);
                                         if let Some(win) = win_for_idle.upgrade() {
                                             win.reload_people();
                                         }
                                     }
                                     Ok(LibraryEvent::SyncStarted) => {
-                                        if let Some(win) = win_for_idle.upgrade() {
-                                            if let Some(sb) = win.sidebar() {
-                                                sb.show_sync_started();
-                                            }
-                                        }
+                                        bus_tx.send(AppEvent::SyncStarted);
                                     }
                                     Ok(LibraryEvent::SyncProgress { assets, people, faces }) => {
-                                        if let Some(win) = win_for_idle.upgrade() {
-                                            if let Some(sb) = win.sidebar() {
-                                                sb.show_sync_progress(assets, people, faces);
-                                            }
-                                        }
+                                        bus_tx.send(AppEvent::SyncProgress { assets, people, faces });
                                     }
-                                    Ok(LibraryEvent::SyncComplete { assets, .. }) => {
-                                        if let Some(win) = win_for_idle.upgrade() {
-                                            if let Some(sb) = win.sidebar() {
-                                                sb.show_sync_complete(assets);
-                                            }
-                                        }
+                                    Ok(LibraryEvent::SyncComplete { assets, people, faces, errors }) => {
+                                        bus_tx.send(AppEvent::SyncComplete { assets, people, faces, errors });
                                     }
                                     Ok(LibraryEvent::ThumbnailDownloadProgress { completed, total }) => {
-                                        if let Some(win) = win_for_idle.upgrade() {
-                                            if let Some(sb) = win.sidebar() {
-                                                sb.show_thumbnail_progress(completed, total);
-                                            }
-                                        }
+                                        bus_tx.send(AppEvent::ThumbnailDownloadProgress { completed, total });
                                     }
                                     Ok(LibraryEvent::ThumbnailDownloadsComplete { total }) => {
-                                        if let Some(win) = win_for_idle.upgrade() {
-                                            if let Some(sb) = win.sidebar() {
-                                                sb.show_thumbnails_complete(total);
-                                            }
-                                        }
+                                        bus_tx.send(AppEvent::ThumbnailDownloadsComplete { total });
                                     }
                                     Ok(_) => {}
                                     Err(std::sync::mpsc::TryRecvError::Empty) => break,

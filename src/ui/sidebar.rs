@@ -361,6 +361,50 @@ impl MomentsSidebar {
         glib::Object::new()
     }
 
+    /// Subscribe to sync, import, thumbnail, and album events on the bus.
+    ///
+    /// Self-contained: the sidebar handles its own events internally.
+    /// The parent (window.rs) only needs to call this once after creation.
+    pub fn subscribe_to_bus(&self) {
+        let weak = self.downgrade();
+        crate::event_bus::subscribe(move |event| {
+            let Some(sidebar) = weak.upgrade() else { return };
+            match event {
+                crate::app_event::AppEvent::SyncStarted => {
+                    sidebar.show_sync_started();
+                }
+                crate::app_event::AppEvent::SyncProgress { assets, people, faces } => {
+                    sidebar.show_sync_progress(*assets, *people, *faces);
+                }
+                crate::app_event::AppEvent::SyncComplete { assets, .. } => {
+                    sidebar.show_sync_complete(*assets);
+                }
+                crate::app_event::AppEvent::ThumbnailDownloadProgress { completed, total } => {
+                    sidebar.show_thumbnail_progress(*completed, *total);
+                }
+                crate::app_event::AppEvent::ThumbnailDownloadsComplete { total } => {
+                    sidebar.show_thumbnails_complete(*total);
+                }
+                crate::app_event::AppEvent::ImportProgress { current, total, imported, skipped, failed } => {
+                    sidebar.show_upload_progress(*current, *total, *imported, *skipped, *failed);
+                }
+                crate::app_event::AppEvent::ImportComplete { summary } => {
+                    sidebar.show_upload_complete(summary);
+                }
+                crate::app_event::AppEvent::AlbumCreated { id, name } => {
+                    sidebar.add_album(id.as_str(), name);
+                }
+                crate::app_event::AppEvent::AlbumRenamed { id, name } => {
+                    sidebar.rename_album(id.as_str(), name);
+                }
+                crate::app_event::AppEvent::AlbumDeleted { id } => {
+                    sidebar.remove_album(id.as_str());
+                }
+                _ => {}
+            }
+        });
+    }
+
     /// Connect a callback that fires when the user selects a row.
     pub fn connect_route_selected<F: Fn(&str) + 'static>(&self, f: F) {
         let list_box = self.imp().list_box.get().unwrap().clone();
