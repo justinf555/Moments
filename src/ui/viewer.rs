@@ -8,7 +8,8 @@ use tracing::{debug, error};
 
 use crate::library::media::MediaMetadataRecord;
 use crate::library::Library;
-use crate::ui::model_registry::ModelRegistry;
+use crate::app_event::AppEvent;
+use crate::event_bus::EventSender;
 use crate::ui::photo_grid::item::MediaItemObject;
 
 pub mod edit_panel;
@@ -55,7 +56,7 @@ struct ViewerInner {
     current_metadata: RefCell<Option<MediaMetadataRecord>>,
     library: Arc<dyn Library>,
     tokio: tokio::runtime::Handle,
-    registry: Rc<ModelRegistry>,
+    bus_sender: EventSender,
 }
 
 impl ViewerInner {
@@ -410,7 +411,7 @@ pub struct PhotoViewer {
 }
 
 impl PhotoViewer {
-    pub fn new(library: Arc<dyn Library>, tokio: tokio::runtime::Handle, registry: Rc<ModelRegistry>) -> Self {
+    pub fn new(library: Arc<dyn Library>, tokio: tokio::runtime::Handle, bus_sender: EventSender) -> Self {
         // ── Header bar ───────────────────────────────────────────────────────
         let header = adw::HeaderBar::new();
 
@@ -555,7 +556,7 @@ impl PhotoViewer {
             current_metadata: RefCell::new(None),
             library,
             tokio,
-            registry,
+            bus_sender,
         });
 
         // ── Signal handlers ───────────────────────────────────────────────────
@@ -613,32 +614,15 @@ impl PhotoViewer {
                 });
                 obj.set_is_favorite(new_fav);
 
-                // Persist to DB, then broadcast to all models so filtered
-                // views reload with the committed data.
                 let id = obj.item().id.clone();
-                let lib = Arc::clone(&inner.library);
-                let tk = inner.tokio.clone();
-                let reg = Rc::clone(&inner.registry);
-                let btn_weak = btn.downgrade();
-                glib::MainContext::default().spawn_local(async move {
-                    let result = tk
-                        .spawn(async move { lib.set_favorite(&[id.clone()], new_fav).await.map(|_| id) })
-                        .await;
-                    match result {
-                        Ok(Ok(id)) => reg.on_favorite_changed(&id, new_fav),
-                        Ok(Err(e)) => {
-                            error!("set_favorite failed: {e}");
-                            if let Some(btn) = btn_weak.upgrade() {
-                                let _ = btn.activate_action("win.show-toast", Some(&"Failed to update favourite".to_variant()));
-                            }
-                        }
-                        Err(e) => error!("set_favorite join failed: {e}"),
-                    }
+                inner.bus_sender.send(AppEvent::FavoriteRequested {
+                    ids: vec![id],
+                    state: new_fav,
                 });
             });
         }
 
-        // Trash button — persist then broadcast, pop back to grid.
+        // Trash button — emit command, subscribe for result to pop back.
         {
             let i = Rc::downgrade(&inner);
             inner.trash_btn.connect_clicked(move |_| {
@@ -650,32 +634,19 @@ impl PhotoViewer {
                 };
                 let Some(id) = id else { return };
 
-                let lib = Arc::clone(&inner.library);
-                let tk = inner.tokio.clone();
-                let reg = Rc::clone(&inner.registry);
-                let nav = inner.nav_page.clone();
-                glib::MainContext::default().spawn_local(async move {
-                    let result = tk
-                        .spawn(async move { lib.trash(&[id.clone()]).await.map(|_| id) })
-                        .await;
-                    match result {
-                        Ok(Ok(id)) => {
-                            reg.on_trashed(&id, true);
-                            // Pop back to grid since the item is gone.
-                            if let Some(nav_view) = nav
-                                .parent()
-                                .and_then(|p| p.downcast::<adw::NavigationView>().ok())
-                            {
-                                nav_view.pop();
-                            }
-                        }
-                        Ok(Err(e)) => {
-                            error!("trash failed: {e}");
-                            let _ = nav.activate_action("win.show-toast", Some(&"Failed to move to trash".to_variant()));
-                        }
-                        Err(e) => error!("trash join failed: {e}"),
-                    }
+                inner.bus_sender.send(AppEvent::TrashRequested {
+                    ids: vec![id],
                 });
+
+                // Pop back to grid — the item will be removed by the model's
+                // Trashed handler. Pop immediately so the user doesn't see
+                // a stale viewer.
+                if let Some(nav_view) = inner.nav_page
+                    .parent()
+                    .and_then(|p| p.downcast::<adw::NavigationView>().ok())
+                {
+                    nav_view.pop();
+                }
             });
         }
 

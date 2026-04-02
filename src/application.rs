@@ -20,7 +20,6 @@
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::sync::{mpsc::Receiver, Arc};
 
 use gettextrs::gettext;
@@ -38,7 +37,6 @@ use crate::library::event::LibraryEvent;
 use crate::library::factory::LibraryFactory;
 use crate::library::Library;
 use crate::ui::import_dialog::ImportDialog;
-use crate::ui::model_registry::ModelRegistry;
 use crate::ui::MomentsSetupWindow;
 use crate::ui::MomentsWindow;
 
@@ -53,7 +51,6 @@ mod imp {
         pub is_immich: Cell<bool>,
         pub immich_server_url: RefCell<Option<String>>,
         pub library_events: RefCell<Option<Receiver<LibraryEvent>>>,
-        pub model_registry: RefCell<Option<Rc<ModelRegistry>>>,
         /// Held while an import is in flight so the idle loop can update it.
         /// Cleared when `ImportComplete` arrives or the user dismisses it.
         pub import_dialog: RefCell<Option<ImportDialog>>,
@@ -91,9 +88,9 @@ mod imp {
         fn shutdown(&self) {
             info!("application shutting down");
 
-            // Remove the idle source first — this frees the closure and
-            // releases the ModelRegistry while the Tokio runtime is still
-            // alive so the SqlitePool background task can exit cleanly.
+            // Remove the idle source first — this frees the closure while
+            // the Tokio runtime is still alive so the SqlitePool background
+            // task can exit cleanly.
             if let Some(source_id) = self.idle_source.borrow_mut().take() {
                 source_id.remove();
             }
@@ -101,7 +98,7 @@ mod imp {
             // Drop all library-related state so the Arc<dyn Library>
             // (and the SqlitePool it wraps) is freed before drop(tokio)
             // in main() tries to shut down the runtime.
-            self.model_registry.borrow_mut().take();
+            self.event_bus.borrow_mut().take();
             self.import_dialog.borrow_mut().take();
             self.library.borrow_mut().take();
 
@@ -476,11 +473,11 @@ impl MomentsApplication {
                         let bus_tx = bus.sender();
 
                         // Wire the shell: builds sidebar, registers views,
-                        // and switches to the content page. Returns a
-                        // ModelRegistry for broadcasting library events.
+                        // and switches to the content page. All components
+                        // subscribe to the bus for event delivery.
                         let settings = app.imp().settings.get()
                             .expect("settings initialised").clone();
-                        let registry = window.setup(library, tokio.clone(), settings, &bus);
+                        window.setup(library, tokio.clone(), settings, &bus);
 
                         // Create the command dispatcher — routes *Requested
                         // events to library calls on the Tokio runtime.
@@ -493,8 +490,24 @@ impl MomentsApplication {
                             &bus,
                         );
 
-                        // Store registry and bus for shutdown cleanup.
-                        *app.imp().model_registry.borrow_mut() = Some(Rc::clone(&registry));
+                        // Subscribe for error toasts — centralised error
+                        // handling for all command failures.
+                        {
+                            let win_weak = window.downgrade();
+                            bus.subscribe(move |event| {
+                                if let AppEvent::Error(msg) = event {
+                                    if let Some(win) = win_weak.upgrade() {
+                                        gtk::prelude::ActionGroupExt::activate_action(
+                                            &win,
+                                            "win.show-toast",
+                                            Some(&msg.to_variant()),
+                                        );
+                                    }
+                                }
+                            });
+                        }
+
+                        // Store bus for shutdown cleanup.
                         *app.imp().event_bus.borrow_mut() = Some(bus);
 
                         // Poll library events on every GTK idle tick.

@@ -56,8 +56,7 @@ impl ContentCoordinator {
     ///
     /// No widget is added to the stack until [`navigate`](Self::navigate) is
     /// called with this route id. The factory closure should create the view,
-    /// register its model in the [`ModelRegistry`](super::model_registry::ModelRegistry),
-    /// and return the view.
+    /// subscribe its model to the event bus, and return the view.
     pub fn register_lazy<F>(&mut self, id: &str, factory: F)
     where
         F: FnOnce() -> Rc<dyn ContentView> + 'static,

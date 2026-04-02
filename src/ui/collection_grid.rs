@@ -9,7 +9,6 @@ use tracing::{debug, info};
 use crate::library::faces::PersonId;
 use crate::library::media::MediaFilter;
 use crate::library::Library;
-use crate::ui::model_registry::ModelRegistry;
 use crate::ui::photo_grid::model::PhotoGridModel;
 use crate::ui::photo_grid::texture_cache::TextureCache;
 use crate::ui::photo_grid::PhotoGridView;
@@ -56,7 +55,6 @@ impl CollectionGridView {
         library: Arc<dyn Library>,
         tokio: tokio::runtime::Handle,
         settings: gio::Settings,
-        registry: Rc<ModelRegistry>,
         texture_cache: Rc<TextureCache>,
         bus_sender: crate::event_bus::EventSender,
     ) -> Self {
@@ -162,7 +160,6 @@ impl CollectionGridView {
             let lib = Arc::clone(&library);
             let tk = tokio.clone();
             let s = settings.clone();
-            let reg = Rc::clone(&registry);
             let tc = Rc::clone(&texture_cache);
             let bs = bus_sender.clone();
             let store_ref = store.clone();
@@ -190,13 +187,11 @@ impl CollectionGridView {
                     Arc::clone(&lib),
                     tk.clone(),
                     s.clone(),
-                    Rc::clone(&reg),
                     Rc::clone(&tc),
                     bs.clone(),
                 ));
-                view.set_model(Rc::clone(&model), Rc::clone(&reg));
+                view.set_model(Rc::clone(&model));
                 model.subscribe_to_bus();
-                reg.register(&model);
 
                 let display_name = if data.name.is_empty() {
                     "Unnamed".to_string()

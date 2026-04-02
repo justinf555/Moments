@@ -14,14 +14,19 @@ mod common;
 use std::rc::Rc;
 
 use gtk::prelude::*;
-use gtk::subclass::prelude::*;
 
+use moments::app_event::AppEvent;
+use moments::event_bus::EventBus;
 use moments::library::media::{MediaFilter, MediaId, MediaItem, MediaType};
-use moments::ui::model_registry::ModelRegistry;
 use moments::ui::photo_grid::item::MediaItemObject;
 use moments::ui::photo_grid::model::PhotoGridModel;
 
 use common::mock_library::stub_deps;
+
+/// Process all pending GLib main loop events.
+fn flush_events() {
+    while gtk::glib::MainContext::default().iteration(false) {}
+}
 
 /// Create a test MediaItem with the given ID and sensible defaults.
 fn test_item(id: &str) -> MediaItem {
@@ -253,43 +258,50 @@ mod photo_grid_model {
     }
 }
 
-// ── ModelRegistry broadcast tests ───────────────────────────────────────────
+// ── Bus-based broadcast tests (replaces ModelRegistry tests) ────────────────
 
 #[cfg(test)]
-mod model_registry {
+mod bus_broadcast {
     use super::*;
 
     #[gtk::test]
-    fn on_deleted_broadcasts_to_all_models() {
-        let registry = ModelRegistry::new();
+    fn deleted_event_reaches_all_subscribed_models() {
+        let bus = EventBus::new();
         let model_a = make_model(MediaFilter::All);
         let model_b = make_model(MediaFilter::All);
 
-        registry.register(&model_a);
-        registry.register(&model_b);
+        model_a.subscribe(&bus);
+        model_b.subscribe(&bus);
 
         model_a.insert_item_sorted(test_item("shared-id"));
         model_b.insert_item_sorted(test_item("shared-id"));
 
-        registry.on_deleted(&MediaId::new("shared-id".to_string()));
+        bus.sender().send(AppEvent::Deleted {
+            ids: vec![MediaId::new("shared-id".to_string())],
+        });
+        flush_events();
 
         assert_eq!(model_a.store.n_items(), 0);
         assert_eq!(model_b.store.n_items(), 0);
     }
 
     #[gtk::test]
-    fn on_favorite_changed_broadcasts_to_all_models() {
-        let registry = ModelRegistry::new();
+    fn favorite_changed_reaches_all_subscribed_models() {
+        let bus = EventBus::new();
         let model_a = make_model(MediaFilter::All);
         let model_b = make_model(MediaFilter::All);
 
-        registry.register(&model_a);
-        registry.register(&model_b);
+        model_a.subscribe(&bus);
+        model_b.subscribe(&bus);
 
         model_a.insert_item_sorted(test_item("fav-id"));
         model_b.insert_item_sorted(test_item("fav-id"));
 
-        registry.on_favorite_changed(&MediaId::new("fav-id".to_string()), true);
+        bus.sender().send(AppEvent::FavoriteChanged {
+            ids: vec![MediaId::new("fav-id".to_string())],
+            is_favorite: true,
+        });
+        flush_events();
 
         let obj_a = model_a.store.item(0).unwrap().downcast::<MediaItemObject>().unwrap();
         let obj_b = model_b.store.item(0).unwrap().downcast::<MediaItemObject>().unwrap();
@@ -298,44 +310,52 @@ mod model_registry {
     }
 
     #[gtk::test]
-    fn on_trashed_removes_from_all_model() {
-        let registry = ModelRegistry::new();
+    fn trashed_event_removes_from_all_model() {
+        let bus = EventBus::new();
         let model_all = make_model(MediaFilter::All);
-        registry.register(&model_all);
+        model_all.subscribe(&bus);
 
         model_all.insert_item_sorted(test_item("trash-id"));
-        registry.on_trashed(&MediaId::new("trash-id".to_string()), true);
+
+        bus.sender().send(AppEvent::Trashed {
+            ids: vec![MediaId::new("trash-id".to_string())],
+        });
+        flush_events();
 
         assert_eq!(model_all.store.n_items(), 0);
     }
 
     #[gtk::test]
-    fn on_asset_synced_inserts_into_matching_models() {
-        let registry = ModelRegistry::new();
+    fn asset_synced_inserts_into_matching_models() {
+        let bus = EventBus::new();
         let model_all = make_model(MediaFilter::All);
         let model_trash = make_model(MediaFilter::Trashed);
 
-        registry.register(&model_all);
-        registry.register(&model_trash);
+        model_all.subscribe(&bus);
+        model_trash.subscribe(&bus);
 
-        registry.on_asset_synced(&test_item("synced-asset"));
+        bus.sender().send(AppEvent::AssetSynced {
+            item: test_item("synced-asset"),
+        });
+        flush_events();
 
         assert_eq!(model_all.store.n_items(), 1, "non-trashed → All");
         assert_eq!(model_trash.store.n_items(), 0, "non-trashed ≠ Trashed");
     }
 
     #[gtk::test]
-    fn on_asset_synced_routes_trashed_to_trash_model() {
-        let registry = ModelRegistry::new();
+    fn asset_synced_routes_trashed_to_trash_model() {
+        let bus = EventBus::new();
         let model_all = make_model(MediaFilter::All);
         let model_trash = make_model(MediaFilter::Trashed);
 
-        registry.register(&model_all);
-        registry.register(&model_trash);
+        model_all.subscribe(&bus);
+        model_trash.subscribe(&bus);
 
         let mut item = test_item("trashed-asset");
         item.is_trashed = true;
-        registry.on_asset_synced(&item);
+        bus.sender().send(AppEvent::AssetSynced { item });
+        flush_events();
 
         assert_eq!(model_all.store.n_items(), 0, "trashed ≠ All");
         assert_eq!(model_trash.store.n_items(), 1, "trashed → Trashed");
