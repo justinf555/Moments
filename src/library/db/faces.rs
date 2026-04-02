@@ -326,8 +326,8 @@ mod tests {
             .unwrap();
 
         // Insert media and faces to give Bob more faces.
-        let rec1 = record_with_taken_at(MediaId::__test_new("m1"), "a/photo1.jpg", Some(1000));
-        let rec2 = record_with_taken_at(MediaId::__test_new("m2"), "a/photo2.jpg", Some(2000));
+        let rec1 = record_with_taken_at(MediaId::new("m1".to_string()), "a/photo1.jpg", Some(1000));
+        let rec2 = record_with_taken_at(MediaId::new("m2".to_string()), "a/photo2.jpg", Some(2000));
         db.upsert_media(&rec1).await.unwrap();
         db.upsert_media(&rec2).await.unwrap();
 
@@ -435,7 +435,7 @@ mod tests {
         db.upsert_person("p1", "Alice", None, false, false, None, None)
             .await
             .unwrap();
-        let rec = test_record(MediaId::__test_new("m1"));
+        let rec = test_record(MediaId::new("m1".to_string()));
         db.upsert_media(&rec).await.unwrap();
 
         let face = AssetFaceRow {
@@ -475,8 +475,8 @@ mod tests {
             .await
             .unwrap();
 
-        let rec1 = record_with_taken_at(MediaId::__test_new("m1"), "a/photo1.jpg", Some(1000));
-        let mut rec2 = record_with_taken_at(MediaId::__test_new("m2"), "a/photo2.jpg", Some(2000));
+        let rec1 = record_with_taken_at(MediaId::new("m1".to_string()), "a/photo1.jpg", Some(1000));
+        let mut rec2 = record_with_taken_at(MediaId::new("m2".to_string()), "a/photo2.jpg", Some(2000));
         rec2.is_trashed = true;
         rec2.trashed_at = Some(chrono::Utc::now().timestamp());
         db.upsert_media(&rec1).await.unwrap();
@@ -521,7 +521,7 @@ mod tests {
         db.upsert_person("p1", "Alice", None, false, false, None, None)
             .await
             .unwrap();
-        let rec = test_record(MediaId::__test_new("m1"));
+        let rec = test_record(MediaId::new("m1".to_string()));
         db.upsert_media(&rec).await.unwrap();
 
         let face = AssetFaceRow {
@@ -556,7 +556,7 @@ mod tests {
         db.upsert_person("p1", "Alice", None, false, false, None, None)
             .await
             .unwrap();
-        let rec = test_record(MediaId::__test_new("m1"));
+        let rec = test_record(MediaId::new("m1".to_string()));
         db.upsert_media(&rec).await.unwrap();
 
         let face = AssetFaceRow {

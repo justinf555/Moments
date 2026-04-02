@@ -18,12 +18,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-mod application;
-mod config;
-mod library;
-mod ui;
-
-use self::application::MomentsApplication;
+use moments::application::MomentsApplication;
+use moments::config;
 
 use config::{GETTEXT_PACKAGE, LOCALEDIR, PKGDATADIR};
 use gettextrs::{bind_textdomain_codeset, bindtextdomain, textdomain};
