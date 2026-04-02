@@ -66,6 +66,14 @@ pub enum AppEvent {
         album_id: AlbumId,
         ids: Vec<MediaId>,
     },
+    AddToAlbumRequested {
+        album_id: AlbumId,
+        ids: Vec<MediaId>,
+    },
+    CreateAlbumRequested {
+        name: String,
+        ids: Vec<MediaId>,
+    },
 
     // ── Results (CommandDispatcher → subscribers) ────────────────────────────
     FavoriteChanged {
