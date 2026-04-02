@@ -6,6 +6,8 @@ use std::sync::Arc;
 use gtk::{gdk, gio, glib, prelude::*};
 use tracing::{debug, error};
 
+use crate::app_event::AppEvent;
+use crate::event_bus::EventBus;
 use crate::library::media::{MediaCursor, MediaFilter, MediaId, MediaItem};
 use crate::library::Library;
 
@@ -59,6 +61,36 @@ impl PhotoGridModel {
             id_index: RefCell::new(HashMap::new()),
             on_page_ready: RefCell::new(None),
         }
+    }
+
+    /// Subscribe to relevant events on the bus.
+    ///
+    /// Currently handles `ThumbnailReady`. The subscription captures a weak
+    /// reference to the model — when the model is dropped, the callback
+    /// becomes a no-op.
+    pub fn subscribe(self: &Rc<Self>, bus: &EventBus) {
+        let weak = Rc::downgrade(self);
+        bus.subscribe(move |event| {
+            let Some(model) = weak.upgrade() else { return };
+            if let AppEvent::ThumbnailReady { media_id } = event {
+                model.on_thumbnail_ready(media_id);
+            }
+        });
+    }
+
+    /// Subscribe to the bus via the thread-local free function.
+    ///
+    /// Used by lazy views that don't have a direct reference to the
+    /// `EventBus` struct. Safe to call from the GTK main thread after
+    /// the bus has been created.
+    pub fn subscribe_to_bus(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        crate::event_bus::subscribe(move |event| {
+            let Some(model) = weak.upgrade() else { return };
+            if let AppEvent::ThumbnailReady { media_id } = event {
+                model.on_thumbnail_ready(media_id);
+            }
+        });
     }
 
     /// The filter this model was constructed with.

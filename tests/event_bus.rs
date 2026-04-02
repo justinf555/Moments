@@ -1,8 +1,7 @@
-//! Tests for the EventBus infrastructure (Phase 1 of #230).
+//! Tests for the EventBus infrastructure (#230).
 //!
 //! These tests validate the core fan-out subscriber pattern, cross-thread
-//! delivery, and event filtering. They use #[gtk::test] because the bus
-//! relies on glib::timeout_add_local for its drain source.
+//! delivery, and event filtering.
 
 #![cfg(feature = "integration-tests")]
 
@@ -15,14 +14,8 @@ use moments::app_event::AppEvent;
 use moments::event_bus::EventBus;
 use moments::library::media::MediaId;
 
-/// Process GLib main loop events until the bus drain fires.
-///
-/// The EventBus uses a 4ms timeout source, so we need to wait at least
-/// that long and then iterate the main loop to process the events.
+/// Process all pending GLib main loop events.
 fn flush_events() {
-    // Sleep briefly to let the timeout source become ready
-    std::thread::sleep(std::time::Duration::from_millis(10));
-    // Drain all pending events
     while glib::MainContext::default().iteration(false) {}
 }
 
@@ -40,7 +33,7 @@ fn single_subscriber_receives_event() {
         }
     });
 
-    bus.sender().send(AppEvent::SyncStarted).unwrap();
+    bus.sender().send(AppEvent::SyncStarted);
     flush_events();
 
     assert!(received.get());
@@ -60,7 +53,7 @@ fn multiple_subscribers_all_receive() {
         });
     }
 
-    bus.sender().send(AppEvent::SyncStarted).unwrap();
+    bus.sender().send(AppEvent::SyncStarted);
     flush_events();
 
     assert_eq!(count.get(), 3);
@@ -78,15 +71,12 @@ fn subscribers_ignore_unmatched_events() {
         }
     });
 
-    // Send a different event
-    bus.sender()
-        .send(AppEvent::SyncComplete {
-            assets: 0,
-            people: 0,
-            faces: 0,
-            errors: 0,
-        })
-        .unwrap();
+    bus.sender().send(AppEvent::SyncComplete {
+        assets: 0,
+        people: 0,
+        faces: 0,
+        errors: 0,
+    });
     flush_events();
 
     assert!(!received.get(), "subscriber should not fire for unmatched event");
@@ -109,18 +99,16 @@ fn multiple_events_delivered_in_order() {
     });
 
     let tx = bus.sender();
-    tx.send(AppEvent::SyncStarted).unwrap();
+    tx.send(AppEvent::SyncStarted);
     tx.send(AppEvent::ThumbnailReady {
         media_id: MediaId::new("abc".to_string()),
-    })
-    .unwrap();
+    });
     tx.send(AppEvent::SyncComplete {
         assets: 10,
         people: 0,
         faces: 0,
         errors: 0,
-    })
-    .unwrap();
+    });
     flush_events();
 
     let entries = log.borrow();
@@ -146,7 +134,7 @@ fn sender_works_from_another_thread() {
 
     let tx = bus.sender();
     std::thread::spawn(move || {
-        tx.send(AppEvent::SyncStarted).unwrap();
+        tx.send(AppEvent::SyncStarted);
     })
     .join()
     .unwrap();
@@ -173,14 +161,12 @@ fn command_event_reaches_subscriber() {
         }
     });
 
-    bus.sender()
-        .send(AppEvent::TrashRequested {
-            ids: vec![
-                MediaId::new("a".to_string()),
-                MediaId::new("b".to_string()),
-            ],
-        })
-        .unwrap();
+    bus.sender().send(AppEvent::TrashRequested {
+        ids: vec![
+            MediaId::new("a".to_string()),
+            MediaId::new("b".to_string()),
+        ],
+    });
     flush_events();
 
     let ids = trashed_ids.borrow();
@@ -201,13 +187,37 @@ fn result_event_reaches_subscriber() {
         }
     });
 
-    bus.sender()
-        .send(AppEvent::FavoriteChanged {
-            ids: vec![MediaId::new("x".to_string())],
-            is_favorite: true,
-        })
-        .unwrap();
+    bus.sender().send(AppEvent::FavoriteChanged {
+        ids: vec![MediaId::new("x".to_string())],
+        is_favorite: true,
+    });
     flush_events();
 
     assert!(favorite_state.get());
+}
+
+// ── Drop cleanup ────────────────────────────────────────────────────────────
+
+#[gtk::test]
+fn drop_cleans_up_thread_local_state() {
+    {
+        let bus = EventBus::new();
+        bus.subscribe(|_| {});
+        // bus dropped here
+    }
+
+    // Creating a new bus should work (thread-local state was cleared)
+    let bus = EventBus::new();
+    let received = Rc::new(Cell::new(false));
+    let r = Rc::clone(&received);
+    bus.subscribe(move |event| {
+        if matches!(event, AppEvent::SyncStarted) {
+            r.set(true);
+        }
+    });
+
+    bus.sender().send(AppEvent::SyncStarted);
+    flush_events();
+
+    assert!(received.get(), "new bus after drop should work");
 }

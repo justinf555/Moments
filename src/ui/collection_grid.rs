@@ -192,6 +192,7 @@ impl CollectionGridView {
                     Rc::clone(&tc),
                 ));
                 view.set_model(Rc::clone(&model), Rc::clone(&reg));
+                model.subscribe_to_bus();
                 reg.register(&model);
 
                 let display_name = if data.name.is_empty() {
