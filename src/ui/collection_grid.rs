@@ -58,6 +58,7 @@ impl CollectionGridView {
         settings: gio::Settings,
         registry: Rc<ModelRegistry>,
         texture_cache: Rc<TextureCache>,
+        bus_sender: crate::event_bus::EventSender,
     ) -> Self {
         let header = adw::HeaderBar::new();
 
@@ -163,6 +164,7 @@ impl CollectionGridView {
             let s = settings.clone();
             let reg = Rc::clone(&registry);
             let tc = Rc::clone(&texture_cache);
+            let bs = bus_sender.clone();
             let store_ref = store.clone();
             grid_view.connect_activate(move |_, position| {
                 let Some(obj) = store_ref
@@ -190,6 +192,7 @@ impl CollectionGridView {
                     s.clone(),
                     Rc::clone(&reg),
                     Rc::clone(&tc),
+                    bs.clone(),
                 ));
                 view.set_model(Rc::clone(&model), Rc::clone(&reg));
                 model.subscribe_to_bus();

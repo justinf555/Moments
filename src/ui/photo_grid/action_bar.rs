@@ -4,17 +4,19 @@
 //! - **Standard** (Photos, Favourites, Recent, People): Favourite, Add to album, Delete
 //! - **Trash**: Restore, Delete permanently
 //! - **Album**: Favourite, Remove from album, Delete
-
-use std::rc::Rc;
-use std::sync::Arc;
+//!
+//! Button handlers emit command events via the [`EventBus`] — they resolve
+//! UI state (selection → IDs) and nothing else. The
+//! [`CommandDispatcher`](crate::commands::dispatcher::CommandDispatcher)
+//! handles execution and emits result events.
 
 use adw::prelude::*;
-use gtk::{gio, glib};
+use gtk::glib;
 
+use crate::app_event::AppEvent;
+use crate::event_bus::EventSender;
 use crate::library::album::AlbumId;
 use crate::library::media::MediaFilter;
-use crate::library::Library;
-use crate::ui::model_registry::ModelRegistry;
 
 use super::actions;
 use super::item::MediaItemObject;
@@ -25,6 +27,9 @@ pub struct ActionBarButtons {
     pub container: gtk::Box,
     /// The favourite/unfavourite button (if present). Stored for dynamic label updates.
     pub fav_btn: Option<gtk::Button>,
+    /// The "Add to album" button (if present). Needs separate wiring via
+    /// `wire_album_controls` since it requires library queries for the popover.
+    pub album_btn: Option<gtk::Button>,
 }
 
 /// Build action bar buttons appropriate for the given filter.
@@ -33,17 +38,12 @@ pub struct ActionBarButtons {
 pub fn build_for_filter(
     filter: &MediaFilter,
     selection: &gtk::MultiSelection,
-    library: &Arc<dyn Library>,
-    tokio: &tokio::runtime::Handle,
-    registry: &Rc<ModelRegistry>,
-    exit_selection: &gio::SimpleAction,
+    bus: &EventSender,
 ) -> ActionBarButtons {
     match filter {
-        MediaFilter::Trashed => build_trash_bar(selection, library, tokio, registry, exit_selection),
-        MediaFilter::Album { album_id } => {
-            build_album_bar(selection, library, tokio, registry, album_id, exit_selection)
-        }
-        _ => build_standard_bar(selection, library, tokio, registry, exit_selection),
+        MediaFilter::Trashed => build_trash_bar(selection, bus),
+        MediaFilter::Album { album_id } => build_album_bar(selection, bus, album_id),
+        _ => build_standard_bar(selection, bus),
     }
 }
 
@@ -51,18 +51,15 @@ pub fn build_for_filter(
 
 fn build_standard_bar(
     selection: &gtk::MultiSelection,
-    library: &Arc<dyn Library>,
-    tokio: &tokio::runtime::Handle,
-    registry: &Rc<ModelRegistry>,
-    exit_selection: &gio::SimpleAction,
+    bus: &EventSender,
 ) -> ActionBarButtons {
     let fav_btn = make_button("starred-symbolic", "Favourite");
     fav_btn.set_width_request(150);
     let album_btn = make_button("folder-new-symbolic", "Add to album");
     let trash_btn = make_button("user-trash-symbolic", "Delete");
 
-    wire_favourite(&fav_btn, selection, library, tokio, registry);
-    wire_trash(&trash_btn, selection, library, tokio, registry, exit_selection);
+    wire_favourite(&fav_btn, selection, bus);
+    wire_trash(&trash_btn, selection, bus);
 
     let container = bar_container();
     container.append(&fav_btn);
@@ -72,6 +69,7 @@ fn build_standard_bar(
     ActionBarButtons {
         container,
         fav_btn: Some(fav_btn),
+        album_btn: Some(album_btn),
     }
 }
 
@@ -79,16 +77,13 @@ fn build_standard_bar(
 
 fn build_trash_bar(
     selection: &gtk::MultiSelection,
-    library: &Arc<dyn Library>,
-    tokio: &tokio::runtime::Handle,
-    registry: &Rc<ModelRegistry>,
-    exit_selection: &gio::SimpleAction,
+    bus: &EventSender,
 ) -> ActionBarButtons {
     let restore_btn = make_button("edit-undo-symbolic", "Restore");
     let delete_btn = make_button("edit-delete-symbolic", "Delete permanently");
 
-    wire_restore(&restore_btn, selection, library, tokio, registry, exit_selection);
-    wire_delete_permanently(&delete_btn, selection, library, tokio, registry, exit_selection);
+    wire_restore(&restore_btn, selection, bus);
+    wire_delete_permanently(&delete_btn, selection, bus);
 
     let container = bar_container();
     container.append(&restore_btn);
@@ -97,6 +92,7 @@ fn build_trash_bar(
     ActionBarButtons {
         container,
         fav_btn: None,
+        album_btn: None,
     }
 }
 
@@ -104,20 +100,17 @@ fn build_trash_bar(
 
 fn build_album_bar(
     selection: &gtk::MultiSelection,
-    library: &Arc<dyn Library>,
-    tokio: &tokio::runtime::Handle,
-    registry: &Rc<ModelRegistry>,
+    bus: &EventSender,
     album_id: &AlbumId,
-    exit_selection: &gio::SimpleAction,
 ) -> ActionBarButtons {
     let fav_btn = make_button("starred-symbolic", "Favourite");
     fav_btn.set_width_request(150);
     let remove_btn = make_button("list-remove-symbolic", "Remove from album");
     let trash_btn = make_button("user-trash-symbolic", "Delete");
 
-    wire_favourite(&fav_btn, selection, library, tokio, registry);
-    wire_remove_from_album(&remove_btn, selection, library, tokio, registry, album_id, exit_selection);
-    wire_trash(&trash_btn, selection, library, tokio, registry, exit_selection);
+    wire_favourite(&fav_btn, selection, bus);
+    wire_remove_from_album(&remove_btn, selection, bus, album_id);
+    wire_trash(&trash_btn, selection, bus);
 
     let container = bar_container();
     container.append(&fav_btn);
@@ -127,6 +120,7 @@ fn build_album_bar(
     ActionBarButtons {
         container,
         fav_btn: Some(fav_btn),
+        album_btn: None,
     }
 }
 
@@ -161,14 +155,10 @@ fn bar_container() -> gtk::Box {
 fn wire_favourite(
     btn: &gtk::Button,
     selection: &gtk::MultiSelection,
-    library: &Arc<dyn Library>,
-    tokio: &tokio::runtime::Handle,
-    registry: &Rc<ModelRegistry>,
+    bus: &EventSender,
 ) {
     let sel = selection.clone();
-    let lib = Arc::clone(library);
-    let tk = tokio.clone();
-    let reg = Rc::clone(registry);
+    let tx = bus.clone();
     let btn_ref = btn.clone();
     btn.connect_clicked(move |_| {
         let ids = super::collect_selected_ids(&sel);
@@ -180,110 +170,48 @@ fn wire_favourite(
             .unwrap_or(false);
         let new_state = !first_fav;
 
-        let lib = Arc::clone(&lib);
-        let tk = tk.clone();
-        let reg = Rc::clone(&reg);
-        let id_list = ids.clone();
-        let btn = btn_ref.clone();
-        glib::MainContext::default().spawn_local(async move {
-            let result = tk
-                .spawn(async move { lib.set_favorite(&id_list, new_state).await })
-                .await;
-            if let Ok(Ok(())) = result {
-                for id in &ids {
-                    reg.on_favorite_changed(id, new_state);
-                }
-                actions::update_fav_button(&btn, new_state);
-            }
-        });
+        tx.send(AppEvent::FavoriteRequested { ids, state: new_state });
+        actions::update_fav_button(&btn_ref, new_state);
     });
 }
 
 fn wire_trash(
     btn: &gtk::Button,
     selection: &gtk::MultiSelection,
-    library: &Arc<dyn Library>,
-    tokio: &tokio::runtime::Handle,
-    registry: &Rc<ModelRegistry>,
-    exit_selection: &gio::SimpleAction,
+    bus: &EventSender,
 ) {
     let sel = selection.clone();
-    let lib = Arc::clone(library);
-    let tk = tokio.clone();
-    let reg = Rc::clone(registry);
-    let exit = exit_selection.clone();
+    let tx = bus.clone();
     btn.connect_clicked(move |_| {
         let ids = super::collect_selected_ids(&sel);
-        if ids.is_empty() { return; }
-
-        let lib = Arc::clone(&lib);
-        let tk = tk.clone();
-        let reg = Rc::clone(&reg);
-        let exit = exit.clone();
-        let ids_for_action = ids.clone();
-        glib::MainContext::default().spawn_local(async move {
-            let result = tk
-                .spawn(async move { lib.trash(&ids_for_action).await })
-                .await;
-            if let Ok(Ok(())) = result {
-                for id in &ids {
-                    reg.on_trashed(&id, true);
-                }
-                exit.activate(None);
-            }
-        });
+        if !ids.is_empty() {
+            tx.send(AppEvent::TrashRequested { ids });
+        }
     });
 }
 
 fn wire_restore(
     btn: &gtk::Button,
     selection: &gtk::MultiSelection,
-    library: &Arc<dyn Library>,
-    tokio: &tokio::runtime::Handle,
-    registry: &Rc<ModelRegistry>,
-    exit_selection: &gio::SimpleAction,
+    bus: &EventSender,
 ) {
     let sel = selection.clone();
-    let lib = Arc::clone(library);
-    let tk = tokio.clone();
-    let reg = Rc::clone(registry);
-    let exit = exit_selection.clone();
+    let tx = bus.clone();
     btn.connect_clicked(move |_| {
         let ids = super::collect_selected_ids(&sel);
-        if ids.is_empty() { return; }
-
-        let lib = Arc::clone(&lib);
-        let tk = tk.clone();
-        let reg = Rc::clone(&reg);
-        let exit = exit.clone();
-        let ids_for_action = ids.clone();
-        glib::MainContext::default().spawn_local(async move {
-            let result = tk
-                .spawn(async move { lib.restore(&ids_for_action).await })
-                .await;
-            if let Ok(Ok(())) = result {
-                for id in &ids {
-                    reg.on_deleted(id);
-                }
-                exit.activate(None);
-            }
-        });
+        if !ids.is_empty() {
+            tx.send(AppEvent::RestoreRequested { ids });
+        }
     });
 }
 
 fn wire_delete_permanently(
     btn: &gtk::Button,
     selection: &gtk::MultiSelection,
-    library: &Arc<dyn Library>,
-    tokio: &tokio::runtime::Handle,
-    registry: &Rc<ModelRegistry>,
-    exit_selection: &gio::SimpleAction,
+    bus: &EventSender,
 ) {
     let sel = selection.clone();
-    let lib = Arc::clone(library);
-    let tk = tokio.clone();
-    let reg = Rc::clone(registry);
-    let exit_selection = exit_selection.clone();
+    let tx = bus.clone();
     btn.connect_clicked(move |btn| {
         let ids = super::collect_selected_ids(&sel);
         if ids.is_empty() { return; }
@@ -304,29 +232,12 @@ fn wire_delete_permanently(
         dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
         dialog.set_default_response(Some("cancel"));
 
-        let lib = Arc::clone(&lib);
-        let tk = tk.clone();
-        let reg = Rc::clone(&reg);
-        let exit = exit_selection.clone();
+        let tx = tx.clone();
         let window = btn.root().and_downcast::<gtk::Window>();
         dialog.choose(window.as_ref(), gtk::gio::Cancellable::NONE, move |response| {
-            if response != "delete" { return; }
-            let lib = Arc::clone(&lib);
-            let tk = tk.clone();
-            let reg = Rc::clone(&reg);
-            let exit = exit.clone();
-            let ids_for_action = ids.clone();
-            glib::MainContext::default().spawn_local(async move {
-                let result = tk
-                    .spawn(async move { lib.delete_permanently(&ids_for_action).await })
-                    .await;
-                if let Ok(Ok(())) = result {
-                    for id in &ids {
-                        reg.on_deleted(id);
-                    }
-                    exit.activate(None);
-                }
-            });
+            if response == "delete" {
+                tx.send(AppEvent::DeleteRequested { ids });
+            }
         });
     });
 }
@@ -334,36 +245,19 @@ fn wire_delete_permanently(
 fn wire_remove_from_album(
     btn: &gtk::Button,
     selection: &gtk::MultiSelection,
-    library: &Arc<dyn Library>,
-    tokio: &tokio::runtime::Handle,
-    registry: &Rc<ModelRegistry>,
+    bus: &EventSender,
     album_id: &AlbumId,
-    exit_selection: &gio::SimpleAction,
 ) {
     let sel = selection.clone();
-    let lib = Arc::clone(library);
-    let tk = tokio.clone();
-    let reg = Rc::clone(registry);
+    let tx = bus.clone();
     let aid = album_id.clone();
-    let exit = exit_selection.clone();
     btn.connect_clicked(move |_| {
         let ids = super::collect_selected_ids(&sel);
-        if ids.is_empty() { return; }
-
-        let lib = Arc::clone(&lib);
-        let tk = tk.clone();
-        let reg = Rc::clone(&reg);
-        let aid = aid.clone();
-        let aid_log = aid.clone();
-        let exit = exit.clone();
-        glib::MainContext::default().spawn_local(async move {
-            let result = tk
-                .spawn(async move { lib.remove_from_album(&aid, &ids).await })
-                .await;
-            if let Ok(Ok(())) = result {
-                reg.on_album_media_changed(&aid_log);
-                exit.activate(None);
-            }
-        });
+        if !ids.is_empty() {
+            tx.send(AppEvent::RemoveFromAlbumRequested {
+                album_id: aid.clone(),
+                ids,
+            });
+        }
     });
 }

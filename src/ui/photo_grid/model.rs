@@ -97,6 +97,45 @@ impl PhotoGridModel {
             AppEvent::ThumbnailReady { media_id } => {
                 self.on_thumbnail_ready(media_id);
             }
+            AppEvent::FavoriteChanged { ids, is_favorite } => {
+                for id in ids {
+                    self.on_favorite_changed(id, *is_favorite);
+                }
+            }
+            AppEvent::Trashed { ids } => {
+                for id in ids {
+                    self.on_trashed(id, true);
+                }
+            }
+            AppEvent::Restored { ids } => {
+                for id in ids {
+                    self.on_trashed(id, false);
+                }
+            }
+            AppEvent::Deleted { ids } => {
+                for id in ids {
+                    self.on_deleted(id);
+                }
+            }
+            AppEvent::AssetSynced { item } => {
+                let filter = self.filter();
+                if filter.matches(item) {
+                    self.insert_item_sorted(item.clone());
+                }
+            }
+            AppEvent::AssetDeletedRemote { media_id } => {
+                self.on_deleted(media_id);
+            }
+            AppEvent::AlbumMediaChanged { album_id } => {
+                if let MediaFilter::Album { album_id: ref mid } = self.filter() {
+                    if mid == album_id {
+                        self.reload();
+                    }
+                }
+            }
+            AppEvent::ImportComplete { .. } => {
+                self.reload();
+            }
             _ => {}
         }
     }

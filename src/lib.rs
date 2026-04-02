@@ -1,5 +1,6 @@
 pub mod app_event;
 pub mod application;
+pub mod commands;
 pub mod config;
 pub mod event_bus;
 pub mod library;

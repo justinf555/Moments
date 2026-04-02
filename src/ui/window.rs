@@ -195,6 +195,7 @@ impl MomentsWindow {
         use crate::library::media::MediaFilter;
 
         let registry = ModelRegistry::new();
+        let bus_sender = bus.sender();
 
         // Build sidebar — MomentsSidebar is already an AdwNavigationPage subclass.
         let sidebar = MomentsSidebar::new();
@@ -360,6 +361,7 @@ impl MomentsWindow {
             settings.clone(),
             Rc::clone(&registry),
             Rc::clone(&texture_cache),
+            bus_sender.clone(),
         ));
         photos_view.set_model(Rc::clone(&photos_model), Rc::clone(&registry));
         photos_model.subscribe(bus);
@@ -373,13 +375,14 @@ impl MomentsWindow {
             let s = settings.clone();
             let reg = Rc::clone(&registry);
             let tc = Rc::clone(&texture_cache);
+            let bs = bus_sender.clone();
             coordinator.register_lazy("favorites", move || {
                 let model = Rc::new(PhotoGridModel::new(
                     Arc::clone(&lib),
                     tk.clone(),
                     MediaFilter::Favorites,
                 ));
-                let view = Rc::new(PhotoGridView::new(lib, tk, s, Rc::clone(&reg), tc));
+                let view = Rc::new(PhotoGridView::new(lib, tk, s, Rc::clone(&reg), tc, bs));
                 view.set_model(Rc::clone(&model), Rc::clone(&reg));
                 model.subscribe_to_bus();
                 reg.register(&model);
@@ -394,6 +397,7 @@ impl MomentsWindow {
             let s = settings.clone();
             let reg = Rc::clone(&registry);
             let tc = Rc::clone(&texture_cache);
+            let bs = bus_sender.clone();
             coordinator.register_lazy("recent", move || {
                 let days = s.uint("recent-imports-days") as i64;
                 let since = chrono::Utc::now().timestamp() - days * 86400;
@@ -402,7 +406,7 @@ impl MomentsWindow {
                     tk.clone(),
                     MediaFilter::RecentImports { since },
                 ));
-                let view = Rc::new(PhotoGridView::new(lib, tk, s, Rc::clone(&reg), tc));
+                let view = Rc::new(PhotoGridView::new(lib, tk, s, Rc::clone(&reg), tc, bs));
                 view.set_model(Rc::clone(&model), Rc::clone(&reg));
                 model.subscribe_to_bus();
                 reg.register(&model);
@@ -417,13 +421,14 @@ impl MomentsWindow {
             let s = settings.clone();
             let reg = Rc::clone(&registry);
             let tc = Rc::clone(&texture_cache);
+            let bs = bus_sender.clone();
             coordinator.register_lazy("trash", move || {
                 let model = Rc::new(PhotoGridModel::new(
                     Arc::clone(&lib),
                     tk.clone(),
                     MediaFilter::Trashed,
                 ));
-                let view = Rc::new(PhotoGridView::new(lib, tk, s, Rc::clone(&reg), tc));
+                let view = Rc::new(PhotoGridView::new(lib, tk, s, Rc::clone(&reg), tc, bs));
                 view.set_model(Rc::clone(&model), Rc::clone(&reg));
                 model.subscribe_to_bus();
                 reg.register(&model);
@@ -438,9 +443,10 @@ impl MomentsWindow {
             let s = settings.clone();
             let reg = Rc::clone(&registry);
             let tc = Rc::clone(&texture_cache);
+            let bs = bus_sender.clone();
             let win_weak = self.downgrade();
             coordinator.register_lazy("people", move || {
-                let view = Rc::new(CollectionGridView::new_people(lib, tk, s, reg, tc));
+                let view = Rc::new(CollectionGridView::new_people(lib, tk, s, reg, tc, bs));
                 // Store reload callback so PeopleSyncComplete can refresh the grid.
                 if let Some(win) = win_weak.upgrade() {
                     let view_ref = Rc::clone(&view);
@@ -488,6 +494,7 @@ impl MomentsWindow {
             let s = settings.clone();
             let reg = Rc::clone(&registry);
             let tc = Rc::clone(&texture_cache);
+            let bs = bus_sender.clone();
             sidebar.connect_route_selected(move |id| {
                 let Some(win) = obj_weak.upgrade() else { return };
                 let Some(coordinator) = win.imp().coordinator.get() else { return };
@@ -508,6 +515,7 @@ impl MomentsWindow {
                             s.clone(),
                             Rc::clone(&reg),
                             Rc::clone(&tc),
+                            bs.clone(),
                         ));
                         view.set_model(Rc::clone(&model), Rc::clone(&reg));
                         model.subscribe_to_bus();
