@@ -42,15 +42,8 @@ impl MediaId {
     ///
     /// Use this inside a `spawn_blocking` closure where hashing is done
     /// manually with `blake3::Hasher`. For general use, prefer [`MediaId::from_file`].
-    pub(crate) fn new(hex: String) -> Self {
+    pub fn new(hex: String) -> Self {
         Self(hex)
-    }
-
-    /// For use in tests only — constructs a `MediaId` from a raw string
-    /// without hashing. Prefixed `__test_` to make its purpose obvious.
-    #[cfg(test)]
-    pub fn __test_new(s: &str) -> Self {
-        Self(s.to_string())
     }
 }
 

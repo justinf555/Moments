@@ -117,7 +117,7 @@ mod tests {
     #[test]
     fn asset_imported_contains_path() {
         let event = LibraryEvent::AssetImported {
-            media_id: MediaId::__test_new("abc123"),
+            media_id: MediaId::new("abc123".to_string()),
             path: PathBuf::from("/tmp/photo.jpg"),
         };
         assert!(format!("{event:?}").contains("AssetImported"));
