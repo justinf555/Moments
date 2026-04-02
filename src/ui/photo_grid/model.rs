@@ -71,9 +71,8 @@ impl PhotoGridModel {
     pub fn subscribe(self: &Rc<Self>, bus: &EventBus) {
         let weak = Rc::downgrade(self);
         bus.subscribe(move |event| {
-            let Some(model) = weak.upgrade() else { return };
-            if let AppEvent::ThumbnailReady { media_id } = event {
-                model.on_thumbnail_ready(media_id);
+            if let Some(model) = weak.upgrade() {
+                model.handle_event(event);
             }
         });
     }
@@ -86,11 +85,20 @@ impl PhotoGridModel {
     pub fn subscribe_to_bus(self: &Rc<Self>) {
         let weak = Rc::downgrade(self);
         crate::event_bus::subscribe(move |event| {
-            let Some(model) = weak.upgrade() else { return };
-            if let AppEvent::ThumbnailReady { media_id } = event {
-                model.on_thumbnail_ready(media_id);
+            if let Some(model) = weak.upgrade() {
+                model.handle_event(event);
             }
         });
+    }
+
+    /// Dispatch a bus event to the appropriate handler.
+    fn handle_event(self: &Rc<Self>, event: &AppEvent) {
+        match event {
+            AppEvent::ThumbnailReady { media_id } => {
+                self.on_thumbnail_ready(media_id);
+            }
+            _ => {}
+        }
     }
 
     /// The filter this model was constructed with.

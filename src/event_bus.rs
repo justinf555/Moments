@@ -45,6 +45,10 @@ fn drain_events() {
 
         SUBSCRIBERS.with(|subs_cell| {
             let subs = subs_cell.borrow();
+            // NOTE: subscribers must not call sender.send() from within a handler.
+            // Events sent during dispatch are picked up by this same while loop —
+            // any cycle (A emits B, B emits A) will loop forever and hang the UI.
+            // See the circular event loop risk in docs/design-event-bus.md.
             while let Ok(event) = rx.try_recv() {
                 for handler in subs.iter() {
                     handler(&event);
@@ -60,6 +64,13 @@ impl EventBus {
     /// Must be called on the GTK main thread. Only one `EventBus` may exist
     /// per thread (the subscriber list is thread-local).
     pub fn new() -> Self {
+        RECEIVER.with(|cell| {
+            assert!(
+                cell.borrow().is_none(),
+                "EventBus: only one instance per thread is allowed"
+            );
+        });
+
         let (tx, rx) = mpsc::channel::<AppEvent>();
 
         RECEIVER.with(|cell| {
@@ -138,6 +149,11 @@ impl EventSender {
         if self.tx.send(event).is_ok() {
             // Wake the main loop to drain the channel.
             // idle_add_once is Send — safe from Tokio threads.
+            //
+            // NOTE: during burst sends (e.g. 200 thumbnails), each send()
+            // schedules a drain callback. The first drains all events; the
+            // rest are no-ops. Functionally correct but adds idle-source
+            // queue churn proportional to event volume.
             glib::idle_add_once(drain_events);
         }
     }
