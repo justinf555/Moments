@@ -27,6 +27,9 @@ impl CommandHandler for CreateAlbumCommand {
         match library.create_album(&name).await {
             Ok(album_id) => {
                 debug!(album_id = %album_id, %name, "album created");
+                // AlbumCreated is emitted before the optional add — the album
+                // exists regardless of whether the add succeeds. A failed add
+                // leaves a valid empty album; the error toast informs the user.
                 bus.send(AppEvent::AlbumCreated {
                     id: album_id.clone(),
                     name,

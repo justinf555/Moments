@@ -195,8 +195,12 @@ pub(super) fn wire_context_menu(ctx: &ActionContext) {
             }
         }
 
-        // Select the right-clicked item.
-        if selection.selection().size() <= 1 {
+        // If the right-clicked item is not already selected, select just it
+        // (replacing any existing selection). If it's already part of a
+        // multi-selection, preserve the selection so the context menu acts
+        // on all selected items.
+        if !selection.is_selected(pos) {
+            selection.unselect_all();
             selection.select_item(pos, true);
         }
 
@@ -247,12 +251,34 @@ pub(super) fn wire_context_menu(ctx: &ActionContext) {
                 let pw = pop_ref.clone();
                 let sel = selection.clone();
                 let tx = bus_tx.clone();
-                delete_btn.connect_clicked(move |_| {
+                delete_btn.connect_clicked(move |btn| {
                     if let Some(p) = pw.upgrade() { p.popdown(); }
                     let ids = super::collect_selected_ids(&sel);
-                    if !ids.is_empty() {
-                        tx.send(AppEvent::DeleteRequested { ids });
-                    }
+                    if ids.is_empty() { return; }
+
+                    let count = ids.len();
+                    let message = if count == 1 {
+                        "Permanently delete this photo? This cannot be undone.".to_string()
+                    } else {
+                        format!("Permanently delete {count} photos? This cannot be undone.")
+                    };
+
+                    let dialog = adw::AlertDialog::builder()
+                        .heading("Delete permanently?")
+                        .body(&message)
+                        .build();
+                    dialog.add_response("cancel", "Cancel");
+                    dialog.add_response("delete", "Delete");
+                    dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+                    dialog.set_default_response(Some("cancel"));
+
+                    let tx = tx.clone();
+                    let window = btn.root().and_downcast::<gtk::Window>();
+                    dialog.choose(window.as_ref(), gtk::gio::Cancellable::NONE, move |response| {
+                        if response == "delete" {
+                            tx.send(AppEvent::DeleteRequested { ids });
+                        }
+                    });
                 });
             }
         } else {
