@@ -1,15 +1,16 @@
 use std::sync::Arc;
 
-use crate::app_event::AppEvent;
-use crate::event_bus::{EventBus, EventSender};
+use crate::event_bus::EventBus;
 use crate::library::Library;
 
 use super::CommandHandler;
-use super::trash::TrashCommand;
-use super::restore::RestoreCommand;
+use super::add_to_album::AddToAlbumCommand;
+use super::create_album::CreateAlbumCommand;
 use super::delete::DeleteCommand;
 use super::favorite::FavoriteCommand;
 use super::remove_from_album::RemoveFromAlbumCommand;
+use super::restore::RestoreCommand;
+use super::trash::TrashCommand;
 
 /// Routes command events to their handlers on the Tokio runtime.
 ///
@@ -33,6 +34,8 @@ impl CommandDispatcher {
             Arc::new(DeleteCommand),
             Arc::new(FavoriteCommand),
             Arc::new(RemoveFromAlbumCommand),
+            Arc::new(AddToAlbumCommand),
+            Arc::new(CreateAlbumCommand),
         ];
 
         let tx = bus.sender();

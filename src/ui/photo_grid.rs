@@ -629,10 +629,9 @@ impl PhotoGridView {
             selection,
             library: Arc::clone(&self.library),
             tokio: self.tokio.clone(),
-            registry: Rc::clone(&registry),
             filter: filter.clone(),
-            nav_view: self.nav_view.clone(),
             grid_view,
+            bus_sender: self.bus_sender.clone(),
         };
 
         actions::wire_context_menu(&ctx);

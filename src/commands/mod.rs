@@ -1,9 +1,11 @@
-pub mod dispatcher;
-pub mod trash;
-pub mod restore;
+pub mod add_to_album;
+pub mod create_album;
 pub mod delete;
+pub mod dispatcher;
 pub mod favorite;
 pub mod remove_from_album;
+pub mod restore;
+pub mod trash;
 
 use std::sync::Arc;
 

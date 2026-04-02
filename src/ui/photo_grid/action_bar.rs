@@ -11,7 +11,6 @@
 //! handles execution and emits result events.
 
 use adw::prelude::*;
-use gtk::glib;
 
 use crate::app_event::AppEvent;
 use crate::event_bus::EventSender;

@@ -539,7 +539,6 @@ impl MomentsWindow {
 
         // Add window-level actions.
         self.install_show_toast_action();
-        self.install_album_created_action();
         self.install_toggle_sidebar_action();
 
         debug!("switching main window to content page");
@@ -576,23 +575,6 @@ impl MomentsWindow {
         let toast = adw::Toast::new(message);
         toast.set_timeout(5);
         self.imp().toast_overlay.add_toast(toast);
-    }
-
-    /// Install the `win.album-created` action (string tuple: "id\nname").
-    ///
-    /// Fired after an album is created inline (e.g. from the "Add to Album"
-    /// popover) so the sidebar can add the new album without a direct ref.
-    fn install_album_created_action(&self) {
-        let action = gio::SimpleAction::new("album-created", Some(glib::VariantTy::STRING));
-        let sidebar_weak = self.imp().sidebar.get().map(|s| s.downgrade());
-        action.connect_activate(move |_, param| {
-            let Some(msg) = param.and_then(|v| v.get::<String>()) else { return };
-            let Some((id, name)) = msg.split_once('\n') else { return };
-            if let Some(Some(sb)) = sidebar_weak.as_ref().map(|w| w.upgrade()) {
-                sb.add_album(id, name);
-            }
-        });
-        self.add_action(&action);
     }
 
     /// Install the `win.show-toast` action (string parameter).
