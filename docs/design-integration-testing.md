@@ -761,13 +761,107 @@ This avoids pulling in a mocking framework. The mock is hand-written and project
 | 2 | Event bus tests | `EventBus` subscribe/send, `CommandHandler` dispatch, translator | No (`glib::init()` only) |
 | 3 | Widget integration tests | PhotoGridView, ActionBarFactory, Sidebar, accessibility | Yes (mutter --headless) |
 | 4 | End-to-end smoke tests | App lifecycle, library open, import flow | Yes (mutter --headless) |
-| 5 | Ongoing | New tests alongside every new feature/bug fix | Varies |
+| 5 | Coverage tracking | `cargo-llvm-cov` in CI, PR comments, threshold gate | No |
+| 6 | Ongoing | New tests alongside every new feature/bug fix | Varies |
 
-**Phase 1–2 can begin immediately** — they don't need a compositor and will validate the event bus implementation (#230).
+**Phase 1–2 complete** — EventBus tests and baseline regression tests are in CI.
 
 **Phase 3–4 require the headless compositor CI job** but can run locally on a GNOME desktop with `GSK_RENDERER=cairo`.
 
-**Phase 5 is a process change** — every PR that adds or modifies UI behaviour should include integration tests.
+**Phase 5 adds coverage tracking** — see below.
+
+**Phase 6 is a process change** — every PR that adds or modifies UI behaviour should include integration tests.
+
+## Phase 5: Coverage Tracking (#307)
+
+### Baseline (2026-04-02)
+
+| Layer | Lines | Covered | Coverage |
+|-------|------:|--------:|---------:|
+| Library (db, format, sync, import, edit) | ~4,500 | ~3,600 | ~80% |
+| UI (widgets, viewers, sidebar, window) | ~7,500 | ~400 | ~5% |
+| **Total** | **12,035** | **3,995** | **33%** |
+
+### CI integration
+
+Add a coverage job that runs on every PR and posts a comment with the diff:
+
+```yaml
+coverage:
+  name: Coverage
+  runs-on: ubuntu-latest
+  container:
+    image: fedora:43
+  env:
+    SQLX_OFFLINE: "true"
+    GSK_RENDERER: "cairo"
+  steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        dnf install -y cargo gtk4-devel libadwaita-devel gettext-devel \
+          libheif-devel gstreamer1-devel gstreamer1-plugins-base-devel \
+          libsecret-devel pkg-config mutter dbus-x11
+        rustup component add llvm-tools-preview
+        cargo install cargo-llvm-cov
+
+    - name: Generate config.rs stub
+      run: |
+        cat > src/config.rs <<'EOF'
+        pub static VERSION: &str = env!("CARGO_PKG_VERSION");
+        pub static GETTEXT_PACKAGE: &str = "moments";
+        pub static LOCALEDIR: &str = "/usr/share/locale";
+        pub static PKGDATADIR: &str = "/usr/share/moments";
+        EOF
+
+    - name: Run coverage (unit + integration)
+      run: |
+        export XDG_RUNTIME_DIR=/tmp/runtime-$$
+        mkdir -p "$XDG_RUNTIME_DIR"
+        chmod 700 "$XDG_RUNTIME_DIR"
+        dbus-run-session \
+          mutter --headless --wayland --no-x11 --virtual-monitor 1024x768 -- \
+          cargo llvm-cov --features integration-tests --summary-only \
+            -- --test-threads=1 2>&1 | tee coverage.txt
+
+    - name: Post coverage comment
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const coverage = fs.readFileSync('coverage.txt', 'utf8');
+          const totalLine = coverage.split('\n').find(l => l.startsWith('TOTAL'));
+          if (totalLine) {
+            const match = totalLine.match(/(\d+\.\d+)%\s*$/);
+            const pct = match ? match[1] : 'unknown';
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## Coverage: ${pct}%\n\n\`\`\`\n${totalLine}\n\`\`\``
+            });
+          }
+```
+
+### Coverage threshold
+
+Once baseline is established, add a minimum threshold that fails CI if coverage drops:
+
+```bash
+cargo llvm-cov --features integration-tests --fail-under-lines 33 -- --test-threads=1
+```
+
+Start at 33% (current baseline) and increase as widget tests are added in Phases 3-4.
+
+### Coverage targets
+
+| Milestone | Target | How |
+|-----------|--------|-----|
+| Current | 33% | Unit tests + bus/model integration tests |
+| After Phase 3 (widget tests) | 45% | PhotoGridView, ActionBar, Sidebar |
+| After Phase 4 (E2E tests) | 55% | App lifecycle, import flow |
+| v0.2.0 | 60% | All new features include tests |
 
 ## Edge Cases
 
