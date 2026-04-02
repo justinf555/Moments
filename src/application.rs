@@ -29,6 +29,7 @@ use adw::subclass::prelude::*;
 use gtk::{gio, glib};
 use tracing::{debug, error, info, instrument, warn};
 
+use crate::app_event::AppEvent;
 use crate::config::VERSION;
 use crate::event_bus::EventBus;
 use crate::library::bundle::Bundle;
@@ -469,15 +470,21 @@ impl MomentsApplication {
                         // Store library on the application.
                         *app.imp().library.borrow_mut() = Some(Arc::clone(&library));
 
+                        // Create the event bus before wiring the shell so
+                        // components can subscribe during construction.
+                        let bus = EventBus::new();
+                        let bus_tx = bus.sender();
+
                         // Wire the shell: builds sidebar, registers views,
                         // and switches to the content page. Returns a
                         // ModelRegistry for broadcasting library events.
                         let settings = app.imp().settings.get()
                             .expect("settings initialised").clone();
-                        let registry = window.setup(library, tokio.clone(), settings);
+                        let registry = window.setup(library, tokio.clone(), settings, &bus);
 
-                        // Store registry for shutdown cleanup.
+                        // Store registry and bus for shutdown cleanup.
                         *app.imp().model_registry.borrow_mut() = Some(Rc::clone(&registry));
+                        *app.imp().event_bus.borrow_mut() = Some(bus);
 
                         // Poll library events on every GTK idle tick.
                         // Routes thumbnail and import events via the registry.
@@ -498,7 +505,7 @@ impl MomentsApplication {
                             loop {
                                 match receiver.try_recv() {
                                     Ok(LibraryEvent::ThumbnailReady { media_id }) => {
-                                        registry.on_thumbnail_ready(&media_id);
+                                        bus_tx.send(AppEvent::ThumbnailReady { media_id });
                                     }
                                     Ok(LibraryEvent::ImportProgress { current, total, imported, skipped, failed }) => {
                                         // Update sidebar bottom sheet (non-modal).
@@ -619,14 +626,6 @@ impl MomentsApplication {
                             glib::ControlFlow::Continue
                         });
                         *app.imp().idle_source.borrow_mut() = Some(source_id);
-
-                        // ── Event bus (Phase 1) ─────────────────────────────
-                        // Create the bus and store it. No subscribers yet —
-                        // components will subscribe in later phases. For now
-                        // the bus runs alongside the existing idle loop.
-                        let bus = EventBus::new();
-                        info!("event bus created");
-                        *app.imp().event_bus.borrow_mut() = Some(bus);
                     }
                     Err(e) => {
                         error!("failed to open library: {e}");

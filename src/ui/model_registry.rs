@@ -29,13 +29,6 @@ impl ModelRegistry {
         self.models.borrow_mut().push(Rc::clone(model));
     }
 
-    /// Forward a `ThumbnailReady` event to all registered models.
-    pub fn on_thumbnail_ready(&self, id: &MediaId) {
-        for model in self.models.borrow().iter() {
-            model.on_thumbnail_ready(id);
-        }
-    }
-
     /// Broadcast a favourite change to all registered models.
     ///
     /// Unfiltered models update the item's property in place. Filtered

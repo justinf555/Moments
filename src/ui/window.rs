@@ -189,6 +189,7 @@ impl MomentsWindow {
         library: Arc<dyn Library>,
         tokio: tokio::runtime::Handle,
         settings: gio::Settings,
+        bus: &crate::event_bus::EventBus,
     ) -> Rc<ModelRegistry> {
         let imp = self.imp();
         use crate::library::media::MediaFilter;
@@ -361,6 +362,7 @@ impl MomentsWindow {
             Rc::clone(&texture_cache),
         ));
         photos_view.set_model(Rc::clone(&photos_model), Rc::clone(&registry));
+        photos_model.subscribe(bus);
         registry.register(&photos_model);
         coordinator.register("photos", photos_view);
 
@@ -379,6 +381,7 @@ impl MomentsWindow {
                 ));
                 let view = Rc::new(PhotoGridView::new(lib, tk, s, Rc::clone(&reg), tc));
                 view.set_model(Rc::clone(&model), Rc::clone(&reg));
+                model.subscribe_to_bus();
                 reg.register(&model);
                 view
             });
@@ -401,6 +404,7 @@ impl MomentsWindow {
                 ));
                 let view = Rc::new(PhotoGridView::new(lib, tk, s, Rc::clone(&reg), tc));
                 view.set_model(Rc::clone(&model), Rc::clone(&reg));
+                model.subscribe_to_bus();
                 reg.register(&model);
                 view
             });
@@ -421,6 +425,7 @@ impl MomentsWindow {
                 ));
                 let view = Rc::new(PhotoGridView::new(lib, tk, s, Rc::clone(&reg), tc));
                 view.set_model(Rc::clone(&model), Rc::clone(&reg));
+                model.subscribe_to_bus();
                 reg.register(&model);
                 view
             });
@@ -505,6 +510,7 @@ impl MomentsWindow {
                             Rc::clone(&tc),
                         ));
                         view.set_model(Rc::clone(&model), Rc::clone(&reg));
+                        model.subscribe_to_bus();
                         reg.register(&model);
                         coord.register(id, view);
                         debug!(route = %id, "registered album view");
