@@ -484,6 +484,9 @@ impl MomentsApplication {
 
                         // Create the command dispatcher — routes *Requested
                         // events to library calls on the Tokio runtime.
+                        // The dispatcher is a unit struct; the real work is the
+                        // subscriber closure registered in new(), which lives in
+                        // the bus's thread-local SUBSCRIBERS for the app lifetime.
                         let _dispatcher = crate::commands::dispatcher::CommandDispatcher::new(
                             Arc::clone(app.imp().library.borrow().as_ref().unwrap()),
                             tokio.clone(),
