@@ -473,7 +473,6 @@ impl MomentsApplication {
                         let bus_tx = bus.sender();
 
                         // Wire the shell: builds sidebar, registers views,
-                        // Wire the shell: builds sidebar, registers views,
                         // and switches to the content page. All components
                         // subscribe to the bus for event delivery.
                         let settings = app.imp().settings.get()
@@ -490,6 +489,23 @@ impl MomentsApplication {
                             tokio.clone(),
                             &bus,
                         );
+
+                        // Subscribe for error toasts — centralised error
+                        // handling for all command failures.
+                        {
+                            let win_weak = window.downgrade();
+                            bus.subscribe(move |event| {
+                                if let AppEvent::Error(msg) = event {
+                                    if let Some(win) = win_weak.upgrade() {
+                                        gtk::prelude::ActionGroupExt::activate_action(
+                                            &win,
+                                            "win.show-toast",
+                                            Some(&msg.to_variant()),
+                                        );
+                                    }
+                                }
+                            });
+                        }
 
                         // Store bus for shutdown cleanup.
                         *app.imp().event_bus.borrow_mut() = Some(bus);
