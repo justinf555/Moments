@@ -55,7 +55,7 @@ Moments should follow the Nautilus pattern — explicit separation of displayles
 │ CI container support    │ Yes (Fedora 43+)     │ Yes (any Linux)       │
 │ Package                 │ mutter (Fedora)      │ xorg-x11-server-Xvfb │
 │ Invocation              │ mutter --headless    │ xvfb-run -a           │
-│                         │   --wayland --no-x11 │   -s "-screen 0       │
+│                         │   --wayland           │   -s "-screen 0       │
 │                         │   --virtual-monitor  │      1024x768x24"    │
 │                         │   1024x768 -- CMD    │   CMD                 │
 └─────────────────────────┴──────────────────────┴───────────────────────┘
@@ -633,7 +633,7 @@ jobs:
             libsecret-devel \
             pkg-config \
             mutter \
-            dbus-x11
+            dbus-daemon
 
       - name: Configure sccache
         uses: mozilla-actions/sccache-action@v0.0.7
@@ -659,7 +659,7 @@ jobs:
       - name: Run integration tests
         run: >
           dbus-run-session
-          mutter --headless --wayland --no-x11 --virtual-monitor 1024x768 --
+          mutter --headless --wayland --virtual-monitor 1024x768 --
           cargo test --features integration-tests -- --test-threads=1
 
       - name: Show sccache stats
@@ -678,7 +678,7 @@ GSK_RENDERER=cairo cargo test --features integration-tests -- --test-threads=1
 
 # Integration tests — headless (SSH, CI, no desktop):
 dbus-run-session \
-  mutter --headless --wayland --no-x11 --virtual-monitor 1024x768 -- \
+  mutter --headless --wayland --virtual-monitor 1024x768 -- \
   cargo test --features integration-tests -- --test-threads=1
 
 # Fallback if mutter is unavailable (X11 systems):
@@ -698,7 +698,7 @@ test-integration:
 
 test-integration-headless:
 	dbus-run-session \
-	  mutter --headless --wayland --no-x11 --virtual-monitor 1024x768 -- \
+	  mutter --headless --wayland --virtual-monitor 1024x768 -- \
 	  cargo test --features integration-tests -- --test-threads=1
 
 test-all:
@@ -782,6 +782,8 @@ This avoids pulling in a mocking framework. The mock is hand-written and project
 | UI (widgets, viewers, sidebar, window) | ~7,500 | ~400 | ~5% |
 | **Total** | **12,035** | **3,995** | **33%** |
 
+*Line counts are approximations from the initial `cargo-llvm-cov` run. Exact values will be confirmed once the CI coverage job is live.*
+
 ### CI integration
 
 Add a coverage job that runs on every PR and posts a comment with the diff:
@@ -802,7 +804,9 @@ coverage:
       run: |
         dnf install -y cargo gtk4-devel libadwaita-devel gettext-devel \
           libheif-devel gstreamer1-devel gstreamer1-plugins-base-devel \
-          libsecret-devel pkg-config mutter dbus-x11
+          libsecret-devel pkg-config mutter dbus-daemon
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        source "$HOME/.cargo/env"
         rustup component add llvm-tools-preview
         cargo install cargo-llvm-cov
 
@@ -821,12 +825,13 @@ coverage:
         mkdir -p "$XDG_RUNTIME_DIR"
         chmod 700 "$XDG_RUNTIME_DIR"
         dbus-run-session \
-          mutter --headless --wayland --no-x11 --virtual-monitor 1024x768 -- \
+          mutter --headless --wayland --virtual-monitor 1024x768 -- \
           cargo llvm-cov --features integration-tests --summary-only \
             -- --test-threads=1 2>&1 | tee coverage.txt
 
     - name: Post coverage comment
       uses: actions/github-script@v7
+      if: github.event_name == 'pull_request'
       with:
         script: |
           const fs = require('fs');
@@ -835,12 +840,32 @@ coverage:
           if (totalLine) {
             const match = totalLine.match(/(\d+\.\d+)%\s*$/);
             const pct = match ? match[1] : 'unknown';
-            await github.rest.issues.createComment({
+            const body = `<!-- coverage-bot -->\n## Coverage: ${pct}%\n\n\`\`\`\n${totalLine}\n\`\`\``;
+            const marker = '<!-- coverage-bot -->';
+
+            // Find existing coverage comment to update (sticky comment pattern)
+            const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: `## Coverage: ${pct}%\n\n\`\`\`\n${totalLine}\n\`\`\``
             });
+            const existing = comments.find(c => c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
           }
 ```
 
