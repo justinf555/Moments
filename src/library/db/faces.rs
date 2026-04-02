@@ -158,7 +158,7 @@ impl Database {
     }
 
     /// Upsert an asset face record (from sync).
-    pub async fn upsert_asset_face(&self, face: &AssetFaceRow) -> Result<(), LibraryError> {
+    pub(crate) async fn upsert_asset_face(&self, face: &AssetFaceRow) -> Result<(), LibraryError> {
         sqlx::query(
             "INSERT INTO asset_faces (id, asset_id, person_id, image_width, image_height, bbox_x1, bbox_y1, bbox_x2, bbox_y2, source_type)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
