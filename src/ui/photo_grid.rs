@@ -651,6 +651,12 @@ impl PhotoGridView {
         self.bar_box.append(&bar_buttons.container);
         *self.fav_btn.borrow_mut() = bar_buttons.fav_btn;
 
+        // Wire "Add to album" popover — requires library queries, so it
+        // uses the old ActionContext wiring until album commands are migrated.
+        if let Some(ref album_btn) = bar_buttons.album_btn {
+            actions::wire_album_controls(&ctx, album_btn);
+        }
+
         // Subscribe for exit-selection on destructive result events.
         {
             let exit = self.exit_selection.clone();

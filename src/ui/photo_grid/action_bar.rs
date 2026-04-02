@@ -27,6 +27,9 @@ pub struct ActionBarButtons {
     pub container: gtk::Box,
     /// The favourite/unfavourite button (if present). Stored for dynamic label updates.
     pub fav_btn: Option<gtk::Button>,
+    /// The "Add to album" button (if present). Needs separate wiring via
+    /// `wire_album_controls` since it requires library queries for the popover.
+    pub album_btn: Option<gtk::Button>,
 }
 
 /// Build action bar buttons appropriate for the given filter.
@@ -66,6 +69,7 @@ fn build_standard_bar(
     ActionBarButtons {
         container,
         fav_btn: Some(fav_btn),
+        album_btn: Some(album_btn),
     }
 }
 
@@ -88,6 +92,7 @@ fn build_trash_bar(
     ActionBarButtons {
         container,
         fav_btn: None,
+        album_btn: None,
     }
 }
 
@@ -115,6 +120,7 @@ fn build_album_bar(
     ActionBarButtons {
         container,
         fav_btn: Some(fav_btn),
+        album_btn: None,
     }
 }
 
