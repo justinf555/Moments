@@ -556,7 +556,9 @@ impl MomentsApplication {
                                         bus_tx.send(AppEvent::AlbumCreated { id, name });
                                     }
                                     Ok(LibraryEvent::AlbumDeleted { id }) => {
-                                        // Unregister the coordinator route (app-level concern).
+                                        // NOTE: coordinator cleanup is synchronous and intentionally
+                                        // precedes the bus dispatch — the route must be dead before
+                                        // the sidebar removes the entry, to avoid a navigation race.
                                         if let Some(win) = win_for_idle.upgrade() {
                                             if let Some(coord) = win.imp().coordinator.get() {
                                                 let route = format!("album:{}", id.as_str());
