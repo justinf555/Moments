@@ -4,11 +4,12 @@ use std::sync::Arc;
 
 use gtk::{gio, glib, prelude::*, subclass::prelude::*};
 use tokio::sync::Semaphore;
-use tracing::{debug, error};
+use tracing::debug;
 
+use crate::app_event::AppEvent;
+use crate::event_bus::EventSender;
 use crate::library::media::MediaFilter;
 use crate::library::Library;
-use crate::ui::model_registry::ModelRegistry;
 
 use super::cell::PhotoGridCell;
 use super::item::MediaItemObject;
@@ -44,7 +45,7 @@ pub fn build_factory(
     cell_size: i32,
     library: Arc<dyn Library>,
     tokio: tokio::runtime::Handle,
-    registry: Rc<ModelRegistry>,
+    bus_sender: EventSender,
     filter: MediaFilter,
     cache: Rc<TextureCache>,
     selection_mode: Rc<Cell<bool>>,
@@ -69,7 +70,7 @@ pub fn build_factory(
         #[strong]
         tokio,
         #[strong]
-        registry,
+        bus_sender,
         #[strong]
         cache,
         #[strong]
@@ -177,40 +178,19 @@ pub fn build_factory(
             } else {
                 cell.imp().days_label.set_visible(false);
 
-                // Wire star button click → optimistic toggle + async persist.
+                // Wire star button click → optimistic toggle + bus command.
                 let star_btn = cell.imp().star_btn.clone();
                 let item_weak = item.downgrade();
-                let lib = Arc::clone(&library);
-                let tk = tokio.clone();
-                let reg = Rc::clone(&registry);
-                let handler_id = star_btn.connect_clicked(move |btn| {
+                let tx = bus_sender.clone();
+                let handler_id = star_btn.connect_clicked(move |_| {
                     let Some(item) = item_weak.upgrade() else { return };
                     let new_fav = !item.is_favorite();
-
                     // Optimistic: update the current item immediately.
                     item.set_is_favorite(new_fav);
-
-                    // Persist to DB, then broadcast to all models so filtered
-                    // views reload with the committed data.
                     let id = item.item().id.clone();
-                    let lib = Arc::clone(&lib);
-                    let tk = tk.clone();
-                    let reg = Rc::clone(&reg);
-                    let btn_weak = btn.downgrade();
-                    glib::MainContext::default().spawn_local(async move {
-                        let result = tk
-                            .spawn(async move { lib.set_favorite(&[id.clone()], new_fav).await.map(|_| id) })
-                            .await;
-                        match result {
-                            Ok(Ok(id)) => reg.on_favorite_changed(&id, new_fav),
-                            Ok(Err(e)) => {
-                                error!("set_favorite failed: {e}");
-                                if let Some(btn) = btn_weak.upgrade() {
-                                    let _ = btn.activate_action("win.show-toast", Some(&"Failed to update favourite".to_variant()));
-                                }
-                            }
-                            Err(e) => error!("set_favorite join failed: {e}"),
-                        }
+                    tx.send(AppEvent::FavoriteRequested {
+                        ids: vec![id],
+                        state: new_fav,
                     });
                 });
 

@@ -59,7 +59,6 @@ use crate::ui::album_dialogs;
 use crate::ui::collection_grid::CollectionGridView;
 use crate::ui::coordinator::ContentCoordinator;
 use crate::ui::empty_library::EmptyLibraryView;
-use crate::ui::model_registry::ModelRegistry;
 use crate::ui::photo_grid::{PhotoGridModel, PhotoGridView};
 use crate::ui::photo_grid::texture_cache::TextureCache;
 use crate::ui::sidebar::MomentsSidebar;
@@ -182,19 +181,21 @@ impl MomentsWindow {
     ///
     /// Photos is created eagerly (always the default view). Other routes
     /// are registered lazily — their views are materialised on first
-    /// navigation. Returns a [`ModelRegistry`] so the caller can forward
-    /// library events to all models (including those created later).
+    /// Wire the full shell: sidebar, coordinator, views.
+    ///
+    /// All models subscribe to the [`EventBus`] for event delivery.
+    /// The caller does not need to forward events — components are
+    /// self-contained.
     pub fn setup(
         &self,
         library: Arc<dyn Library>,
         tokio: tokio::runtime::Handle,
         settings: gio::Settings,
         bus: &crate::event_bus::EventBus,
-    ) -> Rc<ModelRegistry> {
+    ) {
         let imp = self.imp();
         use crate::library::media::MediaFilter;
 
-        let registry = ModelRegistry::new();
         let bus_sender = bus.sender();
 
         // Build sidebar — MomentsSidebar is already an AdwNavigationPage subclass.
@@ -360,13 +361,11 @@ impl MomentsWindow {
             Arc::clone(&library),
             tokio.clone(),
             settings.clone(),
-            Rc::clone(&registry),
             Rc::clone(&texture_cache),
             bus_sender.clone(),
         ));
-        photos_view.set_model(Rc::clone(&photos_model), Rc::clone(&registry));
+        photos_view.set_model(Rc::clone(&photos_model));
         photos_model.subscribe(bus);
-        registry.register(&photos_model);
         coordinator.register("photos", photos_view);
 
         // Register the Favorites view (lazy — created on first click).
@@ -374,7 +373,6 @@ impl MomentsWindow {
             let lib = Arc::clone(&library);
             let tk = tokio.clone();
             let s = settings.clone();
-            let reg = Rc::clone(&registry);
             let tc = Rc::clone(&texture_cache);
             let bs = bus_sender.clone();
             coordinator.register_lazy("favorites", move || {
@@ -383,10 +381,9 @@ impl MomentsWindow {
                     tk.clone(),
                     MediaFilter::Favorites,
                 ));
-                let view = Rc::new(PhotoGridView::new(lib, tk, s, Rc::clone(&reg), tc, bs));
-                view.set_model(Rc::clone(&model), Rc::clone(&reg));
+                let view = Rc::new(PhotoGridView::new(lib, tk, s, tc, bs));
+                view.set_model(Rc::clone(&model));
                 model.subscribe_to_bus();
-                reg.register(&model);
                 view
             });
         }
@@ -396,7 +393,6 @@ impl MomentsWindow {
             let lib = Arc::clone(&library);
             let tk = tokio.clone();
             let s = settings.clone();
-            let reg = Rc::clone(&registry);
             let tc = Rc::clone(&texture_cache);
             let bs = bus_sender.clone();
             coordinator.register_lazy("recent", move || {
@@ -407,10 +403,9 @@ impl MomentsWindow {
                     tk.clone(),
                     MediaFilter::RecentImports { since },
                 ));
-                let view = Rc::new(PhotoGridView::new(lib, tk, s, Rc::clone(&reg), tc, bs));
-                view.set_model(Rc::clone(&model), Rc::clone(&reg));
+                let view = Rc::new(PhotoGridView::new(lib, tk, s, tc, bs));
+                view.set_model(Rc::clone(&model));
                 model.subscribe_to_bus();
-                reg.register(&model);
                 view
             });
         }
@@ -420,7 +415,6 @@ impl MomentsWindow {
             let lib = Arc::clone(&library);
             let tk = tokio.clone();
             let s = settings.clone();
-            let reg = Rc::clone(&registry);
             let tc = Rc::clone(&texture_cache);
             let bs = bus_sender.clone();
             coordinator.register_lazy("trash", move || {
@@ -429,10 +423,9 @@ impl MomentsWindow {
                     tk.clone(),
                     MediaFilter::Trashed,
                 ));
-                let view = Rc::new(PhotoGridView::new(lib, tk, s, Rc::clone(&reg), tc, bs));
-                view.set_model(Rc::clone(&model), Rc::clone(&reg));
+                let view = Rc::new(PhotoGridView::new(lib, tk, s, tc, bs));
+                view.set_model(Rc::clone(&model));
                 model.subscribe_to_bus();
-                reg.register(&model);
                 view
             });
         }
@@ -442,12 +435,11 @@ impl MomentsWindow {
             let lib = Arc::clone(&library);
             let tk = tokio.clone();
             let s = settings.clone();
-            let reg = Rc::clone(&registry);
             let tc = Rc::clone(&texture_cache);
             let bs = bus_sender.clone();
             let win_weak = self.downgrade();
             coordinator.register_lazy("people", move || {
-                let view = Rc::new(CollectionGridView::new_people(lib, tk, s, reg, tc, bs));
+                let view = Rc::new(CollectionGridView::new_people(lib, tk, s, tc, bs));
                 // Store reload callback so PeopleSyncComplete can refresh the grid.
                 if let Some(win) = win_weak.upgrade() {
                     let view_ref = Rc::clone(&view);
@@ -493,7 +485,6 @@ impl MomentsWindow {
             let lib = Arc::clone(&library);
             let tk = tokio.clone();
             let s = settings.clone();
-            let reg = Rc::clone(&registry);
             let tc = Rc::clone(&texture_cache);
             let bs = bus_sender.clone();
             sidebar.connect_route_selected(move |id| {
@@ -514,13 +505,11 @@ impl MomentsWindow {
                             Arc::clone(&lib),
                             tk.clone(),
                             s.clone(),
-                            Rc::clone(&reg),
                             Rc::clone(&tc),
                             bs.clone(),
                         ));
-                        view.set_model(Rc::clone(&model), Rc::clone(&reg));
+                        view.set_model(Rc::clone(&model));
                         model.subscribe_to_bus();
-                        reg.register(&model);
                         coord.register(id, view);
                         debug!(route = %id, "registered album view");
                     }
@@ -543,8 +532,6 @@ impl MomentsWindow {
 
         debug!("switching main window to content page");
         imp.main_stack.set_visible_child_name("content");
-
-        registry
     }
 
     /// Access the sidebar for event-driven album updates.

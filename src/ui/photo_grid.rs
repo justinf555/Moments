@@ -42,7 +42,7 @@ mod imp {
         /// Library reference for the factory (star button persist).
         pub library: OnceCell<Arc<dyn Library>>,
         pub tokio: OnceCell<tokio::runtime::Handle>,
-        pub registry: OnceCell<Rc<crate::ui::model_registry::ModelRegistry>>,
+        pub bus_sender: OnceCell<crate::event_bus::EventSender>,
         pub filter: RefCell<crate::library::media::MediaFilter>,
         pub texture_cache: OnceCell<Rc<super::texture_cache::TextureCache>>,
         /// Shared selection mode flag for the factory.
@@ -61,7 +61,7 @@ mod imp {
                 zoom_level: Cell::new(DEFAULT_ZOOM_INDEX),
                 library: OnceCell::default(),
                 tokio: OnceCell::default(),
-                registry: OnceCell::default(),
+                bus_sender: OnceCell::default(),
                 filter: RefCell::new(crate::library::media::MediaFilter::All),
                 texture_cache: OnceCell::default(),
                 selection_mode: Rc::new(Cell::new(false)),
@@ -172,7 +172,7 @@ impl PhotoGrid {
         let grid_view = imp.grid_view.get().unwrap();
         let library = imp.library.get().unwrap().clone();
         let tokio = imp.tokio.get().unwrap().clone();
-        let registry = imp.registry.get().unwrap().clone();
+        let bus_sender = imp.bus_sender.get().unwrap().clone();
         let filter = imp.filter.borrow().clone();
         let cache = imp.texture_cache.get().unwrap().clone();
         let sm = Rc::clone(&imp.selection_mode);
@@ -182,7 +182,7 @@ impl PhotoGrid {
             self.current_cell_size(),
             library,
             tokio,
-            registry,
+            bus_sender.clone(),
             filter,
             cache,
             sm,
@@ -205,7 +205,7 @@ impl PhotoGrid {
         model: Rc<PhotoGridModel>,
         library: Arc<dyn Library>,
         tokio: tokio::runtime::Handle,
-        registry: Rc<crate::ui::model_registry::ModelRegistry>,
+        bus_sender: crate::event_bus::EventSender,
         filter: crate::library::media::MediaFilter,
         cache: Rc<texture_cache::TextureCache>,
         on_activate: impl Fn(Vec<item::MediaItemObject>, usize) + 'static,
@@ -213,7 +213,7 @@ impl PhotoGrid {
         let imp = self.imp();
         let _ = imp.library.set(Arc::clone(&library));
         let _ = imp.tokio.set(tokio.clone());
-        let _ = imp.registry.set(Rc::clone(&registry));
+        let _ = imp.bus_sender.set(bus_sender.clone());
         let _ = imp.texture_cache.set(Rc::clone(&cache));
         *imp.filter.borrow_mut() = filter.clone();
 
@@ -230,7 +230,7 @@ impl PhotoGrid {
             self.current_cell_size(),
             Arc::clone(&library),
             tokio,
-            Rc::clone(&registry),
+            bus_sender,
             filter.clone(),
             cache,
             sm,
@@ -330,7 +330,6 @@ impl PhotoGridView {
         library: Arc<dyn Library>,
         tokio: tokio::runtime::Handle,
         settings: gio::Settings,
-        registry: Rc<crate::ui::model_registry::ModelRegistry>,
         texture_cache: Rc<texture_cache::TextureCache>,
         bus_sender: crate::event_bus::EventSender,
     ) -> Self {
@@ -420,8 +419,8 @@ impl PhotoGridView {
         nav_view.push(&grid_page);
 
         // ── Viewers (reused across activations) ──────────────────────────────
-        let photo_viewer = Rc::new(PhotoViewer::new(Arc::clone(&library), tokio.clone(), Rc::clone(&registry)));
-        let video_viewer = Rc::new(VideoViewer::new(Arc::clone(&library), tokio.clone(), Rc::clone(&registry)));
+        let photo_viewer = Rc::new(PhotoViewer::new(Arc::clone(&library), tokio.clone(), bus_sender.clone()));
+        let video_viewer = Rc::new(VideoViewer::new(Arc::clone(&library), tokio.clone(), bus_sender.clone()));
 
         // ── Zoom actions ─────────────────────────────────────────────────────
         let action_group = gio::SimpleActionGroup::new();
@@ -574,13 +573,13 @@ impl PhotoGridView {
         }
     }
 
-    pub fn set_model(&self, model: Rc<PhotoGridModel>, registry: Rc<crate::ui::model_registry::ModelRegistry>) {
+    pub fn set_model(&self, model: Rc<PhotoGridModel>) {
         let filter = model.filter();
         self.photo_grid.set_model(
             Rc::clone(&model),
             Arc::clone(&self.library),
             self.tokio.clone(),
-            Rc::clone(&registry),
+            self.bus_sender.clone(),
             filter.clone(),
             Rc::clone(&self.texture_cache),
             {

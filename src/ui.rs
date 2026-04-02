@@ -6,7 +6,6 @@ pub mod coordinator;
 pub mod preferences_dialog;
 pub mod empty_library;
 pub mod import_dialog;
-pub mod model_registry;
 pub mod photo_grid;
 pub mod setup_window;
 pub mod sidebar;

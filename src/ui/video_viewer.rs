@@ -4,11 +4,12 @@ use std::sync::Arc;
 
 use adw::prelude::*;
 use gtk::{gio, glib};
-use tracing::{debug, error};
+use tracing::debug;
 
 use crate::library::media::MediaMetadataRecord;
+use crate::app_event::AppEvent;
+use crate::event_bus::EventSender;
 use crate::library::Library;
-use crate::ui::model_registry::ModelRegistry;
 use crate::ui::photo_grid::item::MediaItemObject;
 use crate::ui::viewer::info_panel::InfoPanel;
 
@@ -28,7 +29,7 @@ struct VideoViewerInner {
     current_metadata: RefCell<Option<MediaMetadataRecord>>,
     library: Arc<dyn Library>,
     tokio: tokio::runtime::Handle,
-    registry: Rc<ModelRegistry>,
+    bus_sender: EventSender,
 }
 
 impl VideoViewerInner {
@@ -175,7 +176,7 @@ pub struct VideoViewer {
 }
 
 impl VideoViewer {
-    pub fn new(library: Arc<dyn Library>, tokio: tokio::runtime::Handle, registry: Rc<ModelRegistry>) -> Self {
+    pub fn new(library: Arc<dyn Library>, tokio: tokio::runtime::Handle, bus_sender: EventSender) -> Self {
         // ── Header bar ───────────────────────────────────────────────────────
         let header = adw::HeaderBar::new();
         let info_toggle = gtk::ToggleButton::builder()
@@ -269,7 +270,7 @@ impl VideoViewer {
             current_metadata: RefCell::new(None),
             library,
             tokio,
-            registry,
+            bus_sender,
         });
 
         // ── Signal handlers ───────────────────────────────────────────────────
@@ -308,24 +309,9 @@ impl VideoViewer {
                 obj.set_is_favorite(new_fav);
 
                 let id = obj.item().id.clone();
-                let lib = Arc::clone(&inner.library);
-                let tk = inner.tokio.clone();
-                let reg = Rc::clone(&inner.registry);
-                let btn_weak = btn.downgrade();
-                glib::MainContext::default().spawn_local(async move {
-                    let result = tk
-                        .spawn(async move { lib.set_favorite(&[id.clone()], new_fav).await.map(|_| id) })
-                        .await;
-                    match result {
-                        Ok(Ok(id)) => reg.on_favorite_changed(&id, new_fav),
-                        Ok(Err(e)) => {
-                            error!("set_favorite failed: {e}");
-                            if let Some(btn) = btn_weak.upgrade() {
-                                let _ = btn.activate_action("win.show-toast", Some(&"Failed to update favourite".to_variant()));
-                            }
-                        }
-                        Err(e) => error!("set_favorite join failed: {e}"),
-                    }
+                inner.bus_sender.send(AppEvent::FavoriteRequested {
+                    ids: vec![id],
+                    state: new_fav,
                 });
             });
         }
@@ -342,31 +328,16 @@ impl VideoViewer {
                 };
                 let Some(id) = id else { return };
 
-                let lib = Arc::clone(&inner.library);
-                let tk = inner.tokio.clone();
-                let reg = Rc::clone(&inner.registry);
-                let nav = inner.nav_page.clone();
-                glib::MainContext::default().spawn_local(async move {
-                    let result = tk
-                        .spawn(async move { lib.trash(&[id.clone()]).await.map(|_| id) })
-                        .await;
-                    match result {
-                        Ok(Ok(id)) => {
-                            reg.on_trashed(&id, true);
-                            if let Some(nav_view) = nav
-                                .parent()
-                                .and_then(|p| p.downcast::<adw::NavigationView>().ok())
-                            {
-                                nav_view.pop();
-                            }
-                        }
-                        Ok(Err(e)) => {
-                            error!("trash failed: {e}");
-                            let _ = nav.activate_action("win.show-toast", Some(&"Failed to move to trash".to_variant()));
-                        }
-                        Err(e) => error!("trash join failed: {e}"),
-                    }
+                inner.bus_sender.send(AppEvent::TrashRequested {
+                    ids: vec![id],
                 });
+
+                if let Some(nav_view) = inner.nav_page
+                    .parent()
+                    .and_then(|p| p.downcast::<adw::NavigationView>().ok())
+                {
+                    nav_view.pop();
+                }
             });
         }
 
