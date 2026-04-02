@@ -199,6 +199,7 @@ impl MomentsWindow {
 
         // Build sidebar — MomentsSidebar is already an AdwNavigationPage subclass.
         let sidebar = MomentsSidebar::new();
+        sidebar.subscribe_to_bus();
         imp.split_view.set_sidebar(Some(&sidebar));
         let _ = imp.sidebar.set(sidebar.clone());
 
