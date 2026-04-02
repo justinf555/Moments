@@ -30,6 +30,7 @@ use gtk::{gio, glib};
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::config::VERSION;
+use crate::event_bus::EventBus;
 use crate::library::bundle::Bundle;
 use crate::library::config::LibraryConfig;
 use crate::library::event::LibraryEvent;
@@ -61,6 +62,9 @@ mod imp {
         /// closure and releases the `Rc<PhotoGridModel>` (→ `Arc<dyn Library>`
         /// → `SqlitePool`) before the Tokio runtime is dropped in `main()`.
         pub idle_source: RefCell<Option<glib::SourceId>>,
+        /// Centralised event bus for fan-out event delivery.
+        /// Created when the library is loaded.
+        pub event_bus: RefCell<Option<EventBus>>,
     }
 
     #[glib::object_subclass]
@@ -615,6 +619,14 @@ impl MomentsApplication {
                             glib::ControlFlow::Continue
                         });
                         *app.imp().idle_source.borrow_mut() = Some(source_id);
+
+                        // ── Event bus (Phase 1) ─────────────────────────────
+                        // Create the bus and store it. No subscribers yet —
+                        // components will subscribe in later phases. For now
+                        // the bus runs alongside the existing idle loop.
+                        let bus = EventBus::new();
+                        info!("event bus created");
+                        *app.imp().event_bus.borrow_mut() = Some(bus);
                     }
                     Err(e) => {
                         error!("failed to open library: {e}");
