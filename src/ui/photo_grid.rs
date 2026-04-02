@@ -6,6 +6,7 @@ use adw::prelude::*;
 use gtk::{gio, glib, subclass::prelude::*};
 use tracing::instrument;
 
+use crate::app_event::AppEvent;
 use crate::library::media::MediaType;
 use crate::library::Library;
 use crate::ui::video_viewer::VideoViewer;
@@ -320,6 +321,8 @@ pub struct PhotoGridView {
     bar_box: gtk::Box,
     /// Current favourite button (if any) — for dynamic label updates.
     fav_btn: RefCell<Option<gtk::Button>>,
+    /// Bus sender for action bar commands.
+    bus_sender: crate::event_bus::EventSender,
 }
 
 impl PhotoGridView {
@@ -329,6 +332,7 @@ impl PhotoGridView {
         settings: gio::Settings,
         registry: Rc<crate::ui::model_registry::ModelRegistry>,
         texture_cache: Rc<texture_cache::TextureCache>,
+        bus_sender: crate::event_bus::EventSender,
     ) -> Self {
         // ── Grid header bar ──────────────────────────────────────────────────
         let header = adw::HeaderBar::new();
@@ -566,6 +570,7 @@ impl PhotoGridView {
             action_bar,
             bar_box,
             fav_btn: RefCell::new(None),
+            bus_sender,
         }
     }
 
@@ -641,13 +646,26 @@ impl PhotoGridView {
         let bar_buttons = action_bar::build_for_filter(
             &filter,
             &ctx.selection,
-            &self.library,
-            &self.tokio,
-            &Rc::clone(&registry),
-            &self.exit_selection,
+            &self.bus_sender,
         );
         self.bar_box.append(&bar_buttons.container);
         *self.fav_btn.borrow_mut() = bar_buttons.fav_btn;
+
+        // Subscribe for exit-selection on destructive result events.
+        {
+            let exit = self.exit_selection.clone();
+            crate::event_bus::subscribe(move |event| {
+                match event {
+                    AppEvent::Trashed { .. }
+                    | AppEvent::Deleted { .. }
+                    | AppEvent::Restored { .. }
+                    | AppEvent::AlbumMediaChanged { .. } => {
+                        exit.activate(None);
+                    }
+                    _ => {}
+                }
+            });
+        }
 
         // ── Selection changed → update count, auto-exit ─────────────────────
         {

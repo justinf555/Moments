@@ -482,6 +482,14 @@ impl MomentsApplication {
                             .expect("settings initialised").clone();
                         let registry = window.setup(library, tokio.clone(), settings, &bus);
 
+                        // Create the command dispatcher — routes *Requested
+                        // events to library calls on the Tokio runtime.
+                        let _dispatcher = crate::commands::dispatcher::CommandDispatcher::new(
+                            Arc::clone(app.imp().library.borrow().as_ref().unwrap()),
+                            tokio.clone(),
+                            &bus,
+                        );
+
                         // Store registry and bus for shutdown cleanup.
                         *app.imp().model_registry.borrow_mut() = Some(Rc::clone(&registry));
                         *app.imp().event_bus.borrow_mut() = Some(bus);
@@ -536,17 +544,18 @@ impl MomentsApplication {
                                         }
                                         // Release strong ref — dialog stays open until user dismisses.
                                         app.imp().import_dialog.borrow_mut().take();
-                                        registry.reload_all();
+                                        // Notify models via bus (replaces registry.reload_all()).
+                                        bus_tx.send(AppEvent::ImportComplete { summary });
                                         // Navigate to Recent Imports so the user sees what arrived.
                                         if let Some(win) = win_for_idle.upgrade() {
                                             win.navigate("recent");
                                         }
                                     }
                                     Ok(LibraryEvent::AssetSynced { item }) => {
-                                        registry.on_asset_synced(&item);
+                                        bus_tx.send(AppEvent::AssetSynced { item });
                                     }
                                     Ok(LibraryEvent::AssetDeletedRemote { media_id }) => {
-                                        registry.on_deleted(&media_id);
+                                        bus_tx.send(AppEvent::AssetDeletedRemote { media_id });
                                     }
                                     Ok(LibraryEvent::AlbumCreated { id, name }) => {
                                         if let Some(win) = win_for_idle.upgrade() {
@@ -574,7 +583,7 @@ impl MomentsApplication {
                                         }
                                     }
                                     Ok(LibraryEvent::AlbumMediaChanged { album_id }) => {
-                                        registry.on_album_media_changed(&album_id);
+                                        bus_tx.send(AppEvent::AlbumMediaChanged { album_id });
                                     }
                                     Ok(LibraryEvent::PeopleSyncComplete) => {
                                         if let Some(win) = win_for_idle.upgrade() {
