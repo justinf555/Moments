@@ -33,8 +33,10 @@ mod imp {
     use std::cell::OnceCell;
 
     pub struct PhotoGrid {
+        pub content_stack: OnceCell<gtk::Stack>,
         pub scrolled: OnceCell<gtk::ScrolledWindow>,
         pub grid_view: OnceCell<gtk::GridView>,
+        pub empty_page: OnceCell<adw::StatusPage>,
         pub selection: RefCell<Option<gtk::MultiSelection>>,
         /// Kept alive so lazy-loading stays wired after `set_model`.
         pub model: RefCell<Option<Rc<PhotoGridModel>>>,
@@ -54,8 +56,10 @@ mod imp {
     impl Default for PhotoGrid {
         fn default() -> Self {
             Self {
+                content_stack: OnceCell::default(),
                 scrolled: OnceCell::default(),
                 grid_view: OnceCell::default(),
+                empty_page: OnceCell::default(),
                 selection: RefCell::default(),
                 model: RefCell::default(),
                 zoom_level: Cell::new(DEFAULT_ZOOM_INDEX),
@@ -98,10 +102,25 @@ mod imp {
             scrolled.set_hscrollbar_policy(gtk::PolicyType::Never);
             scrolled.set_vexpand(true);
             scrolled.set_child(Some(&grid_view));
-            scrolled.set_parent(&*obj);
+
+            let empty_page = adw::StatusPage::builder()
+                .icon_name("folder-pictures-symbolic")
+                .title("No photos yet")
+                .description("Import photos to get started")
+                .vexpand(true)
+                .build();
+
+            let stack = gtk::Stack::new();
+            stack.set_transition_type(gtk::StackTransitionType::Crossfade);
+            stack.add_named(&scrolled, Some("grid"));
+            stack.add_named(&empty_page, Some("empty"));
+            stack.set_visible_child_name("grid");
+            stack.set_parent(&*obj);
 
             self.grid_view.set(grid_view).unwrap();
             self.scrolled.set(scrolled).unwrap();
+            self.empty_page.set(empty_page).unwrap();
+            self.content_stack.set(stack).unwrap();
         }
 
         fn dispose(&self) {
@@ -238,13 +257,32 @@ impl PhotoGrid {
             enter,
         )));
 
+        // Configure empty state message based on filter.
+        let empty_page = imp.empty_page.get().unwrap();
+        let stack = imp.content_stack.get().unwrap();
+        set_empty_state_for_filter(empty_page, &filter);
+
+        // Show/hide empty state based on model item count.
+        // Shared closure: called from items_changed (when items are added/
+        // removed) and from on_page_ready (covers the case where load_more
+        // returns 0 items and items_changed never fires).
+        let update_empty: Rc<dyn Fn()> = {
+            let stack = stack.clone();
+            let store = model.store.clone();
+            Rc::new(move || {
+                let name = if store.n_items() == 0 { "empty" } else { "grid" };
+                stack.set_visible_child_name(name);
+            })
+        };
+        {
+            let update = Rc::clone(&update_empty);
+            model.store.connect_items_changed(move |_, _, _, _| update());
+        }
+
         // Fetch the first page immediately.
         model.load_more();
 
         // Load further pages as the user scrolls toward the bottom.
-        // Triggers when the scroll position passes 75% of the loaded content,
-        // which gives enough lead time for the next page to load before the
-        // user reaches the end — even during fast scrollbar drags.
         let model_scroll = Rc::clone(&model);
         let adj = scrolled.vadjustment();
         adj.connect_value_changed(move |adj| {
@@ -255,12 +293,13 @@ impl PhotoGrid {
             }
         });
 
-        // After each page loads, re-check whether more pages are needed.
-        // Handles fast scrollbar drags where the user jumps far past the
-        // loaded content in a single gesture.
+        // After each page loads, re-check whether more pages are needed
+        // and update the empty state.
         let model_ready = Rc::clone(&model);
         let adj_ready = scrolled.vadjustment();
+        let update_on_ready = Rc::clone(&update_empty);
         model.set_on_page_ready(move || {
+            update_on_ready();
             let visible_end = adj_ready.value() + adj_ready.page_size();
             let trigger_point = adj_ready.upper() * 0.75;
             if visible_end >= trigger_point {
@@ -724,6 +763,49 @@ pub(super) fn collect_selected_ids(selection: &gtk::MultiSelection) -> Vec<crate
         }
     }
     ids
+}
+
+/// Configure the empty state status page for the given filter.
+fn set_empty_state_for_filter(
+    page: &adw::StatusPage,
+    filter: &crate::library::media::MediaFilter,
+) {
+    use crate::library::media::MediaFilter;
+    let (icon, title, description) = match filter {
+        MediaFilter::All => (
+            "folder-pictures-symbolic",
+            "No photos yet",
+            "Import photos to get started",
+        ),
+        MediaFilter::Favorites => (
+            "starred-symbolic",
+            "No favourites yet",
+            "Star a photo to add it here",
+        ),
+        MediaFilter::RecentImports { .. } => (
+            "document-send-symbolic",
+            "No recent imports",
+            "Import photos from the hamburger menu",
+        ),
+        MediaFilter::Trashed => (
+            "user-trash-symbolic",
+            "Trash is empty",
+            "Deleted photos appear here for 30 days",
+        ),
+        MediaFilter::Album { .. } => (
+            "folder-symbolic",
+            "This album is empty",
+            "Use Add to Album to add photos",
+        ),
+        MediaFilter::Person { .. } => (
+            "avatar-default-symbolic",
+            "No photos found",
+            "Photos of this person will appear here",
+        ),
+    };
+    page.set_icon_name(Some(icon));
+    page.set_title(title);
+    page.set_description(Some(description));
 }
 
 impl ContentView for PhotoGridView {
