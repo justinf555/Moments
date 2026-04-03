@@ -212,10 +212,12 @@ impl LibraryAlbums for Database {
         }
         let placeholders = id_placeholders(media_ids.len());
         let sql = format!(
-            "SELECT album_id, COUNT(*) as cnt \
-             FROM album_media \
-             WHERE media_id IN ({placeholders}) \
-             GROUP BY album_id"
+            "SELECT am.album_id, COUNT(*) as cnt \
+             FROM album_media am \
+             JOIN media m ON am.media_id = m.id \
+             WHERE am.media_id IN ({placeholders}) \
+               AND m.is_trashed = 0 \
+             GROUP BY am.album_id"
         );
         let mut query = sqlx::query_as::<_, (String, i64)>(&sql);
         for id in media_ids {

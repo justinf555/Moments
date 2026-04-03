@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use crate::library::album::AlbumId;
 
 /// All data needed to populate the album picker dialog.
+#[derive(Debug)]
 pub struct AlbumPickerData {
     /// Albums to display, pre-sorted by `updated_at` DESC.
     pub albums: Vec<AlbumEntry>,
@@ -16,6 +17,7 @@ pub struct AlbumPickerData {
 }
 
 /// View-model for a single album row in the picker.
+#[derive(Debug)]
 pub struct AlbumEntry {
     /// Album identifier.
     pub id: AlbumId,

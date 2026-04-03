@@ -1,5 +1,5 @@
 //! Album picker dialog — lets the user choose or create an album to add
-//! selected photos to. Replaces the simple popover in `album_picker.rs`.
+//! selected photos to.
 
 pub mod state;
 
