@@ -15,7 +15,7 @@ pub(crate) const VIDEO_EXTENSIONS: &[&str] = &[
 ];
 
 /// RAW formats that require `rawler` for decode. The `image` crate cannot
-/// reliably decode these — full-res viewing is not yet supported (#316).
+/// decode these — the viewer and thumbnailer use `RawHandler` instead.
 pub(crate) const RAW_EXTENSIONS: &[&str] = &[
     "ari", "arw", "cr2", "cr3", "crm", "crw", "dcr", "dcs", "dng", "erf", "iiq", "kdc",
     "mef", "mos", "mrw", "nef", "nrw", "orf", "ori", "pef", "raf", "raw", "rw2", "rwl",

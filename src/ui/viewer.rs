@@ -223,26 +223,30 @@ impl ViewerInner {
                 return;
             }
 
-            // Guard: RAW formats are not yet supported for full-res viewing (#316).
-            if crate::library::format::registry::RAW_EXTENSIONS.contains(&ext.as_str()) {
-                inner.spinner.set_spinning(false);
-                inner.spinner.set_visible(false);
-                inner.bus_sender.send(AppEvent::Error(
-                    "Full-resolution RAW viewing is not yet supported".into(),
-                ));
-                return;
-            }
-
-            // Decode via `image` crate with EXIF orientation applied.
+            // Decode full-res image on a blocking thread.
+            // RAW formats use rawler; standard formats use the image crate.
+            let is_raw = crate::library::format::registry::RAW_EXTENSIONS
+                .contains(&ext.as_str());
             let pixels: Option<(Vec<u8>, i32, i32)> = tokio
                 .spawn(async move {
                     tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, i32, i32)> {
-                        let img = image::open(&path)
-                            .map_err(|e| debug!("full-res decode failed: {e}"))
-                            .ok()?;
+                        let img = if is_raw {
+                            use crate::library::format::raw::RawHandler;
+                            use crate::library::format::registry::FormatHandler;
+                            RawHandler
+                                .decode(&path)
+                                .map_err(|e| debug!("RAW full-res decode failed: {e}"))
+                                .ok()?
+                        } else {
+                            image::open(&path)
+                                .map_err(|e| debug!("full-res decode failed: {e}"))
+                                .ok()?
+                        };
                         // Skip orientation for HEIC/HEIF — libheif applies it
                         // automatically during decode. Applying again would
-                        // double-rotate.
+                        // double-rotate. RAW embedded previews may already have
+                        // orientation applied, but rawler does not guarantee
+                        // this, so we apply EXIF orientation for RAW as well.
                         let ext = path
                             .extension()
                             .and_then(|e| e.to_str())
