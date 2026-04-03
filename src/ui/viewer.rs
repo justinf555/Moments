@@ -804,40 +804,22 @@ impl PhotoViewer {
             }
         }
 
-        // Subscribe to bus for favourite rollback on failure.
+        // Subscribe to bus: clear pending favourite state on confirmation.
+        // Error-based rollback is deferred until AppEvent::Error carries
+        // operation identity (PR 2 of #278). For now, the grid model's
+        // on_favorite_changed will correct the item state on the next
+        // successful toggle.
         {
             let i = Rc::downgrade(&inner);
             crate::event_bus::subscribe(move |event| {
-                let Some(inner) = i.upgrade() else { return };
-                match event {
-                    AppEvent::FavoriteChanged { .. } => {
-                        // Confirmed — clear the pending state.
-                        *inner.pending_fav.borrow_mut() = None;
-                    }
-                    AppEvent::Error(_) => {
-                        // If we have a pending favourite toggle, roll it back.
-                        let pending = inner.pending_fav.borrow_mut().take();
-                        if let Some((id, was_fav)) = pending {
-                            let items = inner.items.borrow();
-                            let idx = inner.current_index.get();
-                            if let Some(obj) = items.get(idx) {
-                                if obj.item().id == id {
-                                    obj.set_is_favorite(was_fav);
-                                    inner.star_btn.set_icon_name(if was_fav {
-                                        "starred-symbolic"
-                                    } else {
-                                        "non-starred-symbolic"
-                                    });
-                                    if was_fav {
-                                        inner.star_btn.add_css_class("warning");
-                                    } else {
-                                        inner.star_btn.remove_css_class("warning");
-                                    }
-                                }
-                            }
+                if let AppEvent::FavoriteChanged { ids, .. } = event {
+                    let Some(inner) = i.upgrade() else { return };
+                    let mut pf = inner.pending_fav.borrow_mut();
+                    if let Some((ref pending_id, _)) = *pf {
+                        if ids.contains(pending_id) {
+                            *pf = None;
                         }
                     }
-                    _ => {}
                 }
             });
         }
