@@ -18,6 +18,7 @@ use crate::ui::viewer::info_panel::InfoPanel;
 
 struct VideoViewerInner {
     nav_page: adw::NavigationPage,
+    toolbar_view: adw::ToolbarView,
     video: gtk::Video,
     prev_btn: gtk::Button,
     next_btn: gtk::Button,
@@ -58,6 +59,9 @@ impl VideoViewerInner {
         self.nav_page.set_title(&filename);
         self.prev_btn.set_visible(index > 0);
         self.next_btn.set_visible(index + 1 < count);
+
+        // Grab focus so the key controller (← → F9 Escape) works immediately.
+        self.toolbar_view.grab_focus();
 
         // Sync star button.
         {
@@ -285,6 +289,7 @@ impl VideoViewer {
         // ── Assemble ─────────────────────────────────────────────────────────
         let inner = Rc::new(VideoViewerInner {
             nav_page,
+            toolbar_view: toolbar_view.clone(),
             video,
             prev_btn,
             next_btn,
@@ -408,6 +413,18 @@ impl VideoViewer {
                         let active = info_toggle.is_active();
                         info_toggle.set_active(!active);
                         glib::Propagation::Stop
+                    }
+                    gdk::Key::Escape => {
+                        if let Some(nav_view) = inner
+                            .nav_page
+                            .parent()
+                            .and_then(|p| p.downcast::<adw::NavigationView>().ok())
+                        {
+                            nav_view.pop();
+                            glib::Propagation::Stop
+                        } else {
+                            glib::Propagation::Proceed
+                        }
                     }
                     _ => glib::Propagation::Proceed,
                 }

@@ -78,7 +78,11 @@ mod imp {
             let obj = self.obj();
             obj.setup_gactions();
             obj.set_accels_for_action("app.quit", &["<control>q"]);
-            obj.set_accels_for_action("win.toggle-sidebar", &["F9"]);
+            obj.set_accels_for_action("app.import", &["<control>i"]);
+            obj.set_accels_for_action("app.preferences", &["<control>comma"]);
+            obj.set_accels_for_action("app.shortcuts", &["<control>question"]);
+            // F9 is handled by the viewer's EventControllerKey for the info
+            // panel toggle — don't register it as a global accelerator here.
             obj.set_accels_for_action("view.zoom-in", &["<control>equal", "<control>plus", "<control>KP_Add"]);
             obj.set_accels_for_action("view.zoom-out", &["<control>minus", "<control>KP_Subtract"]);
         }
@@ -207,7 +211,19 @@ impl MomentsApplication {
         let preferences_action = gio::ActionEntry::builder("preferences")
             .activate(move |app: &Self, _, _| app.show_preferences())
             .build();
-        self.add_action_entries([quit_action, about_action, import_action, preferences_action]);
+        let shortcuts_action = gio::ActionEntry::builder("shortcuts")
+            .activate(move |app: &Self, _, _| app.show_shortcuts())
+            .build();
+        self.add_action_entries([quit_action, about_action, import_action, preferences_action, shortcuts_action]);
+    }
+
+    fn show_shortcuts(&self) {
+        let Some(window) = self.active_window() else { return };
+        let builder = gtk::Builder::from_resource("/io/github/justinf555/Moments/shortcuts-dialog.ui");
+        let dialog = builder
+            .object::<adw::ShortcutsDialog>("shortcuts_dialog")
+            .expect("shortcuts_dialog in resource");
+        dialog.present(Some(&window));
     }
 
     fn show_about(&self) {

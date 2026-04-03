@@ -59,6 +59,21 @@ Adw.ShortcutsDialog shortcuts_dialog {
     title: _("Application");
 
     Adw.ShortcutsItem {
+      title: C_("shortcut window", "Import Photos");
+      action-name: "app.import";
+    }
+
+    Adw.ShortcutsItem {
+      title: C_("shortcut window", "Preferences");
+      action-name: "app.preferences";
+    }
+
+    Adw.ShortcutsItem {
+      title: C_("shortcut window", "Keyboard Shortcuts");
+      action-name: "app.shortcuts";
+    }
+
+    Adw.ShortcutsItem {
       title: C_("shortcut window", "Quit");
       action-name: "app.quit";
     }
