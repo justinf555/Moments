@@ -204,14 +204,24 @@ impl ViewerInner {
             }
 
             // Guard: skip decode for video files (they use VideoViewer).
-            let is_video = path
+            let ext = path
                 .extension()
                 .and_then(|e| e.to_str())
-                .map(|e| crate::library::format::registry::VIDEO_EXTENSIONS.contains(&e.to_lowercase().as_str()))
-                .unwrap_or(false);
-            if is_video {
+                .map(|e| e.to_lowercase())
+                .unwrap_or_default();
+            if crate::library::format::registry::VIDEO_EXTENSIONS.contains(&ext.as_str()) {
                 inner.spinner.set_spinning(false);
                 inner.spinner.set_visible(false);
+                return;
+            }
+
+            // Guard: RAW formats are not yet supported for full-res viewing (#316).
+            if crate::library::format::registry::RAW_EXTENSIONS.contains(&ext.as_str()) {
+                inner.spinner.set_spinning(false);
+                inner.spinner.set_visible(false);
+                inner.bus_sender.send(AppEvent::Error(
+                    "Full-resolution RAW viewing is not yet supported".into(),
+                ));
                 return;
             }
 
