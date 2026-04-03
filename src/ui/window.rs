@@ -212,19 +212,21 @@ impl MomentsWindow {
             let sb = sidebar.clone();
             let tx = bus_sender.clone();
             glib::MainContext::default().spawn_local(async move {
-                if let Ok(albums) = tk.spawn(async move { lib.list_albums().await }).await {
-                    match albums {
-                        Ok(albums) => {
-                            let pairs: Vec<(String, String)> = albums
-                                .into_iter()
-                                .map(|a| (a.id.as_str().to_owned(), a.name))
-                                .collect();
-                            sb.set_albums(&pairs);
-                        }
-                        Err(e) => {
-                            tracing::error!("failed to load albums for sidebar: {e}");
-                            tx.send(AppEvent::Error("Could not load albums".into()));
-                        }
+                match tk.spawn(async move { lib.list_albums().await }).await {
+                    Ok(Ok(albums)) => {
+                        let pairs: Vec<(String, String)> = albums
+                            .into_iter()
+                            .map(|a| (a.id.as_str().to_owned(), a.name))
+                            .collect();
+                        sb.set_albums(&pairs);
+                    }
+                    Ok(Err(e)) => {
+                        tracing::error!("failed to load albums for sidebar: {e}");
+                        tx.send(AppEvent::Error("Could not load albums".into()));
+                    }
+                    Err(e) => {
+                        tracing::error!("failed to load albums for sidebar (join): {e}");
+                        tx.send(AppEvent::Error("Could not load albums".into()));
                     }
                 }
             });
