@@ -29,6 +29,8 @@ use info_panel::InfoPanel;
 /// viewer would be a bug.
 struct ViewerInner {
     nav_page: adw::NavigationPage,
+    /// Focusable container for the key controller (← → F9 Escape).
+    toolbar_view: adw::ToolbarView,
     picture: gtk::Picture,
     spinner: gtk::Spinner,
     prev_btn: gtk::Button,
@@ -601,6 +603,7 @@ impl PhotoViewer {
         // ── Assemble ─────────────────────────────────────────────────────────
         let inner = Rc::new(ViewerInner {
             nav_page,
+            toolbar_view,
             picture,
             spinner,
             prev_btn,
@@ -625,11 +628,13 @@ impl PhotoViewer {
 
         // ── Signal handlers ───────────────────────────────────────────────────
 
-        // Start deferred full-res load after the slide-in animation completes.
+        // Start deferred full-res load after the slide-in animation completes,
+        // and grab focus so the key controller (← → F9 Escape) works immediately.
         {
             let i = Rc::downgrade(&inner);
             inner.nav_page.connect_shown(move |_| {
                 let Some(inner) = i.upgrade() else { return };
+                inner.toolbar_view.grab_focus();
                 let pending = inner.pending_load.borrow_mut().take();
                 if let Some(id) = pending {
                     let gen = inner.load_gen.get();
@@ -901,8 +906,6 @@ impl PhotoViewer {
     pub fn show(&self, items: Vec<MediaItemObject>, index: usize) {
         *self.inner.items.borrow_mut() = items;
         self.inner.show_at(index);
-        // Grab keyboard focus so arrow-key navigation works immediately.
-        self.inner.nav_page.grab_focus();
     }
 }
 
