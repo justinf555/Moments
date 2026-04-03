@@ -468,10 +468,10 @@ impl EditPanel {
             .column_homogeneous(true)
             .build();
 
-        let rotate_ccw_btn = make_transform_button("object-rotate-left-symbolic", "Rotate CCW", "Rotate Left");
-        let rotate_cw_btn = make_transform_button("object-rotate-right-symbolic", "Rotate CW", "Rotate Right");
-        let flip_h_btn = make_transform_button("object-flip-horizontal-symbolic", "Flip H", "Flip Horizontal");
-        let flip_v_btn = make_transform_button("object-flip-vertical-symbolic", "Flip V", "Flip Vertical");
+        let rotate_ccw_btn = make_transform_button("object-rotate-left-symbolic", "Rotate CCW", &gettext("Rotate Left"));
+        let rotate_cw_btn = make_transform_button("object-rotate-right-symbolic", "Rotate CW", &gettext("Rotate Right"));
+        let flip_h_btn = make_transform_button("object-flip-horizontal-symbolic", "Flip H", &gettext("Flip Horizontal"));
+        let flip_v_btn = make_transform_button("object-flip-vertical-symbolic", "Flip V", &gettext("Flip Vertical"));
 
         grid.attach(&rotate_ccw_btn, 0, 0, 1, 1);
         grid.attach(&rotate_cw_btn, 1, 0, 1, 1);
@@ -1196,7 +1196,7 @@ fn make_transform_button(icon_name: &str, label: &str, tooltip: &str) -> gtk::Bu
 
     let btn = gtk::Button::builder()
         .child(&vbox)
-        .tooltip_text(&gettext(tooltip))
+        .tooltip_text(tooltip)
         .build();
     btn.add_css_class("flat");
     btn
