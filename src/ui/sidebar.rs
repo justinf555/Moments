@@ -4,6 +4,7 @@ pub mod row;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
+use gettextrs::gettext;
 use gtk::{gio, glib, prelude::*, subclass::prelude::*};
 use adw::prelude::*;
 use tracing::debug;
@@ -115,7 +116,7 @@ mod imp {
             let menu_button = gtk::MenuButton::builder()
                 .primary(true)
                 .icon_name("open-menu-symbolic")
-                .tooltip_text("Main Menu")
+                .tooltip_text(&gettext("Main Menu"))
                 .build();
             let menu = gio::Menu::new();
             let import_section = gio::Menu::new();
@@ -333,7 +334,7 @@ mod imp {
 
             let add_btn = gtk::Button::from_icon_name("list-add-symbolic");
             add_btn.add_css_class("flat");
-            add_btn.set_tooltip_text(Some("New album"));
+            add_btn.set_tooltip_text(Some(&gettext("New album")));
             hbox.append(&add_btn);
 
             let row = gtk::ListBoxRow::new();

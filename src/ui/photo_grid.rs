@@ -3,6 +3,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use adw::prelude::*;
+use gettextrs::gettext;
 use gtk::{gio, glib, subclass::prelude::*};
 use tracing::instrument;
 
@@ -378,13 +379,13 @@ impl PhotoGridView {
         // ── Zoom controls ───────────────────────────────────────────────────
         let zoom_out_btn = gtk::Button::builder()
             .icon_name("zoom-out-symbolic")
-            .tooltip_text("Zoom Out")
+            .tooltip_text(&gettext("Zoom Out"))
             .action_name("view.zoom-out")
             .build();
         zoom_out_btn.add_css_class("flat");
         let zoom_in_btn = gtk::Button::builder()
             .icon_name("zoom-in-symbolic")
-            .tooltip_text("Zoom In")
+            .tooltip_text(&gettext("Zoom In"))
             .action_name("view.zoom-in")
             .build();
         zoom_in_btn.add_css_class("flat");
@@ -414,7 +415,7 @@ impl PhotoGridView {
 
         let content_menu_btn = gtk::MenuButton::builder()
             .icon_name("view-more-symbolic")
-            .tooltip_text("Menu")
+            .tooltip_text(&gettext("Menu"))
             .menu_model(&content_menu)
             .build();
         content_menu_btn.add_css_class("flat");
