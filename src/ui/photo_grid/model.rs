@@ -124,7 +124,17 @@ impl PhotoGridModel {
             AppEvent::AssetSynced { item } => {
                 let filter = self.filter();
                 let already_present = self.id_index.borrow().contains_key(&item.id);
-                if filter.matches(item) {
+                let matches = filter.matches(item);
+                debug!(
+                    id = %item.id,
+                    filter = ?filter,
+                    is_trashed = item.is_trashed,
+                    matches = matches,
+                    already_present = already_present,
+                    store_len = self.store.n_items(),
+                    "AssetSynced received"
+                );
+                if matches {
                     if !already_present {
                         self.insert_item_sorted(item.clone());
                     }
@@ -173,7 +183,7 @@ impl PhotoGridModel {
         *self.cursor.borrow_mut() = None;
         self.loading.set(false);
         self.has_more.set(true);
-        debug!("reloading grid from first page");
+        debug!(filter = ?self.filter(), "reloading grid from first page");
         self.load_more();
     }
 
