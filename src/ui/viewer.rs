@@ -53,6 +53,9 @@ struct ViewerInner {
     pending_load: RefCell<Option<crate::library::media::MediaId>>,
     /// Cached metadata for the currently displayed item.
     current_metadata: RefCell<Option<MediaMetadataRecord>>,
+    /// Tracks a pending optimistic favourite toggle for rollback on failure.
+    /// Contains `(media_id, previous_favourite_state)`.
+    pending_fav: RefCell<Option<(crate::library::media::MediaId, bool)>>,
     library: Arc<dyn Library>,
     tokio: tokio::runtime::Handle,
     bus_sender: EventSender,
@@ -569,6 +572,7 @@ impl PhotoViewer {
             load_gen: Cell::new(0),
             pending_load: RefCell::new(None),
             current_metadata: RefCell::new(None),
+            pending_fav: RefCell::new(None),
             library,
             tokio,
             bus_sender,
@@ -610,7 +614,7 @@ impl PhotoViewer {
             });
         }
 
-        // Star (favourite) button
+        // Star (favourite) button — optimistic toggle with rollback on failure.
         {
             let i = Rc::downgrade(&inner);
             inner.star_btn.connect_clicked(move |btn| {
@@ -619,7 +623,8 @@ impl PhotoViewer {
                 let idx = inner.current_index.get();
                 let Some(obj) = items.get(idx) else { return };
 
-                let new_fav = !obj.is_favorite();
+                let was_fav = obj.is_favorite();
+                let new_fav = !was_fav;
 
                 // Optimistic: update icon and current item immediately.
                 btn.set_icon_name(if new_fav {
@@ -635,6 +640,8 @@ impl PhotoViewer {
                 obj.set_is_favorite(new_fav);
 
                 let id = obj.item().id.clone();
+                *inner.pending_fav.borrow_mut() = Some((id.clone(), was_fav));
+
                 inner.bus_sender.send(AppEvent::FavoriteRequested {
                     ids: vec![id],
                     state: new_fav,
@@ -795,6 +802,44 @@ impl PhotoViewer {
                     }
                 });
             }
+        }
+
+        // Subscribe to bus for favourite rollback on failure.
+        {
+            let i = Rc::downgrade(&inner);
+            crate::event_bus::subscribe(move |event| {
+                let Some(inner) = i.upgrade() else { return };
+                match event {
+                    AppEvent::FavoriteChanged { .. } => {
+                        // Confirmed — clear the pending state.
+                        *inner.pending_fav.borrow_mut() = None;
+                    }
+                    AppEvent::Error(_) => {
+                        // If we have a pending favourite toggle, roll it back.
+                        let pending = inner.pending_fav.borrow_mut().take();
+                        if let Some((id, was_fav)) = pending {
+                            let items = inner.items.borrow();
+                            let idx = inner.current_index.get();
+                            if let Some(obj) = items.get(idx) {
+                                if obj.item().id == id {
+                                    obj.set_is_favorite(was_fav);
+                                    inner.star_btn.set_icon_name(if was_fav {
+                                        "starred-symbolic"
+                                    } else {
+                                        "non-starred-symbolic"
+                                    });
+                                    if was_fav {
+                                        inner.star_btn.add_css_class("warning");
+                                    } else {
+                                        inner.star_btn.remove_css_class("warning");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            });
         }
 
         Self { inner }
