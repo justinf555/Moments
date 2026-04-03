@@ -280,8 +280,11 @@ pub fn build_factory(
 fn accessible_label_for_media(item: &MediaItem) -> String {
     if let Some(ts) = item.taken_at {
         // Note: %B produces English month names regardless of locale.
-        let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
-            .map(|d| d.format("%e %B %Y").to_string())
+        use chrono::TimeZone;
+        let dt = chrono::Utc
+            .timestamp_opt(ts, 0)
+            .single()
+            .map(|d: chrono::DateTime<chrono::Utc>| d.format("%e %B %Y").to_string())
             .unwrap_or_default();
         if dt.is_empty() {
             item.original_filename.clone()
