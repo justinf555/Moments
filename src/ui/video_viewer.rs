@@ -412,7 +412,7 @@ impl VideoViewer {
                         items.get(idx).map(|obj| obj.item().id.clone())
                     };
                     let Some(id) = id else { return };
-                    crate::ui::album_picker::show_album_picker_on_widget(
+                    crate::ui::album_picker_dialog::show_album_picker_dialog(
                         mb.upcast_ref::<gtk::Widget>(),
                         vec![id],
                         Arc::clone(&inner.library),

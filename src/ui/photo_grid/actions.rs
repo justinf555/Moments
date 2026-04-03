@@ -26,10 +26,7 @@ pub(super) struct ActionContext {
     pub bus_sender: EventSender,
 }
 
-/// Wire the "Add to Album" popover on the given button.
-///
-/// The popover lists existing albums (fetched via library query) and
-/// a "New Album…" option. All mutations go through the bus.
+/// Wire the "Add to Album" button to open the album picker dialog.
 pub(super) fn wire_album_controls(ctx: &ActionContext, album_btn: &gtk::Button) {
     let lib = Arc::clone(&ctx.library);
     let tk = ctx.tokio.clone();
@@ -37,12 +34,12 @@ pub(super) fn wire_album_controls(ctx: &ActionContext, album_btn: &gtk::Button) 
     let bus_tx = ctx.bus_sender.clone();
 
     album_btn.connect_clicked(move |btn: &gtk::Button| {
-        debug!("album button clicked, loading albums async");
+        debug!("album button clicked");
         let ids = super::collect_selected_ids(&selection);
         if ids.is_empty() {
             return;
         }
-        crate::ui::album_picker::show_album_picker(
+        crate::ui::album_picker_dialog::show_album_picker_dialog(
             btn,
             ids,
             Arc::clone(&lib),
