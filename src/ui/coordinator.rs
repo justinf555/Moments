@@ -87,9 +87,7 @@ impl ContentCoordinator {
             *slot = ViewSlot::Ready(view);
         }
 
-        debug!(route = %id, visible_before = ?self.stack.visible_child_name(), "switching visible child");
         self.stack.set_visible_child_name(id);
-        debug!(route = %id, visible_after = ?self.stack.visible_child_name(), "visible child set");
 
         if let Some(ViewSlot::Ready(view)) = self.slots.get(id) {
             view.view_actions().cloned()

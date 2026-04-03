@@ -512,7 +512,6 @@ impl MomentsWindow {
             let tc = Rc::clone(&texture_cache);
             let bs = bus_sender.clone();
             sidebar.connect_route_selected(move |id| {
-                debug!(route = %id, "sidebar route selected");
                 let Some(win) = obj_weak.upgrade() else { return };
                 let Some(coordinator) = win.imp().coordinator.get() else { return };
 

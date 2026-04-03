@@ -124,17 +124,7 @@ impl PhotoGridModel {
             AppEvent::AssetSynced { item } => {
                 let filter = self.filter();
                 let already_present = self.id_index.borrow().contains_key(&item.id);
-                let matches = filter.matches(item);
-                debug!(
-                    id = %item.id,
-                    filter = ?filter,
-                    is_trashed = item.is_trashed,
-                    matches = matches,
-                    already_present = already_present,
-                    store_len = self.store.n_items(),
-                    "AssetSynced received"
-                );
-                if matches {
+                if filter.matches(item) {
                     if !already_present {
                         self.insert_item_sorted(item.clone());
                     }
@@ -142,7 +132,6 @@ impl PhotoGridModel {
                     // Item no longer matches this view's filter (e.g. it was
                     // restored on the server, so is_trashed flipped to false).
                     // Remove it so stale entries don't linger in filtered views.
-                    debug!(id = %item.id, "removing synced item that no longer matches filter");
                     self.remove_item(&item.id);
                 }
             }
@@ -183,7 +172,7 @@ impl PhotoGridModel {
         *self.cursor.borrow_mut() = None;
         self.loading.set(false);
         self.has_more.set(true);
-        debug!(filter = ?self.filter(), "reloading grid from first page");
+        debug!("reloading grid from first page");
         self.load_more();
     }
 
@@ -379,13 +368,6 @@ impl PhotoGridModel {
 
     /// Called when an item is trashed or restored in any view.
     pub fn on_trashed(self: &Rc<Self>, id: &MediaId, is_trashed: bool) {
-        debug!(
-            id = %id,
-            is_trashed = is_trashed,
-            filter = ?self.filter(),
-            store_len = self.store.n_items(),
-            "on_trashed called"
-        );
         match self.filter.borrow().clone() {
             MediaFilter::All | MediaFilter::Favorites | MediaFilter::RecentImports { .. } | MediaFilter::Album { .. } | MediaFilter::Person { .. } => {
                 if is_trashed {
@@ -416,7 +398,7 @@ impl PhotoGridModel {
 
     fn on_page_loaded(&self, items: Vec<MediaItem>) {
         let count = items.len();
-        debug!(filter = ?self.filter(), count, store_len = self.store.n_items(), "page loaded");
+        debug!("page loaded: {count} items");
 
         // Advance the cursor to the last item so the next page continues
         // exactly where this one left off (keyset pagination).
