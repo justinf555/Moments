@@ -123,6 +123,15 @@ impl MediaFilter {
             MediaFilter::Person { .. } => false,
         }
     }
+
+    /// Returns `true` if [`matches`] can authoritatively decide membership
+    /// from the item data alone, without a DB query.
+    ///
+    /// Returns `false` for `Album` and `Person` — membership for those views
+    /// requires a join and is never knowable from the [`MediaItem`] fields.
+    pub fn supports_inline_match(&self) -> bool {
+        !matches!(self, MediaFilter::Album { .. } | MediaFilter::Person { .. })
+    }
 }
 
 /// Opaque cursor for keyset pagination in [`LibraryMedia::list_media`].

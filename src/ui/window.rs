@@ -475,13 +475,26 @@ impl MomentsWindow {
         // the first page arrives.
         coordinator.borrow_mut().navigate("empty");
 
-        // Toggle between empty and content based on store item count.
-        // Connected to the photos store (the default view).
+        // Toggle between empty-library placeholder and the current content
+        // view. Only switch when transitioning between "empty" ↔ "has items"
+        // (not on every store mutation), and never override the visible child
+        // if the user has navigated away from Photos (e.g. to Trash).
         {
             let stack = content_stack.clone();
+            let was_empty = std::cell::Cell::new(true);
             photos_model.store.connect_items_changed(move |store, _, _, _| {
-                let target = if store.n_items() > 0 { "photos" } else { "empty" };
-                stack.set_visible_child_name(target);
+                let is_empty = store.n_items() == 0;
+                if is_empty && !was_empty.get() {
+                    // Library just became empty — show the empty placeholder.
+                    stack.set_visible_child_name("empty");
+                    was_empty.set(true);
+                } else if !is_empty && was_empty.get() {
+                    // First items arrived — switch from empty placeholder to photos.
+                    stack.set_visible_child_name("photos");
+                    was_empty.set(false);
+                }
+                // Otherwise: items changed but we're already in the right state
+                // — don't override the visible child (user may be on another view).
             });
         }
 

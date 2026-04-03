@@ -123,8 +123,16 @@ impl PhotoGridModel {
             }
             AppEvent::AssetSynced { item } => {
                 let filter = self.filter();
+                let already_present = self.id_index.borrow().contains_key(&item.id);
                 if filter.matches(item) {
-                    self.insert_item_sorted(item.clone());
+                    if !already_present {
+                        self.insert_item_sorted(item.clone());
+                    }
+                } else if already_present && filter.supports_inline_match() {
+                    // Item no longer matches this view's filter (e.g. it was
+                    // restored on the server, so is_trashed flipped to false).
+                    // Remove it so stale entries don't linger in filtered views.
+                    self.remove_item(&item.id);
                 }
             }
             AppEvent::AssetDeletedRemote { media_id } => {
