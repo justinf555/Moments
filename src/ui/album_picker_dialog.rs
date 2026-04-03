@@ -52,10 +52,12 @@ pub fn show_album_picker_dialog(
             Ok(Ok(pair)) => pair,
             Ok(Err(e)) => {
                 tracing::error!("album picker data load failed: {e}");
+                bus_sender.send(crate::app_event::AppEvent::Error("Could not load albums".into()));
                 return;
             }
             Err(e) => {
                 tracing::error!("album picker join failed: {e}");
+                bus_sender.send(crate::app_event::AppEvent::Error("Could not load albums".into()));
                 return;
             }
         };

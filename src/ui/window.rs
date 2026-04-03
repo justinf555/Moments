@@ -22,6 +22,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use crate::app_event::AppEvent;
 use gtk::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gio, glib};
@@ -209,6 +210,7 @@ impl MomentsWindow {
             let lib = Arc::clone(&library);
             let tk = tokio.clone();
             let sb = sidebar.clone();
+            let tx = bus_sender.clone();
             glib::MainContext::default().spawn_local(async move {
                 if let Ok(albums) = tk.spawn(async move { lib.list_albums().await }).await {
                     match albums {
@@ -219,7 +221,10 @@ impl MomentsWindow {
                                 .collect();
                             sb.set_albums(&pairs);
                         }
-                        Err(e) => tracing::error!("failed to load albums for sidebar: {e}"),
+                        Err(e) => {
+                            tracing::error!("failed to load albums for sidebar: {e}");
+                            tx.send(AppEvent::Error("Could not load albums".into()));
+                        }
                     }
                 }
             });
@@ -356,6 +361,7 @@ impl MomentsWindow {
             Arc::clone(&library),
             tokio.clone(),
             MediaFilter::All,
+            bus_sender.clone(),
         ));
         let photos_view = Rc::new(PhotoGridView::new(
             Arc::clone(&library),
@@ -380,6 +386,7 @@ impl MomentsWindow {
                     Arc::clone(&lib),
                     tk.clone(),
                     MediaFilter::Favorites,
+                    bs.clone(),
                 ));
                 let view = Rc::new(PhotoGridView::new(lib, tk, s, tc, bs));
                 view.set_model(Rc::clone(&model));
@@ -402,6 +409,7 @@ impl MomentsWindow {
                     Arc::clone(&lib),
                     tk.clone(),
                     MediaFilter::RecentImports { since },
+                    bs.clone(),
                 ));
                 let view = Rc::new(PhotoGridView::new(lib, tk, s, tc, bs));
                 view.set_model(Rc::clone(&model));
@@ -422,6 +430,7 @@ impl MomentsWindow {
                     Arc::clone(&lib),
                     tk.clone(),
                     MediaFilter::Trashed,
+                    bs.clone(),
                 ));
                 let view = Rc::new(PhotoGridView::new(lib, tk, s, tc, bs));
                 view.set_model(Rc::clone(&model));
@@ -500,6 +509,7 @@ impl MomentsWindow {
                             Arc::clone(&lib),
                             tk.clone(),
                             MediaFilter::Album { album_id },
+                            bs.clone(),
                         ));
                         let view = Rc::new(PhotoGridView::new(
                             Arc::clone(&lib),

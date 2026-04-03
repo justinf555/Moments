@@ -7,7 +7,7 @@ use gtk::{gdk, gio, glib, prelude::*};
 use tracing::{debug, error};
 
 use crate::app_event::AppEvent;
-use crate::event_bus::EventBus;
+use crate::event_bus::{EventBus, EventSender};
 use crate::library::media::{MediaCursor, MediaFilter, MediaId, MediaItem};
 use crate::library::Library;
 
@@ -42,6 +42,8 @@ pub struct PhotoGridModel {
     /// Called after each page loads so the scroll handler can re-check
     /// whether more pages are needed (e.g. after a fast scrollbar drag).
     on_page_ready: RefCell<Option<Box<dyn Fn()>>>,
+    /// Bus sender for emitting user-facing error toasts.
+    bus_sender: EventSender,
 }
 
 impl PhotoGridModel {
@@ -49,6 +51,7 @@ impl PhotoGridModel {
         library: Arc<dyn Library>,
         tokio: tokio::runtime::Handle,
         filter: MediaFilter,
+        bus_sender: EventSender,
     ) -> Self {
         Self {
             store: gio::ListStore::new::<MediaItemObject>(),
@@ -60,6 +63,7 @@ impl PhotoGridModel {
             has_more: Cell::new(true),
             id_index: RefCell::new(HashMap::new()),
             on_page_ready: RefCell::new(None),
+            bus_sender,
         }
     }
 
@@ -200,10 +204,12 @@ impl PhotoGridModel {
                 }
                 Ok(Err(e)) => {
                     error!(elapsed_ms = elapsed.as_millis(), "list_media failed: {e}");
+                    model.bus_sender.send(AppEvent::Error("Could not load photos".into()));
                     model.loading.set(false);
                 }
                 Err(e) => {
                     error!(elapsed_ms = elapsed.as_millis(), "tokio join failed: {e}");
+                    model.bus_sender.send(AppEvent::Error("Could not load photos".into()));
                     model.loading.set(false);
                 }
             }

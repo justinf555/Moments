@@ -523,6 +523,7 @@ impl PhotoViewer {
             picture.clone(),
             Arc::clone(&library),
             tokio.clone(),
+            bus_sender.clone(),
         );
 
         // ── Sidebar stack (info | edit) ──────────────────────────────────────

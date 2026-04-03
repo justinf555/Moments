@@ -182,6 +182,7 @@ impl CollectionGridView {
                     Arc::clone(&lib),
                     tk.clone(),
                     filter,
+                    bs.clone(),
                 ));
                 let view = Rc::new(PhotoGridView::new(
                     Arc::clone(&lib),
