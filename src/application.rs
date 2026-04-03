@@ -245,7 +245,7 @@ impl MomentsApplication {
     }
 
     /// Show the first-run setup window.
-    fn show_setup_window(&self) {
+    fn show_setup_window(&self) -> MomentsSetupWindow {
         let setup = MomentsSetupWindow::new(self);
         setup.connect_setup_complete(glib::clone!(
             #[weak(rename_to = app)]
@@ -255,6 +255,7 @@ impl MomentsApplication {
             }
         ));
         setup.present();
+        setup
     }
 
     /// Called when the user completes the setup wizard.
@@ -277,6 +278,11 @@ impl MomentsApplication {
                 Ok(result) => result,
                 Err(e) => {
                     error!("failed to open bundle: {e}");
+                    show_library_error_dialog(
+                        setup_win,
+                        "Could not open library",
+                        &format!("The library at {} could not be opened.\n\nDetails: {e}", bundle_path.display()),
+                    );
                     return;
                 }
             }
@@ -286,6 +292,11 @@ impl MomentsApplication {
                 Ok(b) => b,
                 Err(e) => {
                     error!("failed to create library bundle: {e}");
+                    show_library_error_dialog(
+                        setup_win,
+                        "Could not create library",
+                        &format!("Failed to create a library at {}.\n\nDetails: {e}", bundle_path.display()),
+                    );
                     return;
                 }
             };
@@ -335,7 +346,16 @@ impl MomentsApplication {
                 if let Err(e) = settings.set_string("library-path", "") {
                     error!("failed to clear stale library path: {e}");
                 }
-                self.show_setup_window();
+                // Show setup window with an error dialog explaining what happened.
+                let setup_win = self.show_setup_window();
+                show_library_error_dialog(
+                    &setup_win,
+                    "Could not open library",
+                    &format!(
+                        "The library at {} could not be opened. Please set up a new library.\n\nDetails: {e}",
+                        path.display()
+                    ),
+                );
                 return;
             }
         };
@@ -620,11 +640,51 @@ impl MomentsApplication {
                     }
                     Err(e) => {
                         error!("failed to open library: {e}");
+
+                        let dialog = adw::AlertDialog::builder()
+                            .heading("Could not open library")
+                            .body(&format!(
+                                "An error occurred while opening the library.\n\nDetails: {e}"
+                            ))
+                            .build();
+                        dialog.add_response("setup", "Set Up Library");
+                        dialog.add_response("quit", "Quit");
+                        dialog.set_response_appearance("quit", adw::ResponseAppearance::Destructive);
+                        dialog.set_default_response(Some("setup"));
+                        dialog.set_close_response("quit");
+
+                        let app_weak = app.downgrade();
+                        let win_weak2 = window.downgrade();
+                        dialog.connect_response(None, move |_, response| {
+                            if response == "setup" {
+                                if let Some(app) = app_weak.upgrade() {
+                                    if let Some(win) = win_weak2.upgrade() {
+                                        win.close();
+                                    }
+                                    app.show_setup_window();
+                                }
+                            } else if let Some(app) = app_weak.upgrade() {
+                                app.quit();
+                            }
+                        });
+
+                        dialog.present(Some(&window));
                     }
                 }
             }
         ));
     }
+}
+
+/// Show a blocking error dialog for library open/create failures.
+fn show_library_error_dialog(parent: &impl IsA<gtk::Widget>, heading: &str, body: &str) {
+    let dialog = adw::AlertDialog::builder()
+        .heading(heading)
+        .body(body)
+        .build();
+    dialog.add_response("ok", "OK");
+    dialog.set_default_response(Some("ok"));
+    dialog.present(Some(parent));
 }
 
 /// Recursively enumerate a folder's contents using GIO.
