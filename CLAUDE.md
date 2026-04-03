@@ -16,7 +16,21 @@ make clean
 
 The Flatpak manifest is `io.github.justinf555.Moments.json` (local dev) and `io.github.justinf555.Moments.flathub.json` (Flathub submission). The local manifest pulls source from the local git repo (`file:///home/justin/Projects/Moments`, branch `main`), so **changes must be committed before rebuilding**. The `make run` command installs the Flatpak locally (`--user --install`) so icons are exported to GNOME Shell.
 
-Instruct the user to test via GNOME Builder or `make run` — do not attempt to run the app binary directly.
+### Dev build
+
+```bash
+# Build with editing feature enabled, debug logs, installs as Flatpak
+make run-dev
+
+# Release: creates PR with version bump, merging triggers tag + GitHub Release
+make release VERSION=0.2.0
+```
+
+The dev manifest (`io.github.justinf555.Moments.dev.json`) uses `type: "dir"` — picks up working tree changes without committing. It installs under the **same app ID** as production (`io.github.justinf555.Moments`) so Flatpak portals work correctly. `flatpak-builder --run` does not support portals.
+
+GNOME Builder can also use the dev manifest — configure it in the project build settings.
+
+Instruct the user to test via GNOME Builder or `make run-dev` — do not attempt to run the app binary directly.
 
 ## Architecture
 
@@ -71,6 +85,17 @@ src/
     providers/
       local.rs         — LocalLibrary (local filesystem backend)
       immich.rs        — ImmichLibrary (Immich server backend)
+  app_event.rs         — AppEvent enum (commands, results, lifecycle events)
+  event_bus.rs         — EventBus (push-based fan-out delivery via glib::idle_add_once)
+  commands/
+    dispatcher.rs      — CommandDispatcher (routes *Requested events to handlers on Tokio)
+    trash.rs           — TrashCommand handler
+    restore.rs         — RestoreCommand handler
+    delete.rs          — DeleteCommand handler
+    favorite.rs        — FavoriteCommand handler
+    add_to_album.rs    — AddToAlbumCommand handler
+    remove_from_album.rs — RemoveFromAlbumCommand handler
+    create_album.rs    — CreateAlbumCommand handler
   ui/
     window.rs          — MomentsWindow; wires sidebar, coordinator, views
     sidebar.rs         — MomentsSidebar with dynamic album section + persistent status bar
@@ -78,29 +103,36 @@ src/
       route.rs         — TOP_ROUTES / BOTTOM_ROUTES definitions (Photos, Favorites, Recent, People, Trash)
       row.rs           — MomentsSidebarRow widget
     coordinator.rs     — ContentCoordinator (stack-based view routing, returns view_actions)
-    model_registry.rs  — ModelRegistry (broadcasts events to all grid models)
     collection_grid.rs — CollectionGridView (reusable grid for People, future Memories/Places)
     collection_grid/
       cell.rs          — CollectionGridCell widget (thumbnail + name + subtitle)
       factory.rs       — Cell factory with ThumbnailStyle (Circular/Square)
       item.rs          — CollectionItemObject (GObject wrapper for collection items)
-    photo_grid.rs      — PhotoGridView (zoom, selection actions, viewer integration)
+    photo_grid.rs      — PhotoGridView (zoom, selection, empty states, viewer integration)
     photo_grid/
-      actions.rs       — Action wiring: run_action helper, wire_selection/album/context_menu
-      model.rs         — PhotoGridModel (pagination, filtering, incremental updates)
+      actions.rs       — Action wiring: context menu, album controls
+      action_bar.rs    — Selection mode action bar (favourite, album, trash/restore/delete)
+      model.rs         — PhotoGridModel (pagination, filtering, incremental updates, bus errors)
       factory.rs       — Cell factory (bind/unbind with texture management + decode semaphore)
-      cell.rs          — PhotoGridCell widget (placeholder → thumbnail → star)
+      cell.rs          — PhotoGridCell widget (placeholder → thumbnail → star + checkbox)
       item.rs          — MediaItemObject (GObject wrapper for grid items)
       texture_cache.rs — LRU cache for decoded RGBA thumbnail pixels
-    viewer.rs          — PhotoViewer (full-res image display, edit session management)
+    viewer.rs          — PhotoViewer (full-res display, overflow menu, edit session)
     viewer/
       info_panel.rs    — EXIF metadata display panel
       edit_panel.rs    — Edit panel with exposure/color sliders, transform controls
-    video_viewer.rs    — VideoViewer (GStreamer playback)
+    video_viewer.rs    — VideoViewer (GStreamer playback, matching overflow menu)
     album_dialogs.rs   — Create/rename/delete album dialogs
+    album_picker_dialog.rs — Album picker dialog entry point (async data fetch + present)
+    album_picker_dialog/
+      dialog.rs        — AdwDialog with search, thumbnails, create flow, empty state
+      album_row.rs     — Album row widget (thumbnail + name + count + checkmark + pill)
+      state.rs         — AlbumPickerData, AlbumEntry (data-in, events-out)
     import_dialog.rs   — Import progress dialog
-    preferences_dialog.rs — Preferences with library stats, Immich server stats, cache/sync settings
+    preferences_dialog.rs — Preferences (sentence case, AdwSpinRow, library stats)
+    empty_library.rs   — Empty library placeholder view
     setup_window/      — Setup wizard (backend picker, local setup, Immich setup)
+    widgets.rs         — Shared UI components (expander_row, detail_row, section_label)
   style.css            — Custom CSS (selection highlight, circular thumbnails, hidden person styling)
 ```
 
@@ -118,7 +150,7 @@ The app has two distinct async executors that must never be confused:
 - **GTK executor** (`glib::MainContext`) — UI thread only. Runs widget updates, signal handlers, and calls into library traits via `glib::MainContext::default().spawn_local()`.
 - **Library executor** (Tokio runtime) — all backend I/O: database queries, file ops, future Immich HTTP calls. Created in `main()` before `app.run()` and held for the process lifetime. All backends share it via `tokio::runtime::Handle` stored on `MomentsApplication`.
 
-Results flow back from Tokio → GTK via `Sender<LibraryEvent>` (a `std::sync::mpsc` channel, which is `Send`).
+Results flow back from Tokio → GTK via `Sender<LibraryEvent>` (a `std::sync::mpsc` channel, which is `Send`). The idle loop in `application.rs` translates `LibraryEvent` → `AppEvent` and sends via the event bus for fan-out delivery to all subscribers.
 
 ### Library abstraction layer
 
@@ -130,7 +162,7 @@ Two backends exist:
 
 ### Database
 
-`src/library/db.rs` — backend-agnostic `Database` struct wrapping an `sqlx::SqlitePool`. Used by all backends that need persistence. Migrations live at `src/library/db/migrations/` (001–013) and are embedded via `sqlx::migrate!()`. **Every schema change must be a numbered migration — no ad-hoc `CREATE TABLE IF NOT EXISTS` in code.** Query implementations are split into submodules: `db/media.rs`, `db/albums.rs`, `db/faces.rs`, `db/sync.rs`, `db/thumbnails.rs`, `db/stats.rs`, `db/upload.rs`.
+`src/library/db.rs` — backend-agnostic `Database` struct wrapping an `sqlx::SqlitePool`. Used by all backends that need persistence. Migrations live at `src/library/db/migrations/` (001–014) and are embedded via `sqlx::migrate!()`. **Every schema change must be a numbered migration — no ad-hoc `CREATE TABLE IF NOT EXISTS` in code.** Query implementations are split into submodules: `db/media.rs`, `db/albums.rs`, `db/faces.rs`, `db/sync.rs`, `db/thumbnails.rs`, `db/stats.rs`, `db/upload.rs`.
 
 After any schema change, regenerate the offline query snapshot:
 ```bash
@@ -170,6 +202,24 @@ Settings that affect background tasks (sync interval, cache limit) use `tokio::s
 
 All content views implement `ContentView` (widget + optional view_actions). When the coordinator navigates to a view, its action group is installed on the window under the `"view"` prefix. This is critical for zoom buttons to work across different views (Photos, Favorites, Albums, People drill-down). When a `CollectionGridView` pushes a `PhotoGridView` onto its internal NavigationView, it must also install that view's actions on the window.
 
+### Event bus and command dispatch
+
+`src/event_bus.rs` — centralised push-based event delivery using `glib::idle_add_once`. Components subscribe in their own constructors; parents do assembly only.
+
+- **`AppEvent`** (`app_event.rs`) — command variants (`*Requested`) and result variants (`*Changed`, `Trashed`, etc.)
+- **`EventSender`** — `Send + Clone` wrapper around `mpsc::Sender`. Safe to call from Tokio threads.
+- **`CommandDispatcher`** (`commands/dispatcher.rs`) — subscribes to the bus, routes `*Requested` events to `CommandHandler` impls on the Tokio runtime. Each handler emits result events or `AppEvent::Error` on failure.
+- **Error toasts** — a subscriber in `application.rs` listens for `AppEvent::Error` and shows an `AdwToast` via `WidgetExt::activate_action("win.show-toast", ...)`. **Important:** Use `WidgetExt::activate_action` (not `ActionGroupExt::activate_action`) — `ActionGroupExt` does not resolve the `win.` prefix.
+- **Blocking errors** — library open/create failures show `AdwAlertDialog` with error details and recovery options.
+
+### Viewer headerbar and overflow menu
+
+Photo and video viewers use a clean headerbar: `[★] [ℹ] [✏] [⋮]`. The overflow menu (⋮) is a manual `gtk::Popover` with icon+label buttons (not `GMenuModel` — GTK4's `PopoverMenu` does not render icons from `GMenuModel` attributes). Items: Add to album, Share, Export original, Set as wallpaper (photo only), Show in Files, Delete (destructive, separated). Shared builder: `build_viewer_menu_popover()` and `find_menu_button()` in `viewer.rs`.
+
+### Album picker dialog
+
+`src/ui/album_picker_dialog.rs` — full `adw::Dialog` replacing the old popover. Architecture: async data fetch → `AlbumPickerData` (plain structs) → dialog construction → `AppEvent` bus commands. The dialog never imports `Library`. Features: search with Pango bold highlighting, cover thumbnails (pre-decoded on Tokio), "Already added" pills, inline "New album…" creation flow, empty state.
+
 ### Icons
 
 Use only icons confirmed to exist in the Adwaita icon theme. Common ones: `object-select-symbolic` (checkmark), `view-refresh-symbolic` (sync), `view-conceal-symbolic` (eye-slash/hidden), `folder-download-symbolic`, `go-up-symbolic`, `document-send-symbolic`. Check with `find /usr/share/icons/Adwaita -name "icon-name.svg"` before using.
@@ -200,7 +250,9 @@ Design docs live in `docs/` and follow a consistent format with issue links, sta
 - `docs/design-lazy-view-loading.md` — Lazy view registration pattern
 - `docs/design-video-import.md` — Video format detection and import
 - `docs/design-photo-editing.md` — Non-destructive editing: data model, renderer, UI, Immich integration
+- `docs/design-event-bus.md` — EventBus architecture, AppEvent enum, CommandDispatcher pattern
+- `docs/design-integration-testing.md` — Headless GTK4 testing with mutter, CI config, coverage tracking
 
 ### Feature flags
 
-The `editing` Cargo feature gates the edit button in the viewer. It is disabled by default (not shipped to Flathub). Enable with `cargo run --features editing` for development.
+The `editing` Cargo feature gates the edit button in the viewer. It is disabled by default but will be enabled for the next Flathub release (v0.2.0). Enable with `cargo run --features editing` for development.
