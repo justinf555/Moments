@@ -352,16 +352,28 @@ impl ViewerInner {
             let preview = tk
                 .spawn(async move {
                     tokio::task::spawn_blocking(move || -> Option<Arc<image::DynamicImage>> {
-                        let img = image::open(&path)
-                            .map_err(|e| error!("edit session decode failed: {e}"))
-                            .ok()?;
-                        // Apply EXIF orientation (skip for HEIC).
                         let ext = path
                             .extension()
                             .and_then(|e| e.to_str())
                             .map(|e| e.to_lowercase())
                             .unwrap_or_default();
-                        let img = if matches!(ext.as_str(), "heic" | "heif") {
+                        let is_raw = crate::library::format::registry::RAW_EXTENSIONS
+                            .contains(&ext.as_str());
+                        let img = if is_raw {
+                            use crate::library::format::raw::RawHandler;
+                            RawHandler
+                                .decode_full_res(&path)
+                                .map_err(|e| error!("edit session RAW decode failed: {e}"))
+                                .ok()?
+                        } else {
+                            image::open(&path)
+                                .map_err(|e| error!("edit session decode failed: {e}"))
+                                .ok()?
+                        };
+                        // Skip EXIF orientation for HEIC (libheif pre-applies)
+                        // and RAW (embedded previews / demosaic output are
+                        // pre-oriented).
+                        let img = if matches!(ext.as_str(), "heic" | "heif") || is_raw {
                             img
                         } else {
                             let orientation = crate::library::exif::extract_exif(&path)
