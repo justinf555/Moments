@@ -603,7 +603,7 @@ impl PhotoViewer {
         // ── Assemble ─────────────────────────────────────────────────────────
         let inner = Rc::new(ViewerInner {
             nav_page,
-            toolbar_view,
+            toolbar_view: toolbar_view.clone(),
             picture,
             spinner,
             prev_btn,

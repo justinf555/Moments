@@ -289,7 +289,7 @@ impl VideoViewer {
         // ── Assemble ─────────────────────────────────────────────────────────
         let inner = Rc::new(VideoViewerInner {
             nav_page,
-            toolbar_view,
+            toolbar_view: toolbar_view.clone(),
             video,
             prev_btn,
             next_btn,
