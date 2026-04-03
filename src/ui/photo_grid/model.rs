@@ -409,7 +409,7 @@ impl PhotoGridModel {
 
     fn on_page_loaded(&self, items: Vec<MediaItem>) {
         let count = items.len();
-        debug!("page loaded: {count} items");
+        debug!(filter = ?self.filter(), count, store_len = self.store.n_items(), "page loaded");
 
         // Advance the cursor to the last item so the next page continues
         // exactly where this one left off (keyset pagination).
