@@ -16,9 +16,9 @@ gridview.selection-active > child:selected photo-grid-cell picture {
 
 /* Smaller checkbox overlay on grid cells. */
 photo-grid-cell checkbutton {
-    -gtk-icon-size: 12px;
-    min-height: 16px;
-    min-width: 16px;
+    -gtk-icon-size: 16px;
+    min-height: 24px;
+    min-width: 24px;
 }
 
 /* Taller action bar with larger buttons. */
