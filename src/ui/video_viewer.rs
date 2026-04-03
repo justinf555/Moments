@@ -26,6 +26,8 @@ struct VideoViewerInner {
     items: RefCell<Vec<MediaItemObject>>,
     current_index: Cell<usize>,
     current_metadata: RefCell<Option<MediaMetadataRecord>>,
+    /// Tracks a pending optimistic favourite toggle for rollback on failure.
+    pending_fav: RefCell<Option<(crate::library::media::MediaId, bool)>>,
     library: Arc<dyn Library>,
     tokio: tokio::runtime::Handle,
     bus_sender: EventSender,
@@ -284,6 +286,7 @@ impl VideoViewer {
             items: RefCell::new(Vec::new()),
             current_index: Cell::new(0),
             current_metadata: RefCell::new(None),
+            pending_fav: RefCell::new(None),
             library,
             tokio,
             bus_sender,
@@ -311,7 +314,7 @@ impl VideoViewer {
             });
         }
 
-        // Star (favourite) button
+        // Star (favourite) button — optimistic toggle with rollback on failure.
         {
             let i = Rc::downgrade(&inner);
             inner.star_btn.connect_clicked(move |btn| {
@@ -320,7 +323,8 @@ impl VideoViewer {
                 let idx = inner.current_index.get();
                 let Some(obj) = items.get(idx) else { return };
 
-                let new_fav = !obj.is_favorite();
+                let was_fav = obj.is_favorite();
+                let new_fav = !was_fav;
                 btn.set_icon_name(if new_fav { "starred-symbolic" } else { "non-starred-symbolic" });
                 if new_fav {
                     btn.add_css_class("warning");
@@ -330,6 +334,8 @@ impl VideoViewer {
                 obj.set_is_favorite(new_fav);
 
                 let id = obj.item().id.clone();
+                *inner.pending_fav.borrow_mut() = Some((id.clone(), was_fav));
+
                 inner.bus_sender.send(AppEvent::FavoriteRequested {
                     ids: vec![id],
                     state: new_fav,
@@ -422,7 +428,6 @@ impl VideoViewer {
                 });
             }
 
-            // Delete video — trash + pop back to grid.
             // Stub items — just close the popover on click.
             for name in &["share", "export-original", "show-in-files"] {
                 if let Some(btn) = crate::ui::viewer::find_menu_button(&popover, name) {
@@ -457,6 +462,22 @@ impl VideoViewer {
                     }
                 });
             }
+        }
+
+        // Subscribe to bus: clear pending favourite state on confirmation.
+        {
+            let i = Rc::downgrade(&inner);
+            crate::event_bus::subscribe(move |event| {
+                if let AppEvent::FavoriteChanged { ids, .. } = event {
+                    let Some(inner) = i.upgrade() else { return };
+                    let mut pf = inner.pending_fav.borrow_mut();
+                    if let Some((ref pending_id, _)) = *pf {
+                        if ids.contains(pending_id) {
+                            *pf = None;
+                        }
+                    }
+                }
+            });
         }
 
         Self { inner }

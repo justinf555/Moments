@@ -694,7 +694,7 @@ impl PhotoGridView {
             actions::wire_album_controls(&ctx, album_btn);
         }
 
-        // Subscribe for exit-selection on destructive result events.
+        // Subscribe for exit-selection on result events.
         {
             let exit = self.exit_selection.clone();
             crate::event_bus::subscribe(move |event| {
@@ -702,7 +702,8 @@ impl PhotoGridView {
                     AppEvent::Trashed { .. }
                     | AppEvent::Deleted { .. }
                     | AppEvent::Restored { .. }
-                    | AppEvent::AlbumMediaChanged { .. } => {
+                    | AppEvent::AlbumMediaChanged { .. }
+                    | AppEvent::FavoriteChanged { .. } => {
                         exit.activate(None);
                     }
                     _ => {}
