@@ -3,7 +3,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use adw::prelude::*;
-use gtk::{gio, glib};
+use gtk::{gdk, gio, glib};
 use tracing::debug;
 
 use crate::library::media::MediaMetadataRecord;
@@ -21,7 +21,6 @@ struct VideoViewerInner {
     prev_btn: gtk::Button,
     next_btn: gtk::Button,
     star_btn: gtk::Button,
-    trash_btn: gtk::Button,
     info_split: adw::OverlaySplitView,
     info_panel: InfoPanel,
     items: RefCell<Vec<MediaItemObject>>,
@@ -61,11 +60,17 @@ impl VideoViewerInner {
         {
             let items = self.items.borrow();
             if let Some(obj) = items.get(index) {
-                self.star_btn.set_icon_name(if obj.is_favorite() {
+                let is_fav = obj.is_favorite();
+                self.star_btn.set_icon_name(if is_fav {
                     "starred-symbolic"
                 } else {
                     "non-starred-symbolic"
                 });
+                if is_fav {
+                    self.star_btn.add_css_class("warning");
+                } else {
+                    self.star_btn.remove_css_class("warning");
+                }
             }
         }
 
@@ -178,26 +183,38 @@ pub struct VideoViewer {
 impl VideoViewer {
     pub fn new(library: Arc<dyn Library>, tokio: tokio::runtime::Handle, bus_sender: EventSender) -> Self {
         // ── Header bar ───────────────────────────────────────────────────────
+        //
+        // Layout (pack_end is right-to-left):
+        //   start: [← back]
+        //   end:   [★] [ℹ] [⋮]
+        //
+        // Album, Share, Export, Show in Files, and Delete live in the
+        // overflow menu (⋮).
         let header = adw::HeaderBar::new();
+
+        // ── Overflow menu (far right) ────────────────────────────────────
+        let menu_btn = gtk::MenuButton::builder()
+            .icon_name("view-more-symbolic")
+            .tooltip_text("Menu")
+            .build();
+        let menu_popover = crate::ui::viewer::build_viewer_menu_popover(false);
+        menu_btn.set_popover(Some(&menu_popover));
+        header.pack_end(&menu_btn);
+
+        // ── Info toggle ─────────────────────────────────────────────────
         let info_toggle = gtk::ToggleButton::builder()
-            .icon_name("info-symbolic")
-            .tooltip_text("Video Information")
+            .icon_name("dialog-information-symbolic")
+            .tooltip_text("Video Information (F9)")
             .build();
         header.pack_end(&info_toggle);
 
+        // ── Favourite ───────────────────────────────────────────────────
         let star_btn = gtk::Button::builder()
             .icon_name("non-starred-symbolic")
             .tooltip_text("Toggle Favourite")
             .build();
         star_btn.add_css_class("flat");
         header.pack_end(&star_btn);
-
-        let trash_btn = gtk::Button::builder()
-            .icon_name("user-trash-symbolic")
-            .tooltip_text("Move to Trash")
-            .build();
-        trash_btn.add_css_class("flat");
-        header.pack_start(&trash_btn);
 
         // ── Video ─────────────────────────────────────────────────────────────
         let video = gtk::Video::builder()
@@ -262,7 +279,6 @@ impl VideoViewer {
             prev_btn,
             next_btn,
             star_btn,
-            trash_btn,
             info_split,
             info_panel,
             items: RefCell::new(Vec::new()),
@@ -306,6 +322,11 @@ impl VideoViewer {
 
                 let new_fav = !obj.is_favorite();
                 btn.set_icon_name(if new_fav { "starred-symbolic" } else { "non-starred-symbolic" });
+                if new_fav {
+                    btn.add_css_class("warning");
+                } else {
+                    btn.remove_css_class("warning");
+                }
                 obj.set_is_favorite(new_fav);
 
                 let id = obj.item().id.clone();
@@ -313,31 +334,6 @@ impl VideoViewer {
                     ids: vec![id],
                     state: new_fav,
                 });
-            });
-        }
-
-        // Trash button
-        {
-            let i = Rc::downgrade(&inner);
-            inner.trash_btn.connect_clicked(move |_| {
-                let Some(inner) = i.upgrade() else { return };
-                let id = {
-                    let items = inner.items.borrow();
-                    let idx = inner.current_index.get();
-                    items.get(idx).map(|obj| obj.item().id.clone())
-                };
-                let Some(id) = id else { return };
-
-                inner.bus_sender.send(AppEvent::TrashRequested {
-                    ids: vec![id],
-                });
-
-                if let Some(nav_view) = inner.nav_page
-                    .parent()
-                    .and_then(|p| p.downcast::<adw::NavigationView>().ok())
-                {
-                    nav_view.pop();
-                }
             });
         }
 
@@ -369,27 +365,87 @@ impl VideoViewer {
             });
         }
 
-        // Keyboard navigation (← →)
+        // Keyboard navigation (← → F9)
         {
             let key_ctrl = gtk::EventControllerKey::new();
             toolbar_view.add_controller(key_ctrl.clone());
             let i = Rc::downgrade(&inner);
+            let info_toggle = info_toggle.clone();
             key_ctrl.connect_key_pressed(move |_, keyval, _, _| {
                 let Some(inner) = i.upgrade() else {
                     return glib::Propagation::Proceed;
                 };
                 match keyval {
-                    gtk::gdk::Key::Left | gtk::gdk::Key::KP_Left => {
+                    gdk::Key::Left | gdk::Key::KP_Left => {
                         inner.navigate_prev();
                         glib::Propagation::Stop
                     }
-                    gtk::gdk::Key::Right | gtk::gdk::Key::KP_Right => {
+                    gdk::Key::Right | gdk::Key::KP_Right => {
                         inner.navigate_next();
+                        glib::Propagation::Stop
+                    }
+                    gdk::Key::F9 => {
+                        let active = info_toggle.is_active();
+                        info_toggle.set_active(!active);
                         glib::Propagation::Stop
                     }
                     _ => glib::Propagation::Proceed,
                 }
             });
+        }
+
+        // ── Wire overflow menu buttons ──────────────────────────────────
+        {
+            let popover = menu_popover;
+
+            // Add to album
+            if let Some(btn) = crate::ui::viewer::find_menu_button(&popover, "add-to-album") {
+                let i = Rc::downgrade(&inner);
+                let mb = menu_btn.clone();
+                let pop = popover.downgrade();
+                btn.connect_clicked(move |_| {
+                    if let Some(p) = pop.upgrade() { p.popdown(); }
+                    let Some(inner) = i.upgrade() else { return };
+                    let id = {
+                        let items = inner.items.borrow();
+                        let idx = inner.current_index.get();
+                        items.get(idx).map(|obj| obj.item().id.clone())
+                    };
+                    let Some(id) = id else { return };
+                    crate::ui::album_picker::show_album_picker_on_widget(
+                        mb.upcast_ref::<gtk::Widget>(),
+                        vec![id],
+                        Arc::clone(&inner.library),
+                        inner.tokio.clone(),
+                        inner.bus_sender.clone(),
+                    );
+                });
+            }
+
+            // Delete video — trash + pop back to grid.
+            if let Some(btn) = crate::ui::viewer::find_menu_button(&popover, "delete-photo") {
+                let i = Rc::downgrade(&inner);
+                let pop = popover.downgrade();
+                btn.connect_clicked(move |_| {
+                    if let Some(p) = pop.upgrade() { p.popdown(); }
+                    let Some(inner) = i.upgrade() else { return };
+                    let id = {
+                        let items = inner.items.borrow();
+                        let idx = inner.current_index.get();
+                        items.get(idx).map(|obj| obj.item().id.clone())
+                    };
+                    let Some(id) = id else { return };
+                    inner.bus_sender.send(AppEvent::TrashRequested {
+                        ids: vec![id],
+                    });
+                    if let Some(nav_view) = inner.nav_page
+                        .parent()
+                        .and_then(|p| p.downcast::<adw::NavigationView>().ok())
+                    {
+                        nav_view.pop();
+                    }
+                });
+            }
         }
 
         Self { inner }
@@ -408,3 +464,4 @@ impl VideoViewer {
         self.inner.nav_page.grab_focus();
     }
 }
+
