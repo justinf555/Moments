@@ -162,7 +162,7 @@ Two backends exist:
 
 ### Database
 
-`src/library/db.rs` — backend-agnostic `Database` struct wrapping an `sqlx::SqlitePool`. Used by all backends that need persistence. Migrations live at `src/library/db/migrations/` (001–013) and are embedded via `sqlx::migrate!()`. **Every schema change must be a numbered migration — no ad-hoc `CREATE TABLE IF NOT EXISTS` in code.** Query implementations are split into submodules: `db/media.rs`, `db/albums.rs`, `db/faces.rs`, `db/sync.rs`, `db/thumbnails.rs`, `db/stats.rs`, `db/upload.rs`.
+`src/library/db.rs` — backend-agnostic `Database` struct wrapping an `sqlx::SqlitePool`. Used by all backends that need persistence. Migrations live at `src/library/db/migrations/` (001–014) and are embedded via `sqlx::migrate!()`. **Every schema change must be a numbered migration — no ad-hoc `CREATE TABLE IF NOT EXISTS` in code.** Query implementations are split into submodules: `db/media.rs`, `db/albums.rs`, `db/faces.rs`, `db/sync.rs`, `db/thumbnails.rs`, `db/stats.rs`, `db/upload.rs`.
 
 After any schema change, regenerate the offline query snapshot:
 ```bash
