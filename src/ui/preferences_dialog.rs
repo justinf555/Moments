@@ -31,7 +31,7 @@ pub fn show_preferences(
     appearance_group.set_title("Appearance");
 
     let theme_row = adw::ComboRow::new();
-    theme_row.set_title("Color Scheme");
+    theme_row.set_title("Color scheme");
     let themes = gtk::StringList::new(&["Follow System", "Light", "Dark"]);
     theme_row.set_model(Some(&themes));
 
@@ -72,8 +72,8 @@ pub fn show_preferences(
         1.0,
         0,
     );
-    recent_row.set_title("Recent Imports");
-    recent_row.set_subtitle("Days to show in Recent Imports view");
+    recent_row.set_title("Recent imports");
+    recent_row.set_subtitle("Days to show in recent imports view");
     recent_row.set_value(settings.uint("recent-imports-days") as f64);
     let settings_recent = settings.clone();
     recent_row.connect_changed(move |row| {
@@ -86,7 +86,7 @@ pub fn show_preferences(
         1.0,
         0,
     );
-    trash_row.set_title("Trash Retention");
+    trash_row.set_title("Trash retention");
     trash_row.set_subtitle("Days before trashed items are permanently deleted");
     trash_row.set_value(settings.uint("trash-retention-days") as f64);
     let settings_trash = settings.clone();
@@ -138,7 +138,7 @@ pub fn show_preferences(
             1.0,
             0,
         );
-        cache_row.set_title("Originals Cache Limit");
+        cache_row.set_title("Originals cache limit");
         cache_row.set_subtitle("Maximum disk cache for downloaded originals (MB)");
         cache_row.set_value(settings.uint("originals-cache-max-mb") as f64);
         let settings_cache = settings.clone();
@@ -154,7 +154,7 @@ pub fn show_preferences(
         storage_group.add(&cache_row);
 
         let usage_row = adw::ActionRow::new();
-        usage_row.set_title("Cache Used");
+        usage_row.set_title("Cache used");
         usage_row.set_subtitle("Loading...");
         storage_group.add(&usage_row);
         Some(usage_row)
@@ -225,16 +225,17 @@ pub fn show_preferences(
             server_row.set_subtitle(url);
             conn_group.add(&server_row);
 
-            // Open Immich Web button
-            let open_btn = gtk::Button::with_label("Open Immich Web");
-            open_btn.add_css_class("flat");
-            open_btn.set_halign(gtk::Align::Start);
-            open_btn.set_margin_top(8);
+            // Open Immich web row
+            let open_row = adw::ActionRow::builder()
+                .title("Open Immich web")
+                .activatable(true)
+                .build();
+            open_row.add_suffix(&gtk::Image::from_icon_name("web-browser-symbolic"));
             let url_clone = url.clone();
-            open_btn.connect_clicked(move |_| {
+            open_row.connect_activated(move |_| {
                 let _ = gio::AppInfo::launch_default_for_uri(&url_clone, gio::AppLaunchContext::NONE);
             });
-            conn_group.add(&open_btn);
+            conn_group.add(&open_row);
         }
 
         immich_page.add(&conn_group);
@@ -248,7 +249,7 @@ pub fn show_preferences(
             5.0,
             0,
         );
-        interval_row.set_title("Polling Interval");
+        interval_row.set_title("Polling interval");
         interval_row.set_subtitle("Seconds between sync cycles");
         interval_row.set_value(settings.uint("sync-interval-seconds") as f64);
         let settings_sync = settings.clone();
@@ -280,7 +281,7 @@ pub fn show_preferences(
         server_group.add(&server_videos_row);
 
         let server_disk_row = adw::ActionRow::new();
-        server_disk_row.set_title("Disk Usage");
+        server_disk_row.set_title("Disk usage");
         server_disk_row.set_subtitle("Loading...");
         server_group.add(&server_disk_row);
 

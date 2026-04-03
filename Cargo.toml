@@ -58,6 +58,8 @@ serde_json = "1"
 libsecret = "0.9"
 
 # Utilities
+# Used for Immich protocol compatibility (asset deduplication checksums).
+# Not used for any security function.
 sha1 = "0.10"
 thiserror = "2"
 chrono = "0.4"
