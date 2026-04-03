@@ -1,27 +1,37 @@
-/* Selection highlighting for the photo grid.
+/* ── Selection highlighting for the photo grid ────────────────────────────
  *
- * Only shown when the grid has the .selection-active class (set by
- * enter/exit selection mode). Without the class, clicking cells does
- * not show a selection border — selection is driven by checkboxes.
+ * Custom rule because GtkGridView's default :selected styling is a full
+ * background fill — we need a tight accent-coloured border around each
+ * cell instead.  Only shown when the grid has the .selection-active class
+ * (set by enter/exit selection mode).  Without the class, clicking cells
+ * does not show a selection border — selection is driven by checkboxes.
  */
 gridview.selection-active > child:selected photo-grid-cell {
     border: 3px solid @accent_bg_color;
     border-radius: 6px;
 }
 
-/* Subtle tint on selected cells in selection mode. */
+/* Custom rule: GTK's default :selected state does not dim the picture.
+ * A subtle opacity reduction gives visual feedback that the cell is
+ * selected without obscuring the image content. */
 gridview.selection-active > child:selected photo-grid-cell picture {
     opacity: 0.85;
 }
 
-/* Smaller checkbox overlay on grid cells. */
+/* Custom rule: Adwaita's default GtkCheckButton is too large for a
+ * thumbnail overlay — it covers too much of the image.  These overrides
+ * shrink the icon and hit-target to 24px so the checkbox sits neatly in
+ * the cell corner. */
 photo-grid-cell checkbutton {
     -gtk-icon-size: 16px;
     min-height: 24px;
     min-width: 24px;
 }
 
-/* Taller action bar with larger buttons. */
+/* Custom rule: the default AdwActionBar padding is minimal — extra
+ * vertical padding gives the selection-mode bar visual weight and
+ * separates it from the grid content.  Larger button hit-targets
+ * improve touch usability. */
 .photo-action-bar {
     padding-top: 8px;
     padding-bottom: 8px;
@@ -33,7 +43,10 @@ photo-grid-cell checkbutton {
     padding-right: 16px;
 }
 
-/* Collection grid: circular face thumbnails for People view. */
+/* Custom rule: Adwaita has no built-in "circular clipped image" class.
+ * The People view needs circular face thumbnails, while other collection
+ * grids (albums, places) use rounded rectangles.  The .circular class
+ * toggles between the two shapes via border-radius. */
 collection-grid-cell.circular .collection-thumbnail-frame {
     border-radius: 50%;
 }
@@ -42,19 +55,35 @@ collection-grid-cell .collection-thumbnail-frame {
     border-radius: 8px;
 }
 
-/* Dimmed style for hidden people. */
+/* Custom rule: Adwaita has .dim-label but no whole-widget dimming class.
+ * Hidden people need to be visually de-emphasised while remaining
+ * recognisable, so we reduce opacity on the entire cell. */
 collection-grid-cell.hidden-person {
     opacity: 0.4;
 }
 
-/* Eye-slash overlay icon on hidden person thumbnails. */
+/* Custom rule: the eye-slash overlay icon on hidden-person thumbnails
+ * must be visible on top of arbitrary photo content.  We use a text
+ * shadow for contrast against both light and dark images.  The white
+ * colour and dark shadow are intentional — this renders on top of photo
+ * pixels, not on a theme-controlled background, so Adwaita colour
+ * variables would not guarantee legibility. */
 collection-grid-cell .hidden-icon {
     color: white;
     opacity: 1;
     -gtk-icon-shadow: 0 1px 3px rgba(0,0,0,0.6);
 }
 
-/* ── Filter swatches in the edit panel ─────────────────────────────────── */
+/* ── Filter swatches in the edit panel ─────────────────────────────────
+ *
+ * Each swatch is a small coloured preview representing the visual tone
+ * of a photo filter.  The gradient colours are intentionally hardcoded
+ * because they depict the filter's colour effect (warm tones, cool tones,
+ * black-and-white, etc.) — they are artistic constants, not UI chrome.
+ * Using Adwaita theme variables would make every filter swatch look
+ * identical and defeat the purpose.  These render inside bordered
+ * buttons so they work in both light and dark themes.
+ */
 
 .filter-swatch {
     border-radius: 10px;
@@ -64,13 +93,13 @@ collection-grid-cell .hidden-icon {
     padding: 2px;
 }
 
-.filter-none  { background: linear-gradient(135deg, #e8e8e8, #c0c0c0); }
-.filter-bw    { background: linear-gradient(135deg, #666666, #333333); }
-.filter-vivid { background: linear-gradient(135deg, #e07020, #3080d0); }
-.filter-cool  { background: linear-gradient(135deg, #6090c0, #90b8e0); }
-.filter-warm  { background: linear-gradient(135deg, #d09050, #e0b070); }
-.filter-fade  { background: linear-gradient(135deg, #b8b8b8, #989898); }
-.filter-noir  { background: linear-gradient(135deg, #444444, #111111); }
+.filter-none   { background: linear-gradient(135deg, #e8e8e8, #c0c0c0); }
+.filter-bw     { background: linear-gradient(135deg, #666666, #333333); }
+.filter-vivid  { background: linear-gradient(135deg, #e07020, #3080d0); }
+.filter-cool   { background: linear-gradient(135deg, #6090c0, #90b8e0); }
+.filter-warm   { background: linear-gradient(135deg, #d09050, #e0b070); }
+.filter-fade   { background: linear-gradient(135deg, #b8b8b8, #989898); }
+.filter-noir   { background: linear-gradient(135deg, #444444, #111111); }
 .filter-chrome { background: linear-gradient(135deg, #a0a0a0, #606060); }
-.filter-matte { background: linear-gradient(135deg, #c0b8a8, #989080); }
+.filter-matte  { background: linear-gradient(135deg, #c0b8a8, #989080); }
 .filter-golden { background: linear-gradient(135deg, #d0a030, #c09020); }
