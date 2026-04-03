@@ -277,19 +277,19 @@ pub fn build_factory(
 
 /// Build a human-readable accessible label from a media item's filename and
 /// capture date, e.g. "IMG_1319.jpeg, 7 September 2024".
+///
+/// Uses `glib::DateTime` instead of `chrono` so that month names respect the
+/// system locale (important for i18n / GNOME Circle).
 fn accessible_label_for_media(item: &MediaItem) -> String {
     if let Some(ts) = item.taken_at {
-        // Note: %B produces English month names regardless of locale.
-        use chrono::TimeZone;
-        let dt = chrono::Utc
-            .timestamp_opt(ts, 0)
-            .single()
-            .map(|d: chrono::DateTime<chrono::Utc>| d.format("%e %B %Y").to_string())
-            .unwrap_or_default();
-        if dt.is_empty() {
-            item.original_filename.clone()
-        } else {
-            format!("{}, {}", item.original_filename, dt.trim())
+        let date_str = glib::DateTime::from_unix_utc(ts)
+            .ok()
+            .and_then(|d| d.to_local().ok())
+            .and_then(|d| d.format("%e %B %Y").ok())
+            .map(|s| s.to_string());
+        match date_str {
+            Some(dt) if !dt.is_empty() => format!("{}, {}", item.original_filename, dt.trim()),
+            _ => item.original_filename.clone(),
         }
     } else {
         item.original_filename.clone()
