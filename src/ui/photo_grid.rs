@@ -263,26 +263,26 @@ impl PhotoGrid {
         set_empty_state_for_filter(empty_page, &filter);
 
         // Show/hide empty state based on model item count.
-        {
+        // Shared closure: called from items_changed (when items are added/
+        // removed) and from on_page_ready (covers the case where load_more
+        // returns 0 items and items_changed never fires).
+        let update_empty: Rc<dyn Fn()> = {
             let stack = stack.clone();
             let store = model.store.clone();
-            let update_empty = move || {
+            Rc::new(move || {
                 let name = if store.n_items() == 0 { "empty" } else { "grid" };
                 stack.set_visible_child_name(name);
-            };
-            // Update on every model change. The initial state stays on "grid"
-            // until load_more completes — avoids a flash of the empty state
-            // before items arrive.
-            model.store.connect_items_changed(move |_, _, _, _| update_empty());
+            })
+        };
+        {
+            let update = Rc::clone(&update_empty);
+            model.store.connect_items_changed(move |_, _, _, _| update());
         }
 
         // Fetch the first page immediately.
         model.load_more();
 
         // Load further pages as the user scrolls toward the bottom.
-        // Triggers when the scroll position passes 75% of the loaded content,
-        // which gives enough lead time for the next page to load before the
-        // user reaches the end — even during fast scrollbar drags.
         let model_scroll = Rc::clone(&model);
         let adj = scrolled.vadjustment();
         adj.connect_value_changed(move |adj| {
@@ -293,12 +293,13 @@ impl PhotoGrid {
             }
         });
 
-        // After each page loads, re-check whether more pages are needed.
-        // Handles fast scrollbar drags where the user jumps far past the
-        // loaded content in a single gesture.
+        // After each page loads, re-check whether more pages are needed
+        // and update the empty state.
         let model_ready = Rc::clone(&model);
         let adj_ready = scrolled.vadjustment();
+        let update_on_ready = Rc::clone(&update_empty);
         model.set_on_page_ready(move || {
+            update_on_ready();
             let visible_end = adj_ready.value() + adj_ready.page_size();
             let trigger_point = adj_ready.upper() * 0.75;
             if visible_end >= trigger_point {
