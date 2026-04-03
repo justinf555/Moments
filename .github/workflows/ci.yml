@@ -9,8 +9,6 @@ jobs:
   test:
     name: Unit tests
     runs-on: ubuntu-latest
-    container:
-      image: fedora:43
 
     env:
       SQLX_OFFLINE: "true"
@@ -18,21 +16,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install system dependencies
+      - name: Install Flatpak and GNOME 50 SDK
         run: |
-          dnf install -y \
-            cargo \
-            gtk4-devel \
-            libadwaita-devel \
-            gettext-devel \
-            libheif-devel \
-            gstreamer1-devel \
-            gstreamer1-plugins-base-devel \
-            libsecret-devel \
-            pkg-config
-
-      - name: Configure sccache
-        uses: mozilla-actions/sccache-action@v0.0.7
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq flatpak
+          sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install -y --noninteractive flathub \
+            org.gnome.Sdk//50 \
+            org.gnome.Platform//50 \
+            org.freedesktop.Sdk.Extension.rust-stable//25.08
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -40,8 +32,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: fedora43-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: fedora43-cargo-
+          key: gnome50-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: gnome50-cargo-
 
       - name: Generate config.rs stub
         run: |
@@ -53,44 +45,39 @@ jobs:
           EOF
 
       - name: Run tests
-        run: cargo test
-
-      - name: Show sccache stats
-        if: always()
-        run: sccache --show-stats
+        run: |
+          flatpak run \
+            --share=network \
+            --filesystem="$(pwd)" \
+            --filesystem=~/.cargo:create \
+            --env=SQLX_OFFLINE=true \
+            --env=CARGO_HOME=$HOME/.cargo \
+            --command=bash \
+            org.gnome.Sdk//50 -c '
+              source /usr/lib/sdk/rust-stable/enable.sh
+              cd '"$(pwd)"'
+              cargo test
+            '
 
   integration-tests:
     name: Integration tests
     runs-on: ubuntu-latest
-    container:
-      image: fedora:43
 
     env:
       SQLX_OFFLINE: "true"
-      GSK_RENDERER: "cairo"
-      GTK_A11Y: "none"
-      GIO_USE_VFS: "local"
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install system dependencies
+      - name: Install Flatpak, GNOME 50 SDK, and mutter
         run: |
-          dnf install -y \
-            cargo \
-            gtk4-devel \
-            libadwaita-devel \
-            gettext-devel \
-            libheif-devel \
-            gstreamer1-devel \
-            gstreamer1-plugins-base-devel \
-            libsecret-devel \
-            pkg-config \
-            mutter \
-            dbus-x11
-
-      - name: Configure sccache
-        uses: mozilla-actions/sccache-action@v0.0.7
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq flatpak mutter dbus-x11
+          sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install -y --noninteractive flathub \
+            org.gnome.Sdk//50 \
+            org.gnome.Platform//50 \
+            org.freedesktop.Sdk.Extension.rust-stable//25.08
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -98,8 +85,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: fedora43-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: fedora43-cargo-
+          key: gnome50-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: gnome50-cargo-
 
       - name: Generate config.rs stub
         run: |
@@ -115,10 +102,33 @@ jobs:
           export XDG_RUNTIME_DIR=/tmp/runtime-$$
           mkdir -p "$XDG_RUNTIME_DIR"
           chmod 700 "$XDG_RUNTIME_DIR"
+
+          # Write a wrapper script that mutter will exec — at that point
+          # WAYLAND_DISPLAY is set and the socket exists.
+          cat > /tmp/run-tests.sh <<SCRIPT
+          #!/bin/bash
+          set -e
+          flatpak run \
+            --share=network \
+            --filesystem="$(pwd)" \
+            --filesystem=~/.cargo:create \
+            --filesystem=\$XDG_RUNTIME_DIR \
+            --env=SQLX_OFFLINE=true \
+            --env=CARGO_HOME=$HOME/.cargo \
+            --env=GSK_RENDERER=cairo \
+            --env=GTK_A11Y=none \
+            --env=GIO_USE_VFS=local \
+            --env=XDG_RUNTIME_DIR=\$XDG_RUNTIME_DIR \
+            --env=WAYLAND_DISPLAY=\$WAYLAND_DISPLAY \
+            --command=bash \
+            org.gnome.Sdk//50 -c '
+              source /usr/lib/sdk/rust-stable/enable.sh
+              cd $(pwd)
+              cargo test --features integration-tests -- --test-threads=1
+            '
+          SCRIPT
+          chmod +x /tmp/run-tests.sh
+
           dbus-run-session \
             mutter --headless --wayland --no-x11 --virtual-monitor 1024x768 -- \
-            cargo test --features integration-tests -- --test-threads=1
-
-      - name: Show sccache stats
-        if: always()
-        run: sccache --show-stats
+            /tmp/run-tests.sh
