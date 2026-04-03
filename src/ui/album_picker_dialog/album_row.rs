@@ -33,19 +33,24 @@ impl AlbumRow {
             .build();
 
         // ── Thumbnail (48×48) ───────────────────────────────────────────
+        // Pixels are pre-decoded on the Tokio thread to avoid blocking
+        // the GTK thread with synchronous file I/O.
         let thumbnail = gtk::Image::builder()
             .pixel_size(48)
             .build();
         thumbnail.add_css_class("icon-dropshadow");
 
-        if let Some(ref path) = entry.thumbnail_path {
-            if path.exists() {
-                if let Ok(texture) = gtk::gdk::Texture::from_filename(path) {
-                    thumbnail.set_paintable(Some(&texture));
-                }
-            }
-        }
-        if thumbnail.paintable().is_none() {
+        if let Some((ref pixels, width, height)) = entry.thumbnail_rgba {
+            let gbytes = glib::Bytes::from(pixels);
+            let texture = gtk::gdk::MemoryTexture::new(
+                width as i32,
+                height as i32,
+                gtk::gdk::MemoryFormat::R8g8b8a8,
+                &gbytes,
+                (width as usize) * 4,
+            );
+            thumbnail.set_paintable(Some(&texture));
+        } else {
             thumbnail.set_icon_name(Some("folder-pictures-symbolic"));
         }
 
@@ -104,10 +109,16 @@ impl AlbumRow {
         check_icon.add_css_class("accent");
         hbox.append(&check_icon);
 
+        let all_already_added = total_selected > 0
+            && entry.already_added_count >= total_selected;
+
         let row = gtk::ListBoxRow::builder()
             .child(&hbox)
-            .activatable(true)
+            .activatable(!all_already_added)
             .build();
+        if all_already_added {
+            row.set_sensitive(false);
+        }
         row.set_widget_name(entry.id.as_str());
 
         AlbumRow {
@@ -131,24 +142,51 @@ impl AlbumRow {
 }
 
 /// Highlight occurrences of `query` in `name` using Pango bold markup.
+///
+/// Matches are case-insensitive. Uses char-based offset mapping to handle
+/// cases where lowercasing changes byte lengths (e.g. "İ" → "i\u{307}").
 fn highlight_name(name: &str, query: &str) -> String {
     if query.is_empty() {
         return glib::markup_escape_text(name).to_string();
     }
     let lower_name = name.to_lowercase();
     let lower_query = query.to_lowercase();
-    let mut result = String::new();
-    let mut last_end = 0;
 
-    for (start, _) in lower_name.match_indices(&lower_query) {
-        let end = start + query.len();
-        result.push_str(&glib::markup_escape_text(&name[last_end..start]));
+    // Build a mapping from byte offsets in lower_name to byte offsets in name
+    // by walking both strings char-by-char.
+    let char_map: Vec<(usize, usize)> = name
+        .char_indices()
+        .zip(lower_name.char_indices())
+        .map(|((orig_pos, _), (lower_pos, _))| (lower_pos, orig_pos))
+        .collect();
+    // Sentinel for end-of-string.
+    let map_end = (lower_name.len(), name.len());
+
+    let map_to_orig = |lower_byte: usize| -> usize {
+        char_map
+            .iter()
+            .find(|(lb, _)| *lb >= lower_byte)
+            .map(|(_, ob)| *ob)
+            .unwrap_or(map_end.1)
+    };
+
+    let mut result = String::new();
+    let mut last_lower_end = 0;
+
+    for (lower_start, matched) in lower_name.match_indices(&lower_query) {
+        let lower_end = lower_start + matched.len();
+        let orig_start = map_to_orig(lower_start);
+        let orig_end = map_to_orig(lower_end);
+        let orig_last = map_to_orig(last_lower_end);
+
+        result.push_str(&glib::markup_escape_text(&name[orig_last..orig_start]));
         result.push_str("<b>");
-        result.push_str(&glib::markup_escape_text(&name[start..end]));
+        result.push_str(&glib::markup_escape_text(&name[orig_start..orig_end]));
         result.push_str("</b>");
-        last_end = end;
+        last_lower_end = lower_end;
     }
-    result.push_str(&glib::markup_escape_text(&name[last_end..]));
+    let orig_last = map_to_orig(last_lower_end);
+    result.push_str(&glib::markup_escape_text(&name[orig_last..]));
     result
 }
 

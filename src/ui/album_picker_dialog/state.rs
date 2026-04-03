@@ -27,6 +27,9 @@ pub struct AlbumEntry {
     pub media_count: u32,
     /// Filesystem path to the cover thumbnail, if available.
     pub thumbnail_path: Option<PathBuf>,
+    /// Pre-decoded thumbnail pixels (RGBA, width, height).
+    /// Decoded on the Tokio thread to avoid blocking the GTK thread.
+    pub thumbnail_rgba: Option<(Vec<u8>, u32, u32)>,
     /// How many of the selected media items are already in this album.
     /// `0` = none added, `N` = N of the selection are already present.
     pub already_added_count: usize,

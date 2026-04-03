@@ -60,6 +60,42 @@ pub fn show_album_picker_dialog(
             }
         };
 
+        // Resolve thumbnail paths and pre-decode on Tokio to avoid
+        // blocking the GTK thread with synchronous file I/O.
+        let thumb_entries: Vec<_> = albums
+            .iter()
+            .map(|a| {
+                let path = a.cover_media_id.as_ref().map(|mid| lib.thumbnail_path(mid));
+                (a.id.clone(), path)
+            })
+            .collect();
+
+        let decoded = tk
+            .spawn(async move {
+                tokio::task::spawn_blocking(move || {
+                    thumb_entries
+                        .into_iter()
+                        .map(|(id, path)| {
+                            let rgba = path.and_then(|p| {
+                                let data = std::fs::read(&p).ok()?;
+                                let img = image::load_from_memory(&data).ok()?;
+                                let rgba = img.to_rgba8();
+                                let (w, h) = image::GenericImageView::dimensions(&rgba);
+                                Some((rgba.into_raw(), w, h))
+                            });
+                            (id, rgba)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await
+                .unwrap_or_default()
+            })
+            .await
+            .unwrap_or_default();
+
+        let decoded_map: std::collections::HashMap<_, _> =
+            decoded.into_iter().collect();
+
         let Some(parent) = parent_weak.upgrade() else {
             return;
         };
@@ -68,14 +104,15 @@ pub fn show_album_picker_dialog(
             .into_iter()
             .map(|a| {
                 let already = containing.get(&a.id).copied().unwrap_or(0);
+                let thumbnail_rgba = decoded_map
+                    .get(&a.id)
+                    .and_then(|opt| opt.clone());
                 AlbumEntry {
-                    thumbnail_path: a
-                        .cover_media_id
-                        .as_ref()
-                        .map(|mid| lib.thumbnail_path(mid)),
+                    thumbnail_path: None,
                     id: a.id,
                     name: a.name,
                     media_count: a.media_count,
+                    thumbnail_rgba,
                     already_added_count: already,
                 }
             })
