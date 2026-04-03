@@ -283,7 +283,8 @@ pub fn build_factory(
 fn accessible_label_for_media(item: &MediaItem) -> String {
     if let Some(ts) = item.taken_at {
         let date_str = glib::DateTime::from_unix_utc(ts)
-            .and_then(|d| d.to_local())
+            .ok()
+            .and_then(|d| d.to_local().ok())
             .and_then(|d| d.format("%e %B %Y").ok())
             .map(|s| s.to_string());
         match date_str {
