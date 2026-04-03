@@ -629,6 +629,13 @@ impl LibraryAlbums for ImmichLibrary {
     ) -> Result<Vec<MediaItem>, LibraryError> {
         self.db.list_album_media(album_id, cursor, limit).await
     }
+
+    async fn albums_containing_media(
+        &self,
+        media_ids: &[MediaId],
+    ) -> Result<std::collections::HashMap<AlbumId, usize>, LibraryError> {
+        self.db.albums_containing_media(media_ids).await
+    }
 }
 
 #[async_trait]
