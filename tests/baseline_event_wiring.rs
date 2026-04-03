@@ -55,7 +55,7 @@ fn test_item_at(id: &str, taken_at: i64) -> MediaItem {
 
 fn make_model(filter: MediaFilter) -> Rc<PhotoGridModel> {
     let (lib, tokio) = stub_deps();
-    Rc::new(PhotoGridModel::new(lib, tokio, filter))
+    Rc::new(PhotoGridModel::new(lib, tokio, filter, moments::event_bus::EventSender::no_op()))
 }
 
 // ── MediaItemObject property tests ──────────────────────────────────────────

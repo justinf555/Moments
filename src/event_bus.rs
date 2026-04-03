@@ -141,6 +141,12 @@ pub struct EventSender {
 }
 
 impl EventSender {
+    /// Create a no-op sender for testing. Events are sent but never drained.
+    pub fn no_op() -> Self {
+        let (tx, _rx) = mpsc::channel();
+        Self { tx }
+    }
+
     /// Send an event. Safe to call from any thread.
     ///
     /// The event is delivered to all subscribers on the next GTK main
