@@ -223,32 +223,35 @@ impl ViewerInner {
                 return;
             }
 
-            // Guard: RAW formats are not yet supported for full-res viewing (#316).
-            if crate::library::format::registry::RAW_EXTENSIONS.contains(&ext.as_str()) {
-                inner.spinner.set_spinning(false);
-                inner.spinner.set_visible(false);
-                inner.bus_sender.send(AppEvent::Error(
-                    "Full-resolution RAW viewing is not yet supported".into(),
-                ));
-                return;
-            }
-
-            // Decode via `image` crate with EXIF orientation applied.
+            // Decode full-res image on a blocking thread.
+            // RAW formats use rawler; standard formats use the image crate.
+            let is_raw = crate::library::format::registry::RAW_EXTENSIONS
+                .contains(&ext.as_str());
             let pixels: Option<(Vec<u8>, i32, i32)> = tokio
                 .spawn(async move {
                     tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, i32, i32)> {
-                        let img = image::open(&path)
-                            .map_err(|e| debug!("full-res decode failed: {e}"))
-                            .ok()?;
-                        // Skip orientation for HEIC/HEIF — libheif applies it
-                        // automatically during decode. Applying again would
-                        // double-rotate.
+                        let img = if is_raw {
+                            use crate::library::format::raw::RawHandler;
+                            RawHandler
+                                .decode_full_res(&path)
+                                .map_err(|e| debug!("RAW full-res decode failed: {e}"))
+                                .ok()?
+                        } else {
+                            image::open(&path)
+                                .map_err(|e| debug!("full-res decode failed: {e}"))
+                                .ok()?
+                        };
+                        // Skip orientation for HEIC/HEIF (libheif applies it
+                        // automatically) and RAW (embedded JPEG previews from
+                        // cameras are typically pre-rotated; full demosaic
+                        // output from rawler is also pre-oriented). Applying
+                        // EXIF orientation again would double-rotate.
                         let ext = path
                             .extension()
                             .and_then(|e| e.to_str())
                             .map(|e| e.to_lowercase())
                             .unwrap_or_default();
-                        let img = if matches!(ext.as_str(), "heic" | "heif") {
+                        let img = if matches!(ext.as_str(), "heic" | "heif") || is_raw {
                             img
                         } else {
                             let orientation = crate::library::exif::extract_exif(&path)
@@ -349,16 +352,28 @@ impl ViewerInner {
             let preview = tk
                 .spawn(async move {
                     tokio::task::spawn_blocking(move || -> Option<Arc<image::DynamicImage>> {
-                        let img = image::open(&path)
-                            .map_err(|e| error!("edit session decode failed: {e}"))
-                            .ok()?;
-                        // Apply EXIF orientation (skip for HEIC).
                         let ext = path
                             .extension()
                             .and_then(|e| e.to_str())
                             .map(|e| e.to_lowercase())
                             .unwrap_or_default();
-                        let img = if matches!(ext.as_str(), "heic" | "heif") {
+                        let is_raw = crate::library::format::registry::RAW_EXTENSIONS
+                            .contains(&ext.as_str());
+                        let img = if is_raw {
+                            use crate::library::format::raw::RawHandler;
+                            RawHandler
+                                .decode_full_res(&path)
+                                .map_err(|e| error!("edit session RAW decode failed: {e}"))
+                                .ok()?
+                        } else {
+                            image::open(&path)
+                                .map_err(|e| error!("edit session decode failed: {e}"))
+                                .ok()?
+                        };
+                        // Skip EXIF orientation for HEIC (libheif pre-applies)
+                        // and RAW (embedded previews / demosaic output are
+                        // pre-oriented).
+                        let img = if matches!(ext.as_str(), "heic" | "heif") || is_raw {
                             img
                         } else {
                             let orientation = crate::library::exif::extract_exif(&path)
