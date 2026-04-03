@@ -102,23 +102,33 @@ jobs:
           export XDG_RUNTIME_DIR=/tmp/runtime-$$
           mkdir -p "$XDG_RUNTIME_DIR"
           chmod 700 "$XDG_RUNTIME_DIR"
+
+          # Write a wrapper script that mutter will exec — at that point
+          # WAYLAND_DISPLAY is set and the socket exists.
+          cat > /tmp/run-tests.sh <<SCRIPT
+          #!/bin/bash
+          set -e
+          flatpak run \
+            --share=network \
+            --filesystem="$(pwd)" \
+            --filesystem=~/.cargo:create \
+            --filesystem=\$XDG_RUNTIME_DIR \
+            --env=SQLX_OFFLINE=true \
+            --env=CARGO_HOME=$HOME/.cargo \
+            --env=GSK_RENDERER=cairo \
+            --env=GTK_A11Y=none \
+            --env=GIO_USE_VFS=local \
+            --env=XDG_RUNTIME_DIR=\$XDG_RUNTIME_DIR \
+            --env=WAYLAND_DISPLAY=\$WAYLAND_DISPLAY \
+            --command=bash \
+            org.gnome.Sdk//50 -c '
+              source /usr/lib/sdk/rust-stable/enable.sh
+              cd $(pwd)
+              cargo test --features integration-tests -- --test-threads=1
+            '
+          SCRIPT
+          chmod +x /tmp/run-tests.sh
+
           dbus-run-session \
             mutter --headless --wayland --no-x11 --virtual-monitor 1024x768 -- \
-            flatpak run \
-              --share=network \
-              --filesystem="$(pwd)" \
-              --filesystem=~/.cargo:create \
-              --socket=wayland \
-              --env=SQLX_OFFLINE=true \
-              --env=CARGO_HOME=$HOME/.cargo \
-              --env=GSK_RENDERER=cairo \
-              --env=GTK_A11Y=none \
-              --env=GIO_USE_VFS=local \
-              --env=XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
-              --env=WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
-              --command=bash \
-              org.gnome.Sdk//50 -c '
-                source /usr/lib/sdk/rust-stable/enable.sh
-                cd '"$(pwd)"'
-                cargo test --features integration-tests -- --test-threads=1
-              '
+            /tmp/run-tests.sh
