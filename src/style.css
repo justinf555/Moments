@@ -57,8 +57,9 @@ collection-grid-cell .collection-thumbnail-frame {
 
 /* Custom rule: Adwaita has .dim-label but no whole-widget dimming class.
  * Hidden people need to be visually de-emphasised while remaining
- * recognisable, so we reduce opacity on the entire cell. */
-collection-grid-cell.hidden-person {
+ * recognisable, so we reduce opacity on the thumbnail only (not the
+ * whole cell) so the overlay icon remains fully visible. */
+collection-grid-cell.hidden-person .collection-thumbnail-frame {
     opacity: 0.4;
 }
 
@@ -70,7 +71,6 @@ collection-grid-cell.hidden-person {
  * variables would not guarantee legibility. */
 collection-grid-cell .hidden-icon {
     color: white;
-    opacity: 1;
     -gtk-icon-shadow: 0 1px 3px rgba(0,0,0,0.6);
 }
 
