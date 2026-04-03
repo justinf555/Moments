@@ -410,13 +410,22 @@ impl MomentsSidebar {
     pub fn connect_route_selected<F: Fn(&str) + 'static>(&self, f: F) {
         let list_box = self.imp().list_box.get().unwrap().clone();
         list_box.connect_row_selected(move |_, row| {
-            let Some(row) = row else { return };
-            let Some(child) = row.child() else { return };
+            debug!("row_selected signal fired, row={}", row.is_some());
+            let Some(row) = row else {
+                debug!("row_selected: row is None, returning");
+                return;
+            };
+            let Some(child) = row.child() else {
+                debug!("row_selected: row has no child, returning");
+                return;
+            };
             let Some(sidebar_row) = child.downcast_ref::<MomentsSidebarRow>() else {
+                debug!("row_selected: child is not MomentsSidebarRow (type: {}), returning",
+                    child.type_().name());
                 return;
             };
             let id = sidebar_row.route_id().to_owned();
-            debug!(route = %id, "sidebar route selected");
+            debug!(route = %id, "sidebar route selected — dispatching to coordinator");
             f(&id);
         });
     }

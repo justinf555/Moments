@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::app_event::AppEvent;
 use crate::event_bus::EventSender;
@@ -24,8 +24,10 @@ impl CommandHandler for RestoreCommand {
         bus: &EventSender,
     ) {
         let AppEvent::RestoreRequested { ids } = event else { return };
+        debug!(count = ids.len(), "RestoreCommand: restoring items");
         match library.restore(&ids).await {
             Ok(()) => {
+                debug!(count = ids.len(), "RestoreCommand: success, sending Restored event");
                 bus.send(AppEvent::Restored { ids });
             }
             Err(e) => {

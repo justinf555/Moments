@@ -379,6 +379,13 @@ impl PhotoGridModel {
 
     /// Called when an item is trashed or restored in any view.
     pub fn on_trashed(self: &Rc<Self>, id: &MediaId, is_trashed: bool) {
+        debug!(
+            id = %id,
+            is_trashed = is_trashed,
+            filter = ?self.filter(),
+            store_len = self.store.n_items(),
+            "on_trashed called"
+        );
         match self.filter.borrow().clone() {
             MediaFilter::All | MediaFilter::Favorites | MediaFilter::RecentImports { .. } | MediaFilter::Album { .. } | MediaFilter::Person { .. } => {
                 if is_trashed {
