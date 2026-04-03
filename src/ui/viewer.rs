@@ -190,6 +190,9 @@ impl ViewerInner {
                 None => {
                     inner.spinner.set_spinning(false);
                     inner.spinner.set_visible(false);
+                    inner.bus_sender.send(AppEvent::Error(
+                        "Could not find original photo".into(),
+                    ));
                     return;
                 }
             };
@@ -253,20 +256,28 @@ impl ViewerInner {
                 return;
             }
 
-            if let Some((raw, width, height)) = pixels {
-                let gbytes = glib::Bytes::from_owned(raw);
-                let texture = gdk::MemoryTexture::new(
-                    width,
-                    height,
-                    gdk::MemoryFormat::R8g8b8a8,
-                    &gbytes,
-                    (width as usize) * 4,
-                )
-                .upcast::<gdk::Texture>();
-                inner
-                    .picture
-                    .set_paintable(Some(texture.upcast_ref::<gdk::Paintable>()));
-                debug!("full-res via MemoryTexture: {width}×{height}");
+            match pixels {
+                Some((raw, width, height)) => {
+                    let gbytes = glib::Bytes::from_owned(raw);
+                    let texture = gdk::MemoryTexture::new(
+                        width,
+                        height,
+                        gdk::MemoryFormat::R8g8b8a8,
+                        &gbytes,
+                        (width as usize) * 4,
+                    )
+                    .upcast::<gdk::Texture>();
+                    inner
+                        .picture
+                        .set_paintable(Some(texture.upcast_ref::<gdk::Paintable>()));
+                    debug!("full-res via MemoryTexture: {width}×{height}");
+                }
+                None => {
+                    debug!("full-res decode failed, keeping thumbnail");
+                    inner.bus_sender.send(AppEvent::Error(
+                        "Could not display full-resolution image".into(),
+                    ));
+                }
             }
         });
     }
