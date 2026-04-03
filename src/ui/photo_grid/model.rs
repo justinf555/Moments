@@ -128,7 +128,7 @@ impl PhotoGridModel {
                     if !already_present {
                         self.insert_item_sorted(item.clone());
                     }
-                } else if already_present {
+                } else if already_present && filter.supports_inline_match() {
                     // Item no longer matches this view's filter (e.g. it was
                     // restored on the server, so is_trashed flipped to false).
                     // Remove it so stale entries don't linger in filtered views.
