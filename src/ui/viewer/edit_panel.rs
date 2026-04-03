@@ -67,6 +67,8 @@ pub struct EditPanel {
     adjust_subtitle: Rc<RefCell<Option<gtk::Label>>>,
     /// All adjust slider scales, for resetting on revert.
     adjust_scales: Rc<RefCell<Vec<gtk::Scale>>>,
+    /// Bus sender for emitting user-facing error toasts.
+    bus_sender: crate::event_bus::EventSender,
 }
 
 impl EditPanel {
@@ -74,6 +76,7 @@ impl EditPanel {
         picture: gtk::Picture,
         library: Arc<dyn Library>,
         tokio: tokio::runtime::Handle,
+        bus_sender: crate::event_bus::EventSender,
     ) -> Self {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
@@ -102,6 +105,7 @@ impl EditPanel {
             filter_subtitle,
             adjust_subtitle,
             adjust_scales,
+            bus_sender,
         };
 
         panel.build_ui();
@@ -180,6 +184,7 @@ impl EditPanel {
                 let lib = Arc::clone(&self.library);
                 let tk = self.tokio.clone();
                 let id_log = id.clone();
+                let tx = self.bus_sender.clone();
                 glib::MainContext::default().spawn_local(async move {
                     let start = Instant::now();
                     let result = tk
@@ -193,8 +198,14 @@ impl EditPanel {
                             reason,
                             "delete identity edit state"
                         ),
-                        Ok(Err(e)) => error!("delete edit state failed: {e}"),
-                        Err(e) => error!("delete edit state join failed: {e}"),
+                        Ok(Err(e)) => {
+                            error!("delete edit state failed: {e}");
+                            tx.send(crate::app_event::AppEvent::Error("Could not revert edits".into()));
+                        }
+                        Err(e) => {
+                            error!("delete edit state join failed: {e}");
+                            tx.send(crate::app_event::AppEvent::Error("Could not revert edits".into()));
+                        }
                     }
                 });
                 return;
@@ -213,6 +224,7 @@ impl EditPanel {
         let lib = Arc::clone(&self.library);
         let tk = self.tokio.clone();
         let id_log = id.clone();
+        let tx = self.bus_sender.clone();
 
         glib::MainContext::default().spawn_local(async move {
             let start = Instant::now();
@@ -240,8 +252,14 @@ impl EditPanel {
                         );
                     }
                 }
-                Ok(Err(e)) => error!("save edit state failed: {e}"),
-                Err(e) => error!("save edit state join failed: {e}"),
+                Ok(Err(e)) => {
+                    error!("save edit state failed: {e}");
+                    tx.send(crate::app_event::AppEvent::Error("Could not save edits".into()));
+                }
+                Err(e) => {
+                    error!("save edit state join failed: {e}");
+                    tx.send(crate::app_event::AppEvent::Error("Could not save edits".into()));
+                }
             }
         });
     }
@@ -338,6 +356,7 @@ impl EditPanel {
             let filter_subtitle = Rc::clone(&self.filter_subtitle);
             let adjust_subtitle = Rc::clone(&self.adjust_subtitle);
             let adjust_scales = Rc::clone(&self.adjust_scales);
+            let tx = self.bus_sender.clone();
             revert_btn.connect_clicked(move |_| {
                 // Cancel any pending auto-save.
                 if let Some(id) = save_debounce.take() {
@@ -409,6 +428,7 @@ impl EditPanel {
                     let lib = Arc::clone(&library);
                     let tk = tokio.clone();
                     let id_log = id.clone();
+                    let tx = tx.clone();
                     glib::MainContext::default().spawn_local(async move {
                         let start = Instant::now();
                         let result =
@@ -420,8 +440,14 @@ impl EditPanel {
                                 elapsed_ms = elapsed.as_millis(),
                                 "revert edits"
                             ),
-                            Ok(Err(e)) => error!("revert edits failed: {e}"),
-                            Err(e) => error!("revert edits join failed: {e}"),
+                            Ok(Err(e)) => {
+                                error!("revert edits failed: {e}");
+                                tx.send(crate::app_event::AppEvent::Error("Could not revert edits".into()));
+                            }
+                            Err(e) => {
+                                error!("revert edits join failed: {e}");
+                                tx.send(crate::app_event::AppEvent::Error("Could not revert edits".into()));
+                            }
                         }
                     });
                 }
@@ -909,6 +935,7 @@ impl EditPanel {
         let library = Arc::clone(&self.library);
         let tokio = self.tokio.clone();
         let save_in_flight = Rc::clone(&self.save_in_flight);
+        let bus_sender = self.bus_sender.clone();
 
         move || {
             // Cancel any pending save timer.
@@ -922,12 +949,13 @@ impl EditPanel {
             let tokio = tokio.clone();
             let save_in_flight = Rc::clone(&save_in_flight);
             let save_debounce_inner = Rc::clone(&save_debounce);
+            let tx = bus_sender.clone();
 
             let source_id = glib::timeout_add_local_once(
                 std::time::Duration::from_millis(SAVE_DEBOUNCE_MS as u64),
                 move || {
                     save_debounce_inner.set(None);
-                    schedule_save(&session, &media_id, &library, &tokio, &save_in_flight);
+                    schedule_save(&session, &media_id, &library, &tokio, &save_in_flight, &tx);
                 },
             );
             save_debounce.set(Some(source_id));
@@ -1016,6 +1044,7 @@ fn schedule_save(
     library: &Arc<dyn Library>,
     tokio: &tokio::runtime::Handle,
     save_in_flight: &Rc<Cell<bool>>,
+    bus_sender: &crate::event_bus::EventSender,
 ) {
     let (id, state) = {
         let session = session.borrow();
@@ -1037,6 +1066,7 @@ fn schedule_save(
     let lib = Arc::clone(library);
     let tk = tokio.clone();
     let id_log = id.clone();
+    let tx = bus_sender.clone();
 
     glib::MainContext::default().spawn_local(async move {
         let start = Instant::now();
@@ -1062,8 +1092,14 @@ fn schedule_save(
                     );
                 }
             }
-            Ok(Err(e)) => error!("auto-save failed: {e}"),
-            Err(e) => error!("auto-save join failed: {e}"),
+            Ok(Err(e)) => {
+                error!("auto-save failed: {e}");
+                tx.send(crate::app_event::AppEvent::Error("Could not save edits".into()));
+            }
+            Err(e) => {
+                error!("auto-save join failed: {e}");
+                tx.send(crate::app_event::AppEvent::Error("Could not save edits".into()));
+            }
         }
     });
 }

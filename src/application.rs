@@ -497,11 +497,11 @@ impl MomentsApplication {
                             bus.subscribe(move |event| {
                                 if let AppEvent::Error(msg) = event {
                                     if let Some(win) = win_weak.upgrade() {
-                                        gtk::prelude::ActionGroupExt::activate_action(
+                                        gtk::prelude::WidgetExt::activate_action(
                                             &win,
                                             "win.show-toast",
                                             Some(&msg.to_variant()),
-                                        );
+                                        ).ok();
                                     }
                                 }
                             });

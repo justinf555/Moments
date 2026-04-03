@@ -190,6 +190,9 @@ impl ViewerInner {
                 None => {
                     inner.spinner.set_spinning(false);
                     inner.spinner.set_visible(false);
+                    inner.bus_sender.send(AppEvent::Error(
+                        "Could not find original photo".into(),
+                    ));
                     return;
                 }
             };
@@ -201,14 +204,24 @@ impl ViewerInner {
             }
 
             // Guard: skip decode for video files (they use VideoViewer).
-            let is_video = path
+            let ext = path
                 .extension()
                 .and_then(|e| e.to_str())
-                .map(|e| crate::library::format::registry::VIDEO_EXTENSIONS.contains(&e.to_lowercase().as_str()))
-                .unwrap_or(false);
-            if is_video {
+                .map(|e| e.to_lowercase())
+                .unwrap_or_default();
+            if crate::library::format::registry::VIDEO_EXTENSIONS.contains(&ext.as_str()) {
                 inner.spinner.set_spinning(false);
                 inner.spinner.set_visible(false);
+                return;
+            }
+
+            // Guard: RAW formats are not yet supported for full-res viewing (#316).
+            if crate::library::format::registry::RAW_EXTENSIONS.contains(&ext.as_str()) {
+                inner.spinner.set_spinning(false);
+                inner.spinner.set_visible(false);
+                inner.bus_sender.send(AppEvent::Error(
+                    "Full-resolution RAW viewing is not yet supported".into(),
+                ));
                 return;
             }
 
@@ -253,20 +266,28 @@ impl ViewerInner {
                 return;
             }
 
-            if let Some((raw, width, height)) = pixels {
-                let gbytes = glib::Bytes::from_owned(raw);
-                let texture = gdk::MemoryTexture::new(
-                    width,
-                    height,
-                    gdk::MemoryFormat::R8g8b8a8,
-                    &gbytes,
-                    (width as usize) * 4,
-                )
-                .upcast::<gdk::Texture>();
-                inner
-                    .picture
-                    .set_paintable(Some(texture.upcast_ref::<gdk::Paintable>()));
-                debug!("full-res via MemoryTexture: {width}×{height}");
+            match pixels {
+                Some((raw, width, height)) => {
+                    let gbytes = glib::Bytes::from_owned(raw);
+                    let texture = gdk::MemoryTexture::new(
+                        width,
+                        height,
+                        gdk::MemoryFormat::R8g8b8a8,
+                        &gbytes,
+                        (width as usize) * 4,
+                    )
+                    .upcast::<gdk::Texture>();
+                    inner
+                        .picture
+                        .set_paintable(Some(texture.upcast_ref::<gdk::Paintable>()));
+                    debug!("full-res via MemoryTexture: {width}×{height}");
+                }
+                None => {
+                    debug!("full-res decode failed, keeping thumbnail");
+                    inner.bus_sender.send(AppEvent::Error(
+                        "Could not display full-resolution image".into(),
+                    ));
+                }
             }
         });
     }
@@ -523,6 +544,7 @@ impl PhotoViewer {
             picture.clone(),
             Arc::clone(&library),
             tokio.clone(),
+            bus_sender.clone(),
         );
 
         // ── Sidebar stack (info | edit) ──────────────────────────────────────
