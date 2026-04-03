@@ -423,6 +423,17 @@ impl VideoViewer {
             }
 
             // Delete video — trash + pop back to grid.
+            // Stub items — just close the popover on click.
+            for name in &["share", "export-original", "show-in-files"] {
+                if let Some(btn) = crate::ui::viewer::find_menu_button(&popover, name) {
+                    let pop = popover.downgrade();
+                    btn.connect_clicked(move |_| {
+                        if let Some(p) = pop.upgrade() { p.popdown(); }
+                    });
+                }
+            }
+
+            // Delete video — trash + pop back to grid.
             if let Some(btn) = crate::ui::viewer::find_menu_button(&popover, "delete") {
                 let i = Rc::downgrade(&inner);
                 let pop = popover.downgrade();

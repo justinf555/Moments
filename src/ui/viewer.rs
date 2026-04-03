@@ -761,6 +761,16 @@ impl PhotoViewer {
                 });
             }
 
+            // Stub items — just close the popover on click.
+            for name in &["share", "export-original", "set-wallpaper", "show-in-files"] {
+                if let Some(btn) = find_menu_button(&popover, name) {
+                    let pop = popover.downgrade();
+                    btn.connect_clicked(move |_| {
+                        if let Some(p) = pop.upgrade() { p.popdown(); }
+                    });
+                }
+            }
+
             // Delete photo — trash + pop back to grid.
             if let Some(btn) = find_menu_button(&popover, "delete") {
                 let i = Rc::downgrade(&inner);
