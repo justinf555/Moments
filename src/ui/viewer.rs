@@ -232,9 +232,8 @@ impl ViewerInner {
                     tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, i32, i32)> {
                         let img = if is_raw {
                             use crate::library::format::raw::RawHandler;
-                            use crate::library::format::registry::FormatHandler;
                             RawHandler
-                                .decode(&path)
+                                .decode_full_res(&path)
                                 .map_err(|e| debug!("RAW full-res decode failed: {e}"))
                                 .ok()?
                         } else {
@@ -242,17 +241,17 @@ impl ViewerInner {
                                 .map_err(|e| debug!("full-res decode failed: {e}"))
                                 .ok()?
                         };
-                        // Skip orientation for HEIC/HEIF — libheif applies it
-                        // automatically during decode. Applying again would
-                        // double-rotate. RAW embedded previews may already have
-                        // orientation applied, but rawler does not guarantee
-                        // this, so we apply EXIF orientation for RAW as well.
+                        // Skip orientation for HEIC/HEIF (libheif applies it
+                        // automatically) and RAW (embedded JPEG previews from
+                        // cameras are typically pre-rotated; full demosaic
+                        // output from rawler is also pre-oriented). Applying
+                        // EXIF orientation again would double-rotate.
                         let ext = path
                             .extension()
                             .and_then(|e| e.to_str())
                             .map(|e| e.to_lowercase())
                             .unwrap_or_default();
-                        let img = if matches!(ext.as_str(), "heic" | "heif") {
+                        let img = if matches!(ext.as_str(), "heic" | "heif") || is_raw {
                             img
                         } else {
                             let orientation = crate::library::exif::extract_exif(&path)

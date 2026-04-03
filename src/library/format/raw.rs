@@ -67,6 +67,52 @@ impl FormatHandler for RawHandler {
     }
 }
 
+impl RawHandler {
+    /// Decode at the highest available resolution for full-res viewing.
+    ///
+    /// Tries full demosaicing first (actual sensor data), falls back to the
+    /// largest embedded preview, then the smallest thumbnail as a last resort.
+    /// This is the reverse order of [`FormatHandler::decode`] which optimises
+    /// for speed (thumbnailing).
+    pub fn decode_full_res(&self, path: &Path) -> Result<image::DynamicImage, LibraryError> {
+        let source = RawSource::new(path)
+            .map_err(|e| LibraryError::Thumbnail(format!("failed to open RAW file: {e}")))?;
+
+        let decoder = rawler::get_decoder(&source)
+            .map_err(|e| LibraryError::Thumbnail(format!("no RAW decoder for file: {e}")))?;
+
+        let params = RawDecodeParams::default();
+
+        // Full demosaicing — highest quality, slowest.
+        if let Some(img) = decoder
+            .full_image(&source, &params)
+            .map_err(|e| LibraryError::Thumbnail(format!("RAW full decode failed: {e}")))?
+        {
+            return Ok(img);
+        }
+
+        // Embedded full-size JPEG preview — fast and usually camera-quality.
+        if let Some(img) = decoder
+            .preview_image(&source, &params)
+            .map_err(|e| LibraryError::Thumbnail(format!("RAW preview extraction failed: {e}")))?
+        {
+            return Ok(img);
+        }
+
+        // Last resort: smallest embedded thumbnail.
+        if let Some(img) = decoder
+            .thumbnail_image(&source, &params)
+            .map_err(|e| LibraryError::Thumbnail(format!("RAW thumbnail extraction failed: {e}")))?
+        {
+            return Ok(img);
+        }
+
+        Err(LibraryError::Thumbnail(
+            "RAW decoder returned no image".to_string(),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
