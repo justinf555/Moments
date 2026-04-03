@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 
+use gettextrs::gettext;
 use gtk::{glib, prelude::*, subclass::prelude::*};
 
 use super::item::CollectionItemObject;
@@ -52,6 +53,7 @@ mod imp {
         fn constructed(&self) {
             self.parent_constructed();
             let obj = self.obj();
+            obj.set_accessible_role(gtk::AccessibleRole::Button);
 
             // Use BoxLayout vertical orientation.
             let layout = obj
@@ -140,6 +142,22 @@ impl CollectionGridCell {
         };
         imp.name_label.set_text(display_name);
         imp.subtitle_label.set_text(&data.subtitle);
+
+        // Build accessible label: "name, subtitle" or "name, subtitle, hidden".
+        let a11y_label = {
+            let base = if data.subtitle.is_empty() {
+                display_name.to_string()
+            } else {
+                format!("{}, {}", display_name, data.subtitle)
+            };
+            if data.is_hidden {
+                // Translators: appended to person name for hidden people.
+                format!("{}, {}", base, gettext("hidden"))
+            } else {
+                base
+            }
+        };
+        self.update_property(&[gtk::accessible::Property::Label(&a11y_label)]);
 
         if data.is_hidden {
             self.add_css_class("hidden-person");

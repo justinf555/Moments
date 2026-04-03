@@ -584,6 +584,23 @@ impl PhotoGridView {
             });
         }
 
+        // Escape key exits selection mode from keyboard.
+        {
+            let grid_view = photo_grid.imp().grid_view.get().unwrap();
+            let exit = exit_selection.clone();
+            let sm = Rc::clone(&selection_mode);
+            let key_ctrl = gtk::EventControllerKey::new();
+            key_ctrl.connect_key_pressed(move |_, keyval, _, _| {
+                if keyval == gtk::gdk::Key::Escape && sm.get() {
+                    exit.activate(None);
+                    glib::Propagation::Stop
+                } else {
+                    glib::Propagation::Proceed
+                }
+            });
+            grid_view.add_controller(key_ctrl);
+        }
+
         action_group.add_action(&enter_selection);
         action_group.add_action(&exit_selection);
 

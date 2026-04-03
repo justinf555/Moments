@@ -58,6 +58,10 @@ impl MomentsSidebarRow {
             .set(label_widget)
             .expect("label set once");
 
+        // Suppress this Box from the AT-SPI tree — the parent ListBoxRow is
+        // the accessible node, and it reads the child gtk::Label automatically.
+        obj.set_accessible_role(gtk::AccessibleRole::None);
+
         obj
     }
 

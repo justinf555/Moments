@@ -1,5 +1,6 @@
 use std::cell::{Cell, RefCell};
 
+use gettextrs::gettext;
 use gtk::{glib, prelude::*, subclass::prelude::*};
 
 use super::item::MediaItemObject;
@@ -62,6 +63,7 @@ mod imp {
         fn constructed(&self) {
             self.parent_constructed();
             let obj = self.obj();
+            obj.set_accessible_role(gtk::AccessibleRole::Img);
             // Default cell size — overridden by the factory based on zoom level.
             obj.set_size_request(160, 160);
 
@@ -272,6 +274,16 @@ impl PhotoGridCell {
         let imp = self.imp();
         let fav = item.is_favorite();
         imp.is_favorited.set(fav);
+
+        // Update accessible label so screen readers announce the current state.
+        let a11y_label = if fav {
+            gettext("Remove from favourites")
+        } else {
+            gettext("Add to favourites")
+        };
+        imp.star_btn
+            .update_property(&[gtk::accessible::Property::Label(&a11y_label)]);
+
         if fav && imp.show_star.get() && imp.has_texture.get() {
             imp.star_btn.set_icon_name("starred-symbolic");
             imp.star_btn.set_visible(true);
