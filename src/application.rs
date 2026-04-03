@@ -651,14 +651,14 @@ impl MomentsApplication {
                         dialog.add_response("quit", "Quit");
                         dialog.set_response_appearance("quit", adw::ResponseAppearance::Destructive);
                         dialog.set_default_response(Some("setup"));
-                        dialog.set_close_response("quit");
+                        dialog.set_close_response("setup");
 
                         let app_weak = app.downgrade();
-                        let win_weak2 = window.downgrade();
+                        let win_weak = window.downgrade();
                         dialog.connect_response(None, move |_, response| {
                             if response == "setup" {
                                 if let Some(app) = app_weak.upgrade() {
-                                    if let Some(win) = win_weak2.upgrade() {
+                                    if let Some(win) = win_weak.upgrade() {
                                         win.close();
                                     }
                                     app.show_setup_window();
