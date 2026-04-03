@@ -1,7 +1,7 @@
 {
     "id" : "io.github.justinf555.Moments",
     "runtime" : "org.gnome.Platform",
-    "runtime-version" : "49",
+    "runtime-version" : "50",
     "sdk" : "org.gnome.Sdk",
     "sdk-extensions" : [
         "org.freedesktop.Sdk.Extension.rust-stable"
@@ -23,8 +23,8 @@
             "--share=network"
         ],
         "env" : {
-            "RUST_BACKTRACE" : "1",
-            "PKG_CONFIG_PATH" : "/app/lib/pkgconfig:/app/share/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig"
+            "PKG_CONFIG_PATH" : "/app/lib/pkgconfig:/app/share/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig",
+            "RUST_BACKTRACE" : "1"
         }
     },
     "cleanup" : [
@@ -44,7 +44,8 @@
             "builddir" : true,
             "buildsystem" : "meson",
             "config-opts" : [
-                "-Dediting=true"
+                "-Dediting=true",
+                "--libdir=lib"
             ],
             "sources" : [
                 {

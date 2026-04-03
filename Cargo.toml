@@ -16,8 +16,8 @@ integration-tests = []
 [dependencies]
 
 # GTK/GNOME — keep these version-aligned
-gtk = { version = "0.11", features = ["gnome_48"], package = "gtk4" }
-adw = { version = "0.9", features = ["v1_8"], package = "libadwaita" }
+gtk = { version = "0.11", features = ["gnome_49"], package = "gtk4" }
+adw = { version = "0.9", features = ["v1_9"], package = "libadwaita" }
 gettext-rs = { version = "0.7", features = ["gettext-system"] }
 
 # Async runtime
