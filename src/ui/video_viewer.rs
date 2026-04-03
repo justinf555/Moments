@@ -409,6 +409,16 @@ impl VideoViewer {
                         info_toggle.set_active(!active);
                         glib::Propagation::Stop
                     }
+                    gdk::Key::Escape => {
+                        if let Some(nav_view) = inner
+                            .nav_page
+                            .parent()
+                            .and_then(|p| p.downcast::<adw::NavigationView>().ok())
+                        {
+                            nav_view.pop();
+                        }
+                        glib::Propagation::Stop
+                    }
                     _ => glib::Propagation::Proceed,
                 }
             });

@@ -81,7 +81,8 @@ mod imp {
             obj.set_accels_for_action("app.import", &["<control>i"]);
             obj.set_accels_for_action("app.preferences", &["<control>comma"]);
             obj.set_accels_for_action("app.shortcuts", &["<control>question"]);
-            obj.set_accels_for_action("win.toggle-sidebar", &["F9"]);
+            // F9 is handled by the viewer's EventControllerKey for the info
+            // panel toggle — don't register it as a global accelerator here.
             obj.set_accels_for_action("view.zoom-in", &["<control>equal", "<control>plus", "<control>KP_Add"]);
             obj.set_accels_for_action("view.zoom-out", &["<control>minus", "<control>KP_Subtract"]);
         }
