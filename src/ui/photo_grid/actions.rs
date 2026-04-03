@@ -29,7 +29,7 @@ pub(super) struct ActionContext {
 /// Wire the "Add to Album" popover on the given button.
 ///
 /// The popover lists existing albums (fetched via library query) and
-/// a "New Album..." option. All mutations go through the bus.
+/// a "New Album…" option. All mutations go through the bus.
 pub(super) fn wire_album_controls(ctx: &ActionContext, album_btn: &gtk::Button) {
     let lib = Arc::clone(&ctx.library);
     let tk = ctx.tokio.clone();
@@ -38,119 +38,17 @@ pub(super) fn wire_album_controls(ctx: &ActionContext, album_btn: &gtk::Button) 
 
     album_btn.connect_clicked(move |btn: &gtk::Button| {
         debug!("album button clicked, loading albums async");
-
-        let lib = Arc::clone(&lib);
-        let tk = tk.clone();
-        let sel = selection.clone();
-        let bus_tx = bus_tx.clone();
-        let btn_weak: glib::WeakRef<gtk::Button> = btn.downgrade();
-
-        glib::MainContext::default().spawn_local(async move {
-            let lib_q = Arc::clone(&lib);
-            let albums = match tk.spawn(async move { lib_q.list_albums().await }).await {
-                Ok(Ok(a)) => a,
-                Ok(Err(e)) => {
-                    tracing::error!("list_albums failed: {e}");
-                    return;
-                }
-                Err(e) => {
-                    tracing::error!("list_albums join failed: {e}");
-                    return;
-                }
-            };
-
-            let Some(btn) = btn_weak.upgrade() else { return };
-
-            let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
-            vbox.set_margin_top(6);
-            vbox.set_margin_bottom(6);
-            vbox.set_margin_start(6);
-            vbox.set_margin_end(6);
-
-            let popover = gtk::Popover::new();
-            popover.set_parent(btn.upcast_ref::<gtk::Widget>());
-
-            if albums.is_empty() {
-                let label = gtk::Label::new(Some("No albums"));
-                label.add_css_class("dim-label");
-                vbox.append(&label);
-            } else {
-                for album in &albums {
-                    let ab = gtk::Button::with_label(&album.name);
-                    ab.add_css_class("flat");
-                    let aid = album.id.clone();
-                    let sel_add = sel.clone();
-                    let tx = bus_tx.clone();
-                    let pop_weak = popover.downgrade();
-                    ab.connect_clicked(move |_| {
-                        let ids = super::collect_selected_ids(&sel_add);
-                        if ids.is_empty() { return; }
-                        if let Some(p) = pop_weak.upgrade() {
-                            p.popdown();
-                        }
-                        tx.send(AppEvent::AddToAlbumRequested {
-                            album_id: aid.clone(),
-                            ids,
-                        });
-                    });
-                    vbox.append(&ab);
-                }
-            }
-
-            // Separator + "New Album..." button.
-            let sep = gtk::Separator::new(gtk::Orientation::Horizontal);
-            sep.set_margin_top(4);
-            sep.set_margin_bottom(4);
-            vbox.append(&sep);
-
-            let new_album_btn = gtk::Button::with_label("New Album…");
-            new_album_btn.add_css_class("flat");
-            {
-                let pop_weak = popover.downgrade();
-                let sel_new = sel.clone();
-                let tx = bus_tx.clone();
-                new_album_btn.connect_clicked(move |btn| {
-                    if let Some(p) = pop_weak.upgrade() {
-                        p.popdown();
-                    }
-
-                    let dialog = adw::AlertDialog::builder()
-                        .heading("New Album")
-                        .build();
-                    dialog.add_response("cancel", "Cancel");
-                    dialog.add_response("create", "Create");
-                    dialog.set_response_appearance("create", adw::ResponseAppearance::Suggested);
-                    dialog.set_default_response(Some("create"));
-                    dialog.set_close_response("cancel");
-
-                    let entry = gtk::Entry::new();
-                    entry.set_placeholder_text(Some("Album name"));
-                    entry.set_activates_default(true);
-                    dialog.set_extra_child(Some(&entry));
-
-                    let sel = sel_new.clone();
-                    let tx = tx.clone();
-                    dialog.connect_response(None, move |_, response| {
-                        if response != "create" { return; }
-                        let name = entry.text().to_string();
-                        if name.is_empty() { return; }
-                        let ids = super::collect_selected_ids(&sel);
-                        tx.send(AppEvent::CreateAlbumRequested { name, ids });
-                    });
-
-                    dialog.present(
-                        btn.root()
-                            .as_ref()
-                            .and_then(|r| r.downcast_ref::<gtk::Window>()),
-                    );
-                });
-            }
-            vbox.append(&new_album_btn);
-
-            popover.set_child(Some(&vbox));
-            popover.connect_closed(move |p| { p.unparent(); });
-            popover.popup();
-        });
+        let ids = super::collect_selected_ids(&selection);
+        if ids.is_empty() {
+            return;
+        }
+        crate::ui::album_picker::show_album_picker(
+            btn,
+            ids,
+            Arc::clone(&lib),
+            tk.clone(),
+            bus_tx.clone(),
+        );
     });
 }
 

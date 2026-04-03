@@ -33,7 +33,6 @@ struct ViewerInner {
     prev_btn: gtk::Button,
     next_btn: gtk::Button,
     star_btn: gtk::Button,
-    trash_btn: gtk::Button,
     info_split: adw::OverlaySplitView,
     info_panel: InfoPanel,
     edit_panel: EditPanel,
@@ -96,12 +95,17 @@ impl ViewerInner {
         {
             let items = self.items.borrow();
             if let Some(obj) = items.get(index) {
-                let icon = if obj.is_favorite() {
+                let is_fav = obj.is_favorite();
+                self.star_btn.set_icon_name(if is_fav {
                     "starred-symbolic"
                 } else {
                     "non-starred-symbolic"
-                };
-                self.star_btn.set_icon_name(icon);
+                });
+                if is_fav {
+                    self.star_btn.add_css_class("warning");
+                } else {
+                    self.star_btn.remove_css_class("warning");
+                }
             }
         }
 
@@ -413,8 +417,25 @@ pub struct PhotoViewer {
 impl PhotoViewer {
     pub fn new(library: Arc<dyn Library>, tokio: tokio::runtime::Handle, bus_sender: EventSender) -> Self {
         // ── Header bar ───────────────────────────────────────────────────────
+        //
+        // Layout (pack_end is right-to-left):
+        //   start: [← back]
+        //   end:   [★] [ℹ] [✏] [⋮]
+        //
+        // Album, Share, Export, Wallpaper, Show in Files, and Delete
+        // live in the overflow menu (⋮).
         let header = adw::HeaderBar::new();
 
+        // ── Overflow menu (far right) ────────────────────────────────────
+        let menu_btn = gtk::MenuButton::builder()
+            .icon_name("view-more-symbolic")
+            .tooltip_text("Menu")
+            .build();
+        let menu_popover = build_viewer_menu_popover(true, "Delete photo");
+        menu_btn.set_popover(Some(&menu_popover));
+        header.pack_end(&menu_btn);
+
+        // ── Edit toggle ─────────────────────────────────────────────────
         let edit_toggle = gtk::ToggleButton::builder()
             .icon_name("document-edit-symbolic")
             .tooltip_text("Edit Photo")
@@ -422,25 +443,20 @@ impl PhotoViewer {
         #[cfg(feature = "editing")]
         header.pack_end(&edit_toggle);
 
+        // ── Info toggle ─────────────────────────────────────────────────
         let info_toggle = gtk::ToggleButton::builder()
-            .icon_name("help-about-symbolic")
-            .tooltip_text("Photo Information")
+            .icon_name("dialog-information-symbolic")
+            .tooltip_text("Photo Information (F9)")
             .build();
         header.pack_end(&info_toggle);
 
+        // ── Favourite ───────────────────────────────────────────────────
         let star_btn = gtk::Button::builder()
             .icon_name("non-starred-symbolic")
             .tooltip_text("Toggle Favourite")
             .build();
         star_btn.add_css_class("flat");
         header.pack_end(&star_btn);
-
-        let trash_btn = gtk::Button::builder()
-            .icon_name("user-trash-symbolic")
-            .tooltip_text("Move to Trash")
-            .build();
-        trash_btn.add_css_class("flat");
-        header.pack_start(&trash_btn);
 
         // ── Picture ──────────────────────────────────────────────────────────
         let picture = gtk::Picture::builder()
@@ -542,7 +558,6 @@ impl PhotoViewer {
             prev_btn,
             next_btn,
             star_btn,
-            trash_btn,
             info_split,
             info_panel,
             edit_panel,
@@ -612,6 +627,11 @@ impl PhotoViewer {
                 } else {
                     "non-starred-symbolic"
                 });
+                if new_fav {
+                    btn.add_css_class("warning");
+                } else {
+                    btn.remove_css_class("warning");
+                }
                 obj.set_is_favorite(new_fav);
 
                 let id = obj.item().id.clone();
@@ -619,34 +639,6 @@ impl PhotoViewer {
                     ids: vec![id],
                     state: new_fav,
                 });
-            });
-        }
-
-        // Trash button — emit command, subscribe for result to pop back.
-        {
-            let i = Rc::downgrade(&inner);
-            inner.trash_btn.connect_clicked(move |_| {
-                let Some(inner) = i.upgrade() else { return };
-                let id = {
-                    let items = inner.items.borrow();
-                    let idx = inner.current_index.get();
-                    items.get(idx).map(|obj| obj.item().id.clone())
-                };
-                let Some(id) = id else { return };
-
-                inner.bus_sender.send(AppEvent::TrashRequested {
-                    ids: vec![id],
-                });
-
-                // Pop back to grid — the item will be removed by the model's
-                // Trashed handler. Pop immediately so the user doesn't see
-                // a stale viewer.
-                if let Some(nav_view) = inner.nav_page
-                    .parent()
-                    .and_then(|p| p.downcast::<adw::NavigationView>().ok())
-                {
-                    nav_view.pop();
-                }
             });
         }
 
@@ -731,9 +723,78 @@ impl PhotoViewer {
                         inner.navigate_next();
                         glib::Propagation::Stop
                     }
+                    gdk::Key::F9 => {
+                        let active = inner.info_toggle.is_active();
+                        inner.info_toggle.set_active(!active);
+                        glib::Propagation::Stop
+                    }
                     _ => glib::Propagation::Proceed,
                 }
             });
+        }
+
+        // ── Wire overflow menu buttons ──────────────────────────────────
+        {
+            let popover = menu_popover;
+
+            // Add to album
+            if let Some(btn) = find_menu_button(&popover, "add-to-album") {
+                let i = Rc::downgrade(&inner);
+                let mb = menu_btn.clone();
+                let pop = popover.downgrade();
+                btn.connect_clicked(move |_| {
+                    if let Some(p) = pop.upgrade() { p.popdown(); }
+                    let Some(inner) = i.upgrade() else { return };
+                    let id = {
+                        let items = inner.items.borrow();
+                        let idx = inner.current_index.get();
+                        items.get(idx).map(|obj| obj.item().id.clone())
+                    };
+                    let Some(id) = id else { return };
+                    crate::ui::album_picker::show_album_picker_on_widget(
+                        mb.upcast_ref::<gtk::Widget>(),
+                        vec![id],
+                        Arc::clone(&inner.library),
+                        inner.tokio.clone(),
+                        inner.bus_sender.clone(),
+                    );
+                });
+            }
+
+            // Stub items — just close the popover on click.
+            for name in &["share", "export-original", "set-wallpaper", "show-in-files"] {
+                if let Some(btn) = find_menu_button(&popover, name) {
+                    let pop = popover.downgrade();
+                    btn.connect_clicked(move |_| {
+                        if let Some(p) = pop.upgrade() { p.popdown(); }
+                    });
+                }
+            }
+
+            // Delete photo — trash + pop back to grid.
+            if let Some(btn) = find_menu_button(&popover, "delete") {
+                let i = Rc::downgrade(&inner);
+                let pop = popover.downgrade();
+                btn.connect_clicked(move |_| {
+                    if let Some(p) = pop.upgrade() { p.popdown(); }
+                    let Some(inner) = i.upgrade() else { return };
+                    let id = {
+                        let items = inner.items.borrow();
+                        let idx = inner.current_index.get();
+                        items.get(idx).map(|obj| obj.item().id.clone())
+                    };
+                    let Some(id) = id else { return };
+                    inner.bus_sender.send(AppEvent::TrashRequested {
+                        ids: vec![id],
+                    });
+                    if let Some(nav_view) = inner.nav_page
+                        .parent()
+                        .and_then(|p| p.downcast::<adw::NavigationView>().ok())
+                    {
+                        nav_view.pop();
+                    }
+                });
+            }
         }
 
         Self { inner }
@@ -754,5 +815,83 @@ impl PhotoViewer {
         // Grab keyboard focus so arrow-key navigation works immediately.
         self.inner.nav_page.grab_focus();
     }
+}
+
+/// Build the overflow menu popover content for photo/video viewers.
+///
+/// `include_wallpaper` controls whether "Set as wallpaper" is shown
+/// (photos only, not videos). `delete_label` sets the destructive
+/// action label ("Delete photo" vs "Delete video").
+pub fn build_viewer_menu_popover(include_wallpaper: bool, delete_label: &str) -> gtk::Popover {
+    let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    vbox.set_margin_top(6);
+    vbox.set_margin_bottom(6);
+    vbox.set_margin_start(6);
+    vbox.set_margin_end(6);
+
+    // Section 1: actions
+    vbox.append(&overflow_btn("Add to album", "folder-new-symbolic", "add-to-album"));
+    vbox.append(&overflow_btn("Share", "send-to-symbolic", "share"));
+    vbox.append(&overflow_btn("Export original", "document-save-symbolic", "export-original"));
+    if include_wallpaper {
+        vbox.append(&overflow_btn("Set as wallpaper", "preferences-desktop-wallpaper-symbolic", "set-wallpaper"));
+    }
+
+    // Separator
+    let sep1 = gtk::Separator::new(gtk::Orientation::Horizontal);
+    sep1.set_margin_top(4);
+    sep1.set_margin_bottom(4);
+    vbox.append(&sep1);
+
+    // Section 2: file system
+    vbox.append(&overflow_btn("Show in Files", "folder-open-symbolic", "show-in-files"));
+
+    // Separator
+    let sep2 = gtk::Separator::new(gtk::Orientation::Horizontal);
+    sep2.set_margin_top(4);
+    sep2.set_margin_bottom(4);
+    vbox.append(&sep2);
+
+    // Section 3: destructive
+    let delete_btn = overflow_btn(delete_label, "user-trash-symbolic", "delete");
+    delete_btn.add_css_class("error");
+    vbox.append(&delete_btn);
+
+    let popover = gtk::Popover::new();
+    popover.set_child(Some(&vbox));
+    popover
+}
+
+/// Create a flat button with icon + label for the overflow menu.
+fn overflow_btn(label: &str, icon_name: &str, widget_name: &str) -> gtk::Button {
+    let hbox = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .build();
+    hbox.append(&gtk::Image::from_icon_name(icon_name));
+    hbox.append(&gtk::Label::new(Some(label)));
+
+    let btn = gtk::Button::builder()
+        .child(&hbox)
+        .build();
+    btn.add_css_class("flat");
+    btn.set_widget_name(widget_name);
+    btn
+}
+
+/// Find a button in the popover by its widget name.
+pub fn find_menu_button(popover: &gtk::Popover, name: &str) -> Option<gtk::Button> {
+    let child = popover.child()?;
+    let vbox = child.downcast_ref::<gtk::Box>()?;
+    let mut widget = vbox.first_child();
+    while let Some(w) = widget {
+        if let Some(btn) = w.downcast_ref::<gtk::Button>() {
+            if btn.widget_name() == name {
+                return Some(btn.clone());
+            }
+        }
+        widget = w.next_sibling();
+    }
+    None
 }
 

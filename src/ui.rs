@@ -1,6 +1,7 @@
 use gtk;
 
 pub mod album_dialogs;
+pub mod album_picker;
 pub mod collection_grid;
 pub mod coordinator;
 pub mod preferences_dialog;
