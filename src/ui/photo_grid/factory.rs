@@ -2,13 +2,14 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use gettextrs::gettext;
 use gtk::{gio, glib, prelude::*, subclass::prelude::*};
 use tokio::sync::Semaphore;
 use tracing::debug;
 
 use crate::app_event::AppEvent;
 use crate::event_bus::EventSender;
-use crate::library::media::MediaFilter;
+use crate::library::media::{MediaFilter, MediaItem};
 use crate::library::Library;
 
 use super::cell::PhotoGridCell;
@@ -104,6 +105,18 @@ pub fn build_factory(
             cell.set_checked(list_item.is_selected());
 
             cell.bind(&item);
+
+            // Accessibility: set role and label so screen readers announce
+            // "filename, date" for each cell.
+            let media = item.item();
+            let label = accessible_label_for_media(media);
+            cell.update_property(&[gtk::accessible::Property::Label(&label)]);
+
+            // Checkbox accessible label: "Select filename".
+            let checkbox_label = gettext("Select {}").replace("{}", &media.original_filename);
+            cell.imp()
+                .checkbox
+                .update_property(&[gtk::accessible::Property::Label(&checkbox_label)]);
 
             if item.texture().is_none() {
                 let id = item.item().id.clone();
@@ -260,4 +273,21 @@ pub fn build_factory(
     });
 
     factory
+}
+
+/// Build a human-readable accessible label from a media item's filename and
+/// capture date, e.g. "IMG_1319.jpeg, 7 September 2024".
+fn accessible_label_for_media(item: &MediaItem) -> String {
+    if let Some(ts) = item.taken_at {
+        let dt = chrono::DateTime::from_timestamp(ts, 0)
+            .map(|d| d.format("%e %B %Y").to_string())
+            .unwrap_or_default();
+        if dt.is_empty() {
+            item.original_filename.clone()
+        } else {
+            format!("{}, {}", item.original_filename, dt.trim())
+        }
+    } else {
+        item.original_filename.clone()
+    }
 }

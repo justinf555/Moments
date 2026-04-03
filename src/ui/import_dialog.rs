@@ -74,8 +74,10 @@ impl ImportDialog {
         imp.phase_label.set_label("Importing…");
         if total > 0 {
             imp.progress_bar.set_fraction(current as f64 / total as f64);
-            imp.counts_label
-                .set_label(&format!("{current} of {total}"));
+            let progress_text = format!("{current} of {total}");
+            imp.progress_bar.set_text(Some(&progress_text));
+            imp.progress_bar.set_show_text(true);
+            imp.counts_label.set_label(&progress_text);
         } else {
             imp.progress_bar.pulse();
         }

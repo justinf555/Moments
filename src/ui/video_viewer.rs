@@ -3,6 +3,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use adw::prelude::*;
+use gettextrs::gettext;
 use gtk::{gdk, gio, glib};
 use tracing::debug;
 
@@ -73,6 +74,13 @@ impl VideoViewerInner {
                 } else {
                     self.star_btn.remove_css_class("warning");
                 }
+                let fav_label = if is_fav {
+                    gettext("Remove from favourites")
+                } else {
+                    gettext("Add to favourites")
+                };
+                self.star_btn
+                    .update_property(&[gtk::accessible::Property::Label(&fav_label)]);
             }
         }
 
@@ -331,6 +339,12 @@ impl VideoViewer {
                 } else {
                     btn.remove_css_class("warning");
                 }
+                let fav_label = if new_fav {
+                    gettext("Remove from favourites")
+                } else {
+                    gettext("Add to favourites")
+                };
+                btn.update_property(&[gtk::accessible::Property::Label(&fav_label)]);
                 obj.set_is_favorite(new_fav);
 
                 let id = obj.item().id.clone();
