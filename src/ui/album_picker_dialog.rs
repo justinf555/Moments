@@ -108,7 +108,6 @@ pub fn show_album_picker_dialog(
                     .get(&a.id)
                     .and_then(|opt| opt.clone());
                 AlbumEntry {
-                    thumbnail_path: None,
                     id: a.id,
                     name: a.name,
                     media_count: a.media_count,
