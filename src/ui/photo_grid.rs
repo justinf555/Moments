@@ -270,10 +270,10 @@ impl PhotoGrid {
                 let name = if store.n_items() == 0 { "empty" } else { "grid" };
                 stack.set_visible_child_name(name);
             };
-            // Check after initial load and on every change.
-            update_empty();
-            let update = update_empty.clone();
-            model.store.connect_items_changed(move |_, _, _, _| update());
+            // Update on every model change. The initial state stays on "grid"
+            // until load_more completes — avoids a flash of the empty state
+            // before items arrive.
+            model.store.connect_items_changed(move |_, _, _, _| update_empty());
         }
 
         // Fetch the first page immediately.
