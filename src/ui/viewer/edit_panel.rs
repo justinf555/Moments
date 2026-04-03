@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use adw::prelude::*;
+use gettextrs::gettext;
 use gtk::{gdk, glib};
 use image::DynamicImage;
 use tracing::{debug, error, warn};
@@ -334,7 +335,7 @@ impl EditPanel {
         // ── Revert button (always visible at bottom) ─────────────────────────
         let revert_btn = gtk::Button::builder()
             .label("Revert to Original")
-            .tooltip_text("Remove all edits and restore the original image")
+            .tooltip_text(&gettext("Remove all edits and restore the original image"))
             .hexpand(true)
             .margin_top(12)
             .margin_bottom(12)
@@ -467,10 +468,10 @@ impl EditPanel {
             .column_homogeneous(true)
             .build();
 
-        let rotate_ccw_btn = make_transform_button("object-rotate-left-symbolic", "Rotate CCW");
-        let rotate_cw_btn = make_transform_button("object-rotate-right-symbolic", "Rotate CW");
-        let flip_h_btn = make_transform_button("object-flip-horizontal-symbolic", "Flip H");
-        let flip_v_btn = make_transform_button("object-flip-vertical-symbolic", "Flip V");
+        let rotate_ccw_btn = make_transform_button("object-rotate-left-symbolic", "Rotate CCW", "Rotate Left");
+        let rotate_cw_btn = make_transform_button("object-rotate-right-symbolic", "Rotate CW", "Rotate Right");
+        let flip_h_btn = make_transform_button("object-flip-horizontal-symbolic", "Flip H", "Flip Horizontal");
+        let flip_v_btn = make_transform_button("object-flip-vertical-symbolic", "Flip V", "Flip Vertical");
 
         grid.attach(&rotate_ccw_btn, 0, 0, 1, 1);
         grid.attach(&rotate_cw_btn, 1, 0, 1, 1);
@@ -1175,7 +1176,7 @@ fn update_adjust_subtitle(
 }
 
 /// Create a transform action button with icon and label for the 2×2 grid.
-fn make_transform_button(icon_name: &str, label: &str) -> gtk::Button {
+fn make_transform_button(icon_name: &str, label: &str, tooltip: &str) -> gtk::Button {
     let icon = gtk::Image::from_icon_name(icon_name);
     icon.set_pixel_size(24);
 
@@ -1195,6 +1196,7 @@ fn make_transform_button(icon_name: &str, label: &str) -> gtk::Button {
 
     let btn = gtk::Button::builder()
         .child(&vbox)
+        .tooltip_text(&gettext(tooltip))
         .build();
     btn.add_css_class("flat");
     btn

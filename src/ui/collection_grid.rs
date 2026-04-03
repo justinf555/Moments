@@ -3,6 +3,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use adw::prelude::*;
+use gettextrs::gettext;
 use gtk::{gio, glib};
 use tracing::{debug, info};
 
@@ -68,13 +69,13 @@ impl CollectionGridView {
 
         let unnamed_toggle = gtk::ToggleButton::builder()
             .icon_name("person-symbolic")
-            .tooltip_text("Show Unnamed")
+            .tooltip_text(&gettext("Show Unnamed"))
             .build();
         unnamed_toggle.add_css_class("flat");
 
         let hidden_toggle = gtk::ToggleButton::builder()
             .icon_name("view-reveal-symbolic")
-            .tooltip_text("Show Hidden")
+            .tooltip_text(&gettext("Show Hidden"))
             .build();
         hidden_toggle.add_css_class("flat");
 
