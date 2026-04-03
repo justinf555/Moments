@@ -221,7 +221,7 @@ impl MomentsApplication {
         let Some(window) = self.active_window() else { return };
         let builder = gtk::Builder::from_resource("/io/github/justinf555/Moments/shortcuts-dialog.ui");
         let dialog = builder
-            .object::<adw::Dialog>("shortcuts_dialog")
+            .object::<adw::ShortcutsDialog>("shortcuts_dialog")
             .expect("shortcuts_dialog in resource");
         dialog.present(Some(&window));
     }

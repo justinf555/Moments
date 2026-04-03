@@ -799,8 +799,10 @@ impl PhotoViewer {
                             .and_then(|p| p.downcast::<adw::NavigationView>().ok())
                         {
                             nav_view.pop();
+                            glib::Propagation::Stop
+                        } else {
+                            glib::Propagation::Proceed
                         }
-                        glib::Propagation::Stop
                     }
                     _ => glib::Propagation::Proceed,
                 }
