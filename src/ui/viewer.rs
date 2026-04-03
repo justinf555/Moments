@@ -431,7 +431,7 @@ impl PhotoViewer {
             .icon_name("view-more-symbolic")
             .tooltip_text("Menu")
             .build();
-        let menu_popover = build_viewer_menu_popover(true);
+        let menu_popover = build_viewer_menu_popover(true, "Delete photo");
         menu_btn.set_popover(Some(&menu_popover));
         header.pack_end(&menu_btn);
 
@@ -762,7 +762,7 @@ impl PhotoViewer {
             }
 
             // Delete photo — trash + pop back to grid.
-            if let Some(btn) = find_menu_button(&popover, "delete-photo") {
+            if let Some(btn) = find_menu_button(&popover, "delete") {
                 let i = Rc::downgrade(&inner);
                 let pop = popover.downgrade();
                 btn.connect_clicked(move |_| {
@@ -810,8 +810,9 @@ impl PhotoViewer {
 /// Build the overflow menu popover content for photo/video viewers.
 ///
 /// `include_wallpaper` controls whether "Set as wallpaper" is shown
-/// (photos only, not videos).
-pub fn build_viewer_menu_popover(include_wallpaper: bool) -> gtk::Popover {
+/// (photos only, not videos). `delete_label` sets the destructive
+/// action label ("Delete photo" vs "Delete video").
+pub fn build_viewer_menu_popover(include_wallpaper: bool, delete_label: &str) -> gtk::Popover {
     let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
     vbox.set_margin_top(6);
     vbox.set_margin_bottom(6);
@@ -842,7 +843,7 @@ pub fn build_viewer_menu_popover(include_wallpaper: bool) -> gtk::Popover {
     vbox.append(&sep2);
 
     // Section 3: destructive
-    let delete_btn = overflow_btn("Delete photo", "user-trash-symbolic", "delete-photo");
+    let delete_btn = overflow_btn(delete_label, "user-trash-symbolic", "delete");
     delete_btn.add_css_class("error");
     vbox.append(&delete_btn);
 

@@ -105,6 +105,11 @@ pub fn show_album_picker_on_widget(
             let ids_clone = ids.clone();
             let tx = bus_sender.clone();
             new_album_btn.connect_clicked(move |btn| {
+                // Capture the root window before popdown — the popover's
+                // closed handler unparents it, which would make btn.root()
+                // return None.
+                let window = btn.root().and_downcast::<gtk::Window>();
+
                 if let Some(p) = pop_weak.upgrade() {
                     p.popdown();
                 }
@@ -136,11 +141,7 @@ pub fn show_album_picker_on_widget(
                     tx.send(AppEvent::CreateAlbumRequested { name, ids: ids.clone() });
                 });
 
-                dialog.present(
-                    btn.root()
-                        .as_ref()
-                        .and_then(|r| r.downcast_ref::<gtk::Window>()),
-                );
+                dialog.present(window.as_ref());
             });
         }
         vbox.append(&new_album_btn);

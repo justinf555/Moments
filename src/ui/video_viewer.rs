@@ -197,7 +197,7 @@ impl VideoViewer {
             .icon_name("view-more-symbolic")
             .tooltip_text("Menu")
             .build();
-        let menu_popover = crate::ui::viewer::build_viewer_menu_popover(false);
+        let menu_popover = crate::ui::viewer::build_viewer_menu_popover(false, "Delete video");
         menu_btn.set_popover(Some(&menu_popover));
         header.pack_end(&menu_btn);
 
@@ -423,7 +423,7 @@ impl VideoViewer {
             }
 
             // Delete video — trash + pop back to grid.
-            if let Some(btn) = crate::ui::viewer::find_menu_button(&popover, "delete-photo") {
+            if let Some(btn) = crate::ui::viewer::find_menu_button(&popover, "delete") {
                 let i = Rc::downgrade(&inner);
                 let pop = popover.downgrade();
                 btn.connect_clicked(move |_| {
