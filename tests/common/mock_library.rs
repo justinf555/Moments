@@ -185,6 +185,12 @@ impl LibraryAlbums for StubLibrary {
     ) -> Result<Vec<MediaItem>, LibraryError> {
         unimplemented!()
     }
+    async fn albums_containing_media(
+        &self,
+        _media_ids: &[MediaId],
+    ) -> Result<std::collections::HashMap<AlbumId, usize>, LibraryError> {
+        Ok(std::collections::HashMap::new())
+    }
 }
 
 #[async_trait]

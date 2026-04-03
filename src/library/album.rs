@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 
 use super::error::LibraryError;
@@ -81,6 +83,14 @@ pub trait LibraryAlbums: Send + Sync {
         cursor: Option<&MediaCursor>,
         limit: u32,
     ) -> Result<Vec<MediaItem>, LibraryError>;
+
+    /// For each album containing at least one of `media_ids`, return the
+    /// count of how many are present. Used by the album picker to show
+    /// "Already added" badges.
+    async fn albums_containing_media(
+        &self,
+        media_ids: &[MediaId],
+    ) -> Result<HashMap<AlbumId, usize>, LibraryError>;
 }
 
 #[cfg(test)]

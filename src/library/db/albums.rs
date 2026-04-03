@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::library::album::{Album, AlbumId, LibraryAlbums};
 use crate::library::error::LibraryError;
 use crate::library::media::{MediaCursor, MediaId, MediaItem};
@@ -200,6 +202,33 @@ impl LibraryAlbums for Database {
 
         Ok(rows.into_iter().map(MediaRow::into_item).collect())
     }
+
+    async fn albums_containing_media(
+        &self,
+        media_ids: &[MediaId],
+    ) -> Result<HashMap<AlbumId, usize>, LibraryError> {
+        if media_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders = id_placeholders(media_ids.len());
+        let sql = format!(
+            "SELECT am.album_id, COUNT(*) as cnt \
+             FROM album_media am \
+             JOIN media m ON am.media_id = m.id \
+             WHERE am.media_id IN ({placeholders}) \
+               AND m.is_trashed = 0 \
+             GROUP BY am.album_id"
+        );
+        let mut query = sqlx::query_as::<_, (String, i64)>(&sql);
+        for id in media_ids {
+            query = query.bind(id.as_str());
+        }
+        let rows = query.fetch_all(&self.pool).await.map_err(LibraryError::Db)?;
+        Ok(rows
+            .into_iter()
+            .map(|(aid, cnt)| (AlbumId::from_raw(aid), cnt as usize))
+            .collect())
+    }
 }
 
 #[cfg(test)]
@@ -349,6 +378,77 @@ mod tests {
         let cursor = MediaCursor { sort_key: last.taken_at.unwrap_or(0), id: last.id.clone() };
         let page2 = db.list_album_media(&album_id, Some(&cursor), 3).await.unwrap();
         assert_eq!(page2.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn albums_containing_media_empty_input() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let result = db.albums_containing_media(&[]).await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn albums_containing_media_single_album() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let album_id = db.create_album("Test").await.unwrap();
+        let id_a = MediaId::new("a".repeat(64));
+        let id_b = MediaId::new("b".repeat(64));
+        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000))).await.unwrap();
+        db.insert_media(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000))).await.unwrap();
+        db.add_to_album(&album_id, &[id_a.clone(), id_b.clone()]).await.unwrap();
+
+        let result = db.albums_containing_media(&[id_a, id_b]).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(*result.get(&album_id).unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn albums_containing_media_multiple_albums() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let album1 = db.create_album("Album 1").await.unwrap();
+        let album2 = db.create_album("Album 2").await.unwrap();
+        let id_a = MediaId::new("a".repeat(64));
+        let id_b = MediaId::new("b".repeat(64));
+        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000))).await.unwrap();
+        db.insert_media(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000))).await.unwrap();
+        db.add_to_album(&album1, &[id_a.clone()]).await.unwrap();
+        db.add_to_album(&album2, &[id_a.clone(), id_b.clone()]).await.unwrap();
+
+        let result = db.albums_containing_media(&[id_a, id_b]).await.unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(*result.get(&album1).unwrap(), 1);
+        assert_eq!(*result.get(&album2).unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn albums_containing_media_partial_membership() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let album_id = db.create_album("Partial").await.unwrap();
+        let id_a = MediaId::new("a".repeat(64));
+        let id_b = MediaId::new("b".repeat(64));
+        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000))).await.unwrap();
+        db.insert_media(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000))).await.unwrap();
+        db.add_to_album(&album_id, &[id_a.clone()]).await.unwrap();
+
+        let result = db.albums_containing_media(&[id_a, id_b]).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(*result.get(&album_id).unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn albums_containing_media_no_matches() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        db.create_album("Empty Album").await.unwrap();
+        let id_a = MediaId::new("a".repeat(64));
+        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000))).await.unwrap();
+
+        let result = db.albums_containing_media(&[id_a]).await.unwrap();
+        assert!(result.is_empty());
     }
 
     #[tokio::test]
