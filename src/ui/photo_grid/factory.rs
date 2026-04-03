@@ -113,7 +113,7 @@ pub fn build_factory(
             cell.update_property(&[gtk::accessible::Property::Label(&label)]);
 
             // Checkbox accessible label: "Select filename".
-            let checkbox_label = gettext("Select {}").replace("{}", &media.original_filename);
+            let checkbox_label = format!("{} {}", gettext("Select"), media.original_filename);
             cell.imp()
                 .checkbox
                 .update_property(&[gtk::accessible::Property::Label(&checkbox_label)]);
@@ -279,7 +279,8 @@ pub fn build_factory(
 /// capture date, e.g. "IMG_1319.jpeg, 7 September 2024".
 fn accessible_label_for_media(item: &MediaItem) -> String {
     if let Some(ts) = item.taken_at {
-        let dt = chrono::DateTime::from_timestamp(ts, 0)
+        // Note: %B produces English month names regardless of locale.
+        let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
             .map(|d| d.format("%e %B %Y").to_string())
             .unwrap_or_default();
         if dt.is_empty() {

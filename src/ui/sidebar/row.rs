@@ -58,8 +58,8 @@ impl MomentsSidebarRow {
             .set(label_widget)
             .expect("label set once");
 
-        // Let the parent ListBoxRow be the AT-SPI node; suppress this Box.
-        obj.update_property(&[gtk::accessible::Property::Label(label)]);
+        // Suppress this Box from the AT-SPI tree — the parent ListBoxRow is
+        // the accessible node, and it reads the child gtk::Label automatically.
         obj.set_accessible_role(gtk::AccessibleRole::None);
 
         obj
@@ -69,12 +69,11 @@ impl MomentsSidebarRow {
         self.imp().route_id.get().map(|s| s.as_str()).unwrap_or("")
     }
 
-    /// Update the displayed label text and accessible label.
+    /// Update the displayed label text.
     pub fn set_label_text(&self, text: &str) {
         if let Some(label) = self.imp().label.get() {
             label.set_text(text);
         }
-        self.update_property(&[gtk::accessible::Property::Label(text)]);
     }
 
     /// Get the current label text.
