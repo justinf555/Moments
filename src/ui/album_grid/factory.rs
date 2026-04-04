@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use gtk::prelude::*;
+use tracing::warn;
 
 use crate::library::album::AlbumId;
 use crate::library::Library;
@@ -46,12 +47,20 @@ pub fn build_factory(
                 // Fetch cover media IDs on Tokio.
                 let lib_for_ids = Arc::clone(&lib);
                 let aid = album_id.clone();
-                let cover_ids = tk
+                let cover_ids = match tk
                     .spawn(async move { lib_for_ids.album_cover_media_ids(&aid, 4).await })
                     .await
-                    .ok()
-                    .and_then(|r| r.ok())
-                    .unwrap_or_default();
+                {
+                    Ok(Ok(ids)) => ids,
+                    Ok(Err(e)) => {
+                        warn!("failed to fetch album cover IDs: {e}");
+                        return;
+                    }
+                    Err(e) => {
+                        warn!("tokio join error fetching cover IDs: {e}");
+                        return;
+                    }
+                };
 
                 if cover_ids.is_empty() {
                     return;
