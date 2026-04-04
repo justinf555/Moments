@@ -81,15 +81,30 @@ impl AlbumGridView {
         let action_group = gio::SimpleActionGroup::new();
         action_group.add_action(&sort_action);
 
+        // ── Selection mode state ────────────────────────────────────────
+        let selection_mode = Rc::new(Cell::new(false));
+
+        // ── Selection mode header widgets (hidden by default) ───────────
+        let cancel_btn = gtk::Button::with_label(&gettext("Cancel"));
+        cancel_btn.add_css_class("outlined");
+        cancel_btn.set_visible(false);
+        header.pack_start(&cancel_btn);
+
+        let selection_title = gtk::Label::new(Some("0 selected"));
+        selection_title.add_css_class("heading");
+        selection_title.set_visible(false);
+
         // ── Grid ────────────────────────────────────────────────────────
         let store = gio::ListStore::new::<AlbumItemObject>();
-        let selection = gtk::NoSelection::new(Some(store.clone()));
+        let multi_selection = gtk::MultiSelection::new(Some(store.clone()));
 
         let grid_view = gtk::GridView::new(
-            Some(selection),
+            Some(multi_selection.clone()),
             Some(factory::build_factory(
                 Arc::clone(&library),
                 tokio.clone(),
+                Rc::clone(&selection_mode),
+                multi_selection.clone(),
             )),
         );
         grid_view.set_min_columns(2);
@@ -99,6 +114,16 @@ impl AlbumGridView {
         scrolled.set_hscrollbar_policy(gtk::PolicyType::Never);
         scrolled.set_vexpand(true);
         scrolled.set_child(Some(&grid_view));
+
+        // ── Action bar (bottom, selection mode only) ────────────────────
+        let action_bar = gtk::ActionBar::new();
+        action_bar.set_revealed(false);
+        let delete_selected_btn = gtk::Button::with_label(&gettext("Delete Albums"));
+        delete_selected_btn.add_css_class("destructive-action");
+        let bar_box = gtk::Box::new(gtk::Orientation::Horizontal, 24);
+        bar_box.set_halign(gtk::Align::Center);
+        bar_box.append(&delete_selected_btn);
+        action_bar.set_center_widget(Some(&bar_box));
 
         // ── Empty state ─────────────────────────────────────────────────
         let empty_page = adw::StatusPage::builder()
@@ -125,9 +150,14 @@ impl AlbumGridView {
         content_stack.add_named(&empty_page, Some("empty"));
         content_stack.set_visible_child_name("empty");
 
+        // Wrap grid + action bar in a vertical box.
+        let grid_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        grid_box.append(&content_stack);
+        grid_box.append(&action_bar);
+
         let toolbar_view = adw::ToolbarView::new();
         toolbar_view.add_top_bar(&header);
-        toolbar_view.set_content(Some(&content_stack));
+        toolbar_view.set_content(Some(&grid_box));
         toolbar_view.insert_action_group("album", Some(&action_group));
 
         let grid_page = adw::NavigationPage::builder()
@@ -176,6 +206,158 @@ impl AlbumGridView {
                 s.set_uint("album-sort-order", value).ok();
                 sort_store(&st, value);
                 debug!(sort_order = value, "album sort changed");
+            });
+        }
+
+        // ── Enter/exit selection mode ────────────────────────────────────
+        let enter_selection = gio::SimpleAction::new("select", None);
+        {
+            let sm = Rc::clone(&selection_mode);
+            let new_btn = new_album_btn.clone();
+            let menu = menu_btn.clone();
+            let cancel = cancel_btn.clone();
+            let title = selection_title.clone();
+            let bar = action_bar.clone();
+            let gv = grid_view.clone();
+            enter_selection.connect_activate(move |_, _| {
+                sm.set(true);
+                new_btn.set_visible(false);
+                menu.set_visible(false);
+                cancel.set_visible(true);
+                title.set_visible(true);
+                title.set_text("0 selected");
+                bar.set_revealed(true);
+                // Show checkboxes on all visible cards.
+                let mut child = gv.first_child();
+                while let Some(c) = child {
+                    if let Some(card) = c.first_child()
+                        .and_then(|w| w.downcast::<card::AlbumCard>().ok())
+                    {
+                        card.set_selection_mode(true);
+                    }
+                    child = c.next_sibling();
+                }
+            });
+        }
+        action_group.add_action(&enter_selection);
+
+        let exit_selection = {
+            let sm = Rc::clone(&selection_mode);
+            let new_btn = new_album_btn.clone();
+            let menu = menu_btn.clone();
+            let cancel = cancel_btn.clone();
+            let title = selection_title.clone();
+            let bar = action_bar.clone();
+            let gv = grid_view.clone();
+            let sel = multi_selection.clone();
+            let action = gio::SimpleAction::new("exit-selection", None);
+            action.connect_activate(move |_, _| {
+                sm.set(false);
+                new_btn.set_visible(true);
+                menu.set_visible(true);
+                cancel.set_visible(false);
+                title.set_visible(false);
+                bar.set_revealed(false);
+                sel.unselect_all();
+                // Hide checkboxes on all visible cards.
+                let mut child = gv.first_child();
+                while let Some(c) = child {
+                    if let Some(card) = c.first_child()
+                        .and_then(|w| w.downcast::<card::AlbumCard>().ok())
+                    {
+                        card.set_selection_mode(false);
+                    }
+                    child = c.next_sibling();
+                }
+            });
+            action
+        };
+
+        // Cancel button → exit selection.
+        {
+            let exit = exit_selection.clone();
+            cancel_btn.connect_clicked(move |_| { exit.activate(None); });
+        }
+
+        // Update selection count label when selection changes.
+        {
+            let title = selection_title.clone();
+            multi_selection.connect_selection_changed(move |sel, _, _| {
+                let count = sel.selection().size() as u32;
+                title.set_text(&format!("{count} selected"));
+            });
+        }
+
+        // Wire "Delete Albums" action bar button.
+        {
+            let sel = multi_selection.clone();
+            let st = store.clone();
+            let lib = Arc::clone(&library);
+            let tk = tokio.clone();
+            let bs = bus_sender.clone();
+            let exit = exit_selection.clone();
+            let gv = grid_view.clone();
+            delete_selected_btn.connect_clicked(move |btn| {
+                let n = sel.selection().size() as u32;
+                if n == 0 { return; }
+
+                // Collect selected album IDs.
+                let mut ids = Vec::new();
+                for i in 0..st.n_items() {
+                    if sel.is_selected(i) {
+                        if let Some(obj) = st.item(i).and_then(|o| o.downcast::<AlbumItemObject>().ok()) {
+                            ids.push(obj.album().id.as_str().to_owned());
+                        }
+                    }
+                }
+
+                let lib = Arc::clone(&lib);
+                let tk = tk.clone();
+                let bs = bs.clone();
+                let exit = exit.clone();
+                let msg = if n == 1 {
+                    gettext("Delete 1 album?")
+                } else {
+                    gettext("Delete {} albums?").replace("{}", &n.to_string())
+                };
+
+                let dialog = adw::AlertDialog::new(Some(&msg), Some(&gettext("This cannot be undone. Photos in these albums will not be deleted.")));
+                dialog.add_response("cancel", &gettext("Cancel"));
+                dialog.add_response("delete", &gettext("Delete"));
+                dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+                dialog.set_default_response(Some("cancel"));
+                dialog.set_close_response("cancel");
+
+                let ids_clone = ids.clone();
+                dialog.connect_response(None, move |_, response| {
+                    if response != "delete" { return; }
+                    let lib = Arc::clone(&lib);
+                    let tk = tk.clone();
+                    let bs = bs.clone();
+                    let exit = exit.clone();
+                    let ids = ids_clone.clone();
+                    glib::MainContext::default().spawn_local(async move {
+                        for aid in &ids {
+                            let lib = Arc::clone(&lib);
+                            let id = AlbumId::from_raw(aid.clone());
+                            match tk.spawn(async move { lib.delete_album(&id).await }).await {
+                                Ok(Ok(())) => {
+                                    debug!(album_id = %aid, "album deleted (batch)");
+                                    bs.send(crate::app_event::AppEvent::AlbumDeleted {
+                                        id: AlbumId::from_raw(aid.clone()),
+                                    });
+                                }
+                                Ok(Err(e)) => tracing::error!("failed to delete album {aid}: {e}"),
+                                Err(e) => tracing::error!("tokio join error: {e}"),
+                            }
+                        }
+                        exit.activate(None);
+                    });
+                });
+
+                if let Some(win) = btn.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
+                    dialog.present(Some(&win));
+                }
             });
         }
 
@@ -544,6 +726,10 @@ fn build_sort_menu() -> gio::Menu {
     sort_section.append(Some(&gettext("Name (A–Z)")), Some("album.sort(uint32 1)"));
     sort_section.append(Some(&gettext("Date Created")), Some("album.sort(uint32 2)"));
     menu.append_section(Some(&gettext("Sort by")), &sort_section);
+
+    let select_section = gio::Menu::new();
+    select_section.append(Some(&gettext("Select Albums")), Some("album.select"));
+    menu.append_section(None, &select_section);
 
     menu
 }
