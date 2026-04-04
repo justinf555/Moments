@@ -56,15 +56,8 @@ impl AlbumGridView {
         // ── Headerbar ───────────────────────────────────────────────────
         let header = adw::HeaderBar::new();
 
-        let new_album_btn = {
-            let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-            hbox.append(&gtk::Image::from_icon_name("list-add-symbolic"));
-            hbox.append(&gtk::Label::new(Some(&gettext("New Album"))));
-            let btn = gtk::Button::new();
-            btn.set_child(Some(&hbox));
-            btn.add_css_class("outlined");
-            btn
-        };
+        let new_album_btn = gtk::Button::with_label(&gettext("New Album"));
+        new_album_btn.add_css_class("outlined");
         header.pack_start(&new_album_btn);
 
         // Overflow menu (⋮) with sort options.
