@@ -5,16 +5,16 @@ on:
   push:
     branches: [main]
 
-# Shared Flatpak SDK setup as a reusable snippet via YAML anchors isn't
-# supported in GitHub Actions, so each job repeats the install steps.
+env:
+  SQLX_OFFLINE: "true"
+  # Isolated CARGO_HOME avoids rustup shims in ~/.cargo/bin shadowing
+  # the Flatpak SDK's toolchain.
+  CARGO_HOME_SDK: /tmp/flatpak-cargo
 
 jobs:
   lint:
     name: Clippy lint
     runs-on: ubuntu-latest
-
-    env:
-      SQLX_OFFLINE: "true"
 
     steps:
       - uses: actions/checkout@v4
@@ -49,16 +49,17 @@ jobs:
 
       - name: Run clippy
         run: |
-          flatpak run \
-            --share=network \
+          flatpak run --share=network \
             --filesystem="$(pwd)" \
-            --filesystem=~/.cargo:create \
+            --filesystem=~/.cargo/registry:ro \
+            --filesystem=~/.cargo/git:ro \
             --env=SQLX_OFFLINE=true \
-            --env=CARGO_HOME=$HOME/.cargo \
-            --env=PATH=/usr/lib/sdk/rust-stable/bin:/usr/bin:/bin \
-            --command=bash \
-            org.gnome.Sdk//50 -c '
+            --env=CARGO_HOME=$CARGO_HOME_SDK \
+            --command=bash org.gnome.Sdk//50 -c '
               source /usr/lib/sdk/rust-stable/enable.sh
+              mkdir -p $CARGO_HOME/bin
+              ln -sf ~/.cargo/registry $CARGO_HOME/registry 2>/dev/null
+              ln -sf ~/.cargo/git $CARGO_HOME/git 2>/dev/null
               cd '"$(pwd)"'
               cargo clippy --all-targets -- -D warnings
             '
@@ -66,9 +67,6 @@ jobs:
   test:
     name: Unit tests
     runs-on: ubuntu-latest
-
-    env:
-      SQLX_OFFLINE: "true"
 
     steps:
       - uses: actions/checkout@v4
@@ -103,15 +101,17 @@ jobs:
 
       - name: Run tests
         run: |
-          flatpak run \
-            --share=network \
+          flatpak run --share=network \
             --filesystem="$(pwd)" \
-            --filesystem=~/.cargo:create \
+            --filesystem=~/.cargo/registry:ro \
+            --filesystem=~/.cargo/git:ro \
             --env=SQLX_OFFLINE=true \
-            --env=CARGO_HOME=$HOME/.cargo \
-            --command=bash \
-            org.gnome.Sdk//50 -c '
+            --env=CARGO_HOME=$CARGO_HOME_SDK \
+            --command=bash org.gnome.Sdk//50 -c '
               source /usr/lib/sdk/rust-stable/enable.sh
+              mkdir -p $CARGO_HOME/bin
+              ln -sf ~/.cargo/registry $CARGO_HOME/registry 2>/dev/null
+              ln -sf ~/.cargo/git $CARGO_HOME/git 2>/dev/null
               cd '"$(pwd)"'
               cargo test
             '
@@ -119,9 +119,6 @@ jobs:
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
-
-    env:
-      SQLX_OFFLINE: "true"
 
     steps:
       - uses: actions/checkout@v4
@@ -154,21 +151,22 @@ jobs:
           pub static PKGDATADIR: &str = "/usr/share/moments";
           EOF
 
-      - name: Install cargo-llvm-cov and generate coverage
+      - name: Generate coverage
         run: |
-          flatpak run \
-            --share=network \
+          flatpak run --share=network \
             --filesystem="$(pwd)" \
-            --filesystem=~/.cargo:create \
+            --filesystem=~/.cargo/registry:create \
+            --filesystem=~/.cargo/git:create \
             --env=SQLX_OFFLINE=true \
-            --env=CARGO_HOME=$HOME/.cargo \
-            --env=PATH=/usr/lib/sdk/rust-stable/bin:/usr/bin:/bin \
-            --command=bash \
-            org.gnome.Sdk//50 -c '
+            --env=CARGO_HOME=$CARGO_HOME_SDK \
+            --command=bash org.gnome.Sdk//50 -c '
               source /usr/lib/sdk/rust-stable/enable.sh
+              mkdir -p $CARGO_HOME/bin
+              ln -sf ~/.cargo/registry $CARGO_HOME/registry 2>/dev/null
+              ln -sf ~/.cargo/git $CARGO_HOME/git 2>/dev/null
+              export PATH=$CARGO_HOME/bin:$PATH
               cd '"$(pwd)"'
               cargo install cargo-llvm-cov --locked 2>/dev/null || true
-              export PATH=$HOME/.cargo/bin:$PATH
               cargo llvm-cov --lcov --output-path lcov.info
             '
 
@@ -182,9 +180,6 @@ jobs:
   integration-tests:
     name: Integration tests
     runs-on: ubuntu-latest
-
-    env:
-      SQLX_OFFLINE: "true"
 
     steps:
       - uses: actions/checkout@v4
@@ -226,21 +221,23 @@ jobs:
           cat > /tmp/run-tests.sh <<SCRIPT
           #!/bin/bash
           set -e
-          flatpak run \
-            --share=network \
+          flatpak run --share=network \
             --filesystem="$(pwd)" \
-            --filesystem=~/.cargo:create \
+            --filesystem=~/.cargo/registry:ro \
+            --filesystem=~/.cargo/git:ro \
             --filesystem=\$XDG_RUNTIME_DIR \
             --env=SQLX_OFFLINE=true \
-            --env=CARGO_HOME=$HOME/.cargo \
+            --env=CARGO_HOME=$CARGO_HOME_SDK \
             --env=GSK_RENDERER=cairo \
             --env=GTK_A11Y=none \
             --env=GIO_USE_VFS=local \
             --env=XDG_RUNTIME_DIR=\$XDG_RUNTIME_DIR \
             --env=WAYLAND_DISPLAY=\$WAYLAND_DISPLAY \
-            --command=bash \
-            org.gnome.Sdk//50 -c '
+            --command=bash org.gnome.Sdk//50 -c '
               source /usr/lib/sdk/rust-stable/enable.sh
+              mkdir -p \$CARGO_HOME/bin
+              ln -sf ~/.cargo/registry \$CARGO_HOME/registry 2>/dev/null
+              ln -sf ~/.cargo/git \$CARGO_HOME/git 2>/dev/null
               cd $(pwd)
               cargo test --features integration-tests -- --test-threads=1
             '
