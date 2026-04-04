@@ -14,7 +14,6 @@ use crate::library::album::AlbumId;
 use super::album_row::AlbumRow;
 use super::state::AlbumPickerData;
 
-/// Inner state shared between the dialog and its signal handlers.
 struct DialogInner {
     dialog: adw::Dialog,
     list_box: gtk::ListBox,
@@ -25,10 +24,14 @@ struct DialogInner {
     bus_sender: EventSender,
 }
 
-/// Build and present an album picker dialog.
-///
-/// The dialog takes ownership of `data` and `bus_sender`. It presents
-/// itself modally over `parent` and emits bus commands on user action.
+struct NewAlbumWidgets {
+    separator: gtk::ListBoxRow,
+    row: gtk::ListBoxRow,
+    stack: gtk::Stack,
+    entry: gtk::Entry,
+    create_button: gtk::Button,
+}
+
 pub fn present(
     data: AlbumPickerData,
     bus_sender: EventSender,
@@ -37,14 +40,12 @@ pub fn present(
     let total_selected = data.media_ids.len();
     let is_empty = data.albums.is_empty();
 
-    // ── Dialog shell ────────────────────────────────────────────────────
     let dialog = adw::Dialog::builder()
         .title("Add to Album")
         .content_width(400)
         .content_height(500)
         .build();
 
-    // ── Header bar ──────────────────────────────────────────────────────
     let header = adw::HeaderBar::new();
 
     let cancel_btn = gtk::Button::with_label("Cancel");
@@ -55,7 +56,6 @@ pub fn present(
     add_button.set_visible(false);
     header.pack_end(&add_button);
 
-    // ── Search entry ────────────────────────────────────────────────────
     let search_entry = gtk::SearchEntry::builder()
         .placeholder_text("Search albums")
         .margin_start(12)
@@ -64,7 +64,6 @@ pub fn present(
         .margin_bottom(6)
         .build();
 
-    // ── Album list ──────────────────────────────────────────────────────
     let list_box = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::None)
         .build();
@@ -77,85 +76,23 @@ pub fn present(
         rows.push(album_row);
     }
 
-    // ── Separator + "New album..." row ──────────────────────────────────
-    let new_album_separator = gtk::ListBoxRow::builder()
-        .activatable(false)
-        .selectable(false)
-        .child(&gtk::Separator::new(gtk::Orientation::Horizontal))
-        .build();
-    list_box.append(&new_album_separator);
+    let new_album = build_new_album_row();
+    list_box.append(&new_album.separator);
+    list_box.append(&new_album.row);
 
-    // "New album..." row with a stack: label page ↔ entry page.
-    let new_album_stack = gtk::Stack::new();
-    new_album_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
-
-    let new_album_label_box = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .margin_top(8)
-        .margin_bottom(8)
-        .margin_start(12)
-        .margin_end(12)
-        .build();
-    new_album_label_box.append(&gtk::Image::from_icon_name("list-add-symbolic"));
-    new_album_label_box.append(&gtk::Label::new(Some("New album\u{2026}")));
-    new_album_stack.add_named(&new_album_label_box, Some("label"));
-
-    let new_album_entry_box = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .margin_top(4)
-        .margin_bottom(4)
-        .margin_start(12)
-        .margin_end(12)
-        .build();
-    let new_album_entry = gtk::Entry::builder()
-        .placeholder_text("Album name")
-        .hexpand(true)
-        .activates_default(true)
-        .build();
-    let create_add_btn = gtk::Button::with_label("Create & add");
-    create_add_btn.add_css_class("suggested-action");
-    create_add_btn.set_sensitive(false);
-    new_album_entry_box.append(&new_album_entry);
-    new_album_entry_box.append(&create_add_btn);
-    new_album_stack.add_named(&new_album_entry_box, Some("entry"));
-
-    new_album_stack.set_visible_child_name("label");
-
-    let new_album_row = gtk::ListBoxRow::builder()
-        .child(&new_album_stack)
-        .activatable(true)
-        .build();
-    new_album_row.set_widget_name("new-album");
-    list_box.append(&new_album_row);
-
-    // ── Scrolled window ─────────────────────────────────────────────────
     let scrolled = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .vexpand(true)
         .build();
     scrolled.set_child(Some(&list_box));
 
-    // ── Empty state ─────────────────────────────────────────────────────
-    let empty_page = adw::StatusPage::builder()
-        .title("No albums")
-        .description("Create your first album to organise your photos")
-        .icon_name("folder-pictures-symbolic")
-        .build();
-    let empty_create_btn = gtk::Button::with_label("New Album\u{2026}");
-    empty_create_btn.add_css_class("suggested-action");
-    empty_create_btn.add_css_class("pill");
-    empty_create_btn.set_halign(gtk::Align::Center);
-    empty_page.set_child(Some(&empty_create_btn));
+    let (empty_page, empty_create_btn) = build_empty_state();
 
-    // ── Content stack (list vs empty) ───────────────────────────────────
     let content_stack = gtk::Stack::new();
     content_stack.add_named(&scrolled, Some("list"));
     content_stack.add_named(&empty_page, Some("empty"));
     content_stack.set_visible_child_name(if is_empty { "empty" } else { "list" });
 
-    // ── Layout ──────────────────────────────────────────────────────────
     let content_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
     if !is_empty {
         content_box.append(&search_entry);
@@ -168,7 +105,6 @@ pub fn present(
 
     dialog.set_child(Some(&toolbar_view));
 
-    // ── Shared state ────────────────────────────────────────────────────
     let inner = Rc::new(DialogInner {
         dialog: dialog.clone(),
         list_box,
@@ -179,17 +115,112 @@ pub fn present(
         bus_sender,
     });
 
-    // ── Signal handlers ─────────────────────────────────────────────────
+    connect_signals(
+        &inner,
+        &dialog,
+        &cancel_btn,
+        &add_button,
+        &search_entry,
+        &new_album,
+        &empty_create_btn,
+    );
 
-    // Cancel
+    dialog.present(Some(parent));
+}
+
+fn build_new_album_row() -> NewAlbumWidgets {
+    let separator = gtk::ListBoxRow::builder()
+        .activatable(false)
+        .selectable(false)
+        .child(&gtk::Separator::new(gtk::Orientation::Horizontal))
+        .build();
+
+    let stack = gtk::Stack::new();
+    stack.set_transition_type(gtk::StackTransitionType::Crossfade);
+
+    let label_box = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .margin_top(8)
+        .margin_bottom(8)
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+    label_box.append(&gtk::Image::from_icon_name("list-add-symbolic"));
+    label_box.append(&gtk::Label::new(Some("New album\u{2026}")));
+    stack.add_named(&label_box, Some("label"));
+
+    let entry_box = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .margin_top(4)
+        .margin_bottom(4)
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+    let entry = gtk::Entry::builder()
+        .placeholder_text("Album name")
+        .hexpand(true)
+        .activates_default(true)
+        .build();
+    let create_button = gtk::Button::with_label("Create & add");
+    create_button.add_css_class("suggested-action");
+    create_button.set_sensitive(false);
+    entry_box.append(&entry);
+    entry_box.append(&create_button);
+    stack.add_named(&entry_box, Some("entry"));
+
+    stack.set_visible_child_name("label");
+
+    let row = gtk::ListBoxRow::builder()
+        .child(&stack)
+        .activatable(true)
+        .build();
+    row.set_widget_name("new-album");
+
+    NewAlbumWidgets {
+        separator,
+        row,
+        stack,
+        entry,
+        create_button,
+    }
+}
+
+fn build_empty_state() -> (adw::StatusPage, gtk::Button) {
+    let page = adw::StatusPage::builder()
+        .title("No albums")
+        .description("Create your first album to organise your photos")
+        .icon_name("folder-pictures-symbolic")
+        .build();
+    let button = gtk::Button::with_label("New Album\u{2026}");
+    button.add_css_class("suggested-action");
+    button.add_css_class("pill");
+    button.set_halign(gtk::Align::Center);
+    page.set_child(Some(&button));
+
+    (page, button)
+}
+
+fn connect_signals(
+    inner: &Rc<DialogInner>,
+    dialog: &adw::Dialog,
+    cancel_btn: &gtk::Button,
+    add_button: &gtk::Button,
+    search_entry: &gtk::SearchEntry,
+    new_album: &NewAlbumWidgets,
+    empty_create_btn: &gtk::Button,
+) {
+    let new_album_stack = &new_album.stack;
+    let new_album_entry = &new_album.entry;
+    let create_add_btn = &new_album.create_button;
     {
         let d = dialog.clone();
         cancel_btn.connect_clicked(move |_| { d.close(); });
     }
 
-    // Row activated → select album (or trigger inline create)
     {
-        let i = Rc::clone(&inner);
+        let i = Rc::clone(inner);
         let stack = new_album_stack.clone();
         let entry = new_album_entry.clone();
         inner.list_box.connect_row_activated(move |_, row| {
@@ -202,12 +233,10 @@ pub fn present(
             let album_id_str = row.widget_name().to_string();
             debug!(album_id = %album_id_str, "album row activated");
 
-            // Deselect previous
             for r in &i.rows {
                 r.set_selected(false);
             }
 
-            // Select this one
             if let Some(r) = i.rows.iter().find(|r| r.album_id.as_str() == album_id_str) {
                 r.set_selected(true);
                 *i.selected_album_id.borrow_mut() = Some(r.album_id.clone());
@@ -216,9 +245,8 @@ pub fn present(
         });
     }
 
-    // "Add to album" button
     {
-        let i = Rc::clone(&inner);
+        let i = Rc::clone(inner);
         add_button.connect_clicked(move |_| {
             let album_id = i.selected_album_id.borrow().clone();
             if let Some(album_id) = album_id {
@@ -232,14 +260,12 @@ pub fn present(
         });
     }
 
-    // Search filtering
     {
-        let i = Rc::clone(&inner);
+        let i = Rc::clone(inner);
         search_entry.connect_search_changed(move |entry| {
             let query = entry.text().to_string();
             let lower_query = query.to_lowercase();
 
-            // Update highlights and filter
             for r in &i.rows {
                 r.update_search_highlight(&query);
                 let matches = lower_query.is_empty()
@@ -249,9 +275,8 @@ pub fn present(
         });
     }
 
-    // "Create & add" button in inline create flow
     {
-        let i = Rc::clone(&inner);
+        let i = Rc::clone(inner);
         let entry_ref = new_album_entry.clone();
         let do_create = move || {
             let name = entry_ref.text().to_string();
@@ -279,7 +304,6 @@ pub fn present(
         }
     }
 
-    // Enable/disable "Create & add" based on entry text
     {
         let btn = create_add_btn.clone();
         new_album_entry.connect_changed(move |entry| {
@@ -287,7 +311,6 @@ pub fn present(
         });
     }
 
-    // Escape in new album entry → revert to label
     {
         let stack = new_album_stack.clone();
         let key_ctrl = gtk::EventControllerKey::new();
@@ -302,10 +325,9 @@ pub fn present(
         });
     }
 
-    // Empty state "New Album..." button → show create dialog
     {
         let d = dialog.clone();
-        let i = Rc::clone(&inner);
+        let i = Rc::clone(inner);
         empty_create_btn.connect_clicked(move |_| {
             let alert = adw::AlertDialog::builder()
                 .heading("New Album")
@@ -342,7 +364,4 @@ pub fn present(
             alert.present(Some(&d));
         });
     }
-
-    // ── Present ─────────────────────────────────────────────────────────
-    dialog.present(Some(parent));
 }
