@@ -83,7 +83,8 @@ coverage:
 		echo "Coverage report: target/llvm-cov/html/index.html"'
 
 metrics:
-	rust-code-analysis-cli --metrics -p src/ 2>/dev/null | head -50
+	@rust-code-analysis-cli --metrics -O json -p src/ 2>/dev/null | \
+	python3 scripts/complexity-report.py
 
 # ── Full CI locally ─────────────────────────────────────────────────────────
 
