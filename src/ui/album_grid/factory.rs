@@ -17,6 +17,7 @@ pub fn build_factory(
     tokio: tokio::runtime::Handle,
     selection_mode: Rc<Cell<bool>>,
     selection: gtk::MultiSelection,
+    enter_selection: gtk::gio::SimpleAction,
 ) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
 
@@ -43,12 +44,17 @@ pub fn build_factory(
         card.set_checked(list_item.is_selected());
         card.bind(&item);
 
-        // Wire checkbox → select/deselect.
+        // Wire checkbox → enter selection mode + select/deselect.
         {
             let checkbox = card.imp().checkbox.clone();
             let sel = selection.clone();
+            let sm = Rc::clone(&selection_mode);
+            let enter = enter_selection.clone();
             let handler_id = checkbox.connect_toggled(move |cb: &gtk::CheckButton| {
                 if cb.is_active() {
+                    if !sm.get() {
+                        enter.activate(None);
+                    }
                     sel.select_item(position, false);
                 } else {
                     sel.unselect_item(position);

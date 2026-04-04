@@ -94,6 +94,9 @@ impl AlbumGridView {
         selection_title.add_css_class("heading");
         selection_title.set_visible(false);
 
+        // Enter-selection action — created early so the factory can reference it.
+        let enter_selection = gio::SimpleAction::new("select", None);
+
         // ── Grid ────────────────────────────────────────────────────────
         let store = gio::ListStore::new::<AlbumItemObject>();
         let multi_selection = gtk::MultiSelection::new(Some(store.clone()));
@@ -105,6 +108,7 @@ impl AlbumGridView {
                 tokio.clone(),
                 Rc::clone(&selection_mode),
                 multi_selection.clone(),
+                enter_selection.clone(),
             )),
         );
         grid_view.set_min_columns(2);
@@ -210,7 +214,6 @@ impl AlbumGridView {
         }
 
         // ── Enter/exit selection mode ────────────────────────────────────
-        let enter_selection = gio::SimpleAction::new("select", None);
         {
             let sm = Rc::clone(&selection_mode);
             let new_btn = new_album_btn.clone();
