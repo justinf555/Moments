@@ -13,6 +13,7 @@ use route::ROUTES;
 mod imp {
     use super::*;
     use std::cell::OnceCell;
+    use std::rc::Rc;
 
     pub struct MomentsSidebar {
         pub sidebar: OnceCell<adw::Sidebar>,
@@ -498,7 +499,7 @@ impl MomentsSidebar {
 
         // Persist.
         let strv: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
-        settings.set_strv("pinned-album-ids", &strv).ok();
+        settings.set_strv("pinned-album-ids", strv).ok();
 
         debug!(album_id = %album_id, name = %album_name, "album pinned to sidebar");
         true
@@ -518,7 +519,7 @@ impl MomentsSidebar {
 
             // Persist.
             let strv: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
-            settings.set_strv("pinned-album-ids", &strv).ok();
+            settings.set_strv("pinned-album-ids", strv).ok();
 
             debug!(album_id = %album_id, "album unpinned from sidebar");
         }
