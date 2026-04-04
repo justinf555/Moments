@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use gtk::{glib, prelude::*, subclass::prelude::*};
 
@@ -29,8 +29,12 @@ mod imp {
         /// Mosaic grid widget.
         pub mosaic_grid: std::cell::OnceCell<gtk::Grid>,
         pub placeholder: gtk::Image,
+        pub checkbox: gtk::CheckButton,
         pub name_label: gtk::Label,
         pub count_label: gtk::Label,
+        pub in_selection_mode: Cell<bool>,
+        /// Click handler for the checkbox — connected in factory bind.
+        pub checkbox_handler: RefCell<Option<glib::SignalHandlerId>>,
         pub bindings: RefCell<Option<CardBindings>>,
     }
 
@@ -97,8 +101,35 @@ mod imp {
             overlay.add_overlay(&grid);
             let _ = self.mosaic_grid.set(grid);
 
+            // Selection checkbox — top-left, shown in selection mode.
+            self.checkbox.set_halign(gtk::Align::Start);
+            self.checkbox.set_valign(gtk::Align::Start);
+            self.checkbox.set_margin_start(6);
+            self.checkbox.set_margin_top(6);
+            self.checkbox.add_css_class("selection-mode");
+            self.checkbox.add_css_class("osd");
+            self.checkbox.set_visible(false);
+            overlay.add_overlay(&self.checkbox);
+
             frame.set_child(Some(&overlay));
             inner.append(&frame);
+
+            // Hover controller — show checkbox on mouse enter/leave.
+            let motion = gtk::EventControllerMotion::new();
+            motion.set_propagation_phase(gtk::PropagationPhase::Capture);
+            let cell_weak = obj.downgrade();
+            motion.connect_enter(move |_, _x, _y| {
+                let Some(cell) = cell_weak.upgrade() else { return };
+                cell.imp().checkbox.set_visible(true);
+            });
+            let cell_weak = obj.downgrade();
+            motion.connect_leave(move |_| {
+                let Some(cell) = cell_weak.upgrade() else { return };
+                if !cell.imp().in_selection_mode.get() {
+                    cell.imp().checkbox.set_visible(false);
+                }
+            });
+            obj.add_controller(motion);
 
             // Name label.
             self.name_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
@@ -139,6 +170,21 @@ glib::wrapper! {
 impl AlbumCard {
     pub fn new() -> Self {
         glib::Object::new()
+    }
+
+    /// Set whether the card is in selection mode (checkbox always visible).
+    pub fn set_selection_mode(&self, active: bool) {
+        let imp = self.imp();
+        imp.in_selection_mode.set(active);
+        imp.checkbox.set_visible(active);
+        if !active {
+            imp.checkbox.set_active(false);
+        }
+    }
+
+    /// Set the checkbox checked state.
+    pub fn set_checked(&self, checked: bool) {
+        self.imp().checkbox.set_active(checked);
     }
 
     /// Bind the card to an album item.
@@ -191,6 +237,8 @@ impl AlbumCard {
         for pic in &imp.pictures {
             pic.set_paintable(None::<&gtk::gdk::Texture>);
         }
+        imp.checkbox.set_visible(false);
+        imp.checkbox.set_active(false);
         imp.name_label.set_text("");
         imp.count_label.set_text("");
         self.set_display_mode(DisplayMode::Placeholder);

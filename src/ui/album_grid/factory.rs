@@ -1,6 +1,8 @@
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 
-use gtk::prelude::*;
+use gtk::{prelude::*, subclass::prelude::*};
 use tracing::warn;
 
 use crate::library::album::AlbumId;
@@ -13,10 +15,13 @@ use super::item::AlbumItemObject;
 pub fn build_factory(
     library: Arc<dyn Library>,
     tokio: tokio::runtime::Handle,
+    selection_mode: Rc<Cell<bool>>,
+    selection: gtk::MultiSelection,
+    enter_selection: gtk::gio::SimpleAction,
 ) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
 
-    factory.connect_setup(|_, obj| {
+    factory.connect_setup(move |_, obj| {
         let list_item = obj.downcast_ref::<gtk::ListItem>().expect("is ListItem");
         let card = AlbumCard::new();
         card.set_size_request(205, 205 + 52); // Cover + labels.
@@ -33,10 +38,35 @@ pub fn build_factory(
             .item()
             .and_downcast::<AlbumItemObject>()
             .expect("item is AlbumItemObject");
+        let position = list_item.position();
 
+        card.set_selection_mode(selection_mode.get());
+        card.set_checked(list_item.is_selected());
         card.bind(&item);
 
-        // Load mosaic thumbnails: fetch up to 4 cover IDs, then decode each.
+        // Wire checkbox → enter selection mode + select/deselect.
+        {
+            let checkbox = card.imp().checkbox.clone();
+            let sel = selection.clone();
+            let sm = Rc::clone(&selection_mode);
+            let enter = enter_selection.clone();
+            let handler_id = checkbox.connect_toggled(move |cb: &gtk::CheckButton| {
+                if cb.is_active() {
+                    if !sm.get() {
+                        enter.activate(None);
+                    }
+                    sel.select_item(position, false);
+                } else {
+                    sel.unselect_item(position);
+                }
+            });
+            card.imp()
+                .checkbox_handler
+                .borrow_mut()
+                .replace(handler_id);
+        }
+
+        // Load mosaic thumbnails.
         if item.mosaic_texture(0).is_none() {
             let album_id = AlbumId::from_raw(item.album().id.as_str().to_owned());
             let lib = Arc::clone(&library);
@@ -44,7 +74,6 @@ pub fn build_factory(
             let item_weak = item.downgrade();
 
             gtk::glib::MainContext::default().spawn_local(async move {
-                // Fetch cover media IDs on Tokio.
                 let lib_for_ids = Arc::clone(&lib);
                 let aid = album_id.clone();
                 let cover_ids = match tk
@@ -66,7 +95,6 @@ pub fn build_factory(
                     return;
                 }
 
-                // Decode each thumbnail on a blocking thread.
                 for (i, media_id) in cover_ids.into_iter().enumerate() {
                     let path = lib.thumbnail_path(&media_id);
                     let tk2 = tk.clone();
@@ -112,6 +140,12 @@ pub fn build_factory(
             .child()
             .and_downcast::<AlbumCard>()
             .expect("child is AlbumCard");
+
+        // Disconnect checkbox handler.
+        if let Some(handler) = card.imp().checkbox_handler.borrow_mut().take() {
+            card.imp().checkbox.disconnect(handler);
+        }
+
         card.unbind();
 
         if let Some(item) = list_item
