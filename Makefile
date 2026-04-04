@@ -28,8 +28,15 @@ test:
 	$(FLATPAK_RUN) -c 'source /usr/lib/sdk/rust-stable/enable.sh && cd $(CURDIR) && cargo test'
 
 test-integration:
-	$(FLATPAK_RUN) \
-	  --env=GSK_RENDERER=cairo --env=GTK_A11Y=none --env=GIO_USE_VFS=local \
+	flatpak run --share=network \
+	  --filesystem=$(CURDIR) \
+	  --filesystem=$(HOME)/.cargo:create \
+	  --env=SQLX_OFFLINE=true \
+	  --env=CARGO_HOME=$(HOME)/.cargo \
+	  --env=GSK_RENDERER=cairo \
+	  --env=GTK_A11Y=none \
+	  --env=GIO_USE_VFS=local \
+	  --command=bash org.gnome.Sdk//50 \
 	  -c 'source /usr/lib/sdk/rust-stable/enable.sh && cd $(CURDIR) && cargo test --features integration-tests -- --test-threads=1'
 
 test-all: test test-integration
