@@ -60,6 +60,7 @@ fn drain_events() {
     });
 }
 
+#[allow(clippy::new_without_default)]
 impl EventBus {
     /// Create a new event bus.
     ///
@@ -117,12 +118,6 @@ pub fn subscribe(handler: impl Fn(&AppEvent) + 'static) {
     SUBSCRIBERS.with(|cell| {
         cell.borrow_mut().push(Box::new(handler));
     });
-}
-
-impl Default for EventBus {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl Drop for EventBus {

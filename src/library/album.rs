@@ -9,6 +9,7 @@ use super::media::{MediaCursor, MediaId, MediaItem};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlbumId(String);
 
+#[allow(clippy::new_without_default)]
 impl AlbumId {
     pub fn new() -> Self {
         Self(uuid::Uuid::new_v4().to_string())
@@ -20,12 +21,6 @@ impl AlbumId {
 
     pub(crate) fn from_raw(s: String) -> Self {
         Self(s)
-    }
-}
-
-impl Default for AlbumId {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

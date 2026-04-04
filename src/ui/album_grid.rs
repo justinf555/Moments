@@ -298,7 +298,6 @@ impl AlbumGridView {
             let tk = tokio.clone();
             let bs = bus_sender.clone();
             let exit = exit_selection.clone();
-            let _gv = grid_view.clone();
             delete_selected_btn.connect_clicked(move |btn| {
                 let n = sel.selection().size() as u32;
                 if n == 0 { return; }
