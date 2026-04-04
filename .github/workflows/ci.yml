@@ -103,8 +103,8 @@ jobs:
         run: |
           flatpak run --share=network \
             --filesystem="$(pwd)" \
-            --filesystem=~/.cargo/registry:ro \
-            --filesystem=~/.cargo/git:ro \
+            --filesystem=~/.cargo/registry:create \
+            --filesystem=~/.cargo/git:create \
             --env=SQLX_OFFLINE=true \
             --env=CARGO_HOME=$CARGO_HOME_SDK \
             --command=bash org.gnome.Sdk//50 -c '
@@ -112,9 +112,18 @@ jobs:
               mkdir -p $CARGO_HOME/bin
               ln -sf ~/.cargo/registry $CARGO_HOME/registry 2>/dev/null
               ln -sf ~/.cargo/git $CARGO_HOME/git 2>/dev/null
+              export PATH=$CARGO_HOME/bin:$PATH
               cd '"$(pwd)"'
-              cargo test
+              cargo install cargo-nextest --locked 2>/dev/null || true
+              cargo nextest run --profile ci
             '
+
+      - name: Upload test results to Codecov
+        if: always()
+        uses: codecov/test-results-action@v1
+        with:
+          files: target/nextest/ci/junit.xml
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   coverage:
     name: Coverage

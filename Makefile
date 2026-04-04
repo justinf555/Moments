@@ -19,8 +19,8 @@ clean:
 # are symlinked from the host for speed.
 FLATPAK_RUN = flatpak run --share=network \
 	--filesystem=$(CURDIR) \
-	--filesystem=$(HOME)/.cargo/registry:ro \
-	--filesystem=$(HOME)/.cargo/git:ro \
+	--filesystem=$(HOME)/.cargo/registry:create \
+	--filesystem=$(HOME)/.cargo/git:create \
 	--env=SQLX_OFFLINE=true \
 	--env=CARGO_HOME=/tmp/flatpak-cargo \
 	--command=bash org.gnome.Sdk//50
@@ -40,6 +40,11 @@ check:
 
 test:
 	$(FLATPAK_RUN) -c '$(SDK_INIT) && cargo test'
+
+test-nextest:
+	$(FLATPAK_RUN) -c '$(SDK_INIT) && \
+		cargo install cargo-nextest --locked 2>/dev/null || true && \
+		cargo nextest run --profile ci'
 
 test-integration:
 	flatpak run --share=network \
