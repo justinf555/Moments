@@ -62,7 +62,7 @@ pub(super) fn wire_context_menu(ctx: &ActionContext) {
     let bus_tx = ctx.bus_sender.clone();
 
     gesture.connect_pressed(move |gesture, _, x, y| {
-        let Some(pos) = find_clicked_position(&grid_view, x, y) else {
+        let Some(pos) = find_clicked_position(&grid_view, &selection, x, y) else {
             return;
         };
 
@@ -118,34 +118,39 @@ pub(super) fn wire_context_menu(ctx: &ActionContext) {
     ctx.grid_view.add_controller(gesture);
 }
 
-/// Walk the grid view's widget tree to find which cell position was clicked.
-fn find_clicked_position(grid_view: &gtk::GridView, x: f64, y: f64) -> Option<u32> {
+/// Find the store position of the item at (x, y) by resolving the cell's
+/// bound data. This is correct even when the grid is scrolled (unlike
+/// counting siblings, which only works for non-virtualized lists).
+fn find_clicked_position(
+    grid_view: &gtk::GridView,
+    selection: &gtk::MultiSelection,
+    x: f64,
+    y: f64,
+) -> Option<u32> {
     let picked = grid_view.pick(x, y, gtk::PickFlags::DEFAULT)?;
 
-    // Walk up from the picked widget to find the direct child of the grid.
-    let grid_widget = grid_view.upcast_ref::<gtk::Widget>();
-    let mut target = Some(picked);
-    while let Some(ref w) = target {
-        if w.parent().as_ref() == Some(grid_widget) {
-            break;
-        }
-        target = w.parent();
-    }
-    let target = target?;
-
-    // Count siblings to determine position.
-    let mut pos = 0u32;
-    let mut child = grid_view.first_child();
-    loop {
-        match child {
-            Some(ref c) if c.eq(&target) => return Some(pos),
-            Some(ref c) => {
-                pos += 1;
-                child = c.next_sibling();
+    // Walk up from the picked widget to find the PhotoGridCell.
+    let mut widget = Some(picked);
+    while let Some(ref w) = widget {
+        if let Some(cell) = w.downcast_ref::<super::cell::PhotoGridCell>() {
+            let item = cell.bound_item()?;
+            let target_id = item.item().id.clone();
+            // Search the selection model for the matching item.
+            for i in 0..selection.n_items() {
+                if let Some(obj) = selection
+                    .item(i)
+                    .and_then(|o| o.downcast::<MediaItemObject>().ok())
+                {
+                    if obj.item().id == target_id {
+                        return Some(i);
+                    }
+                }
             }
-            None => return None,
+            return None;
         }
+        widget = w.parent();
     }
+    None
 }
 
 /// Build the trash-view context menu: Restore, Delete Permanently.

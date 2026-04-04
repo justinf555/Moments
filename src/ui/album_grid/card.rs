@@ -229,6 +229,11 @@ impl AlbumCard {
         });
     }
 
+    /// Return the currently bound item, if any.
+    pub fn bound_item(&self) -> Option<AlbumItemObject> {
+        self.imp().bindings.borrow().as_ref()?.item.upgrade()
+    }
+
     /// Unbind the card, disconnecting signals.
     pub fn unbind(&self) {
         let imp = self.imp();

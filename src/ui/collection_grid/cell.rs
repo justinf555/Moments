@@ -189,6 +189,11 @@ impl CollectionGridCell {
         });
     }
 
+    /// Return the currently bound item, if any.
+    pub fn bound_item(&self) -> Option<CollectionItemObject> {
+        self.imp().bindings.borrow().as_ref()?.item.upgrade()
+    }
+
     /// Unbind the cell, disconnecting signals.
     pub fn unbind(&self) {
         let imp = self.imp();

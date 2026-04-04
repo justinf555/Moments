@@ -294,7 +294,6 @@ impl AlbumGridView {
             gesture.set_button(3);
 
             let gv = grid_view.clone();
-            let store_ctx = store.clone();
             let lib_ctx = Arc::clone(&library);
             let tk_ctx = tokio.clone();
             let nav_ctx = nav_view.clone();
@@ -304,7 +303,7 @@ impl AlbumGridView {
 
             gesture.connect_pressed(move |gesture, _, x, y| {
                 actions::show_context_menu(
-                    &gv, &store_ctx, &lib_ctx, &tk_ctx, &s_ctx,
+                    &gv, &lib_ctx, &tk_ctx, &s_ctx,
                     &tc_ctx, &bs_ctx, &nav_ctx, x, y,
                 );
                 gesture.set_state(gtk::EventSequenceState::Claimed);
