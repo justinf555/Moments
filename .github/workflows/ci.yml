@@ -5,7 +5,63 @@ on:
   push:
     branches: [main]
 
+# Shared Flatpak SDK setup as a reusable snippet via YAML anchors isn't
+# supported in GitHub Actions, so each job repeats the install steps.
+
 jobs:
+  lint:
+    name: Clippy lint
+    runs-on: ubuntu-latest
+
+    env:
+      SQLX_OFFLINE: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Flatpak and GNOME 50 SDK
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq flatpak
+          sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install -y --noninteractive flathub \
+            org.gnome.Sdk//50 \
+            org.gnome.Platform//50 \
+            org.freedesktop.Sdk.Extension.rust-stable//25.08
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: gnome50-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: gnome50-cargo-
+
+      - name: Generate config.rs stub
+        run: |
+          cat > src/config.rs <<'EOF'
+          pub static VERSION: &str = env!("CARGO_PKG_VERSION");
+          pub static GETTEXT_PACKAGE: &str = "moments";
+          pub static LOCALEDIR: &str = "/usr/share/locale";
+          pub static PKGDATADIR: &str = "/usr/share/moments";
+          EOF
+
+      - name: Run clippy
+        run: |
+          flatpak run \
+            --share=network \
+            --filesystem="$(pwd)" \
+            --filesystem=~/.cargo:create \
+            --env=SQLX_OFFLINE=true \
+            --env=CARGO_HOME=$HOME/.cargo \
+            --command=bash \
+            org.gnome.Sdk//50 -c '
+              source /usr/lib/sdk/rust-stable/enable.sh
+              cd '"$(pwd)"'
+              cargo clippy --all-targets -- -D warnings
+            '
+
   test:
     name: Unit tests
     runs-on: ubuntu-latest
@@ -59,6 +115,68 @@ jobs:
               cargo test
             '
 
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+
+    env:
+      SQLX_OFFLINE: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Flatpak and GNOME 50 SDK
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq flatpak
+          sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install -y --noninteractive flathub \
+            org.gnome.Sdk//50 \
+            org.gnome.Platform//50 \
+            org.freedesktop.Sdk.Extension.rust-stable//25.08
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: gnome50-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: gnome50-cargo-
+
+      - name: Generate config.rs stub
+        run: |
+          cat > src/config.rs <<'EOF'
+          pub static VERSION: &str = env!("CARGO_PKG_VERSION");
+          pub static GETTEXT_PACKAGE: &str = "moments";
+          pub static LOCALEDIR: &str = "/usr/share/locale";
+          pub static PKGDATADIR: &str = "/usr/share/moments";
+          EOF
+
+      - name: Install cargo-llvm-cov and generate coverage
+        run: |
+          flatpak run \
+            --share=network \
+            --filesystem="$(pwd)" \
+            --filesystem=~/.cargo:create \
+            --env=SQLX_OFFLINE=true \
+            --env=CARGO_HOME=$HOME/.cargo \
+            --command=bash \
+            org.gnome.Sdk//50 -c '
+              source /usr/lib/sdk/rust-stable/enable.sh
+              cd '"$(pwd)"'
+              cargo install cargo-llvm-cov --locked 2>/dev/null || true
+              export PATH=$HOME/.cargo/bin:$PATH
+              cargo llvm-cov --lcov --output-path lcov.info
+            '
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
   integration-tests:
     name: Integration tests
     runs-on: ubuntu-latest
@@ -103,8 +221,6 @@ jobs:
           mkdir -p "$XDG_RUNTIME_DIR"
           chmod 700 "$XDG_RUNTIME_DIR"
 
-          # Write a wrapper script that mutter will exec — at that point
-          # WAYLAND_DISPLAY is set and the socket exists.
           cat > /tmp/run-tests.sh <<SCRIPT
           #!/bin/bash
           set -e

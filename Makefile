@@ -45,6 +45,28 @@ test-integration:
 
 test-all: test test-integration
 
+# ── Linting & Analysis ──────────────────────────────────────────────────────
+
+lint:
+	$(FLATPAK_RUN) -c 'source /usr/lib/sdk/rust-stable/enable.sh && cd $(CURDIR) && cargo clippy --all-targets -- -D warnings'
+
+audit:
+	cargo audit
+	cargo deny check
+
+coverage:
+	$(FLATPAK_RUN) -c 'source /usr/lib/sdk/rust-stable/enable.sh && cd $(CURDIR) && \
+		export PATH=$$HOME/.cargo/bin:$$PATH && \
+		cargo llvm-cov --html && \
+		echo "Coverage report: target/llvm-cov/html/index.html"'
+
+metrics:
+	rust-code-analysis-cli --metrics -p src/ 2>/dev/null | head -50
+
+# ── Full CI locally ─────────────────────────────────────────────────────────
+
+ci-all: lint test test-integration audit
+
 # ── Release ───────────────────────────────────────────────────────────────────
 #
 # Usage: make release VERSION=0.2.0

@@ -1,0 +1,54 @@
+name: Metrics
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  complexity:
+    name: Code complexity
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install rust-code-analysis
+        run: cargo install rust-code-analysis-cli --locked
+
+      - name: Run complexity analysis
+        run: |
+          echo "## Code Complexity Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Top 20 most complex functions across the codebase.
+          echo "### Top 20 functions by cognitive complexity" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          rust-code-analysis-cli --metrics -O json -p src/ 2>/dev/null | \
+            python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          funcs = []
+          def walk(node, file=''):
+              if 'kind' in node and node['kind'] in ('function', 'impl'):
+                  name = node.get('name', '<anon>')
+                  cc = node.get('metrics', {}).get('cognitive', {}).get('sum', 0)
+                  sloc = node.get('metrics', {}).get('loc', {}).get('sloc', 0)
+                  if cc > 0:
+                      funcs.append((cc, sloc, file, name))
+              for space in node.get('spaces', []):
+                  walk(space, file)
+          for entry in (data if isinstance(data, list) else [data]):
+              walk(entry, entry.get('name', ''))
+          funcs.sort(reverse=True)
+          print(f'{'Complexity':>10}  {'SLOC':>6}  Function')
+          print(f'{\"─\"*10:>10}  {\"─\"*6:>6}  {\"─\"*40}')
+          for cc, sloc, f, name in funcs[:20]:
+              short_f = f.replace('src/', '')
+              print(f'{cc:>10}  {sloc:>6}  {short_f}::{name}')
+          " >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "Analysis failed — see logs" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
