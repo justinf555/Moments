@@ -59,6 +59,14 @@
 				to Immich libraries. Set to 0 to disable polling.
 			</description>
 		</key>
+		<key name="pinned-album-ids" type="as">
+			<default>[]</default>
+			<summary>Pinned album IDs in display order</summary>
+			<description>
+				Album IDs pinned to the sidebar's "Pinned" section,
+				in the order they should appear. Maximum 5.
+			</description>
+		</key>
 		<key name="album-sort-order" type="u">
 			<default>0</default>
 			<summary>Album grid sort order</summary>

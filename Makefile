@@ -3,23 +3,45 @@ run:
 	flatpak run io.github.justinf555.Moments
 
 run-dev:
-	flatpak-builder --user --install --force-clean flatpak-build-dir io.github.justinf555.Moments.dev.json && \
+	flatpak-builder --user --install flatpak-build-dir io.github.justinf555.Moments.dev.json && \
 	flatpak run --env=RUST_LOG=moments=debug io.github.justinf555.Moments
 
 clean:
 	rm -rf flatpak-build-dir
 
-# ── Testing ──────────────────────────────────────────────────────────────────
+# ── Testing (inside GNOME 50 Flatpak SDK) ────────────────────────────────────
+#
+# All test targets run inside the Flatpak SDK so that libadwaita 1.9
+# and other GNOME 50 dependencies are available.
+
+FLATPAK_RUN = flatpak run --share=network \
+	--filesystem=$(CURDIR) \
+	--filesystem=$(HOME)/.cargo:create \
+	--env=SQLX_OFFLINE=true \
+	--env=CARGO_HOME=$(HOME)/.cargo \
+	--command=bash org.gnome.Sdk//50
+
+check:
+	$(FLATPAK_RUN) -c 'source /usr/lib/sdk/rust-stable/enable.sh && cd $(CURDIR) && cargo check'
 
 test:
-	cargo test
+	$(FLATPAK_RUN) -c 'source /usr/lib/sdk/rust-stable/enable.sh && cd $(CURDIR) && cargo test'
 
 test-integration:
-	GSK_RENDERER=cairo cargo test --features integration-tests -- --test-threads=1
-
-test-integration-headless:
-	dbus-run-session mutter --headless --wayland --no-x11 --virtual-monitor 1024x768 -- \
-	  env GSK_RENDERER=cairo cargo test --features integration-tests -- --test-threads=1
+	flatpak run --share=network \
+	  --socket=wayland \
+	  --filesystem=$(CURDIR) \
+	  --filesystem=$(HOME)/.cargo:create \
+	  --filesystem=$(XDG_RUNTIME_DIR) \
+	  --env=SQLX_OFFLINE=true \
+	  --env=CARGO_HOME=$(HOME)/.cargo \
+	  --env=GSK_RENDERER=cairo \
+	  --env=GTK_A11Y=none \
+	  --env=GIO_USE_VFS=local \
+	  --env=XDG_RUNTIME_DIR=$(XDG_RUNTIME_DIR) \
+	  --env=WAYLAND_DISPLAY=$(WAYLAND_DISPLAY) \
+	  --command=bash org.gnome.Sdk//50 \
+	  -c 'source /usr/lib/sdk/rust-stable/enable.sh && cd $(CURDIR) && cargo test --features integration-tests -- --test-threads=1'
 
 test-all: test test-integration
 

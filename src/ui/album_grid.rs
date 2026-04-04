@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use adw::prelude::*;
 use gettextrs::gettext;
-use gtk::{gio, glib};
+use gtk::{gio, glib, subclass::prelude::*};
 use tracing::debug;
 
 use crate::library::album::{Album, AlbumId};
@@ -529,11 +529,26 @@ impl AlbumGridView {
                 // Separator
                 vbox.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 
-                // Pin to sidebar (stub — disabled)
+                // Pin to sidebar.
                 let pin_btn = gtk::Button::with_label(&gettext("Pin to Sidebar"));
                 pin_btn.add_css_class("flat");
-                pin_btn.set_sensitive(false);
-                pin_btn.set_tooltip_text(Some(&gettext("Coming soon")));
+                {
+                    // Check current pin state.
+                    let app = crate::application::MomentsApplication::default();
+                    if let Some(win) = app.active_window() {
+                        if let Some(win) = win.downcast_ref::<crate::ui::MomentsWindow>() {
+                            if let Some(sb) = win.sidebar() {
+                                if sb.is_pinned(&album_id_str) {
+                                    pin_btn.set_label(&gettext("Pinned"));
+                                    pin_btn.set_sensitive(false);
+                                } else if sb.pinned_count() >= 5 {
+                                    pin_btn.set_sensitive(false);
+                                    pin_btn.set_tooltip_text(Some(&gettext("Unpin an album to pin another")));
+                                }
+                            }
+                        }
+                    }
+                }
                 vbox.append(&pin_btn);
 
                 // Share (stub)
@@ -555,6 +570,26 @@ impl AlbumGridView {
                 popover.set_parent(&gv);
                 popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
                 popover.set_has_arrow(true);
+
+                // Wire Pin to sidebar.
+                {
+                    let pop = popover.downgrade();
+                    let aid = album_id_str.clone();
+                    let aname = album_name.clone();
+                    pin_btn.connect_clicked(move |_| {
+                        if let Some(p) = pop.upgrade() { p.popdown(); }
+                        let app = crate::application::MomentsApplication::default();
+                        if let Some(settings) = app.imp().settings.get() {
+                            if let Some(win) = app.active_window() {
+                                if let Some(win) = win.downcast_ref::<crate::ui::MomentsWindow>() {
+                                    if let Some(sb) = win.sidebar() {
+                                        sb.pin_album(&aid, &aname, settings);
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
 
                 // Wire Open — same as activation.
                 {

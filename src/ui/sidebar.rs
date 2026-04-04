@@ -13,9 +13,13 @@ use route::ROUTES;
 mod imp {
     use super::*;
     use std::cell::OnceCell;
+    use std::rc::Rc;
 
     pub struct MomentsSidebar {
         pub sidebar: OnceCell<adw::Sidebar>,
+        pub pinned_section: OnceCell<adw::SidebarSection>,
+        /// Album IDs for pinned items, in display order.
+        pub pinned_ids: RefCell<Vec<String>>,
         pub trash_badge: OnceCell<gtk::Label>,
         pub trash_count: Cell<u32>,
 
@@ -55,6 +59,8 @@ mod imp {
         fn default() -> Self {
             Self {
                 sidebar: OnceCell::new(),
+                pinned_section: OnceCell::new(),
+                pinned_ids: RefCell::new(Vec::new()),
                 trash_badge: OnceCell::new(),
                 trash_count: Cell::new(0),
                 bottom_sheet: OnceCell::new(),
@@ -134,6 +140,65 @@ mod imp {
             }
 
             sidebar.append(section);
+
+            // Pinned albums section — hidden when empty.
+            let pinned_section = adw::SidebarSection::new();
+            pinned_section.set_title(Some(&gettext("Pinned")));
+
+            // Context menu for pinned items: "Unpin from sidebar".
+            let unpin_menu = gio::Menu::new();
+            unpin_menu.append(Some(&gettext("Unpin from Sidebar")), Some("sidebar.unpin"));
+            pinned_section.set_menu_model(Some(&unpin_menu));
+
+            sidebar.append(pinned_section.clone());
+            let _ = self.pinned_section.set(pinned_section.clone());
+
+            // Track which pinned item was right-clicked for the unpin action.
+            let menu_target_index: Rc<Cell<Option<u32>>> = Rc::new(Cell::new(None));
+            {
+                let mti = Rc::clone(&menu_target_index);
+                let ps = pinned_section.clone();
+                sidebar.connect_setup_menu(move |_, item| {
+                    // Determine if this item is in the pinned section.
+                    if let Some(item) = item {
+                        let n = ps.items().n_items();
+                        for i in 0..n {
+                            if let Some(pinned_item) = ps.item(i) {
+                                if pinned_item == *item {
+                                    mti.set(Some(i));
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    mti.set(None);
+                });
+            }
+
+            // Unpin action — removes the right-clicked pinned item.
+            let unpin_action = gio::SimpleAction::new("unpin", None);
+            {
+                let mti = Rc::clone(&menu_target_index);
+                let obj_weak = obj.downgrade();
+                unpin_action.connect_activate(move |_, _| {
+                    let Some(index) = mti.get() else { return };
+                    let Some(sidebar) = obj_weak.upgrade() else { return };
+                    let ids = sidebar.imp().pinned_ids.borrow();
+                    if let Some(album_id) = ids.get(index as usize).cloned() {
+                        drop(ids);
+                        // Get settings from the app.
+                        let app = crate::application::MomentsApplication::default();
+                        if let Some(settings) = app.imp().settings.get() {
+                            sidebar.unpin_album(&album_id, settings);
+                        }
+                    }
+                });
+            }
+
+            let sidebar_action_group = gio::SimpleActionGroup::new();
+            sidebar_action_group.add_action(&unpin_action);
+            toolbar_view.insert_action_group("sidebar", Some(&sidebar_action_group));
+
             toolbar_view.set_content(Some(&sidebar));
 
             // ── Status bar (bottom bar of the BottomSheet) ───────────────
@@ -326,12 +391,30 @@ impl MomentsSidebar {
     }
 
     /// Connect a callback that fires when the user activates a sidebar item.
+    ///
+    /// System routes (index 0–5) map to `ROUTES[index].id`.
+    /// Pinned album items (index 6+) map to `"album:{album_id}"`.
     pub fn connect_route_selected<F: Fn(&str) + 'static>(&self, f: F) {
         let sidebar = self.imp().sidebar.get().unwrap().clone();
+        let weak = self.downgrade();
         sidebar.connect_activated(move |_, index| {
-            if let Some(route) = ROUTES.get(index as usize) {
-                debug!(route = %route.id, "sidebar route selected");
-                f(route.id);
+            let system_count = ROUTES.len() as u32;
+            if index < system_count {
+                if let Some(route) = ROUTES.get(index as usize) {
+                    debug!(route = %route.id, "sidebar route selected");
+                    f(route.id);
+                }
+            } else {
+                // Pinned album item.
+                let pinned_index = (index - system_count) as usize;
+                if let Some(sidebar) = weak.upgrade() {
+                    let ids = sidebar.imp().pinned_ids.borrow();
+                    if let Some(album_id) = ids.get(pinned_index) {
+                        let route = format!("album:{album_id}");
+                        debug!(route = %route, "pinned album selected");
+                        f(&route);
+                    }
+                }
             }
         });
     }
@@ -355,6 +438,101 @@ impl MomentsSidebar {
         let new_count = (current + delta).max(0) as u32;
         imp.trash_count.set(new_count);
         self.update_trash_badge();
+    }
+
+    // ── Pinned albums ───────────────────────────────────────────────
+
+    /// Maximum number of pinned albums.
+    const MAX_PINNED: usize = 5;
+
+    /// Load pinned albums from GSettings and populate the Pinned section.
+    ///
+    /// Called once at startup after the library is available. `albums` is
+    /// the full album list so we can resolve names for the sidebar items.
+    pub fn load_pinned_albums(
+        &self,
+        settings: &gtk::gio::Settings,
+        albums: &[(String, String)], // (id, name)
+    ) {
+        let imp = self.imp();
+        let ids: Vec<String> = settings
+            .strv("pinned-album-ids")
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let section = imp.pinned_section.get().unwrap();
+        section.remove_all();
+
+        let mut valid_ids = Vec::new();
+        for id in &ids {
+            // Find the album name — skip if the album was deleted.
+            if let Some((_, name)) = albums.iter().find(|(aid, _)| aid == id) {
+                let item = adw::SidebarItem::builder()
+                    .title(name)
+                    .icon_name("folder-symbolic")
+                    .build();
+                section.append(item);
+                valid_ids.push(id.clone());
+            }
+        }
+        *imp.pinned_ids.borrow_mut() = valid_ids;
+    }
+
+    /// Pin an album to the sidebar. Returns false if already pinned or at limit.
+    pub fn pin_album(&self, album_id: &str, album_name: &str, settings: &gtk::gio::Settings) -> bool {
+        let imp = self.imp();
+        let mut ids = imp.pinned_ids.borrow_mut();
+
+        if ids.len() >= Self::MAX_PINNED || ids.contains(&album_id.to_string()) {
+            return false;
+        }
+
+        ids.push(album_id.to_string());
+
+        let section = imp.pinned_section.get().unwrap();
+        let item = adw::SidebarItem::builder()
+            .title(album_name)
+            .icon_name("folder-symbolic")
+            .build();
+        section.append(item);
+
+        // Persist.
+        let strv: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+        settings.set_strv("pinned-album-ids", strv).ok();
+
+        debug!(album_id = %album_id, name = %album_name, "album pinned to sidebar");
+        true
+    }
+
+    /// Unpin an album from the sidebar.
+    pub fn unpin_album(&self, album_id: &str, settings: &gtk::gio::Settings) {
+        let imp = self.imp();
+        let mut ids = imp.pinned_ids.borrow_mut();
+
+        if let Some(pos) = ids.iter().position(|id| id == album_id) {
+            ids.remove(pos);
+            let section = imp.pinned_section.get().unwrap();
+            if let Some(item) = section.item(pos as u32) {
+                section.remove(&item);
+            }
+
+            // Persist.
+            let strv: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+            settings.set_strv("pinned-album-ids", strv).ok();
+
+            debug!(album_id = %album_id, "album unpinned from sidebar");
+        }
+    }
+
+    /// Number of currently pinned albums.
+    pub fn pinned_count(&self) -> usize {
+        self.imp().pinned_ids.borrow().len()
+    }
+
+    /// Whether the given album is currently pinned.
+    pub fn is_pinned(&self, album_id: &str) -> bool {
+        self.imp().pinned_ids.borrow().iter().any(|id| id == album_id)
     }
 
     /// Update the Trash badge with the current count.
