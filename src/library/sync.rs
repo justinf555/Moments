@@ -33,6 +33,28 @@ const THUMBNAIL_THROTTLE: std::time::Duration = std::time::Duration::from_millis
 /// Number of acks to accumulate before flushing to server.
 const ACK_FLUSH_THRESHOLD: usize = 500;
 
+#[derive(Default)]
+struct SyncCounters {
+    assets: usize,
+    exifs: usize,
+    deletes: usize,
+    people: usize,
+    faces: usize,
+    albums: usize,
+    errors: usize,
+}
+
+fn deserialize_entity<T: serde::de::DeserializeOwned>(
+    data: &serde_json::Value,
+    entity_type: &str,
+    line_number: usize,
+) -> Result<T, LibraryError> {
+    serde_json::from_value(data.clone()).map_err(|e| {
+        error!(line_number, "failed to deserialize {entity_type}: {e}");
+        LibraryError::Immich(format!("invalid {entity_type} at line {line_number}: {e}"))
+    })
+}
+
 impl SyncHandle {
     /// Spawn the sync manager and thumbnail downloader as background Tokio tasks.
     ///
@@ -191,13 +213,7 @@ impl SyncManager {
 
         let mut lines = reader.lines();
         let mut acks: Vec<String> = Vec::new();
-        let mut asset_count: usize = 0;
-        let mut exif_count: usize = 0;
-        let mut delete_count: usize = 0;
-        let mut person_count: usize = 0;
-        let mut face_count: usize = 0;
-        let mut album_count: usize = 0;
-        let mut error_count: usize = 0;
+        let mut counters = SyncCounters::default();
         let mut is_reset = false;
         let mut existing_ids: Option<HashSet<String>> = None;
         let mut line_number: usize = 0;
@@ -220,327 +236,115 @@ impl SyncManager {
 
             match sync_line.entity_type.as_str() {
                 "SyncResetV1" => {
-                    warn!("server requested sync reset — performing full resync");
-                    is_reset = true;
-                    let ids = self.db.all_media_ids().await?;
-                    info!(existing_count = ids.len(), "loaded existing media IDs for reset tracking");
-                    existing_ids = Some(ids);
-                    self.db.clear_asset_faces().await?;
-                    self.db.clear_people().await?;
-                    self.db.clear_sync_checkpoints().await?;
+                    self.handle_sync_reset(&mut is_reset, &mut existing_ids).await?;
                     acks.push(sync_line.ack);
                 }
                 "AssetV1" => {
-                    let asset: SyncAssetV1 = serde_json::from_value(sync_line.data)
-                        .map_err(|e| {
-                            error!(line_number, "failed to deserialize AssetV1: {e}");
-                            LibraryError::Immich(format!("invalid AssetV1 at line {line_number}: {e}"))
-                        })?;
+                    let asset: SyncAssetV1 = deserialize_entity(&sync_line.data, "AssetV1", line_number)?;
                     let id = asset.id.clone();
-
-                    let audit_id = self.db.start_sync_audit("AssetV1", &id, &sync_cycle).await.ok();
-
-                    match self.handle_asset(asset).await {
-                        Ok(()) => {
-                            if let Some(aid) = audit_id {
-                                let _ = self.db.complete_sync_audit(aid, "upsert").await;
-                            }
-                            acks.push(sync_line.ack);
-                            asset_count += 1;
-                        }
-                        Err(e) => {
-                            warn!(asset_id = %id, error = %e, "skipping asset");
-                            if let Some(aid) = audit_id {
-                                let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
-                            }
-                            error_count += 1;
-                            // Don't ack — server will resend next cycle.
-                        }
+                    self.process_entity("AssetV1", &id, &sync_cycle, sync_line.ack,
+                        self.handle_asset(asset),
+                        &mut acks, &mut counters.assets, &mut counters.errors,
+                    ).await;
+                    if counters.assets.is_multiple_of(500) && counters.assets > 0 {
+                        info!(assets = counters.assets, "sync progress");
                     }
-
-                    if asset_count.is_multiple_of(500) && asset_count > 0 {
-                        info!(assets = asset_count, "sync progress");
-                    }
-
                     if let Some(ref mut ids) = existing_ids {
                         ids.remove(&id);
                     }
                 }
                 "AssetDeleteV1" => {
-                    let delete: SyncAssetDeleteV1 = serde_json::from_value(sync_line.data)
-                        .map_err(|e| {
-                            error!(line_number, "failed to deserialize AssetDeleteV1: {e}");
-                            LibraryError::Immich(format!("invalid AssetDeleteV1 at line {line_number}: {e}"))
-                        })?;
-
-                    let audit_id = self.db.start_sync_audit("AssetDeleteV1", &delete.asset_id, &sync_cycle).await.ok();
-
+                    let delete: SyncAssetDeleteV1 = deserialize_entity(&sync_line.data, "AssetDeleteV1", line_number)?;
+                    let id = delete.asset_id.clone();
                     if let Some(ref mut ids) = existing_ids {
-                        ids.remove(&delete.asset_id);
+                        ids.remove(&id);
                     }
-
-                    match self.handle_asset_delete(&delete.asset_id).await {
-                        Ok(()) => {
-                            if let Some(aid) = audit_id {
-                                let _ = self.db.complete_sync_audit(aid, "delete").await;
-                            }
-                            acks.push(sync_line.ack);
-                            delete_count += 1;
-                        }
-                        Err(e) => {
-                            warn!(asset_id = %delete.asset_id, error = %e, "skipping asset delete");
-                            if let Some(aid) = audit_id {
-                                let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
-                            }
-                            error_count += 1;
-                        }
-                    }
+                    self.process_entity("AssetDeleteV1", &id, &sync_cycle, sync_line.ack,
+                        self.handle_asset_delete(&id),
+                        &mut acks, &mut counters.deletes, &mut counters.errors,
+                    ).await;
                 }
                 "AssetExifV1" => {
-                    let exif: SyncAssetExifV1 = serde_json::from_value(sync_line.data)
-                        .map_err(|e| {
-                            error!(line_number, "failed to deserialize AssetExifV1: {e}");
-                            LibraryError::Immich(format!("invalid AssetExifV1 at line {line_number}: {e}"))
-                        })?;
-
-                    let exif_asset_id = exif.asset_id.clone();
-                    let audit_id = self.db.start_sync_audit("AssetExifV1", &exif_asset_id, &sync_cycle).await.ok();
-
-                    match self.handle_asset_exif(exif).await {
-                        Ok(()) => {
-                            if let Some(aid) = audit_id {
-                                let _ = self.db.complete_sync_audit(aid, "upsert").await;
-                            }
-                            acks.push(sync_line.ack);
-                            exif_count += 1;
-                        }
-                        Err(e) => {
-                            warn!(asset_id = %exif_asset_id, error = %e, "skipping exif");
-                            if let Some(aid) = audit_id {
-                                let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
-                            }
-                            error_count += 1;
-                        }
-                    }
+                    let exif: SyncAssetExifV1 = deserialize_entity(&sync_line.data, "AssetExifV1", line_number)?;
+                    let id = exif.asset_id.clone();
+                    self.process_entity("AssetExifV1", &id, &sync_cycle, sync_line.ack,
+                        self.handle_asset_exif(exif),
+                        &mut acks, &mut counters.exifs, &mut counters.errors,
+                    ).await;
                 }
                 "AlbumV1" => {
-                    let album: SyncAlbumV1 = serde_json::from_value(sync_line.data)
-                        .map_err(|e| {
-                            error!(line_number, "failed to deserialize AlbumV1: {e}");
-                            LibraryError::Immich(format!("invalid AlbumV1 at line {line_number}: {e}"))
-                        })?;
-
-                    let album_id = album.id.clone();
-                    let audit_id = self.db.start_sync_audit("AlbumV1", &album_id, &sync_cycle).await.ok();
-
-                    match self.handle_album(album).await {
-                        Ok(()) => {
-                            if let Some(aid) = audit_id {
-                                let _ = self.db.complete_sync_audit(aid, "upsert").await;
-                            }
-                            acks.push(sync_line.ack);
-                            album_count += 1;
-                        }
-                        Err(e) => {
-                            warn!(album_id = %album_id, error = %e, "skipping album");
-                            if let Some(aid) = audit_id {
-                                let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
-                            }
-                            error_count += 1;
-                        }
-                    }
+                    let album: SyncAlbumV1 = deserialize_entity(&sync_line.data, "AlbumV1", line_number)?;
+                    let id = album.id.clone();
+                    self.process_entity("AlbumV1", &id, &sync_cycle, sync_line.ack,
+                        self.handle_album(album),
+                        &mut acks, &mut counters.albums, &mut counters.errors,
+                    ).await;
                 }
                 "AlbumDeleteV1" => {
-                    let delete: SyncAlbumDeleteV1 = serde_json::from_value(sync_line.data)
-                        .map_err(|e| {
-                            error!(line_number, "failed to deserialize AlbumDeleteV1: {e}");
-                            LibraryError::Immich(format!("invalid AlbumDeleteV1 at line {line_number}: {e}"))
-                        })?;
-
-                    let del_album_id = delete.album_id.clone();
-                    let audit_id = self.db.start_sync_audit("AlbumDeleteV1", &del_album_id, &sync_cycle).await.ok();
-
-                    match self.handle_album_delete(&delete.album_id).await {
-                        Ok(()) => {
-                            if let Some(aid) = audit_id {
-                                let _ = self.db.complete_sync_audit(aid, "delete").await;
-                            }
-                            acks.push(sync_line.ack);
-                        }
-                        Err(e) => {
-                            warn!(album_id = %del_album_id, error = %e, "skipping album delete");
-                            if let Some(aid) = audit_id {
-                                let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
-                            }
-                            error_count += 1;
-                        }
-                    }
+                    let delete: SyncAlbumDeleteV1 = deserialize_entity(&sync_line.data, "AlbumDeleteV1", line_number)?;
+                    let id = delete.album_id.clone();
+                    self.process_entity("AlbumDeleteV1", &id, &sync_cycle, sync_line.ack,
+                        self.handle_album_delete(&id),
+                        &mut acks, &mut counters.deletes, &mut counters.errors,
+                    ).await;
                 }
                 "AlbumToAssetV1" => {
-                    let assoc: SyncAlbumToAssetV1 = serde_json::from_value(sync_line.data)
-                        .map_err(|e| {
-                            error!(line_number, "failed to deserialize AlbumToAssetV1: {e}");
-                            LibraryError::Immich(format!("invalid AlbumToAssetV1 at line {line_number}: {e}"))
-                        })?;
-
-                    let assoc_id = format!("{}:{}", assoc.album_id, assoc.asset_id);
-                    let audit_id = self.db.start_sync_audit("AlbumToAssetV1", &assoc_id, &sync_cycle).await.ok();
-
-                    match self.handle_album_asset(assoc).await {
-                        Ok(()) => {
-                            if let Some(aid) = audit_id {
-                                let _ = self.db.complete_sync_audit(aid, "upsert").await;
-                            }
-                            acks.push(sync_line.ack);
-                        }
-                        Err(e) => {
-                            warn!(assoc = %assoc_id, error = %e, "skipping album-asset link");
-                            if let Some(aid) = audit_id {
-                                let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
-                            }
-                            error_count += 1;
-                        }
-                    }
+                    let assoc: SyncAlbumToAssetV1 = deserialize_entity(&sync_line.data, "AlbumToAssetV1", line_number)?;
+                    let id = format!("{}:{}", assoc.album_id, assoc.asset_id);
+                    self.process_entity("AlbumToAssetV1", &id, &sync_cycle, sync_line.ack,
+                        self.handle_album_asset(assoc),
+                        &mut acks, &mut counters.albums, &mut counters.errors,
+                    ).await;
                 }
                 "AlbumToAssetDeleteV1" => {
-                    let assoc: SyncAlbumToAssetDeleteV1 = serde_json::from_value(sync_line.data)
-                        .map_err(|e| {
-                            error!(line_number, "failed to deserialize AlbumToAssetDeleteV1: {e}");
-                            LibraryError::Immich(format!("invalid AlbumToAssetDeleteV1 at line {line_number}: {e}"))
-                        })?;
-
-                    let assoc_id = format!("{}:{}", assoc.album_id, assoc.asset_id);
-                    let audit_id = self.db.start_sync_audit("AlbumToAssetDeleteV1", &assoc_id, &sync_cycle).await.ok();
-
-                    match self.handle_album_asset_delete(assoc).await {
-                        Ok(()) => {
-                            if let Some(aid) = audit_id {
-                                let _ = self.db.complete_sync_audit(aid, "delete").await;
-                            }
-                            acks.push(sync_line.ack);
-                        }
-                        Err(e) => {
-                            warn!(assoc = %assoc_id, error = %e, "skipping album-asset unlink");
-                            if let Some(aid) = audit_id {
-                                let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
-                            }
-                            error_count += 1;
-                        }
-                    }
+                    let assoc: SyncAlbumToAssetDeleteV1 = deserialize_entity(&sync_line.data, "AlbumToAssetDeleteV1", line_number)?;
+                    let id = format!("{}:{}", assoc.album_id, assoc.asset_id);
+                    self.process_entity("AlbumToAssetDeleteV1", &id, &sync_cycle, sync_line.ack,
+                        self.handle_album_asset_delete(assoc),
+                        &mut acks, &mut counters.albums, &mut counters.errors,
+                    ).await;
                 }
                 "PersonV1" => {
-                    let person: SyncPersonV1 = serde_json::from_value(sync_line.data)
-                        .map_err(|e| {
-                            error!(line_number, "failed to deserialize PersonV1: {e}");
-                            LibraryError::Immich(format!("invalid PersonV1 at line {line_number}: {e}"))
-                        })?;
-                    let person_id = person.id.clone();
-                    let audit_id = self.db.start_sync_audit("PersonV1", &person_id, &sync_cycle).await.ok();
-
-                    match self.handle_person(person).await {
-                        Ok(()) => {
-                            if let Some(aid) = audit_id {
-                                let _ = self.db.complete_sync_audit(aid, "upsert").await;
-                            }
-                            acks.push(sync_line.ack);
-                            person_count += 1;
-                        }
-                        Err(e) => {
-                            warn!(person_id = %person_id, error = %e, "skipping person");
-                            if let Some(aid) = audit_id {
-                                let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
-                            }
-                            error_count += 1;
-                        }
-                    }
+                    let person: SyncPersonV1 = deserialize_entity(&sync_line.data, "PersonV1", line_number)?;
+                    let id = person.id.clone();
+                    self.process_entity("PersonV1", &id, &sync_cycle, sync_line.ack,
+                        self.handle_person(person),
+                        &mut acks, &mut counters.people, &mut counters.errors,
+                    ).await;
                 }
                 "PersonDeleteV1" => {
-                    let delete: SyncPersonDeleteV1 = serde_json::from_value(sync_line.data)
-                        .map_err(|e| {
-                            error!(line_number, "failed to deserialize PersonDeleteV1: {e}");
-                            LibraryError::Immich(format!("invalid PersonDeleteV1 at line {line_number}: {e}"))
-                        })?;
-                    let person_id = delete.person_id.clone();
-                    let audit_id = self.db.start_sync_audit("PersonDeleteV1", &person_id, &sync_cycle).await.ok();
-
-                    match self.db.delete_person(&person_id).await {
-                        Ok(()) => {
-                            if let Some(aid) = audit_id {
-                                let _ = self.db.complete_sync_audit(aid, "delete").await;
-                            }
-                            acks.push(sync_line.ack);
-                            delete_count += 1;
-                        }
-                        Err(e) => {
-                            warn!(person_id = %person_id, error = %e, "skipping person delete");
-                            if let Some(aid) = audit_id {
-                                let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
-                            }
-                            error_count += 1;
-                        }
-                    }
+                    let delete: SyncPersonDeleteV1 = deserialize_entity(&sync_line.data, "PersonDeleteV1", line_number)?;
+                    let id = delete.person_id.clone();
+                    self.process_entity("PersonDeleteV1", &id, &sync_cycle, sync_line.ack,
+                        self.db.delete_person(&id),
+                        &mut acks, &mut counters.deletes, &mut counters.errors,
+                    ).await;
                 }
                 "AssetFaceV1" => {
-                    let face: SyncAssetFaceV1 = serde_json::from_value(sync_line.data)
-                        .map_err(|e| {
-                            error!(line_number, "failed to deserialize AssetFaceV1: {e}");
-                            LibraryError::Immich(format!("invalid AssetFaceV1 at line {line_number}: {e}"))
-                        })?;
-                    let face_id = face.id.clone();
-                    let audit_id = self.db.start_sync_audit("AssetFaceV1", &face_id, &sync_cycle).await.ok();
-
-                    match self.handle_asset_face(face).await {
-                        Ok(()) => {
-                            if let Some(aid) = audit_id {
-                                let _ = self.db.complete_sync_audit(aid, "upsert").await;
-                            }
-                            acks.push(sync_line.ack);
-                            face_count += 1;
-                        }
-                        Err(e) => {
-                            warn!(face_id = %face_id, error = %e, "skipping asset face");
-                            if let Some(aid) = audit_id {
-                                let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
-                            }
-                            error_count += 1;
-                        }
-                    }
+                    let face: SyncAssetFaceV1 = deserialize_entity(&sync_line.data, "AssetFaceV1", line_number)?;
+                    let id = face.id.clone();
+                    self.process_entity("AssetFaceV1", &id, &sync_cycle, sync_line.ack,
+                        self.handle_asset_face(face),
+                        &mut acks, &mut counters.faces, &mut counters.errors,
+                    ).await;
                 }
                 "AssetFaceDeleteV1" => {
-                    let delete: SyncAssetFaceDeleteV1 = serde_json::from_value(sync_line.data)
-                        .map_err(|e| {
-                            error!(line_number, "failed to deserialize AssetFaceDeleteV1: {e}");
-                            LibraryError::Immich(format!("invalid AssetFaceDeleteV1 at line {line_number}: {e}"))
-                        })?;
-                    let face_id = delete.asset_face_id.clone();
-                    let audit_id = self.db.start_sync_audit("AssetFaceDeleteV1", &face_id, &sync_cycle).await.ok();
-
-                    match self.db.delete_asset_face(&face_id).await {
-                        Ok(()) => {
-                            if let Some(aid) = audit_id {
-                                let _ = self.db.complete_sync_audit(aid, "delete").await;
-                            }
-                            acks.push(sync_line.ack);
-                            delete_count += 1;
-                        }
-                        Err(e) => {
-                            warn!(face_id = %face_id, error = %e, "skipping asset face delete");
-                            if let Some(aid) = audit_id {
-                                let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
-                            }
-                            error_count += 1;
-                        }
-                    }
+                    let delete: SyncAssetFaceDeleteV1 = deserialize_entity(&sync_line.data, "AssetFaceDeleteV1", line_number)?;
+                    let id = delete.asset_face_id.clone();
+                    self.process_entity("AssetFaceDeleteV1", &id, &sync_cycle, sync_line.ack,
+                        self.db.delete_asset_face(&id),
+                        &mut acks, &mut counters.deletes, &mut counters.errors,
+                    ).await;
                 }
                 "SyncCompleteV1" => {
                     info!(
-                        assets = asset_count,
-                        exifs = exif_count,
-                        deletes = delete_count,
-                        albums = album_count,
-                        people = person_count,
-                        faces = face_count,
-                        errors = error_count,
+                        assets = counters.assets,
+                        exifs = counters.exifs,
+                        deletes = counters.deletes,
+                        albums = counters.albums,
+                        people = counters.people,
+                        faces = counters.faces,
+                        errors = counters.errors,
                         lines = line_number,
                         "sync stream complete"
                     );
@@ -553,18 +357,76 @@ impl SyncManager {
                 }
             }
 
-            // Flush acks incrementally so progress is preserved.
             if acks.len() >= ACK_FLUSH_THRESHOLD {
                 self.flush_acks(&mut acks).await?;
                 let _ = self.events.send(LibraryEvent::SyncProgress {
-                    assets: asset_count,
-                    people: person_count,
-                    faces: face_count,
+                    assets: counters.assets,
+                    people: counters.people,
+                    faces: counters.faces,
                 });
             }
         }
 
-        // Handle reset: delete assets that weren't in the stream.
+        self.finish_sync(is_reset, existing_ids, &mut acks, &counters).await
+    }
+
+    async fn handle_sync_reset(
+        &self,
+        is_reset: &mut bool,
+        existing_ids: &mut Option<HashSet<String>>,
+    ) -> Result<(), LibraryError> {
+        warn!("server requested sync reset — performing full resync");
+        *is_reset = true;
+        let ids = self.db.all_media_ids().await?;
+        info!(existing_count = ids.len(), "loaded existing media IDs for reset tracking");
+        *existing_ids = Some(ids);
+        self.db.clear_asset_faces().await?;
+        self.db.clear_people().await?;
+        self.db.clear_sync_checkpoints().await?;
+        Ok(())
+    }
+
+    /// Process a single sync entity: audit, run handler, ack on success or
+    /// log + increment error count on failure.
+    #[allow(clippy::too_many_arguments)]
+    async fn process_entity(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+        sync_cycle: &str,
+        ack: String,
+        handler_result: impl std::future::Future<Output = Result<(), LibraryError>>,
+        acks: &mut Vec<String>,
+        success_counter: &mut usize,
+        error_counter: &mut usize,
+    ) {
+        let audit_id = self.db.start_sync_audit(entity_type, entity_id, sync_cycle).await.ok();
+
+        match handler_result.await {
+            Ok(()) => {
+                if let Some(aid) = audit_id {
+                    let _ = self.db.complete_sync_audit(aid, "upsert").await;
+                }
+                acks.push(ack);
+                *success_counter += 1;
+            }
+            Err(e) => {
+                warn!(entity_type, entity_id, error = %e, "skipping sync entity");
+                if let Some(aid) = audit_id {
+                    let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
+                }
+                *error_counter += 1;
+            }
+        }
+    }
+
+    async fn finish_sync(
+        &self,
+        is_reset: bool,
+        existing_ids: Option<HashSet<String>>,
+        acks: &mut Vec<String>,
+        counters: &SyncCounters,
+    ) -> Result<(), LibraryError> {
         if is_reset {
             if let Some(orphaned_ids) = existing_ids {
                 if !orphaned_ids.is_empty() {
@@ -578,30 +440,23 @@ impl SyncManager {
             }
         }
 
-        // Flush any remaining acks.
         if !acks.is_empty() {
-            self.flush_acks(&mut acks).await?;
+            self.flush_acks(acks).await?;
         }
 
-        // Emit sync complete — always, so the status bar reverts to idle.
         let _ = self.events.send(LibraryEvent::SyncComplete {
-            assets: asset_count,
-            people: person_count,
-            faces: face_count,
-            errors: error_count,
+            assets: counters.assets,
+            people: counters.people,
+            faces: counters.faces,
+            errors: counters.errors,
         });
 
-        // Also emit people-specific event for grid refresh.
-        if person_count > 0 || face_count > 0 {
+        if counters.people > 0 || counters.faces > 0 {
             let _ = self.events.send(LibraryEvent::PeopleSyncComplete);
         }
 
-        if asset_count > 0 || error_count > 0 {
-            info!(
-                synced = asset_count,
-                errors = error_count,
-                "sync complete"
-            );
+        if counters.assets > 0 || counters.errors > 0 {
+            info!(synced = counters.assets, errors = counters.errors, "sync complete");
         } else {
             debug!("sync complete — no new assets");
         }
