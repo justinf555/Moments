@@ -95,31 +95,37 @@ mod imp {
             obj.set_title("Moments");
 
             let toolbar_view = adw::ToolbarView::new();
+            toolbar_view.add_top_bar(&build_header_bar());
 
-            // ── Sidebar header bar ───────────────────────────────────────
-            let header = adw::HeaderBar::new();
-
-            let menu_button = gtk::MenuButton::builder()
-                .primary(true)
-                .icon_name("open-menu-symbolic")
-                .tooltip_text(gettext("Main Menu"))
-                .build();
-            let menu = gio::Menu::new();
-            let import_section = gio::Menu::new();
-            import_section.append(Some("_Import"), Some("app.import"));
-            menu.append_section(None, &import_section);
-            let app_section = gio::Menu::new();
-            app_section.append(Some("_Keyboard Shortcuts"), Some("app.shortcuts"));
-            app_section.append(Some("_About Moments"), Some("app.about"));
-            app_section.append(Some("_Preferences"), Some("app.preferences"));
-            menu.append_section(None, &app_section);
-            menu_button.set_menu_model(Some(&menu));
-            header.pack_end(&menu_button);
-
-            toolbar_view.add_top_bar(&header);
-
-            // ── AdwSidebar ──────────────────────────────────────────────
             let sidebar = adw::Sidebar::new();
+            sidebar.append(self.build_route_section());
+            self.build_pinned_section(&obj, &sidebar, &toolbar_view);
+            toolbar_view.set_content(Some(&sidebar));
+
+            let StatusBarWidgets { bar_stack, idle_label, sync_label, thumb_label, upload_label, complete_label } =
+                build_status_bar_stack();
+            let UploadDetailWidgets { sheet_box, progress_label, progress_bar, detail_label } =
+                build_upload_detail_sheet();
+
+            let bottom_sheet = build_bottom_sheet(&toolbar_view, &sheet_box, &bar_stack);
+            obj.set_child(Some(&bottom_sheet));
+
+            self.sidebar.set(sidebar).expect("set once in constructed");
+            self.bottom_sheet.set(bottom_sheet).expect("set once in constructed");
+            self.progress_label.set(progress_label).expect("set once in constructed");
+            self.progress_bar.set(progress_bar).expect("set once in constructed");
+            self.detail_label.set(detail_label).expect("set once in constructed");
+            self.bar_stack.set(bar_stack).expect("set once in constructed");
+            self.idle_label.set(idle_label).expect("set once in constructed");
+            self.sync_label.set(sync_label).expect("set once in constructed");
+            self.thumb_label.set(thumb_label).expect("set once in constructed");
+            self.upload_label.set(upload_label).expect("set once in constructed");
+            self.complete_label.set(complete_label).expect("set once in constructed");
+        }
+    }
+
+    impl MomentsSidebar {
+        fn build_route_section(&self) -> adw::SidebarSection {
             let section = adw::SidebarSection::new();
 
             for route in ROUTES.iter() {
@@ -127,7 +133,6 @@ mod imp {
                     .title(gettext(route.label))
                     .icon_name(route.icon);
 
-                // Trash item gets a badge suffix showing the item count.
                 if route.id == "trash" {
                     let badge = gtk::Label::new(None);
                     badge.add_css_class("sidebar-badge");
@@ -139,13 +144,18 @@ mod imp {
                 section.append(builder.build());
             }
 
-            sidebar.append(section);
+            section
+        }
 
-            // Pinned albums section — hidden when empty.
+        fn build_pinned_section(
+            &self,
+            obj: &<Self as ObjectSubclass>::Type,
+            sidebar: &adw::Sidebar,
+            toolbar_view: &adw::ToolbarView,
+        ) {
             let pinned_section = adw::SidebarSection::new();
             pinned_section.set_title(Some(&gettext("Pinned")));
 
-            // Context menu for pinned items: "Unpin from sidebar".
             let unpin_menu = gio::Menu::new();
             unpin_menu.append(Some(&gettext("Unpin from Sidebar")), Some("sidebar.unpin"));
             pinned_section.set_menu_model(Some(&unpin_menu));
@@ -153,13 +163,11 @@ mod imp {
             sidebar.append(pinned_section.clone());
             let _ = self.pinned_section.set(pinned_section.clone());
 
-            // Track which pinned item was right-clicked for the unpin action.
             let menu_target_index: Rc<Cell<Option<u32>>> = Rc::new(Cell::new(None));
             {
                 let mti = Rc::clone(&menu_target_index);
                 let ps = pinned_section.clone();
                 sidebar.connect_setup_menu(move |_, item| {
-                    // Determine if this item is in the pinned section.
                     if let Some(item) = item {
                         let n = ps.items().n_items();
                         for i in 0..n {
@@ -175,7 +183,6 @@ mod imp {
                 });
             }
 
-            // Unpin action — removes the right-clicked pinned item.
             let unpin_action = gio::SimpleAction::new("unpin", None);
             {
                 let mti = Rc::clone(&menu_target_index);
@@ -186,7 +193,6 @@ mod imp {
                     let ids = sidebar.imp().pinned_ids.borrow();
                     if let Some(album_id) = ids.get(index as usize).cloned() {
                         drop(ids);
-                        // Get settings from the app.
                         let app = crate::application::MomentsApplication::default();
                         if let Some(settings) = app.imp().settings.get() {
                             sidebar.unpin_album(&album_id, settings);
@@ -198,139 +204,155 @@ mod imp {
             let sidebar_action_group = gio::SimpleActionGroup::new();
             sidebar_action_group.add_action(&unpin_action);
             toolbar_view.insert_action_group("sidebar", Some(&sidebar_action_group));
-
-            toolbar_view.set_content(Some(&sidebar));
-
-            // ── Status bar (bottom bar of the BottomSheet) ───────────────
-            let bar_stack = gtk::Stack::new();
-            bar_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
-            bar_stack.set_transition_duration(200);
-
-            // Idle page: "Synced X ago" or "Waiting for sync..."
-            let idle_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-            idle_box.set_margin_start(12);
-            idle_box.set_margin_end(12);
-            idle_box.set_margin_top(8);
-            idle_box.set_margin_bottom(8);
-            let idle_icon = gtk::Image::from_icon_name("object-select-symbolic");
-            idle_icon.add_css_class("dim-label");
-            idle_box.append(&idle_icon);
-            let idle_label = gtk::Label::new(Some("Waiting for sync..."));
-            idle_label.set_hexpand(true);
-            idle_label.set_xalign(0.0);
-            idle_label.add_css_class("dim-label");
-            idle_label.add_css_class("caption");
-            idle_box.append(&idle_label);
-            bar_stack.add_named(&idle_box, Some("idle"));
-
-            // Sync page: "Syncing..."
-            let sync_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-            sync_box.set_margin_start(12);
-            sync_box.set_margin_end(12);
-            sync_box.set_margin_top(8);
-            sync_box.set_margin_bottom(8);
-            let sync_icon = gtk::Image::from_icon_name("view-refresh-symbolic");
-            sync_box.append(&sync_icon);
-            let sync_label = gtk::Label::new(Some("Syncing..."));
-            sync_label.set_hexpand(true);
-            sync_label.set_xalign(0.0);
-            sync_label.add_css_class("caption");
-            sync_box.append(&sync_label);
-            bar_stack.add_named(&sync_box, Some("sync"));
-
-            // Thumbnails page: "Thumbnails X/Y"
-            let thumb_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-            thumb_box.set_margin_start(12);
-            thumb_box.set_margin_end(12);
-            thumb_box.set_margin_top(8);
-            thumb_box.set_margin_bottom(8);
-            let thumb_icon = gtk::Image::from_icon_name("folder-download-symbolic");
-            thumb_box.append(&thumb_icon);
-            let thumb_label = gtk::Label::new(Some("Downloading thumbnails..."));
-            thumb_label.set_hexpand(true);
-            thumb_label.set_xalign(0.0);
-            thumb_label.add_css_class("caption");
-            thumb_box.append(&thumb_label);
-            bar_stack.add_named(&thumb_box, Some("thumbnails"));
-
-            // Upload page: "Uploading X/Y"
-            let upload_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-            upload_box.set_margin_start(12);
-            upload_box.set_margin_end(12);
-            upload_box.set_margin_top(12);
-            upload_box.set_margin_bottom(16);
-            let upload_icon = gtk::Image::from_icon_name("go-up-symbolic");
-            upload_box.append(&upload_icon);
-            let upload_label = gtk::Label::new(Some("Uploading..."));
-            upload_label.set_hexpand(true);
-            upload_label.set_xalign(0.0);
-            upload_label.add_css_class("caption");
-            upload_box.append(&upload_label);
-            bar_stack.add_named(&upload_box, Some("upload"));
-
-            // Complete page: "Upload Complete"
-            let complete_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-            complete_box.set_margin_start(12);
-            complete_box.set_margin_end(12);
-            complete_box.set_margin_top(8);
-            complete_box.set_margin_bottom(8);
-            let complete_icon = gtk::Image::from_icon_name("object-select-symbolic");
-            complete_box.append(&complete_icon);
-            let complete_label = gtk::Label::new(Some("Import complete"));
-            complete_label.set_hexpand(true);
-            complete_label.set_xalign(0.0);
-            complete_label.add_css_class("caption");
-            complete_box.append(&complete_label);
-            bar_stack.add_named(&complete_box, Some("complete"));
-
-            // ── Upload detail sheet (expanded view) ──────────────────────
-            let sheet_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
-            sheet_box.set_margin_start(16);
-            sheet_box.set_margin_end(16);
-            sheet_box.set_margin_top(16);
-            sheet_box.set_margin_bottom(16);
-
-            let progress_label = gtk::Label::new(Some("Uploading..."));
-            progress_label.set_xalign(0.0);
-            progress_label.add_css_class("heading");
-            sheet_box.append(&progress_label);
-
-            let progress_bar = gtk::ProgressBar::new();
-            progress_bar.set_fraction(0.0);
-            sheet_box.append(&progress_bar);
-
-            let detail_label = gtk::Label::new(Some(""));
-            detail_label.set_xalign(0.0);
-            detail_label.add_css_class("dim-label");
-            detail_label.add_css_class("caption");
-            sheet_box.append(&detail_label);
-
-            // ── Bottom sheet ─────────────────────────────────────────────
-            let bottom_sheet = adw::BottomSheet::new();
-            bottom_sheet.set_content(Some(&toolbar_view));
-            bottom_sheet.set_sheet(Some(&sheet_box));
-            bottom_sheet.set_bottom_bar(Some(&bar_stack));
-            bottom_sheet.set_open(false);
-            bottom_sheet.set_show_drag_handle(false);
-            bottom_sheet.set_can_open(false);
-            bottom_sheet.set_modal(false);
-            bottom_sheet.set_full_width(true);
-            bottom_sheet.set_reveal_bottom_bar(true);
-
-            obj.set_child(Some(&bottom_sheet));
-
-            self.sidebar.set(sidebar).expect("set once in constructed");
-            self.bottom_sheet.set(bottom_sheet).expect("set once in constructed");
-            self.progress_label.set(progress_label).expect("set once in constructed");
-            self.progress_bar.set(progress_bar).expect("set once in constructed");
-            self.detail_label.set(detail_label).expect("set once in constructed");
-            self.bar_stack.set(bar_stack).expect("set once in constructed");
-            self.idle_label.set(idle_label).expect("set once in constructed");
-            self.sync_label.set(sync_label).expect("set once in constructed");
-            self.thumb_label.set(thumb_label).expect("set once in constructed");
-            self.upload_label.set(upload_label).expect("set once in constructed");
-            self.complete_label.set(complete_label).expect("set once in constructed");
         }
+    }
+
+    struct StatusBarWidgets {
+        bar_stack: gtk::Stack,
+        idle_label: gtk::Label,
+        sync_label: gtk::Label,
+        thumb_label: gtk::Label,
+        upload_label: gtk::Label,
+        complete_label: gtk::Label,
+    }
+
+    fn build_status_bar_page(
+        icon_name: &str,
+        text: &str,
+        extra_icon_classes: &[&str],
+        extra_label_classes: &[&str],
+        margins: (i32, i32),
+    ) -> (gtk::Box, gtk::Label) {
+        let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        hbox.set_margin_start(12);
+        hbox.set_margin_end(12);
+        hbox.set_margin_top(margins.0);
+        hbox.set_margin_bottom(margins.1);
+        let icon = gtk::Image::from_icon_name(icon_name);
+        for cls in extra_icon_classes {
+            icon.add_css_class(cls);
+        }
+        hbox.append(&icon);
+        let label = gtk::Label::new(Some(text));
+        label.set_hexpand(true);
+        label.set_xalign(0.0);
+        label.add_css_class("caption");
+        for cls in extra_label_classes {
+            label.add_css_class(cls);
+        }
+        hbox.append(&label);
+        (hbox, label)
+    }
+
+    fn build_status_bar_stack() -> StatusBarWidgets {
+        let bar_stack = gtk::Stack::new();
+        bar_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
+        bar_stack.set_transition_duration(200);
+
+        let (idle_box, idle_label) = build_status_bar_page(
+            "object-select-symbolic", "Waiting for sync...",
+            &["dim-label"], &["dim-label"], (8, 8),
+        );
+        bar_stack.add_named(&idle_box, Some("idle"));
+
+        let (sync_box, sync_label) = build_status_bar_page(
+            "view-refresh-symbolic", "Syncing...",
+            &[], &[], (8, 8),
+        );
+        bar_stack.add_named(&sync_box, Some("sync"));
+
+        let (thumb_box, thumb_label) = build_status_bar_page(
+            "folder-download-symbolic", "Downloading thumbnails...",
+            &[], &[], (8, 8),
+        );
+        bar_stack.add_named(&thumb_box, Some("thumbnails"));
+
+        let (upload_box, upload_label) = build_status_bar_page(
+            "go-up-symbolic", "Uploading...",
+            &[], &[], (12, 16),
+        );
+        bar_stack.add_named(&upload_box, Some("upload"));
+
+        let (complete_box, complete_label) = build_status_bar_page(
+            "object-select-symbolic", "Import complete",
+            &[], &[], (8, 8),
+        );
+        bar_stack.add_named(&complete_box, Some("complete"));
+
+        StatusBarWidgets { bar_stack, idle_label, sync_label, thumb_label, upload_label, complete_label }
+    }
+
+    struct UploadDetailWidgets {
+        sheet_box: gtk::Box,
+        progress_label: gtk::Label,
+        progress_bar: gtk::ProgressBar,
+        detail_label: gtk::Label,
+    }
+
+    fn build_upload_detail_sheet() -> UploadDetailWidgets {
+        let sheet_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        sheet_box.set_margin_start(16);
+        sheet_box.set_margin_end(16);
+        sheet_box.set_margin_top(16);
+        sheet_box.set_margin_bottom(16);
+
+        let progress_label = gtk::Label::new(Some("Uploading..."));
+        progress_label.set_xalign(0.0);
+        progress_label.add_css_class("heading");
+        sheet_box.append(&progress_label);
+
+        let progress_bar = gtk::ProgressBar::new();
+        progress_bar.set_fraction(0.0);
+        sheet_box.append(&progress_bar);
+
+        let detail_label = gtk::Label::new(Some(""));
+        detail_label.set_xalign(0.0);
+        detail_label.add_css_class("dim-label");
+        detail_label.add_css_class("caption");
+        sheet_box.append(&detail_label);
+
+        UploadDetailWidgets { sheet_box, progress_label, progress_bar, detail_label }
+    }
+
+    fn build_header_bar() -> adw::HeaderBar {
+        let header = adw::HeaderBar::new();
+
+        let menu_button = gtk::MenuButton::builder()
+            .primary(true)
+            .icon_name("open-menu-symbolic")
+            .tooltip_text(gettext("Main Menu"))
+            .build();
+        let menu = gio::Menu::new();
+        let import_section = gio::Menu::new();
+        import_section.append(Some("_Import"), Some("app.import"));
+        menu.append_section(None, &import_section);
+        let app_section = gio::Menu::new();
+        app_section.append(Some("_Keyboard Shortcuts"), Some("app.shortcuts"));
+        app_section.append(Some("_About Moments"), Some("app.about"));
+        app_section.append(Some("_Preferences"), Some("app.preferences"));
+        menu.append_section(None, &app_section);
+        menu_button.set_menu_model(Some(&menu));
+        header.pack_end(&menu_button);
+
+        header
+    }
+
+    fn build_bottom_sheet(
+        toolbar_view: &adw::ToolbarView,
+        sheet_box: &gtk::Box,
+        bar_stack: &gtk::Stack,
+    ) -> adw::BottomSheet {
+        let bottom_sheet = adw::BottomSheet::new();
+        bottom_sheet.set_content(Some(toolbar_view));
+        bottom_sheet.set_sheet(Some(sheet_box));
+        bottom_sheet.set_bottom_bar(Some(bar_stack));
+        bottom_sheet.set_open(false);
+        bottom_sheet.set_show_drag_handle(false);
+        bottom_sheet.set_can_open(false);
+        bottom_sheet.set_modal(false);
+        bottom_sheet.set_full_width(true);
+        bottom_sheet.set_reveal_bottom_bar(true);
+        bottom_sheet
     }
 
     impl WidgetImpl for MomentsSidebar {}
