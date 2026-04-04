@@ -121,9 +121,7 @@ pub fn present(
         &cancel_btn,
         &add_button,
         &search_entry,
-        &new_album.stack,
-        &new_album.entry,
-        &new_album.create_button,
+        &new_album,
         &empty_create_btn,
     );
 
@@ -204,18 +202,18 @@ fn build_empty_state() -> (adw::StatusPage, gtk::Button) {
     (page, button)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn connect_signals(
     inner: &Rc<DialogInner>,
     dialog: &adw::Dialog,
     cancel_btn: &gtk::Button,
     add_button: &gtk::Button,
     search_entry: &gtk::SearchEntry,
-    new_album_stack: &gtk::Stack,
-    new_album_entry: &gtk::Entry,
-    create_add_btn: &gtk::Button,
+    new_album: &NewAlbumWidgets,
     empty_create_btn: &gtk::Button,
 ) {
+    let new_album_stack = &new_album.stack;
+    let new_album_entry = &new_album.entry;
+    let create_add_btn = &new_album.create_button;
     {
         let d = dialog.clone();
         cancel_btn.connect_clicked(move |_| { d.close(); });
