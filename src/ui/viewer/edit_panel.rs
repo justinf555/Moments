@@ -145,7 +145,13 @@ impl EditPanel {
         self.sync_ui_from_state();
 
         // Render initial preview if state is not identity.
-        if !self.session.borrow().as_ref().unwrap().state.is_identity() {
+        let is_identity = self
+            .session
+            .borrow()
+            .as_ref()
+            .map(|s| s.state.is_identity())
+            .unwrap_or(true);
+        if !is_identity {
             self.render_preview();
         }
     }
