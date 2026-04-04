@@ -46,9 +46,14 @@ mod imp {
             layout.set_orientation(gtk::Orientation::Vertical);
             layout.set_spacing(4);
 
+            // Inner box — fixed width, centered in the cell. Frame and labels
+            // are children of this box so their left edges align naturally.
+            let inner = gtk::Box::new(gtk::Orientation::Vertical, 4);
+            inner.set_size_request(155, -1);
+            inner.set_halign(gtk::Align::Center);
+
             // Cover frame — clipped square with rounded corners.
             let frame = gtk::Frame::new(None);
-            frame.set_halign(gtk::Align::Center);
             frame.set_size_request(155, 155);
             frame.set_overflow(gtk::Overflow::Hidden);
             frame.add_css_class("album-cover-frame");
@@ -68,24 +73,26 @@ mod imp {
             overlay.add_overlay(&self.picture);
 
             frame.set_child(Some(&overlay));
-            frame.set_parent(&*obj);
+            inner.append(&frame);
 
             // Name label.
             self.name_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
             self.name_label.set_max_width_chars(18);
-            self.name_label.set_halign(gtk::Align::Center);
+            self.name_label.set_halign(gtk::Align::Start);
             self.name_label.set_xalign(0.0);
             self.name_label.add_css_class("heading");
-            self.name_label.set_parent(&*obj);
+            inner.append(&self.name_label);
 
             // Count label.
             self.count_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
             self.count_label.set_max_width_chars(18);
-            self.count_label.set_halign(gtk::Align::Center);
+            self.count_label.set_halign(gtk::Align::Start);
             self.count_label.set_xalign(0.0);
             self.count_label.add_css_class("dim-label");
             self.count_label.add_css_class("caption");
-            self.count_label.set_parent(&*obj);
+            inner.append(&self.count_label);
+
+            inner.set_parent(&*obj);
         }
 
         fn dispose(&self) {
