@@ -65,7 +65,7 @@ impl CollectionGridView {
         });
 
         let unnamed_toggle = gtk::ToggleButton::builder()
-            .icon_name("person-symbolic")
+            .icon_name("avatar-default-symbolic")
             .tooltip_text(gettext("Show Unnamed"))
             .build();
         unnamed_toggle.add_css_class("flat");
