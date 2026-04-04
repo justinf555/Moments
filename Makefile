@@ -29,13 +29,17 @@ test:
 
 test-integration:
 	flatpak run --share=network \
+	  --socket=wayland \
 	  --filesystem=$(CURDIR) \
 	  --filesystem=$(HOME)/.cargo:create \
+	  --filesystem=$(XDG_RUNTIME_DIR) \
 	  --env=SQLX_OFFLINE=true \
 	  --env=CARGO_HOME=$(HOME)/.cargo \
 	  --env=GSK_RENDERER=cairo \
 	  --env=GTK_A11Y=none \
 	  --env=GIO_USE_VFS=local \
+	  --env=XDG_RUNTIME_DIR=$(XDG_RUNTIME_DIR) \
+	  --env=WAYLAND_DISPLAY=$(WAYLAND_DISPLAY) \
 	  --command=bash org.gnome.Sdk//50 \
 	  -c 'source /usr/lib/sdk/rust-stable/enable.sh && cd $(CURDIR) && cargo test --features integration-tests -- --test-threads=1'
 
