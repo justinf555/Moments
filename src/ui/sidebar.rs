@@ -16,7 +16,7 @@ mod imp {
 
     pub struct MomentsSidebar {
         pub sidebar: OnceCell<adw::Sidebar>,
-        pub trash_item: OnceCell<adw::SidebarItem>,
+        pub trash_badge: OnceCell<gtk::Label>,
         pub trash_count: Cell<u32>,
 
         // ── Bottom sheet (upload detail) ──────────────────────────────────
@@ -55,7 +55,7 @@ mod imp {
         fn default() -> Self {
             Self {
                 sidebar: OnceCell::new(),
-                trash_item: OnceCell::new(),
+                trash_badge: OnceCell::new(),
                 trash_count: Cell::new(0),
                 bottom_sheet: OnceCell::new(),
                 progress_label: OnceCell::new(),
@@ -117,17 +117,20 @@ mod imp {
             let section = adw::SidebarSection::new();
 
             for (i, route) in ROUTES.iter().enumerate() {
-                let item = adw::SidebarItem::builder()
+                let mut builder = adw::SidebarItem::builder()
                     .title(&gettext(route.label))
-                    .icon_name(route.icon)
-                    .build();
+                    .icon_name(route.icon);
 
-                // Store the Trash item for subtitle updates.
+                // Trash item gets a badge suffix showing the item count.
                 if i == route::TRASH_INDEX as usize {
-                    let _ = self.trash_item.set(item.clone());
+                    let badge = gtk::Label::new(None);
+                    badge.add_css_class("sidebar-badge");
+                    badge.set_visible(false);
+                    builder = builder.suffix(&badge);
+                    let _ = self.trash_badge.set(badge);
                 }
 
-                section.append(item);
+                section.append(builder.build());
             }
 
             sidebar.append(section);
@@ -342,7 +345,7 @@ impl MomentsSidebar {
     pub fn set_trash_count(&self, count: u32) {
         let imp = self.imp();
         imp.trash_count.set(count);
-        self.update_trash_subtitle();
+        self.update_trash_badge();
     }
 
     /// Adjust the trash count by a signed delta.
@@ -351,18 +354,19 @@ impl MomentsSidebar {
         let current = imp.trash_count.get() as i32;
         let new_count = (current + delta).max(0) as u32;
         imp.trash_count.set(new_count);
-        self.update_trash_subtitle();
+        self.update_trash_badge();
     }
 
-    /// Update the Trash sidebar item subtitle with the current count.
-    fn update_trash_subtitle(&self) {
+    /// Update the Trash badge with the current count.
+    fn update_trash_badge(&self) {
         let imp = self.imp();
-        if let Some(item) = imp.trash_item.get() {
+        if let Some(badge) = imp.trash_badge.get() {
             let count = imp.trash_count.get();
             if count > 0 {
-                item.set_subtitle(Some(&count.to_string()));
+                badge.set_label(&count.to_string());
+                badge.set_visible(true);
             } else {
-                item.set_subtitle(None);
+                badge.set_visible(false);
             }
         }
     }

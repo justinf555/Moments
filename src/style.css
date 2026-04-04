@@ -74,6 +74,20 @@ collection-grid-cell .hidden-icon {
     -gtk-icon-shadow: 0 1px 3px rgba(0,0,0,0.6);
 }
 
+/* Sidebar trash count badge — small pill-shaped label using the accent
+ * colour.  AdwSidebarItem has no built-in badge property, so we use a
+ * suffix widget styled as a badge. */
+.sidebar-badge {
+    background: @accent_bg_color;
+    color: @accent_fg_color;
+    border-radius: 999px;
+    min-width: 16px;
+    min-height: 16px;
+    padding: 0 6px;
+    font-size: 0.75rem;
+    font-weight: bold;
+}
+
 /* ── Filter swatches in the edit panel ─────────────────────────────────
  *
  * Each swatch is a small coloured preview representing the visual tone
