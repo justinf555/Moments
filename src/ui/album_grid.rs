@@ -530,10 +530,10 @@ impl AlbumGridView {
                 vbox.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 
                 // Pin to sidebar.
+                // TODO: replace widget-tree walk with AppEvent bus pattern.
                 let pin_btn = gtk::Button::with_label(&gettext("Pin to Sidebar"));
                 pin_btn.add_css_class("flat");
                 {
-                    // Check current pin state.
                     let app = crate::application::MomentsApplication::default();
                     if let Some(win) = app.active_window() {
                         if let Some(win) = win.downcast_ref::<crate::ui::MomentsWindow>() {
@@ -572,6 +572,7 @@ impl AlbumGridView {
                 popover.set_has_arrow(true);
 
                 // Wire Pin to sidebar.
+                // TODO: replace widget-tree walk with AppEvent bus pattern.
                 {
                     let pop = popover.downgrade();
                     let aid = album_id_str.clone();
