@@ -11,6 +11,7 @@ mod albums;
 mod edits;
 pub(crate) mod faces;
 mod media;
+mod media_write;
 mod stats;
 mod sync;
 mod thumbnails;

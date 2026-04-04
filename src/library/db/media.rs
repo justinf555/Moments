@@ -4,7 +4,7 @@ use crate::library::media::{
     MediaType,
 };
 
-use super::{id_placeholders, Database};
+use super::Database;
 
 /// Internal row type for `media_metadata` queries.
 #[derive(sqlx::FromRow)]
@@ -127,31 +127,7 @@ impl LibraryMedia for Database {
     }
 
     async fn insert_media(&self, record: &MediaRecord) -> Result<(), LibraryError> {
-        sqlx::query(
-            "INSERT INTO media (id, relative_path, original_filename, file_size,
-                                imported_at, media_type, taken_at, width, height,
-                                orientation, duration_ms, is_favorite, is_trashed,
-                                trashed_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(record.id.as_str())
-        .bind(&record.relative_path)
-        .bind(&record.original_filename)
-        .bind(record.file_size)
-        .bind(record.imported_at)
-        .bind(record.media_type as i64)
-        .bind(record.taken_at)
-        .bind(record.width)
-        .bind(record.height)
-        .bind(record.orientation as i64)
-        .bind(record.duration_ms.map(|v| v as i64))
-        .bind(record.is_favorite as i64)
-        .bind(record.is_trashed as i64)
-        .bind(record.trashed_at)
-        .execute(&self.pool)
-        .await
-        .map_err(LibraryError::Db)?;
-        Ok(())
+        self.insert_media_record(record).await
     }
 
     async fn list_media(
@@ -267,79 +243,20 @@ impl LibraryMedia for Database {
         }))
     }
 
-    async fn set_favorite(
-        &self,
-        ids: &[MediaId],
-        favorite: bool,
-    ) -> Result<(), LibraryError> {
-        if ids.is_empty() {
-            return Ok(());
-        }
-        let value: i64 = if favorite { 1 } else { 0 };
-        let placeholders = id_placeholders(ids.len());
-        let sql = format!("UPDATE media SET is_favorite = ? WHERE id IN ({placeholders})");
-        let mut query = sqlx::query(&sql);
-        query = query.bind(value);
-        for id in ids {
-            query = query.bind(id.as_str());
-        }
-        query.execute(&self.pool).await.map_err(LibraryError::Db)?;
-        Ok(())
+    async fn set_favorite(&self, ids: &[MediaId], favorite: bool) -> Result<(), LibraryError> {
+        self.set_favorite_ids(ids, favorite).await
     }
 
     async fn trash(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
-        if ids.is_empty() {
-            return Ok(());
-        }
-        let now = chrono::Utc::now().timestamp();
-        let placeholders = id_placeholders(ids.len());
-        let sql = format!(
-            "UPDATE media SET is_trashed = 1, trashed_at = ? WHERE id IN ({placeholders})"
-        );
-        let mut query = sqlx::query(&sql);
-        query = query.bind(now);
-        for id in ids {
-            query = query.bind(id.as_str());
-        }
-        query.execute(&self.pool).await.map_err(LibraryError::Db)?;
-        Ok(())
+        self.trash_ids(ids).await
     }
 
     async fn restore(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
-        if ids.is_empty() {
-            return Ok(());
-        }
-        let placeholders = id_placeholders(ids.len());
-        let sql = format!(
-            "UPDATE media SET is_trashed = 0, trashed_at = NULL WHERE id IN ({placeholders})"
-        );
-        let mut query = sqlx::query(&sql);
-        for id in ids {
-            query = query.bind(id.as_str());
-        }
-        query.execute(&self.pool).await.map_err(LibraryError::Db)?;
-        Ok(())
+        self.restore_ids(ids).await
     }
 
     async fn delete_permanently(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
-        if ids.is_empty() {
-            return Ok(());
-        }
-        let placeholders = id_placeholders(ids.len());
-        for (table, col) in [
-            ("media_metadata", "media_id"),
-            ("thumbnails", "media_id"),
-            ("album_media", "media_id"),
-            ("media", "id"),
-        ] {
-            let sql = format!("DELETE FROM {table} WHERE {col} IN ({placeholders})");
-            let mut query = sqlx::query(&sql);
-            for id in ids {
-                query = query.bind(id.as_str());
-            }
-            query.execute(&self.pool).await.map_err(LibraryError::Db)?;
-        }
-        Ok(())
+        self.delete_permanently_ids(ids).await
     }
 
     async fn expired_trash(&self, max_age_secs: i64) -> Result<Vec<MediaId>, LibraryError> {
@@ -354,10 +271,7 @@ impl LibraryMedia for Database {
         Ok(rows.into_iter().map(|(id,)| MediaId::new(id)).collect())
     }
 
-    async fn insert_media_metadata(
-        &self,
-        record: &MediaMetadataRecord,
-    ) -> Result<(), LibraryError> {
+    async fn insert_media_metadata(&self, record: &MediaMetadataRecord) -> Result<(), LibraryError> {
         if !record.has_data() {
             return Ok(());
         }
