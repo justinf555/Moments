@@ -57,6 +57,7 @@ impl AlbumGridView {
         let header = adw::HeaderBar::new();
 
         let new_album_btn = gtk::Button::builder()
+            .icon_name("list-add-symbolic")
             .label(&gettext("New Album"))
             .build();
         new_album_btn.add_css_class("outlined");
