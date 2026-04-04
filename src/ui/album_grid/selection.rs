@@ -2,7 +2,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gettextrs::gettext;
-use gtk::{gio, glib, prelude::*};
+use adw::prelude::*;
+use gtk::{gio, glib};
 use tracing::debug;
 
 use crate::library::album::AlbumId;

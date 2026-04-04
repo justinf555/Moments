@@ -2,7 +2,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gettextrs::gettext;
-use gtk::{glib, prelude::*};
+use adw::prelude::*;
+use gtk::{glib, subclass::prelude::*};
 use tracing::debug;
 
 use crate::library::album::AlbumId;
@@ -12,6 +13,7 @@ use crate::ui::album_dialogs;
 use crate::ui::photo_grid::model::PhotoGridModel;
 use crate::ui::photo_grid::texture_cache::TextureCache;
 use crate::ui::photo_grid::PhotoGridView;
+use crate::ui::ContentView;
 
 use super::item::AlbumItemObject;
 
