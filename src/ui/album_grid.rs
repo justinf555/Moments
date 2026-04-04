@@ -34,6 +34,7 @@ pub struct AlbumGridView {
     store: gio::ListStore,
     library: Arc<dyn Library>,
     tokio: tokio::runtime::Handle,
+    sort_order: Rc<Cell<u32>>,
 }
 
 impl std::fmt::Debug for AlbumGridView {
@@ -268,6 +269,7 @@ impl AlbumGridView {
             store: store.clone(),
             library: Arc::clone(&library),
             tokio: tokio.clone(),
+            sort_order: Rc::clone(&sort_order),
         };
 
         {
@@ -298,8 +300,7 @@ impl AlbumGridView {
     }
 
     pub fn reload(&self) {
-        // Can't easily pass sort_order here — reload uses default (recent).
-        reload_albums(&self.store, &self.library, &self.tokio, Rc::new(Cell::new(SORT_RECENT)));
+        reload_albums(&self.store, &self.library, &self.tokio, Rc::clone(&self.sort_order));
     }
 }
 
@@ -325,13 +326,9 @@ fn build_sort_menu() -> gio::Menu {
 /// Sort the store in-place by the given sort order.
 fn sort_store(store: &gio::ListStore, order: u32) {
     store.sort(|a, b| {
-        let a = a.downcast_ref::<AlbumItemObject>().unwrap().album();
-        let b = b.downcast_ref::<AlbumItemObject>().unwrap().album();
-        match order {
-            SORT_NAME => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-            SORT_CREATED => b.created_at.cmp(&a.created_at),
-            _ => b.updated_at.cmp(&a.updated_at), // SORT_RECENT (default)
-        }
+        let a = a.downcast_ref::<AlbumItemObject>().expect("store holds AlbumItemObject").album();
+        let b = b.downcast_ref::<AlbumItemObject>().expect("store holds AlbumItemObject").album();
+        sort_albums(a, b, order)
     });
 }
 
