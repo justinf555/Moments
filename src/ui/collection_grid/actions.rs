@@ -249,10 +249,10 @@ fn wire_rename_button(
         }
 
         let dialog = adw::AlertDialog::builder()
-            .heading("Rename Person")
+            .heading(gettext("Rename Person"))
             .build();
-        dialog.add_response("cancel", "Cancel");
-        dialog.add_response("rename", "Rename");
+        dialog.add_response("cancel", &gettext("Cancel"));
+        dialog.add_response("rename", &gettext("Rename"));
         dialog.set_response_appearance("rename", adw::ResponseAppearance::Suggested);
         dialog.set_default_response(Some("rename"));
         dialog.set_close_response("cancel");
