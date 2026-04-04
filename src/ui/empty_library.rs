@@ -32,6 +32,12 @@ impl EmptyLibraryView {
     }
 }
 
+impl Default for EmptyLibraryView {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ContentView for EmptyLibraryView {
     fn widget(&self) -> &gtk::Widget {
         &self.widget

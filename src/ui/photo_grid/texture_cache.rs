@@ -97,6 +97,12 @@ impl TextureCache {
     }
 }
 
+impl Default for TextureCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

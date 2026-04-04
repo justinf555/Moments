@@ -24,7 +24,6 @@ use item::AlbumItemObject;
 
 /// Sort order for the album grid.
 /// Values match the GSettings `album-sort-order` key.
-const SORT_RECENT: u32 = 0;
 const SORT_NAME: u32 = 1;
 const SORT_CREATED: u32 = 2;
 
@@ -65,7 +64,7 @@ impl AlbumGridView {
         let sort_menu = build_sort_menu();
         let menu_btn = gtk::MenuButton::builder()
             .icon_name("view-more-symbolic")
-            .tooltip_text(&gettext("Menu"))
+            .tooltip_text(gettext("Menu"))
             .menu_model(&sort_menu)
             .build();
         menu_btn.add_css_class("flat");
@@ -131,15 +130,15 @@ impl AlbumGridView {
         // ── Empty state ─────────────────────────────────────────────────
         let empty_page = adw::StatusPage::builder()
             .icon_name("folder-symbolic")
-            .title(&gettext("No Albums Yet"))
-            .description(&gettext(
+            .title(gettext("No Albums Yet"))
+            .description(gettext(
                 "Create an album to start organising your photos into collections.",
             ))
             .vexpand(true)
             .build();
 
         let empty_new_btn = gtk::Button::builder()
-            .label(&gettext("New Album"))
+            .label(gettext("New Album"))
             .halign(gtk::Align::Center)
             .build();
         empty_new_btn.add_css_class("pill");
@@ -165,7 +164,7 @@ impl AlbumGridView {
 
         let grid_page = adw::NavigationPage::builder()
             .tag("albums")
-            .title(&gettext("Albums"))
+            .title(gettext("Albums"))
             .child(&toolbar_view)
             .build();
 
@@ -299,7 +298,7 @@ impl AlbumGridView {
             let tk = tokio.clone();
             let bs = bus_sender.clone();
             let exit = exit_selection.clone();
-            let gv = grid_view.clone();
+            let _gv = grid_view.clone();
             delete_selected_btn.connect_clicked(move |btn| {
                 let n = sel.selection().size() as u32;
                 if n == 0 { return; }

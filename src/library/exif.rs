@@ -57,11 +57,11 @@ pub fn extract_exif(path: &Path) -> ExifInfo {
         Err(_) => return ExifInfo::default(),
     };
 
-    let mut info = ExifInfo::default();
-
-    // ── Capture time ──────────────────────────────────────────────────────────
-    info.captured_at = capture_timestamp(&exif);
-    info.captured_at_tz = capture_tz(&exif);
+    let mut info = ExifInfo {
+        captured_at: capture_timestamp(&exif),
+        captured_at_tz: capture_tz(&exif),
+        ..Default::default()
+    };
 
     // ── Dimensions ───────────────────────────────────────────────────────────
     info.width = rational_or_short_u32(&exif, exif::Tag::PixelXDimension)
@@ -96,7 +96,7 @@ pub fn extract_exif(path: &Path) -> ExifInfo {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn get_field<'a>(exif: &'a exif::Exif, tag: exif::Tag) -> Option<&'a exif::Field> {
+fn get_field(exif: &exif::Exif, tag: exif::Tag) -> Option<&exif::Field> {
     exif.get_field(tag, exif::In::PRIMARY)
         .or_else(|| exif.get_field(tag, exif::In::THUMBNAIL))
 }

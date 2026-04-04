@@ -511,7 +511,7 @@ mod tests {
         let id = MediaId::new("f".repeat(64));
         db.insert_media(&test_record(id.clone())).await.unwrap();
         assert!(!db.list_media(MediaFilter::All, None, 10).await.unwrap()[0].is_favorite);
-        db.set_favorite(&[id.clone()], true).await.unwrap();
+        db.set_favorite(std::slice::from_ref(&id), true).await.unwrap();
         assert!(db.list_media(MediaFilter::All, None, 10).await.unwrap()[0].is_favorite);
         db.set_favorite(&[id], false).await.unwrap();
         assert!(!db.list_media(MediaFilter::All, None, 10).await.unwrap()[0].is_favorite);
@@ -537,7 +537,7 @@ mod tests {
         let id2 = MediaId::new("2".repeat(64));
         db.insert_media(&record_with_taken_at(id1.clone(), "a.jpg", Some(1000))).await.unwrap();
         db.insert_media(&record_with_taken_at(id2.clone(), "b.jpg", Some(2000))).await.unwrap();
-        db.set_favorite(&[id1.clone()], true).await.unwrap();
+        db.set_favorite(std::slice::from_ref(&id1), true).await.unwrap();
         assert_eq!(db.list_media(MediaFilter::Favorites, None, 10).await.unwrap().len(), 1);
     }
 
@@ -548,7 +548,7 @@ mod tests {
         let id = MediaId::new("t".repeat(64));
         db.insert_media(&test_record(id.clone())).await.unwrap();
         assert_eq!(db.list_media(MediaFilter::All, None, 10).await.unwrap().len(), 1);
-        db.trash(&[id.clone()]).await.unwrap();
+        db.trash(std::slice::from_ref(&id)).await.unwrap();
         assert_eq!(db.list_media(MediaFilter::All, None, 10).await.unwrap().len(), 0);
         assert_eq!(db.list_media(MediaFilter::Trashed, None, 10).await.unwrap().len(), 1);
         db.restore(&[id]).await.unwrap();
@@ -561,7 +561,7 @@ mod tests {
         let db = open_test_db(dir.path()).await;
         let id = MediaId::new("u".repeat(64));
         db.insert_media(&test_record(id.clone())).await.unwrap();
-        db.set_favorite(&[id.clone()], true).await.unwrap();
+        db.set_favorite(std::slice::from_ref(&id), true).await.unwrap();
         db.trash(&[id]).await.unwrap();
         assert_eq!(db.list_media(MediaFilter::Favorites, None, 10).await.unwrap().len(), 0);
     }
@@ -572,7 +572,7 @@ mod tests {
         let db = open_test_db(dir.path()).await;
         let id = MediaId::new("v".repeat(64));
         db.insert_media(&test_record(id.clone())).await.unwrap();
-        db.delete_permanently(&[id.clone()]).await.unwrap();
+        db.delete_permanently(std::slice::from_ref(&id)).await.unwrap();
         assert!(!db.media_exists(&id).await.unwrap());
     }
 
@@ -582,7 +582,7 @@ mod tests {
         let db = open_test_db(dir.path()).await;
         let id = MediaId::new("w".repeat(64));
         db.insert_media(&test_record(id.clone())).await.unwrap();
-        db.trash(&[id.clone()]).await.unwrap();
+        db.trash(std::slice::from_ref(&id)).await.unwrap();
         assert!(db.expired_trash(30 * 24 * 60 * 60).await.unwrap().is_empty());
         let old_ts = chrono::Utc::now().timestamp() - (31 * 24 * 60 * 60);
         sqlx::query("UPDATE media SET trashed_at = ? WHERE id = ?")
@@ -640,7 +640,7 @@ mod tests {
         let id_out = MediaId::new("o".repeat(64));
         db.insert_media(&record_with_taken_at(id_in.clone(), "in.jpg", Some(2000))).await.unwrap();
         db.insert_media(&record_with_taken_at(id_out.clone(), "out.jpg", Some(1000))).await.unwrap();
-        db.add_to_album(&album_id, &[id_in.clone()]).await.unwrap();
+        db.add_to_album(&album_id, std::slice::from_ref(&id_in)).await.unwrap();
         let items = db.list_media(MediaFilter::Album { album_id }, None, 50).await.unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].id, id_in);
@@ -653,7 +653,7 @@ mod tests {
         let album_id = db.create_album("Trash Filter").await.unwrap();
         let media_id = MediaId::new("t".repeat(64));
         db.insert_media(&test_record(media_id.clone())).await.unwrap();
-        db.add_to_album(&album_id, &[media_id.clone()]).await.unwrap();
+        db.add_to_album(&album_id, std::slice::from_ref(&media_id)).await.unwrap();
         db.trash(&[media_id]).await.unwrap();
         assert!(db.list_media(MediaFilter::Album { album_id }, None, 50).await.unwrap().is_empty());
     }

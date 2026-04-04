@@ -42,6 +42,7 @@ fn max_decode_workers() -> usize {
 /// `bind`     — connects the cell to its `MediaItemObject`, reflecting current state.
 /// `unbind`   — disconnects signals and resets the cell to its idle state.
 /// `teardown` — removes the child widget so GTK can reclaim the list item slot.
+#[allow(clippy::too_many_arguments)]
 pub fn build_factory(
     cell_size: i32,
     library: Arc<dyn Library>,

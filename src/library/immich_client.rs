@@ -238,7 +238,7 @@ impl ImmichClient {
         &self,
         path: &str,
     ) -> Result<T, LibraryError> {
-        self.send_json(self.client.get(&self.url(path)), "GET", path).await
+        self.send_json(self.client.get(self.url(path)), "GET", path).await
     }
 
     pub(crate) async fn post<B: serde::Serialize, T: serde::de::DeserializeOwned>(
@@ -246,7 +246,7 @@ impl ImmichClient {
         path: &str,
         body: &B,
     ) -> Result<T, LibraryError> {
-        self.send_json(self.client.post(&self.url(path)).json(body), "POST", path).await
+        self.send_json(self.client.post(self.url(path)).json(body), "POST", path).await
     }
 
     #[allow(dead_code)]
@@ -255,7 +255,7 @@ impl ImmichClient {
         path: &str,
         body: &B,
     ) -> Result<T, LibraryError> {
-        self.send_json(self.client.put(&self.url(path)).json(body), "PUT", path).await
+        self.send_json(self.client.put(self.url(path)).json(body), "PUT", path).await
     }
 
     #[allow(dead_code)]
@@ -263,7 +263,7 @@ impl ImmichClient {
         &self,
         path: &str,
     ) -> Result<T, LibraryError> {
-        self.send_json(self.client.delete(&self.url(path)), "DELETE", path).await
+        self.send_json(self.client.delete(self.url(path)), "DELETE", path).await
     }
 
     pub(crate) async fn post_no_content<B: serde::Serialize>(
@@ -271,7 +271,7 @@ impl ImmichClient {
         path: &str,
         body: &B,
     ) -> Result<(), LibraryError> {
-        self.send_no_content(self.client.post(&self.url(path)).json(body), "POST", path).await
+        self.send_no_content(self.client.post(self.url(path)).json(body), "POST", path).await
     }
 
     pub(crate) async fn put_no_content<B: serde::Serialize>(
@@ -279,11 +279,11 @@ impl ImmichClient {
         path: &str,
         body: &B,
     ) -> Result<(), LibraryError> {
-        self.send_no_content(self.client.put(&self.url(path)).json(body), "PUT", path).await
+        self.send_no_content(self.client.put(self.url(path)).json(body), "PUT", path).await
     }
 
     pub(crate) async fn delete_no_content(&self, path: &str) -> Result<(), LibraryError> {
-        self.send_no_content(self.client.delete(&self.url(path)), "DELETE", path).await
+        self.send_no_content(self.client.delete(self.url(path)), "DELETE", path).await
     }
 
     pub(crate) async fn delete_with_body<B: serde::Serialize>(
@@ -291,7 +291,7 @@ impl ImmichClient {
         path: &str,
         body: &B,
     ) -> Result<(), LibraryError> {
-        self.send_no_content(self.client.delete(&self.url(path)).json(body), "DELETE", path).await
+        self.send_no_content(self.client.delete(self.url(path)).json(body), "DELETE", path).await
     }
 
     pub(crate) async fn patch_no_content<B: serde::Serialize>(
@@ -299,7 +299,7 @@ impl ImmichClient {
         path: &str,
         body: &B,
     ) -> Result<(), LibraryError> {
-        self.send_no_content(self.client.patch(&self.url(path)).json(body), "PATCH", path).await
+        self.send_no_content(self.client.patch(self.url(path)).json(body), "PATCH", path).await
     }
 
     /// Upload an asset to the Immich server via multipart form-data.
@@ -381,7 +381,7 @@ impl ImmichClient {
 
     /// Make a GET request and return the raw response bytes.
     pub(crate) async fn get_bytes(&self, path: &str) -> Result<Vec<u8>, LibraryError> {
-        let resp = self.send(self.client.get(&self.url(path)), "GET", path).await?;
+        let resp = self.send(self.client.get(self.url(path)), "GET", path).await?;
         resp.bytes()
             .await
             .map(|b| b.to_vec())
@@ -394,7 +394,7 @@ impl ImmichClient {
         path: &str,
         body: &B,
     ) -> Result<reqwest::Response, LibraryError> {
-        self.send(self.client.post(&self.url(path)).json(body), "POST", path).await
+        self.send(self.client.post(self.url(path)).json(body), "POST", path).await
     }
 }
 

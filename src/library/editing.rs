@@ -146,8 +146,10 @@ mod tests {
 
     #[test]
     fn filter_only_is_not_identity() {
-        let mut state = EditState::default();
-        state.filter = Some("bw".to_string());
+        let state = EditState {
+            filter: Some("bw".to_string()),
+            ..Default::default()
+        };
         assert!(!state.is_identity());
     }
 

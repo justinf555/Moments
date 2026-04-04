@@ -26,11 +26,13 @@ pub struct EventBus {
     tx: mpsc::Sender<AppEvent>,
 }
 
+type SubscriberList = Vec<Box<dyn Fn(&AppEvent)>>;
+
 // Thread-local subscriber list. Accessible from `idle_add_once` callbacks
 // which run on the GTK main thread. This avoids the Send constraint — the
 // subscriber closures capture widget references (Rc, not Send).
 thread_local! {
-    static SUBSCRIBERS: RefCell<Vec<Box<dyn Fn(&AppEvent)>>> = const { RefCell::new(Vec::new()) };
+    static SUBSCRIBERS: RefCell<SubscriberList> = const { RefCell::new(Vec::new()) };
     static RECEIVER: RefCell<Option<mpsc::Receiver<AppEvent>>> = const { RefCell::new(None) };
 }
 
@@ -115,6 +117,12 @@ pub fn subscribe(handler: impl Fn(&AppEvent) + 'static) {
     SUBSCRIBERS.with(|cell| {
         cell.borrow_mut().push(Box::new(handler));
     });
+}
+
+impl Default for EventBus {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Drop for EventBus {

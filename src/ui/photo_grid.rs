@@ -219,6 +219,7 @@ impl PhotoGrid {
     ///
     /// `on_activate` is called with `(items, position)` when the user
     /// double-clicks or presses Enter on a grid item.
+    #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     pub fn set_model(
         &self,
@@ -379,13 +380,13 @@ impl PhotoGridView {
         // ── Zoom controls ───────────────────────────────────────────────────
         let zoom_out_btn = gtk::Button::builder()
             .icon_name("zoom-out-symbolic")
-            .tooltip_text(&gettext("Zoom Out"))
+            .tooltip_text(gettext("Zoom Out"))
             .action_name("view.zoom-out")
             .build();
         zoom_out_btn.add_css_class("flat");
         let zoom_in_btn = gtk::Button::builder()
             .icon_name("zoom-in-symbolic")
-            .tooltip_text(&gettext("Zoom In"))
+            .tooltip_text(gettext("Zoom In"))
             .action_name("view.zoom-in")
             .build();
         zoom_in_btn.add_css_class("flat");
@@ -415,7 +416,7 @@ impl PhotoGridView {
 
         let content_menu_btn = gtk::MenuButton::builder()
             .icon_name("view-more-symbolic")
-            .tooltip_text(&gettext("Menu"))
+            .tooltip_text(gettext("Menu"))
             .menu_model(&content_menu)
             .build();
         content_menu_btn.add_css_class("flat");
@@ -834,6 +835,12 @@ impl ContentView for PhotoGridView {
 
     fn view_actions(&self) -> Option<&gio::SimpleActionGroup> {
         Some(&self.view_actions)
+    }
+}
+
+impl Default for PhotoGrid {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

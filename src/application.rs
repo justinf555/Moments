@@ -192,6 +192,7 @@ impl MomentsApplication {
     }
 
     /// Get the singleton application instance.
+    #[allow(clippy::should_implement_trait)]
     pub fn default() -> Self {
         gio::Application::default()
             .and_downcast::<Self>()
@@ -234,7 +235,7 @@ impl MomentsApplication {
             .developer_name("Unknown")
             .version(VERSION)
             .developers(vec!["Unknown"])
-            .translator_credits(&gettext("translator-credits"))
+            .translator_credits(gettext("translator-credits"))
             .copyright("© 2026 Unknown")
             .build();
 
@@ -413,11 +414,8 @@ impl MomentsApplication {
             glib::clone!(
                 #[weak(rename_to = app)]
                 self,
-                move |result| match result {
-                    Ok(folder) => {
-                        app.run_import(folder);
-                    }
-                    Err(_) => {} // user cancelled — nothing to do
+                move |result| if let Ok(folder) = result {
+                    app.run_import(folder);
                 }
             ),
         );
@@ -659,7 +657,7 @@ impl MomentsApplication {
 
                         let dialog = adw::AlertDialog::builder()
                             .heading("Could not open library")
-                            .body(&format!(
+                            .body(format!(
                                 "An error occurred while opening the library.\n\nDetails: {e}"
                             ))
                             .build();

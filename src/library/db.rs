@@ -142,7 +142,7 @@ pub(crate) mod test_helpers {
         MediaRecord {
             id,
             relative_path: path.to_string(),
-            original_filename: path.split('/').last().unwrap_or("photo.jpg").to_string(),
+            original_filename: path.split('/').next_back().unwrap_or("photo.jpg").to_string(),
             file_size: 512,
             imported_at: 1_700_000_000,
             media_type: MediaType::Image,
@@ -161,7 +161,7 @@ pub(crate) mod test_helpers {
         MediaRecord {
             id,
             relative_path: path.to_string(),
-            original_filename: path.split('/').last().unwrap_or("photo.jpg").to_string(),
+            original_filename: path.split('/').next_back().unwrap_or("photo.jpg").to_string(),
             file_size: 512,
             imported_at,
             media_type: MediaType::Image,

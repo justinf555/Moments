@@ -206,3 +206,9 @@ impl CollectionGridCell {
         self.remove_css_class("hidden-person");
     }
 }
+
+impl Default for CollectionGridCell {
+    fn default() -> Self {
+        Self::new()
+    }
+}

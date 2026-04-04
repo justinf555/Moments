@@ -135,7 +135,7 @@ impl EditPanel {
         *self.media_id.borrow_mut() = Some(id);
         *self.session.borrow_mut() = Some(EditSession {
             state,
-            preview_image: preview_image,
+            preview_image,
             render_gen: 0,
         });
 
@@ -335,7 +335,7 @@ impl EditPanel {
         // ── Revert button (always visible at bottom) ─────────────────────────
         let revert_btn = gtk::Button::builder()
             .label("Revert to Original")
-            .tooltip_text(&gettext("Remove all edits and restore the original image"))
+            .tooltip_text(gettext("Remove all edits and restore the original image"))
             .hexpand(true)
             .margin_top(12)
             .margin_bottom(12)
@@ -767,7 +767,7 @@ impl EditPanel {
         display_fn: D,
     ) -> (gtk::ListBoxRow, gtk::Scale) {
         let value_label = gtk::Label::builder()
-            .label(&format!("{}", display_fn(initial)))
+            .label(format!("{}", display_fn(initial)))
             .halign(gtk::Align::End)
             .width_chars(4)
             .build();

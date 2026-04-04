@@ -102,7 +102,7 @@ mod imp {
             let menu_button = gtk::MenuButton::builder()
                 .primary(true)
                 .icon_name("open-menu-symbolic")
-                .tooltip_text(&gettext("Main Menu"))
+                .tooltip_text(gettext("Main Menu"))
                 .build();
             let menu = gio::Menu::new();
             let import_section = gio::Menu::new();
@@ -122,9 +122,9 @@ mod imp {
             let sidebar = adw::Sidebar::new();
             let section = adw::SidebarSection::new();
 
-            for (i, route) in ROUTES.iter().enumerate() {
+            for route in ROUTES.iter() {
                 let mut builder = adw::SidebarItem::builder()
-                    .title(&gettext(route.label))
+                    .title(gettext(route.label))
                     .icon_name(route.icon);
 
                 // Trash item gets a badge suffix showing the item count.
@@ -341,6 +341,12 @@ glib::wrapper! {
     pub struct MomentsSidebar(ObjectSubclass<imp::MomentsSidebar>)
         @extends gtk::Widget, adw::NavigationPage,
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+
+impl Default for MomentsSidebar {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MomentsSidebar {

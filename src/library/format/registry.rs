@@ -46,6 +46,12 @@ pub struct FormatRegistry {
     handlers: HashMap<String, Arc<dyn FormatHandler>>,
 }
 
+impl Default for FormatRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FormatRegistry {
     pub fn new() -> Self {
         Self {
