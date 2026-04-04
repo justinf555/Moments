@@ -129,7 +129,7 @@ impl AlbumGridView {
         let toolbar_view = adw::ToolbarView::new();
         toolbar_view.add_top_bar(&header);
         toolbar_view.set_content(Some(&content_stack));
-        toolbar_view.insert_action_group("album", &action_group);
+        toolbar_view.insert_action_group("album", Some(&action_group));
 
         let grid_page = adw::NavigationPage::builder()
             .tag("albums")
