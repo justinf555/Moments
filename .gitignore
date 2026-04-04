@@ -10,7 +10,9 @@ build/
 
 # Flatpak builder cache
 .flatpak-builder/
+.flatpak-builder-dev/
 flatpak-build-dir/
+flatpak-build-dev/
 
 # SQLite runtime files
 *.db

@@ -3,11 +3,13 @@ run:
 	flatpak run io.github.justinf555.Moments
 
 run-dev:
-	flatpak-builder --user --install flatpak-build-dir io.github.justinf555.Moments.dev.json && \
+	flatpak-builder --user --install --force-clean \
+		--state-dir=.flatpak-builder-dev \
+		flatpak-build-dev io.github.justinf555.Moments.dev.json && \
 	flatpak run --env=RUST_LOG=moments=debug io.github.justinf555.Moments
 
 clean:
-	rm -rf flatpak-build-dir
+	rm -rf flatpak-build-dir flatpak-build-dev
 
 # ── Testing (inside GNOME 50 Flatpak SDK) ────────────────────────────────────
 #
