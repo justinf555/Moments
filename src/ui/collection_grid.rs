@@ -7,14 +7,11 @@ use gettextrs::gettext;
 use gtk::{gio, glib};
 use tracing::{debug, info};
 
-use crate::library::faces::PersonId;
-use crate::library::media::MediaFilter;
 use crate::library::Library;
-use crate::ui::photo_grid::model::PhotoGridModel;
 use crate::ui::photo_grid::texture_cache::TextureCache;
-use crate::ui::photo_grid::PhotoGridView;
 use crate::ui::ContentView;
 
+mod actions;
 pub mod cell;
 pub mod factory;
 pub mod item;
@@ -120,7 +117,6 @@ impl CollectionGridView {
 
         // Remove the person grid's zoom actions when navigating back.
         nav_view.connect_popped(|nav, _page| {
-            // If we're back to the collection page, remove zoom actions.
             let is_collection = nav
                 .visible_page()
                 .and_then(|p| p.tag())
@@ -155,285 +151,14 @@ impl CollectionGridView {
             });
         }
 
-        // ── Wire item activation ─────────────────────────────────────────
-        {
-            let nav_clone = nav_view.clone();
-            let lib = Arc::clone(&library);
-            let tk = tokio.clone();
-            let s = settings.clone();
-            let tc = Rc::clone(&texture_cache);
-            let bs = bus_sender.clone();
-            let store_ref = store.clone();
-            grid_view.connect_activate(move |_, position| {
-                let Some(obj) = store_ref
-                    .item(position)
-                    .and_then(|o| o.downcast::<CollectionItemObject>().ok())
-                else {
-                    return;
-                };
-
-                let data = obj.data();
-                let person_id = PersonId::from_raw(data.id.clone());
-                debug!(person = %data.name, id = %data.id, "person activated");
-
-                let filter = MediaFilter::Person {
-                    person_id: person_id.clone(),
-                };
-                let model = Rc::new(PhotoGridModel::new(
-                    Arc::clone(&lib),
-                    tk.clone(),
-                    filter,
-                    bs.clone(),
-                ));
-                let view = Rc::new(PhotoGridView::new(
-                    Arc::clone(&lib),
-                    tk.clone(),
-                    s.clone(),
-                    Rc::clone(&tc),
-                    bs.clone(),
-                ));
-                view.set_model(Rc::clone(&model));
-                model.subscribe_to_bus();
-
-                let display_name = if data.name.is_empty() {
-                    "Unnamed".to_string()
-                } else {
-                    data.name.clone()
-                };
-
-                let person_page = adw::NavigationPage::builder()
-                    .tag(format!("person:{}", data.id))
-                    .title(&display_name)
-                    .child(view.widget())
-                    .build();
-
-                // Install the person grid's zoom actions on the window.
-                if let Some(actions) = view.view_actions() {
-                    if let Some(win) = nav_clone.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
-                        win.insert_action_group("view", Some(actions));
-                    }
-                }
-
-                nav_clone.push(&person_page);
-            });
-        }
-
-        // ── Wire right-click context menu ────────────────────────────────
-        {
-            let gesture = gtk::GestureClick::new();
-            gesture.set_button(3);
-
-            let gv = grid_view.clone();
-            let lib = Arc::clone(&library);
-            let tk = tokio.clone();
-            let store_ctx = store.clone();
-            let filter_ctx = Rc::clone(&filter);
-
-            gesture.connect_pressed(move |gesture, _, x, y| {
-                let Some(picked) = gv.pick(x, y, gtk::PickFlags::DEFAULT) else {
-                    return;
-                };
-
-                let grid_widget = gv.upcast_ref::<gtk::Widget>();
-                let mut target = Some(picked);
-                while let Some(ref w) = target {
-                    if w.parent().as_ref() == Some(grid_widget) {
-                        break;
-                    }
-                    target = w.parent();
-                }
-                let Some(target) = target else { return };
-
-                let mut pos = 0u32;
-                let mut child = gv.first_child();
-                loop {
-                    let Some(c) = child else { return };
-                    if c == target {
-                        break;
-                    }
-                    pos += 1;
-                    child = c.next_sibling();
-                }
-
-                let Some(obj) = store_ctx
-                    .item(pos)
-                    .and_then(|o| o.downcast::<CollectionItemObject>().ok())
-                else {
-                    return;
-                };
-
-                let data = obj.data();
-                let person_id = data.id.clone();
-                let current_name = data.name.clone();
-                let is_hidden = data.is_hidden;
-
-                let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
-                vbox.set_margin_top(6);
-                vbox.set_margin_bottom(6);
-                vbox.set_margin_start(6);
-                vbox.set_margin_end(6);
-
-                let popover = gtk::Popover::new();
-
-                // ── Rename button ──
-                let rename_btn = gtk::Button::with_label("Rename");
-                rename_btn.add_css_class("flat");
-                vbox.append(&rename_btn);
-
-                // ── Hide/Unhide button ──
-                let hide_label = if is_hidden { "Unhide" } else { "Hide" };
-                let hide_btn = gtk::Button::with_label(hide_label);
-                hide_btn.add_css_class("flat");
-                vbox.append(&hide_btn);
-
-                // Wire rename.
-                let pop_weak = popover.downgrade();
-                let lib_r = Arc::clone(&lib);
-                let tk_r = tk.clone();
-                let store_r = store_ctx.clone();
-                let pid_r = person_id.clone();
-                let gv_ref = gv.clone();
-                let item_subtitle = data.subtitle.clone();
-                let item_thumb = data.thumbnail_path.clone();
-                let item_hidden = data.is_hidden;
-                rename_btn.connect_clicked(move |_| {
-                    if let Some(p) = pop_weak.upgrade() {
-                        p.popdown();
-                    }
-
-                    let dialog = adw::AlertDialog::builder()
-                        .heading("Rename Person")
-                        .build();
-                    dialog.add_response("cancel", "Cancel");
-                    dialog.add_response("rename", "Rename");
-                    dialog.set_response_appearance("rename", adw::ResponseAppearance::Suggested);
-                    dialog.set_default_response(Some("rename"));
-                    dialog.set_close_response("cancel");
-
-                    let entry = gtk::Entry::new();
-                    entry.set_text(&current_name);
-                    entry.set_activates_default(true);
-                    dialog.set_extra_child(Some(&entry));
-
-                    let lib = Arc::clone(&lib_r);
-                    let tk = tk_r.clone();
-                    let store = store_r.clone();
-                    let pid = pid_r.clone();
-                    let subtitle = item_subtitle.clone();
-                    let thumb = item_thumb.clone();
-                    let hidden = item_hidden;
-                    let gv_toast = gv_ref.clone();
-                    dialog.connect_response(None, move |_, response| {
-                        if response != "rename" {
-                            return;
-                        }
-                        let new_name = entry.text().to_string();
-                        if new_name.is_empty() {
-                            return;
-                        }
-                        let pid_str = pid.clone();
-                        let pid = PersonId::from_raw(pid.clone());
-                        let lib = Arc::clone(&lib);
-                        let tk = tk.clone();
-                        let store = store.clone();
-                        let subtitle = subtitle.clone();
-                        let thumb = thumb.clone();
-                        let gv_toast = gv_toast.clone();
-                        debug!(person_id = %pid, name = %new_name, "renaming person");
-                        glib::MainContext::default().spawn_local(async move {
-                            let name = new_name.clone();
-                            let result = tk
-                                .spawn(async move { lib.rename_person(&pid, &name).await })
-                                .await;
-                            match result {
-                                Ok(Ok(())) => {
-                                    info!("person renamed successfully");
-                                    replace_item(&store, &pid_str, CollectionItemData {
-                                        id: pid_str.clone(),
-                                        name: new_name,
-                                        subtitle,
-                                        thumbnail_path: thumb,
-                                        is_hidden: hidden,
-                                    });
-                                }
-                                Ok(Err(e)) => {
-                                    tracing::error!("rename_person failed: {e}");
-                                    let _ = gv_toast.activate_action("win.show-toast", Some(&"Failed to rename person".to_variant()));
-                                }
-                                Err(e) => tracing::error!("rename_person join failed: {e}"),
-                            }
-                        });
-                    });
-                    dialog.present(
-                        gv_ref
-                            .root()
-                            .as_ref()
-                            .and_then(|r| r.downcast_ref::<gtk::Window>()),
-                    );
-                });
-
-                // Wire hide/unhide.
-                let pop_weak = popover.downgrade();
-                let lib_h = Arc::clone(&lib);
-                let tk_h = tk.clone();
-                let store_h = store_ctx.clone();
-                let filter_h = Rc::clone(&filter_ctx);
-                let new_hidden = !is_hidden;
-                let gv_hide = gv.clone();
-                hide_btn.connect_clicked(move |_| {
-                    if let Some(p) = pop_weak.upgrade() {
-                        p.popdown();
-                    }
-                    let pid = PersonId::from_raw(person_id.clone());
-                    let lib = Arc::clone(&lib_h);
-                    let tk = tk_h.clone();
-                    let store = store_h.clone();
-                    let f = Rc::clone(&filter_h);
-                    let action = if new_hidden { "hiding" } else { "unhiding" };
-                    debug!(person_id = %pid, action, "toggling person visibility");
-                    let pid_for_remove = pid.to_string();
-                    let gv_hide = gv_hide.clone();
-                    glib::MainContext::default().spawn_local(async move {
-                        let result = tk
-                            .spawn(async move { lib.set_person_hidden(&pid, new_hidden).await })
-                            .await;
-                        match result {
-                            Ok(Ok(())) => {
-                                info!("person visibility changed successfully");
-                                // If hiding and "Show Hidden" is off, just remove the item.
-                                // If unhiding and "Show Hidden" is on, item stays — no change needed.
-                                if new_hidden && !f.include_hidden.get() {
-                                    remove_by_id(&store, &pid_for_remove);
-                                } else if !new_hidden && f.include_hidden.get() {
-                                    // Unhiding while showing hidden — item stays, no action needed.
-                                }
-                            }
-                            Ok(Err(e)) => {
-                                tracing::error!("set_person_hidden failed: {e}");
-                                let _ = gv_hide.activate_action("win.show-toast", Some(&"Failed to update person visibility".to_variant()));
-                            }
-                            Err(e) => tracing::error!("set_person_hidden join failed: {e}"),
-                        }
-                    });
-                });
-
-                popover.set_child(Some(&vbox));
-                popover.set_parent(&gv);
-                popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
-                    x as i32, y as i32, 1, 1,
-                )));
-                popover.set_has_arrow(true);
-
-                popover.connect_closed(move |p| {
-                    p.unparent();
-                });
-
-                popover.popup();
-                gesture.set_state(gtk::EventSequenceState::Claimed);
-            });
-
-            grid_view.add_controller(gesture);
-        }
+        // ── Wire item activation and context menu ────────────────────────
+        actions::wire_activation(
+            &grid_view, &store, &nav_view, &library,
+            &tokio, &settings, &texture_cache, &bus_sender,
+        );
+        actions::wire_context_menu(
+            &grid_view, &store, &library, &tokio, &filter,
+        );
 
         // Load people asynchronously.
         load_people(&store, &library, &filter);
@@ -533,7 +258,11 @@ fn full_reload(store: &gio::ListStore, library: &Arc<dyn Library>, filter: &Rc<P
 }
 
 /// Incremental update: insert new, remove deleted (used for sync refresh).
-fn incremental_reload(store: &gio::ListStore, library: &Arc<dyn Library>, filter: &Rc<PeopleFilter>) {
+fn incremental_reload(
+    store: &gio::ListStore,
+    library: &Arc<dyn Library>,
+    filter: &Rc<PeopleFilter>,
+) {
     use std::collections::HashMap;
 
     let lib = Arc::clone(library);
