@@ -23,6 +23,8 @@ pub struct LibraryStats {
     pub video_count: u64,
     pub album_count: u64,
     pub total_file_size: u64,
+    /// Number of items currently in the trash.
+    pub trashed_count: u64,
     /// Disk usage of the originals cache (Immich only), in bytes.
     pub cache_used_bytes: u64,
     /// People count (named, non-hidden).

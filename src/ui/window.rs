@@ -28,8 +28,6 @@ use adw::subclass::prelude::*;
 use gtk::{gio, glib};
 use tracing::{debug, instrument};
 
-use crate::library::album::AlbumId;
-
 /// Wrapper for a reload callback that implements `Debug` and `Default`.
 pub struct ReloadCallback(Box<dyn Fn()>);
 
@@ -56,7 +54,7 @@ impl Default for ReloadCallback {
 }
 use crate::library::Library;
 
-use crate::ui::album_dialogs;
+
 use crate::ui::collection_grid::CollectionGridView;
 use crate::ui::coordinator::ContentCoordinator;
 use crate::ui::empty_library::EmptyLibraryView;
@@ -205,145 +203,19 @@ impl MomentsWindow {
         imp.split_view.set_sidebar(Some(&sidebar));
         let _ = imp.sidebar.set(sidebar.clone());
 
-        // Populate sidebar with existing albums from the library.
+        // Load initial trash count for the sidebar badge.
         {
             let lib = Arc::clone(&library);
             let tk = tokio.clone();
             let sb = sidebar.clone();
-            let tx = bus_sender.clone();
             glib::MainContext::default().spawn_local(async move {
-                match tk.spawn(async move { lib.list_albums().await }).await {
-                    Ok(Ok(albums)) => {
-                        let pairs: Vec<(String, String)> = albums
-                            .into_iter()
-                            .map(|a| (a.id.as_str().to_owned(), a.name))
-                            .collect();
-                        sb.set_albums(&pairs);
-                    }
-                    Ok(Err(e)) => {
-                        tracing::error!("failed to load albums for sidebar: {e}");
-                        tx.send(AppEvent::Error("Could not load albums".into()));
-                    }
-                    Err(e) => {
-                        tracing::error!("failed to load albums for sidebar (join): {e}");
-                        tx.send(AppEvent::Error("Could not load albums".into()));
-                    }
+                let result = tk
+                    .spawn(async move { lib.library_stats().await })
+                    .await;
+                if let Ok(Ok(stats)) = result {
+                    sb.set_trash_count(stats.trashed_count as u32);
                 }
             });
-        }
-
-        // Wire "+" button → create album dialog.
-        {
-            let win_weak = self.downgrade();
-            let lib = Arc::clone(&library);
-            let tk = tokio.clone();
-            let sb = sidebar.clone();
-            sidebar.connect_album_add_clicked(move || {
-                let Some(win) = win_weak.upgrade() else { return };
-                let lib = Arc::clone(&lib);
-                let tk = tk.clone();
-                let sb = sb.clone();
-                album_dialogs::show_create_album_dialog(&win, move |name| {
-                    let lib = Arc::clone(&lib);
-                    let tk = tk.clone();
-                    let sb = sb.clone();
-                    glib::MainContext::default().spawn_local(async move {
-                        let n = name.clone();
-                        match tk.spawn(async move { lib.create_album(&n).await }).await {
-                            Ok(Ok(id)) => {
-                                debug!(album_id = %id, name = %name, "album created");
-                                sb.add_album(id.as_str(), &name);
-                            }
-                            Ok(Err(e)) => {
-                                tracing::error!("failed to create album: {e}");
-                                let _ = sb.activate_action("win.show-toast", Some(&"Failed to create album".to_variant()));
-                            }
-                            Err(e) => tracing::error!("tokio join error: {e}"),
-                        }
-                    });
-                });
-            });
-        }
-
-        // Wire right-click context menu on album rows.
-        {
-            let win_weak = self.downgrade();
-            let lib_rename = Arc::clone(&library);
-            let tk_rename = tokio.clone();
-            let sb_rename = sidebar.clone();
-
-            let win_weak2 = self.downgrade();
-            let lib_delete = Arc::clone(&library);
-            let tk_delete = tokio.clone();
-            let sb_delete = sidebar.clone();
-
-            sidebar.set_album_context_callbacks(
-                // on_rename callback
-                move |album_id, album_name| {
-                    let Some(win) = win_weak.upgrade() else { return };
-                    let lib = Arc::clone(&lib_rename);
-                    let tk = tk_rename.clone();
-                    let sb = sb_rename.clone();
-                    let aid = album_id.clone();
-                    album_dialogs::show_rename_album_dialog(&win, &album_name, move |new_name| {
-                        let lib = Arc::clone(&lib);
-                        let tk = tk.clone();
-                        let sb = sb.clone();
-                        let aid = aid.clone();
-                        glib::MainContext::default().spawn_local(async move {
-                            let n = new_name.clone();
-                            let id = AlbumId::from_raw(aid.clone());
-                            match tk.spawn(async move { lib.rename_album(&id, &n).await }).await {
-                                Ok(Ok(())) => {
-                                    debug!(album_id = %aid, name = %new_name, "album renamed");
-                                    sb.rename_album(&aid, &new_name);
-                                }
-                                Ok(Err(e)) => {
-                                    tracing::error!("failed to rename album: {e}");
-                                    let _ = sb.activate_action("win.show-toast", Some(&"Failed to rename album".to_variant()));
-                                }
-                                Err(e) => tracing::error!("tokio join error: {e}"),
-                            }
-                        });
-                    });
-                },
-                // on_delete callback
-                move |album_id, album_name| {
-                    let Some(win) = win_weak2.upgrade() else { return };
-                    let lib = Arc::clone(&lib_delete);
-                    let tk = tk_delete.clone();
-                    let sb = sb_delete.clone();
-                    let aid = album_id.clone();
-                    let win_weak_inner = win.downgrade();
-                    album_dialogs::show_delete_album_dialog(&win, &album_name, move || {
-                        let lib = Arc::clone(&lib);
-                        let tk = tk.clone();
-                        let sb = sb.clone();
-                        let aid = aid.clone();
-                        let win_w = win_weak_inner.clone();
-                        glib::MainContext::default().spawn_local(async move {
-                            let id = AlbumId::from_raw(aid.clone());
-                            match tk.spawn(async move { lib.delete_album(&id).await }).await {
-                                Ok(Ok(())) => {
-                                    debug!(album_id = %aid, "album deleted");
-                                    sb.remove_album(&aid);
-                                    if let Some(win) = win_w.upgrade() {
-                                        let route = format!("album:{aid}");
-                                        if let Some(coord) = win.imp().coordinator.get() {
-                                            coord.borrow_mut().unregister(&route);
-                                        }
-                                    }
-                                }
-                                Ok(Err(e)) => {
-                                    tracing::error!("failed to delete album: {e}");
-                                    let _ = sb.activate_action("win.show-toast", Some(&"Failed to delete album".to_variant()));
-                                }
-                                Err(e) => tracing::error!("tokio join error: {e}"),
-                            }
-                        });
-                    });
-                },
-            );
         }
 
         // Build content stack + coordinator.
@@ -462,6 +334,19 @@ impl MomentsWindow {
             });
         }
 
+        // Register the Albums placeholder view (lazy — replaced by full
+        // Albums grid view in #339).
+        coordinator.register_lazy("albums", || {
+            Rc::new(super::empty_library::EmptyLibraryView::from_status_page(
+                adw::StatusPage::builder()
+                    .icon_name("folder-symbolic")
+                    .title("Albums")
+                    .description("Album management is coming soon.")
+                    .vexpand(true)
+                    .build(),
+            ))
+        });
+
         // Wrap the content stack in a NavigationPage for the split view.
         let content_nav_page = adw::NavigationPage::builder()
             .title("Photos")
@@ -502,49 +387,14 @@ impl MomentsWindow {
             .set(coordinator)
             .expect("coordinator set once in setup()");
 
-        // Wire sidebar selection → coordinator navigation.
-        // Album routes are registered dynamically on first click.
+        // Wire sidebar selection ��� coordinator navigation.
         {
             let obj_weak = self.downgrade();
-            let lib = Arc::clone(&library);
-            let tk = tokio.clone();
-            let s = settings.clone();
-            let tc = Rc::clone(&texture_cache);
-            let bs = bus_sender.clone();
             sidebar.connect_route_selected(move |id| {
                 let Some(win) = obj_weak.upgrade() else { return };
                 let Some(coordinator) = win.imp().coordinator.get() else { return };
-
-                // Dynamic registration for album routes.
-                if let Some(album_id_str) = id.strip_prefix("album:") {
-                    let mut coord = coordinator.borrow_mut();
-                    if !coord.has_route(id) {
-                        let album_id = AlbumId::from_raw(album_id_str.to_owned());
-                        let model = Rc::new(PhotoGridModel::new(
-                            Arc::clone(&lib),
-                            tk.clone(),
-                            MediaFilter::Album { album_id },
-                            bs.clone(),
-                        ));
-                        let view = Rc::new(PhotoGridView::new(
-                            Arc::clone(&lib),
-                            tk.clone(),
-                            s.clone(),
-                            Rc::clone(&tc),
-                            bs.clone(),
-                        ));
-                        view.set_model(Rc::clone(&model));
-                        model.subscribe_to_bus();
-                        coord.register(id, view);
-                        debug!(route = %id, "registered album view");
-                    }
-                    if let Some(actions) = coord.navigate(id) {
-                        win.insert_action_group("view", Some(&actions));
-                    }
-                } else {
-                    if let Some(actions) = coordinator.borrow_mut().navigate(id) {
-                        win.insert_action_group("view", Some(&actions));
-                    }
+                if let Some(actions) = coordinator.borrow_mut().navigate(id) {
+                    win.insert_action_group("view", Some(&actions));
                 }
             });
         }

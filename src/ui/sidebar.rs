@@ -1,39 +1,23 @@
 pub mod route;
-pub mod row;
 
-use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::cell::Cell;
+use std::cell::RefCell;
 
 use gettextrs::gettext;
 use gtk::{gio, glib, prelude::*, subclass::prelude::*};
 use adw::prelude::*;
 use tracing::debug;
 
-use route::{TOP_ROUTES, BOTTOM_ROUTES};
-use row::MomentsSidebarRow;
-
-/// Stored callbacks for album row right-click menus.
-struct AlbumContextMenu {
-    on_rename: std::rc::Rc<dyn Fn(String, String)>,
-    on_delete: std::rc::Rc<dyn Fn(String, String)>,
-}
+use route::ROUTES;
 
 mod imp {
     use super::*;
     use std::cell::OnceCell;
 
     pub struct MomentsSidebar {
-        pub list_box: OnceCell<gtk::ListBox>,
-        /// Maps album_id → ListBoxRow for dynamic add/remove.
-        pub album_rows: RefCell<HashMap<String, gtk::ListBoxRow>>,
-        /// The non-selectable header row for the Albums section.
-        pub albums_header: OnceCell<gtk::ListBoxRow>,
-        /// The separator row before Trash (albums are inserted before this).
-        pub bottom_separator: OnceCell<gtk::ListBoxRow>,
-        /// The "+" button for creating albums.
-        pub add_button: OnceCell<gtk::Button>,
-        /// Stored context menu callbacks (set once via set_album_context_callbacks).
-        pub(super) context_menu: RefCell<Option<AlbumContextMenu>>,
+        pub sidebar: OnceCell<adw::Sidebar>,
+        pub trash_item: OnceCell<adw::SidebarItem>,
+        pub trash_count: Cell<u32>,
 
         // ── Bottom sheet (upload detail) ──────────────────────────────────
         pub bottom_sheet: OnceCell<adw::BottomSheet>,
@@ -70,12 +54,9 @@ mod imp {
     impl Default for MomentsSidebar {
         fn default() -> Self {
             Self {
-                list_box: OnceCell::new(),
-                album_rows: RefCell::new(HashMap::new()),
-                albums_header: OnceCell::new(),
-                bottom_separator: OnceCell::new(),
-                add_button: OnceCell::new(),
-                context_menu: RefCell::new(None),
+                sidebar: OnceCell::new(),
+                trash_item: OnceCell::new(),
+                trash_count: Cell::new(0),
                 bottom_sheet: OnceCell::new(),
                 progress_label: OnceCell::new(),
                 progress_bar: OnceCell::new(),
@@ -112,7 +93,6 @@ mod imp {
             // ── Sidebar header bar ───────────────────────────────────────
             let header = adw::HeaderBar::new();
 
-            // Hamburger menu (RHS) — contains Import + app-level actions.
             let menu_button = gtk::MenuButton::builder()
                 .primary(true)
                 .icon_name("open-menu-symbolic")
@@ -132,56 +112,26 @@ mod imp {
 
             toolbar_view.add_top_bar(&header);
 
-            // ── Route list ───────────────────────────────────────────────
-            let list_box = gtk::ListBox::new();
-            list_box.set_selection_mode(gtk::SelectionMode::Single);
-            list_box.add_css_class("navigation-sidebar");
+            // ── AdwSidebar ──────────────────────────────────────────────
+            let sidebar = adw::Sidebar::new();
+            let section = adw::SidebarSection::new();
 
-            // Top routes (Photos, Favorites, Recent Imports, People).
-            for route in TOP_ROUTES {
-                let row = MomentsSidebarRow::new(route.id, route.label, route.icon);
-                let list_row = gtk::ListBoxRow::new();
-                list_row.set_child(Some(&row));
-                list_box.append(&list_row);
-            }
+            for (i, route) in ROUTES.iter().enumerate() {
+                let item = adw::SidebarItem::builder()
+                    .title(&gettext(route.label))
+                    .icon_name(route.icon)
+                    .build();
 
-            // Albums header row.
-            let (header_row, add_button) = Self::make_albums_header();
-            list_box.append(&header_row);
-            self.albums_header
-                .set(header_row)
-                .expect("albums_header set once");
-            self.add_button
-                .set(add_button)
-                .expect("add_button set once");
-
-            // Bottom spacer (albums are inserted before this).
-            let spacer = gtk::ListBoxRow::new();
-            spacer.set_selectable(false);
-            spacer.set_activatable(false);
-            spacer.set_visible(false);
-            list_box.append(&spacer);
-            self.bottom_separator
-                .set(spacer)
-                .expect("bottom_separator set once");
-
-            // Bottom routes (Trash).
-            for (i, route) in BOTTOM_ROUTES.iter().enumerate() {
-                let row = MomentsSidebarRow::new(route.id, route.label, route.icon);
-                let list_row = gtk::ListBoxRow::new();
-                list_row.set_child(Some(&row));
-                if i == 0 {
-                    list_row.set_margin_top(12);
+                // Store the Trash item for subtitle updates.
+                if i == route::TRASH_INDEX as usize {
+                    let _ = self.trash_item.set(item.clone());
                 }
-                list_box.append(&list_row);
+
+                section.append(item);
             }
 
-            let scrolled = gtk::ScrolledWindow::new();
-            scrolled.set_hscrollbar_policy(gtk::PolicyType::Never);
-            scrolled.set_vexpand(true);
-            scrolled.set_child(Some(&list_box));
-
-            toolbar_view.set_content(Some(&scrolled));
+            sidebar.append(section);
+            toolbar_view.set_content(Some(&sidebar));
 
             // ── Status bar (bottom bar of the BottomSheet) ───────────────
             let bar_stack = gtk::Stack::new();
@@ -250,7 +200,7 @@ mod imp {
             upload_box.append(&upload_label);
             bar_stack.add_named(&upload_box, Some("upload"));
 
-            // Complete page: "✓ X imported"
+            // Complete page: "Upload Complete"
             let complete_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
             complete_box.set_margin_start(12);
             complete_box.set_margin_end(12);
@@ -297,12 +247,11 @@ mod imp {
             bottom_sheet.set_can_open(false);
             bottom_sheet.set_modal(false);
             bottom_sheet.set_full_width(true);
-            // Always visible — shows status at all times.
             bottom_sheet.set_reveal_bottom_bar(true);
 
             obj.set_child(Some(&bottom_sheet));
 
-            self.list_box.set(list_box).unwrap();
+            self.sidebar.set(sidebar).unwrap();
             let _ = self.bottom_sheet.set(bottom_sheet);
             let _ = self.progress_label.set(progress_label);
             let _ = self.progress_bar.set(progress_bar);
@@ -313,37 +262,6 @@ mod imp {
             let _ = self.thumb_label.set(thumb_label);
             let _ = self.upload_label.set(upload_label);
             let _ = self.complete_label.set(complete_label);
-        }
-    }
-
-    impl imp::MomentsSidebar {
-        /// Create the "Albums" header row with a "+" button.
-        fn make_albums_header() -> (gtk::ListBoxRow, gtk::Button) {
-            let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-            hbox.set_margin_start(12);
-            hbox.set_margin_end(6);
-            hbox.set_margin_top(2);
-            hbox.set_margin_bottom(2);
-
-            let label = gtk::Label::new(Some("Albums"));
-            label.set_xalign(0.0);
-            label.set_hexpand(true);
-            label.add_css_class("dim-label");
-            label.add_css_class("caption-heading");
-            hbox.append(&label);
-
-            let add_btn = gtk::Button::from_icon_name("list-add-symbolic");
-            add_btn.add_css_class("flat");
-            add_btn.set_tooltip_text(Some(&gettext("New album")));
-            hbox.append(&add_btn);
-
-            let row = gtk::ListBoxRow::new();
-            row.set_child(Some(&hbox));
-            row.set_selectable(false);
-            row.set_activatable(false);
-            row.set_margin_top(12);
-
-            (row, add_btn)
         }
     }
 
@@ -362,10 +280,7 @@ impl MomentsSidebar {
         glib::Object::new()
     }
 
-    /// Subscribe to sync, import, thumbnail, and album events on the bus.
-    ///
-    /// Self-contained: the sidebar handles its own events internally.
-    /// The parent (window.rs) only needs to call this once after creation.
+    /// Subscribe to sync, import, thumbnail, and trash count events.
     pub fn subscribe_to_bus(&self) {
         let weak = self.downgrade();
         crate::event_bus::subscribe(move |event| {
@@ -392,219 +307,77 @@ impl MomentsSidebar {
                 crate::app_event::AppEvent::ImportComplete { summary } => {
                     sidebar.show_upload_complete(summary);
                 }
-                crate::app_event::AppEvent::AlbumCreated { id, name } => {
-                    sidebar.add_album(id.as_str(), name);
+                // Dynamic trash count updates.
+                crate::app_event::AppEvent::Trashed { ids } => {
+                    sidebar.adjust_trash_count(ids.len() as i32);
                 }
-                crate::app_event::AppEvent::AlbumRenamed { id, name } => {
-                    sidebar.rename_album(id.as_str(), name);
+                crate::app_event::AppEvent::Restored { ids } => {
+                    sidebar.adjust_trash_count(-(ids.len() as i32));
                 }
-                crate::app_event::AppEvent::AlbumDeleted { id } => {
-                    sidebar.remove_album(id.as_str());
+                crate::app_event::AppEvent::Deleted { ids } => {
+                    sidebar.adjust_trash_count(-(ids.len() as i32));
                 }
                 _ => {}
             }
         });
     }
 
-    /// Connect a callback that fires when the user selects a row.
+    /// Connect a callback that fires when the user activates a sidebar item.
     pub fn connect_route_selected<F: Fn(&str) + 'static>(&self, f: F) {
-        let list_box = self.imp().list_box.get().unwrap().clone();
-        list_box.connect_row_selected(move |_, row| {
-            let Some(row) = row else { return };
-            let Some(child) = row.child() else { return };
-            let Some(sidebar_row) = child.downcast_ref::<MomentsSidebarRow>() else {
-                return;
-            };
-            let id = sidebar_row.route_id().to_owned();
-            debug!(route = %id, "sidebar route selected");
-            f(&id);
+        let sidebar = self.imp().sidebar.get().unwrap().clone();
+        sidebar.connect_activated(move |_, index| {
+            if let Some(route) = ROUTES.get(index as usize) {
+                debug!(route = %route.id, "sidebar route selected");
+                f(route.id);
+            }
         });
     }
 
-    /// Pre-select the first row so the shell always has an active route.
+    /// Pre-select the first item (Photos) so the shell always has an active route.
     pub fn select_first(&self) {
-        let list_box = self.imp().list_box.get().unwrap();
-        if let Some(first) = list_box.row_at_index(0) {
-            list_box.select_row(Some(&first));
-        }
+        self.imp().sidebar.get().unwrap().set_selected(0);
     }
 
-    /// Populate all album rows at startup.
-    pub fn set_albums(&self, albums: &[(String, String)]) {
+    /// Set the initial trash count (called once at startup after querying the library).
+    pub fn set_trash_count(&self, count: u32) {
         let imp = self.imp();
-        let mut album_rows = imp.album_rows.borrow_mut();
-        let list_box = imp.list_box.get().unwrap();
-        for (_, row) in album_rows.drain() {
-            list_box.remove(&row);
-        }
-        drop(album_rows);
-
-        for (id, name) in albums {
-            self.add_album(id, name);
-        }
+        imp.trash_count.set(count);
+        self.update_trash_subtitle();
     }
 
-    /// Add a single album row to the Albums section.
-    pub fn add_album(&self, album_id: &str, name: &str) {
-        if self.imp().album_rows.borrow().contains_key(album_id) {
-            self.rename_album(album_id, name);
-            return;
-        }
-
+    /// Adjust the trash count by a signed delta.
+    fn adjust_trash_count(&self, delta: i32) {
         let imp = self.imp();
-        let list_box = imp.list_box.get().unwrap();
-        let bottom_sep = imp.bottom_separator.get().unwrap();
-
-        let route_id = format!("album:{album_id}");
-        let sidebar_row = MomentsSidebarRow::new(&route_id, name, "folder-symbolic");
-        let list_row = gtk::ListBoxRow::new();
-        list_row.set_child(Some(&sidebar_row));
-
-        list_box.insert(&list_row, bottom_sep.index());
-
-        self.attach_row_context_menu(&list_row, album_id, name);
-
-        imp.album_rows
-            .borrow_mut()
-            .insert(album_id.to_owned(), list_row);
+        let current = imp.trash_count.get() as i32;
+        let new_count = (current + delta).max(0) as u32;
+        imp.trash_count.set(new_count);
+        self.update_trash_subtitle();
     }
 
-    /// Remove an album row by album ID.
-    pub fn remove_album(&self, album_id: &str) {
+    /// Update the Trash sidebar item subtitle with the current count.
+    fn update_trash_subtitle(&self) {
         let imp = self.imp();
-        let list_box = imp.list_box.get().unwrap();
-
-        if let Some(row) = imp.album_rows.borrow_mut().remove(album_id) {
-            let is_selected = list_box
-                .selected_row()
-                .map(|sel| sel == row)
-                .unwrap_or(false);
-
-            list_box.remove(&row);
-
-            if is_selected {
-                self.select_first();
+        if let Some(item) = imp.trash_item.get() {
+            let count = imp.trash_count.get();
+            if count > 0 {
+                item.set_subtitle(Some(&count.to_string()));
+            } else {
+                item.set_subtitle(None);
             }
         }
-    }
-
-    /// Update an album row's displayed name.
-    pub fn rename_album(&self, album_id: &str, name: &str) {
-        let imp = self.imp();
-        let album_rows = imp.album_rows.borrow();
-        if let Some(row) = album_rows.get(album_id) {
-            if let Some(child) = row.child() {
-                if let Some(sidebar_row) = child.downcast_ref::<MomentsSidebarRow>() {
-                    sidebar_row.set_label_text(name);
-                }
-            }
-        }
-    }
-
-    /// Connect a callback for the "+" (new album) button.
-    pub fn connect_album_add_clicked<F: Fn() + 'static>(&self, f: F) {
-        if let Some(btn) = self.imp().add_button.get() {
-            btn.connect_clicked(move |_| f());
-        }
-    }
-
-    /// Store callbacks for album context menu actions.
-    pub fn set_album_context_callbacks(
-        &self,
-        on_rename: impl Fn(String, String) + 'static,
-        on_delete: impl Fn(String, String) + 'static,
-    ) {
-        *self.imp().context_menu.borrow_mut() = Some(AlbumContextMenu {
-            on_rename: std::rc::Rc::new(on_rename),
-            on_delete: std::rc::Rc::new(on_delete),
-        });
-    }
-
-    /// Attach a right-click gesture to an individual album row.
-    fn attach_row_context_menu(&self, list_row: &gtk::ListBoxRow, album_id: &str, name: &str) {
-        let ctx = self.imp().context_menu.borrow();
-        let Some(ctx) = ctx.as_ref() else { return };
-
-        let gesture = gtk::GestureClick::new();
-        gesture.set_button(3);
-
-        let on_rename = ctx.on_rename.clone();
-        let on_delete = ctx.on_delete.clone();
-        let aid = album_id.to_owned();
-        let aname = name.to_owned();
-        let row_weak = list_row.downgrade();
-
-        gesture.connect_pressed(move |gesture, _, x, _y| {
-            let Some(row) = row_weak.upgrade() else { return };
-
-            let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
-            vbox.add_css_class("menu");
-
-            let rename_btn = gtk::Button::with_label("Rename");
-            rename_btn.add_css_class("flat");
-            vbox.append(&rename_btn);
-
-            let delete_btn = gtk::Button::with_label("Delete");
-            delete_btn.add_css_class("flat");
-            delete_btn.add_css_class("error");
-            vbox.append(&delete_btn);
-
-            let popover = gtk::Popover::new();
-            popover.set_child(Some(&vbox));
-            popover.set_parent(&row);
-            popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, 0, 1, 1)));
-            popover.set_has_arrow(true);
-
-            let rename_cb = on_rename.clone();
-            let aid_r = aid.clone();
-            let aname_r = aname.clone();
-            let pop_weak = popover.downgrade();
-            rename_btn.connect_clicked(move |_| {
-                if let Some(p) = pop_weak.upgrade() {
-                    p.popdown();
-                }
-                rename_cb(aid_r.clone(), aname_r.clone());
-            });
-
-            let delete_cb = on_delete.clone();
-            let aid_d = aid.clone();
-            let aname_d = aname.clone();
-            let pop_weak = popover.downgrade();
-            delete_btn.connect_clicked(move |_| {
-                if let Some(p) = pop_weak.upgrade() {
-                    p.popdown();
-                }
-                delete_cb(aid_d.clone(), aname_d.clone());
-            });
-
-            popover.connect_closed(move |p| {
-                p.unparent();
-            });
-
-            popover.popup();
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-        });
-
-        list_row.add_controller(gesture);
     }
 
     // ── Status bar methods ───────────────────────────────────────────
 
-    /// Switch the status bar to a named state, respecting priority.
-    ///
-    /// Higher-priority states (upload) can't be overridden by lower
-    /// (sync, thumbnails). Setting idle always succeeds.
     fn set_status(&self, state: imp::StatusState, page: &str) {
         let imp = self.imp();
         let current = imp.current_state.get();
 
-        // Allow transition if: same or higher priority, or resetting to idle.
         if state >= current || state == imp::StatusState::Idle {
             imp.current_state.set(state);
             if let Some(stack) = imp.bar_stack.get() {
                 stack.set_visible_child_name(page);
             }
-            // Close the sheet when leaving upload state.
             if state != imp::StatusState::Upload {
                 if let Some(sheet) = imp.bottom_sheet.get() {
                     sheet.set_can_open(false);
@@ -614,14 +387,12 @@ impl MomentsSidebar {
         }
     }
 
-    /// Set idle state with "Synced X ago" label.
     pub fn set_idle(&self) {
         self.set_status(imp::StatusState::Idle, "idle");
         self.update_idle_label();
         self.start_idle_timer();
     }
 
-    /// Show sync started status.
     pub fn show_sync_started(&self) {
         let imp = self.imp();
         if let Some(label) = imp.sync_label.get() {
@@ -630,7 +401,6 @@ impl MomentsSidebar {
         self.set_status(imp::StatusState::Sync, "sync");
     }
 
-    /// Show sync progress.
     pub fn show_sync_progress(&self, assets: usize, people: usize, faces: usize) {
         let imp = self.imp();
         let total = assets + people + faces;
@@ -640,23 +410,14 @@ impl MomentsSidebar {
         self.set_status(imp::StatusState::Sync, "sync");
     }
 
-    /// Show sync complete — update sync timestamp and schedule idle.
-    ///
-    /// Thumbnail downloads may still be in-flight after the sync stream
-    /// finishes. We schedule a delayed transition to idle that fires
-    /// after 3 seconds — if thumbnail progress events arrive in the
-    /// meantime, they'll take priority and the idle will be rescheduled
-    /// on the next sync complete.
     pub fn show_sync_complete(&self, _assets: usize) {
         let imp = self.imp();
         imp.last_synced_at.set(Some(chrono::Utc::now().timestamp()));
 
-        // If already idle or only thumbnails running, go to idle now.
         let current = imp.current_state.get();
         if current == imp::StatusState::Idle || current == imp::StatusState::Sync {
             self.set_idle();
         } else {
-            // Thumbnails still running — schedule delayed idle.
             let obj_weak = self.downgrade();
             glib::timeout_add_local_once(std::time::Duration::from_secs(3), move || {
                 if let Some(obj) = obj_weak.upgrade() {
@@ -669,14 +430,8 @@ impl MomentsSidebar {
         }
     }
 
-    /// Show thumbnail download progress.
-    ///
-    /// Suppressed if sync has already completed (last_synced_at is set)
-    /// and we've already transitioned to idle — avoids re-triggering
-    /// the thumbnail state from straggler downloads after sync ends.
     pub fn show_thumbnail_progress(&self, completed: usize, total: usize) {
         let imp = self.imp();
-        // Only show thumbnail state while sync is actively running.
         if imp.current_state.get() == imp::StatusState::Idle {
             return;
         }
@@ -686,12 +441,10 @@ impl MomentsSidebar {
         self.set_status(imp::StatusState::Thumbnails, "thumbnails");
     }
 
-    /// Show thumbnails complete — transition to idle.
     pub fn show_thumbnails_complete(&self, _total: usize) {
         self.set_idle();
     }
 
-    /// Show upload progress in the sidebar bottom sheet.
     pub fn show_upload_progress(&self, current: usize, total: usize, imported: usize, skipped: usize, failed: usize) {
         let imp = self.imp();
         if let Some(label) = imp.upload_label.get() {
@@ -715,7 +468,6 @@ impl MomentsSidebar {
         if let Some(label) = imp.detail_label.get() {
             label.set_text(&detail);
         }
-        // Auto-open the sheet during upload so progress is always visible.
         if let Some(sheet) = imp.bottom_sheet.get() {
             if !sheet.is_open() {
                 sheet.set_can_open(true);
@@ -725,11 +477,9 @@ impl MomentsSidebar {
         self.set_status(imp::StatusState::Upload, "upload");
     }
 
-    /// Show upload complete summary, then auto-revert to idle after 5 seconds.
     pub fn show_upload_complete(&self, summary: &crate::library::import::ImportSummary) {
         let imp = self.imp();
 
-        // Build summary text.
         let mut bar_text = format!("{} imported", summary.imported);
         if summary.skipped_duplicates > 0 {
             bar_text.push_str(&format!(", {} skipped", summary.skipped_duplicates));
@@ -751,14 +501,12 @@ impl MomentsSidebar {
             label.set_text(&bar_text);
         }
 
-        // Close expanded sheet.
         if let Some(sheet) = imp.bottom_sheet.get() {
             sheet.set_open(false);
         }
 
         self.set_status(imp::StatusState::Complete, "complete");
 
-        // Auto-revert to idle after 5 seconds.
         let obj_weak = self.downgrade();
         glib::timeout_add_local_once(std::time::Duration::from_secs(5), move || {
             if let Some(obj) = obj_weak.upgrade() {
@@ -767,14 +515,12 @@ impl MomentsSidebar {
         });
     }
 
-    /// Hide the upload progress bottom bar (legacy — now reverts to idle).
     pub fn hide_upload_progress(&self) {
         self.set_idle();
     }
 
     // ── Idle timer ───────────────────────────────────────────────────
 
-    /// Update the idle label with "Synced X ago" or "Waiting for sync...".
     fn update_idle_label(&self) {
         let imp = self.imp();
         let Some(label) = imp.idle_label.get() else { return };
@@ -797,11 +543,9 @@ impl MomentsSidebar {
         label.set_text(&text);
     }
 
-    /// Start a 10-second timer to keep the "Synced X ago" label current.
     fn start_idle_timer(&self) {
         let imp = self.imp();
 
-        // Cancel any existing timer.
         if let Some(id) = imp.sync_timer.borrow_mut().take() {
             id.remove();
         }
@@ -811,7 +555,6 @@ impl MomentsSidebar {
             let Some(obj) = obj_weak.upgrade() else {
                 return glib::ControlFlow::Break;
             };
-            // Only update if we're still in idle state.
             if obj.imp().current_state.get() == imp::StatusState::Idle {
                 obj.update_idle_label();
             }
