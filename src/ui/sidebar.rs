@@ -505,7 +505,9 @@ impl MomentsSidebar {
         section.append(item);
 
         // Persist.
-        let strv: Vec<&str> = imp.pinned_ids.borrow().iter().map(|s| s.as_str()).collect();
+        let ids = imp.pinned_ids.borrow();
+        let strv: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+        drop(ids);
         settings.set_strv("pinned-album-ids", strv).ok();
 
         debug!(album_id = %album_id, name = %album_name, "album pinned to sidebar");
@@ -531,7 +533,9 @@ impl MomentsSidebar {
         }
 
         // Persist.
-        let strv: Vec<&str> = imp.pinned_ids.borrow().iter().map(|s| s.as_str()).collect();
+        let ids = imp.pinned_ids.borrow();
+        let strv: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+        drop(ids);
         settings.set_strv("pinned-album-ids", strv).ok();
 
         debug!(album_id = %album_id, "album unpinned from sidebar");
