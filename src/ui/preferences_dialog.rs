@@ -265,6 +265,7 @@ fn spawn_library_stats(library: Option<Arc<dyn Library>>, rows: LibraryStatsRows
                 if let Some(r) = videos_weak.upgrade() { r.set_subtitle("—"); }
                 if let Some(r) = albums_weak.upgrade() { r.set_subtitle("—"); }
                 if let Some(r) = people_weak.upgrade() { r.set_subtitle("—"); }
+                if let Some(Some(r)) = cache_weak.as_ref().map(|w| w.upgrade()) { r.set_subtitle("—"); }
             }
             Err(e) => {
                 tracing::error!("library_stats join failed: {e}");
