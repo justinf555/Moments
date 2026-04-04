@@ -138,14 +138,14 @@ fn find_clicked_position(grid_view: &gtk::GridView, x: f64, y: f64) -> Option<u3
     let mut child = grid_view.first_child();
     loop {
         match child {
-            Some(ref c) if !c.eq(&target) => {
+            Some(ref c) if c.eq(&target) => return Some(pos),
+            Some(ref c) => {
                 pos += 1;
                 child = c.next_sibling();
             }
-            _ => break,
+            None => return None,
         }
     }
-    Some(pos)
 }
 
 /// Build the trash-view context menu: Restore, Delete Permanently.
