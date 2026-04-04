@@ -4,6 +4,13 @@ use gtk::{glib, prelude::*, subclass::prelude::*};
 
 use super::item::AlbumItemObject;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DisplayMode {
+    Placeholder,
+    Single,
+    Mosaic,
+}
+
 /// Signal handler IDs stored between `bind` and `unbind`.
 pub struct CardBindings {
     item: glib::WeakRef<AlbumItemObject>,
@@ -15,8 +22,12 @@ mod imp {
 
     #[derive(Default)]
     pub struct AlbumCard {
-        /// 4 pictures for the 2×2 mosaic.
+        /// Single cover picture (shown for 1–3 photos).
+        pub single_picture: gtk::Picture,
+        /// 4 pictures for the 2×2 mosaic (shown for 4+ photos).
         pub pictures: [gtk::Picture; 4],
+        /// Mosaic grid widget.
+        pub mosaic_grid: std::cell::OnceCell<gtk::Grid>,
         pub placeholder: gtk::Image,
         pub name_label: gtk::Label,
         pub count_label: gtk::Label,
@@ -61,7 +72,14 @@ mod imp {
             self.placeholder.set_valign(gtk::Align::Center);
             overlay.set_child(Some(&self.placeholder));
 
-            // 2×2 mosaic grid.
+            // Single cover picture (1–3 photos).
+            self.single_picture.set_content_fit(gtk::ContentFit::Cover);
+            self.single_picture.set_hexpand(true);
+            self.single_picture.set_vexpand(true);
+            self.single_picture.set_visible(false);
+            overlay.add_overlay(&self.single_picture);
+
+            // 2×2 mosaic grid (4+ photos).
             let grid = gtk::Grid::new();
             grid.set_row_spacing(2);
             grid.set_column_spacing(2);
@@ -77,6 +95,7 @@ mod imp {
             }
 
             overlay.add_overlay(&grid);
+            let _ = self.mosaic_grid.set(grid);
 
             frame.set_child(Some(&overlay));
             inner.append(&frame);
@@ -168,59 +187,56 @@ impl AlbumCard {
                 }
             }
         }
+        imp.single_picture.set_paintable(None::<&gtk::gdk::Texture>);
         for pic in &imp.pictures {
             pic.set_paintable(None::<&gtk::gdk::Texture>);
         }
         imp.name_label.set_text("");
         imp.count_label.set_text("");
-
-        // Hide mosaic grid, show placeholder.
-        self.set_mosaic_visible(false);
+        self.set_display_mode(DisplayMode::Placeholder);
     }
 
-    /// Apply mosaic textures from the item to the grid pictures.
+    /// Apply mosaic textures from the item to the card.
+    ///
+    /// Three display modes:
+    /// - 0 textures → placeholder icon
+    /// - 1–3 textures → single cover photo filling the frame
+    /// - 4 textures → 2×2 mosaic grid
     fn apply_mosaic_textures(&self, item: &AlbumItemObject) {
         let imp = self.imp();
-        let mut any_set = false;
 
-        for i in 0..4 {
-            if let Some(texture) = item.mosaic_texture(i) {
-                imp.pictures[i].set_paintable(Some(&texture));
-                any_set = true;
-            }
+        // Count how many textures are available.
+        let count = (0..4).filter(|i| item.mosaic_texture(*i).is_some()).count();
+
+        if count == 0 {
+            self.set_display_mode(DisplayMode::Placeholder);
+            return;
         }
 
-        // If fewer than 4 textures, fill remaining slots by repeating.
-        if any_set {
-            let mut last_texture = None;
+        if count < 4 {
+            // Single cover: use the first texture.
+            if let Some(texture) = item.mosaic_texture(0) {
+                imp.single_picture.set_paintable(Some(&texture));
+            }
+            self.set_display_mode(DisplayMode::Single);
+        } else {
+            // Full mosaic: set all 4 pictures.
             for i in 0..4 {
-                if let Some(t) = item.mosaic_texture(i) {
-                    last_texture = Some(t);
-                } else if let Some(ref t) = last_texture {
-                    imp.pictures[i].set_paintable(Some(t));
+                if let Some(texture) = item.mosaic_texture(i) {
+                    imp.pictures[i].set_paintable(Some(&texture));
                 }
             }
-            self.set_mosaic_visible(true);
+            self.set_display_mode(DisplayMode::Mosaic);
         }
     }
 
-    /// Show or hide the mosaic grid and placeholder.
-    fn set_mosaic_visible(&self, visible: bool) {
+    /// Switch between placeholder, single cover, and mosaic display.
+    fn set_display_mode(&self, mode: DisplayMode) {
         let imp = self.imp();
-        imp.placeholder.set_visible(!visible);
-        // The grid is the overlay child — find it.
-        if let Some(parent) = imp.placeholder.parent() {
-            if let Some(overlay) = parent.downcast_ref::<gtk::Overlay>() {
-                // The grid is the first overlay widget.
-                let mut child = overlay.first_child();
-                while let Some(c) = child {
-                    if c.downcast_ref::<gtk::Grid>().is_some() {
-                        c.set_visible(visible);
-                        break;
-                    }
-                    child = c.next_sibling();
-                }
-            }
+        imp.placeholder.set_visible(mode == DisplayMode::Placeholder);
+        imp.single_picture.set_visible(mode == DisplayMode::Single);
+        if let Some(grid) = imp.mosaic_grid.get() {
+            grid.set_visible(mode == DisplayMode::Mosaic);
         }
     }
 }
