@@ -365,19 +365,26 @@ impl AlbumGridView {
         {
             let lib = Arc::clone(&library);
             let tk = tokio.clone();
+            let bs = bus_sender.clone();
             let connect_create = move |btn: &gtk::Button| {
                 let lib = Arc::clone(&lib);
                 let tk = tk.clone();
+                let bs = bs.clone();
                 album_dialogs::show_create_album_dialog(
                     btn,
                     move |name| {
                         let lib = Arc::clone(&lib);
                         let tk = tk.clone();
+                        let bs = bs.clone();
                         glib::MainContext::default().spawn_local(async move {
                             let n = name.clone();
                             match tk.spawn(async move { lib.create_album(&n).await }).await {
                                 Ok(Ok(id)) => {
                                     debug!(album_id = %id, name = %name, "album created from albums view");
+                                    bs.send(crate::app_event::AppEvent::AlbumCreated {
+                                        id,
+                                        name,
+                                    });
                                 }
                                 Ok(Err(e)) => {
                                     tracing::error!("failed to create album: {e}");
