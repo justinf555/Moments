@@ -4,21 +4,20 @@ use std::sync::Arc;
 
 use adw::prelude::*;
 use gettextrs::gettext;
-use gtk::{gio, glib, subclass::prelude::*};
+use gtk::{gio, glib};
 use tracing::debug;
 
 use crate::library::album::{Album, AlbumId};
-use crate::library::media::MediaFilter;
 use crate::library::Library;
 use crate::ui::album_dialogs;
-use crate::ui::photo_grid::model::PhotoGridModel;
 use crate::ui::photo_grid::texture_cache::TextureCache;
-use crate::ui::photo_grid::PhotoGridView;
 use crate::ui::ContentView;
 
+mod actions;
 pub mod card;
 pub mod factory;
 pub mod item;
+mod selection;
 
 use item::AlbumItemObject;
 
@@ -120,12 +119,25 @@ impl AlbumGridView {
         // ── Action bar (bottom, selection mode only) ────────────────────
         let action_bar = gtk::ActionBar::new();
         action_bar.set_revealed(false);
-        let delete_selected_btn = gtk::Button::with_label(&gettext("Delete Albums"));
-        delete_selected_btn.add_css_class("destructive-action");
-        let bar_box = gtk::Box::new(gtk::Orientation::Horizontal, 24);
-        bar_box.set_halign(gtk::Align::Center);
-        bar_box.append(&delete_selected_btn);
-        action_bar.set_center_widget(Some(&bar_box));
+
+        // ── Wire selection mode with the real widgets ────────────────────
+        selection::wire_selection_mode(
+            &enter_selection,
+            &header,
+            &new_album_btn,
+            &menu_btn,
+            &cancel_btn,
+            &selection_title,
+            &action_bar,
+            &grid_view,
+            &multi_selection,
+            &store,
+            &selection_mode,
+            &library,
+            &tokio,
+            &bus_sender,
+        );
+        action_group.add_action(&enter_selection);
 
         // ── Empty state ─────────────────────────────────────────────────
         let empty_page = adw::StatusPage::builder()
@@ -211,157 +223,6 @@ impl AlbumGridView {
             });
         }
 
-        // ── Enter/exit selection mode ────────────────────────────────────
-        {
-            let sm = Rc::clone(&selection_mode);
-            let new_btn = new_album_btn.clone();
-            let menu = menu_btn.clone();
-            let cancel = cancel_btn.clone();
-            let title = selection_title.clone();
-            let bar = action_bar.clone();
-            let gv = grid_view.clone();
-            let hdr = header.clone();
-            enter_selection.connect_activate(move |_, _| {
-                sm.set(true);
-                new_btn.set_visible(false);
-                menu.set_visible(false);
-                cancel.set_visible(true);
-                title.set_text("0 selected");
-                hdr.set_title_widget(Some(&title));
-                bar.set_revealed(true);
-                // Show checkboxes on all visible cards.
-                let mut child = gv.first_child();
-                while let Some(c) = child {
-                    if let Some(card) = c.first_child()
-                        .and_then(|w| w.downcast::<card::AlbumCard>().ok())
-                    {
-                        card.set_selection_mode(true);
-                    }
-                    child = c.next_sibling();
-                }
-            });
-        }
-        action_group.add_action(&enter_selection);
-
-        let exit_selection = {
-            let sm = Rc::clone(&selection_mode);
-            let new_btn = new_album_btn.clone();
-            let menu = menu_btn.clone();
-            let cancel = cancel_btn.clone();
-            let bar = action_bar.clone();
-            let gv = grid_view.clone();
-            let sel = multi_selection.clone();
-            let hdr = header.clone();
-            let action = gio::SimpleAction::new("exit-selection", None);
-            action.connect_activate(move |_, _| {
-                sm.set(false);
-                new_btn.set_visible(true);
-                menu.set_visible(true);
-                cancel.set_visible(false);
-                hdr.set_title_widget(None::<&gtk::Widget>);
-                bar.set_revealed(false);
-                sel.unselect_all();
-                // Hide checkboxes on all visible cards.
-                let mut child = gv.first_child();
-                while let Some(c) = child {
-                    if let Some(card) = c.first_child()
-                        .and_then(|w| w.downcast::<card::AlbumCard>().ok())
-                    {
-                        card.set_selection_mode(false);
-                    }
-                    child = c.next_sibling();
-                }
-            });
-            action
-        };
-
-        // Cancel button → exit selection.
-        {
-            let exit = exit_selection.clone();
-            cancel_btn.connect_clicked(move |_| { exit.activate(None); });
-        }
-
-        // Update selection count label when selection changes.
-        {
-            let title = selection_title.clone();
-            multi_selection.connect_selection_changed(move |sel, _, _| {
-                let count = sel.selection().size() as u32;
-                title.set_text(&format!("{count} selected"));
-            });
-        }
-
-        // Wire "Delete Albums" action bar button.
-        {
-            let sel = multi_selection.clone();
-            let st = store.clone();
-            let lib = Arc::clone(&library);
-            let tk = tokio.clone();
-            let bs = bus_sender.clone();
-            let exit = exit_selection.clone();
-            delete_selected_btn.connect_clicked(move |btn| {
-                let n = sel.selection().size() as u32;
-                if n == 0 { return; }
-
-                // Collect selected album IDs.
-                let mut ids = Vec::new();
-                for i in 0..st.n_items() {
-                    if sel.is_selected(i) {
-                        if let Some(obj) = st.item(i).and_then(|o| o.downcast::<AlbumItemObject>().ok()) {
-                            ids.push(obj.album().id.as_str().to_owned());
-                        }
-                    }
-                }
-
-                let lib = Arc::clone(&lib);
-                let tk = tk.clone();
-                let bs = bs.clone();
-                let exit = exit.clone();
-                let msg = if n == 1 {
-                    gettext("Delete 1 album?")
-                } else {
-                    gettext("Delete {} albums?").replace("{}", &n.to_string())
-                };
-
-                let dialog = adw::AlertDialog::new(Some(&msg), Some(&gettext("This cannot be undone. Photos in these albums will not be deleted.")));
-                dialog.add_response("cancel", &gettext("Cancel"));
-                dialog.add_response("delete", &gettext("Delete"));
-                dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
-                dialog.set_default_response(Some("cancel"));
-                dialog.set_close_response("cancel");
-
-                let ids_clone = ids.clone();
-                dialog.connect_response(None, move |_, response| {
-                    if response != "delete" { return; }
-                    let lib = Arc::clone(&lib);
-                    let tk = tk.clone();
-                    let bs = bs.clone();
-                    let exit = exit.clone();
-                    let ids = ids_clone.clone();
-                    glib::MainContext::default().spawn_local(async move {
-                        for aid in &ids {
-                            let lib = Arc::clone(&lib);
-                            let id = AlbumId::from_raw(aid.clone());
-                            match tk.spawn(async move { lib.delete_album(&id).await }).await {
-                                Ok(Ok(())) => {
-                                    debug!(album_id = %aid, "album deleted (batch)");
-                                    bs.send(crate::app_event::AppEvent::AlbumDeleted {
-                                        id: AlbumId::from_raw(aid.clone()),
-                                    });
-                                }
-                                Ok(Err(e)) => tracing::error!("failed to delete album {aid}: {e}"),
-                                Err(e) => tracing::error!("tokio join error: {e}"),
-                            }
-                        }
-                        exit.activate(None);
-                    });
-                });
-
-                if let Some(win) = btn.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
-                    dialog.present(Some(&win));
-                }
-            });
-        }
-
         // ── Wire "New Album" buttons ────────────────────────────────────
         {
             let lib = Arc::clone(&library);
@@ -421,35 +282,9 @@ impl AlbumGridView {
 
                 debug!(album_id = %album.id, name = %album_name, "album activated");
 
-                let model = Rc::new(PhotoGridModel::new(
-                    Arc::clone(&lib),
-                    tk.clone(),
-                    MediaFilter::Album { album_id },
-                    bs.clone(),
-                ));
-                let view = Rc::new(PhotoGridView::new(
-                    Arc::clone(&lib),
-                    tk.clone(),
-                    s.clone(),
-                    Rc::clone(&tc),
-                    bs.clone(),
-                ));
-                view.set_model(Rc::clone(&model));
-                model.subscribe_to_bus();
-
-                let page = adw::NavigationPage::builder()
-                    .tag("album-detail")
-                    .title(&album_name)
-                    .child(view.widget())
-                    .build();
-
-                if let Some(actions) = view.view_actions() {
-                    if let Some(win) = nav.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
-                        win.insert_action_group("view", Some(actions));
-                    }
-                }
-
-                nav.push(&page);
+                actions::open_album_drilldown(
+                    &lib, &tk, &s, &tc, &bs, &nav, album_id, &album_name,
+                );
             });
         }
 
@@ -468,246 +303,10 @@ impl AlbumGridView {
             let bs_ctx = bus_sender.clone();
 
             gesture.connect_pressed(move |gesture, _, x, y| {
-                // Find which grid item was clicked.
-                let Some(picked) = gv.pick(x, y, gtk::PickFlags::DEFAULT) else {
-                    return;
-                };
-
-                let grid_widget = gv.upcast_ref::<gtk::Widget>();
-                let mut target = Some(picked);
-                while let Some(ref w) = target {
-                    if w.parent().as_ref() == Some(grid_widget) {
-                        break;
-                    }
-                    target = w.parent();
-                }
-                let Some(target) = target else { return };
-
-                let mut pos = 0u32;
-                let mut child = gv.first_child();
-                loop {
-                    let Some(c) = child else { return };
-                    if c == target {
-                        break;
-                    }
-                    pos += 1;
-                    child = c.next_sibling();
-                }
-
-                let Some(obj) = store_ctx
-                    .item(pos)
-                    .and_then(|o| o.downcast::<AlbumItemObject>().ok())
-                else {
-                    return;
-                };
-
-                let album = obj.album();
-                let album_id_str = album.id.as_str().to_owned();
-                let album_name = album.name.clone();
-
-                // Build popover menu.
-                let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
-                vbox.set_margin_top(6);
-                vbox.set_margin_bottom(6);
-                vbox.set_margin_start(6);
-                vbox.set_margin_end(6);
-
-                let popover = gtk::Popover::new();
-
-                // Open
-                let open_btn = gtk::Button::with_label(&gettext("Open"));
-                open_btn.add_css_class("flat");
-                vbox.append(&open_btn);
-
-                // Rename
-                let rename_btn = gtk::Button::with_label(&gettext("Rename…"));
-                rename_btn.add_css_class("flat");
-                vbox.append(&rename_btn);
-
-                // Separator
-                vbox.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-
-                // Pin to sidebar.
-                // TODO: replace widget-tree walk with AppEvent bus pattern.
-                let pin_btn = gtk::Button::with_label(&gettext("Pin to Sidebar"));
-                pin_btn.add_css_class("flat");
-                {
-                    let app = crate::application::MomentsApplication::default();
-                    if let Some(win) = app.active_window() {
-                        if let Some(win) = win.downcast_ref::<crate::ui::MomentsWindow>() {
-                            if let Some(sb) = win.sidebar() {
-                                if sb.is_pinned(&album_id_str) {
-                                    pin_btn.set_label(&gettext("Pinned"));
-                                    pin_btn.set_sensitive(false);
-                                } else if sb.pinned_count() >= 5 {
-                                    pin_btn.set_sensitive(false);
-                                    pin_btn.set_tooltip_text(Some(&gettext("Unpin an album to pin another")));
-                                }
-                            }
-                        }
-                    }
-                }
-                vbox.append(&pin_btn);
-
-                // Share (stub)
-                let share_btn = gtk::Button::with_label(&gettext("Share…"));
-                share_btn.add_css_class("flat");
-                share_btn.set_sensitive(false);
-                vbox.append(&share_btn);
-
-                // Separator
-                vbox.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-
-                // Delete (destructive)
-                let delete_btn = gtk::Button::with_label(&gettext("Delete Album…"));
-                delete_btn.add_css_class("flat");
-                delete_btn.add_css_class("error");
-                vbox.append(&delete_btn);
-
-                popover.set_child(Some(&vbox));
-                popover.set_parent(&gv);
-                popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
-                popover.set_has_arrow(true);
-
-                // Wire Pin to sidebar.
-                // TODO: replace widget-tree walk with AppEvent bus pattern.
-                {
-                    let pop = popover.downgrade();
-                    let aid = album_id_str.clone();
-                    let aname = album_name.clone();
-                    pin_btn.connect_clicked(move |_| {
-                        if let Some(p) = pop.upgrade() { p.popdown(); }
-                        let app = crate::application::MomentsApplication::default();
-                        if let Some(settings) = app.imp().settings.get() {
-                            if let Some(win) = app.active_window() {
-                                if let Some(win) = win.downcast_ref::<crate::ui::MomentsWindow>() {
-                                    if let Some(sb) = win.sidebar() {
-                                        sb.pin_album(&aid, &aname, settings);
-                                    }
-                                }
-                            }
-                        }
-                    });
-                }
-
-                // Wire Open — same as activation.
-                {
-                    let pop = popover.downgrade();
-                    let lib = Arc::clone(&lib_ctx);
-                    let tk = tk_ctx.clone();
-                    let s = s_ctx.clone();
-                    let tc = Rc::clone(&tc_ctx);
-                    let bs = bs_ctx.clone();
-                    let nav = nav_ctx.clone();
-                    let aid = album_id_str.clone();
-                    let aname = album_name.clone();
-                    open_btn.connect_clicked(move |_| {
-                        if let Some(p) = pop.upgrade() { p.popdown(); }
-                        let album_id = AlbumId::from_raw(aid.clone());
-                        let model = Rc::new(PhotoGridModel::new(
-                            Arc::clone(&lib), tk.clone(),
-                            MediaFilter::Album { album_id }, bs.clone(),
-                        ));
-                        let view = Rc::new(PhotoGridView::new(
-                            Arc::clone(&lib), tk.clone(), s.clone(),
-                            Rc::clone(&tc), bs.clone(),
-                        ));
-                        view.set_model(Rc::clone(&model));
-                        model.subscribe_to_bus();
-                        let page = adw::NavigationPage::builder()
-                            .tag("album-detail").title(&aname)
-                            .child(view.widget()).build();
-                        if let Some(actions) = view.view_actions() {
-                            if let Some(win) = nav.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
-                                win.insert_action_group("view", Some(actions));
-                            }
-                        }
-                        nav.push(&page);
-                    });
-                }
-
-                // Wire Rename.
-                {
-                    let pop = popover.downgrade();
-                    let lib = Arc::clone(&lib_ctx);
-                    let tk = tk_ctx.clone();
-                    let bs = bs_ctx.clone();
-                    let aid = album_id_str.clone();
-                    let aname = album_name.clone();
-                    let gv_ref = gv.clone();
-                    rename_btn.connect_clicked(move |_| {
-                        if let Some(p) = pop.upgrade() { p.popdown(); }
-                        let lib = Arc::clone(&lib);
-                        let tk = tk.clone();
-                        let bs = bs.clone();
-                        let aid = aid.clone();
-                        if let Some(win) = gv_ref.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
-                            album_dialogs::show_rename_album_dialog(&win, &aname, move |new_name| {
-                                let lib = Arc::clone(&lib);
-                                let tk = tk.clone();
-                                let bs = bs.clone();
-                                let aid = aid.clone();
-                                glib::MainContext::default().spawn_local(async move {
-                                    let n = new_name.clone();
-                                    let id = AlbumId::from_raw(aid.clone());
-                                    match tk.spawn(async move { lib.rename_album(&id, &n).await }).await {
-                                        Ok(Ok(())) => {
-                                            debug!(album_id = %aid, name = %new_name, "album renamed");
-                                            bs.send(crate::app_event::AppEvent::AlbumRenamed {
-                                                id: AlbumId::from_raw(aid),
-                                                name: new_name,
-                                            });
-                                        }
-                                        Ok(Err(e)) => tracing::error!("failed to rename album: {e}"),
-                                        Err(e) => tracing::error!("tokio join error: {e}"),
-                                    }
-                                });
-                            });
-                        }
-                    });
-                }
-
-                // Wire Delete.
-                {
-                    let pop = popover.downgrade();
-                    let lib = Arc::clone(&lib_ctx);
-                    let tk = tk_ctx.clone();
-                    let bs = bs_ctx.clone();
-                    let aid = album_id_str.clone();
-                    let aname = album_name.clone();
-                    let gv_ref = gv.clone();
-                    delete_btn.connect_clicked(move |_| {
-                        if let Some(p) = pop.upgrade() { p.popdown(); }
-                        let lib = Arc::clone(&lib);
-                        let tk = tk.clone();
-                        let bs = bs.clone();
-                        let aid = aid.clone();
-                        if let Some(win) = gv_ref.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
-                            album_dialogs::show_delete_album_dialog(&win, &aname, move || {
-                                let lib = Arc::clone(&lib);
-                                let tk = tk.clone();
-                                let bs = bs.clone();
-                                let aid = aid.clone();
-                                glib::MainContext::default().spawn_local(async move {
-                                    let id = AlbumId::from_raw(aid.clone());
-                                    match tk.spawn(async move { lib.delete_album(&id).await }).await {
-                                        Ok(Ok(())) => {
-                                            debug!(album_id = %aid, "album deleted");
-                                            bs.send(crate::app_event::AppEvent::AlbumDeleted {
-                                                id: AlbumId::from_raw(aid),
-                                            });
-                                        }
-                                        Ok(Err(e)) => tracing::error!("failed to delete album: {e}"),
-                                        Err(e) => tracing::error!("tokio join error: {e}"),
-                                    }
-                                });
-                            });
-                        }
-                    });
-                }
-
-                popover.connect_closed(|p| { p.unparent(); });
-                popover.popup();
+                actions::show_context_menu(
+                    &gv, &store_ctx, &lib_ctx, &tk_ctx, &s_ctx,
+                    &tc_ctx, &bs_ctx, &nav_ctx, x, y,
+                );
                 gesture.set_state(gtk::EventSequenceState::Claimed);
             });
 
