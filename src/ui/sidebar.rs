@@ -151,7 +151,7 @@ mod imp {
             pinned_section.set_menu_model(Some(&unpin_menu));
 
             sidebar.append(pinned_section.clone());
-            let _ = self.pinned_section.set(pinned_section);
+            let _ = self.pinned_section.set(pinned_section.clone());
 
             // Track which pinned item was right-clicked for the unpin action.
             let menu_target_index: Rc<Cell<Option<u32>>> = Rc::new(Cell::new(None));
