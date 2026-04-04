@@ -89,9 +89,14 @@ collection-grid-cell .hidden-icon {
     opacity: 0.7;
 }
 
-/* Album card cover frame — rounded corners for the mosaic/thumbnail. */
+/* Album card cover frame — rounded corners, square aspect ratio. */
 .album-cover-frame {
     border-radius: 10px;
+}
+
+/* Force cover frame to be square regardless of available width. */
+album-card .album-cover-frame {
+    min-height: 1px;
 }
 
 /* ── Filter swatches in the edit panel ─────────────────────────────────

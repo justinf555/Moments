@@ -48,8 +48,7 @@ mod imp {
 
             // Cover frame — clipped square with rounded corners.
             let frame = gtk::Frame::new(None);
-            frame.set_halign(gtk::Align::Center);
-            frame.set_size_request(155, 155);
+            frame.set_halign(gtk::Align::Fill);
             frame.set_overflow(gtk::Overflow::Hidden);
             frame.add_css_class("album-cover-frame");
 
@@ -62,8 +61,9 @@ mod imp {
             self.placeholder.set_valign(gtk::Align::Center);
             overlay.set_child(Some(&self.placeholder));
 
-            self.picture.set_size_request(155, 155);
             self.picture.set_content_fit(gtk::ContentFit::Cover);
+            self.picture.set_hexpand(true);
+            self.picture.set_vexpand(true);
             self.picture.set_visible(false);
             overlay.add_overlay(&self.picture);
 
