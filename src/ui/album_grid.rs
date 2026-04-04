@@ -92,7 +92,6 @@ impl AlbumGridView {
 
         let selection_title = gtk::Label::new(Some("0 selected"));
         selection_title.add_css_class("heading");
-        selection_title.set_visible(false);
 
         // Enter-selection action — created early so the factory can reference it.
         let enter_selection = gio::SimpleAction::new("select", None);
@@ -222,13 +221,14 @@ impl AlbumGridView {
             let title = selection_title.clone();
             let bar = action_bar.clone();
             let gv = grid_view.clone();
+            let hdr = header.clone();
             enter_selection.connect_activate(move |_, _| {
                 sm.set(true);
                 new_btn.set_visible(false);
                 menu.set_visible(false);
                 cancel.set_visible(true);
-                title.set_visible(true);
                 title.set_text("0 selected");
+                hdr.set_title_widget(Some(&title));
                 bar.set_revealed(true);
                 // Show checkboxes on all visible cards.
                 let mut child = gv.first_child();
@@ -249,17 +249,17 @@ impl AlbumGridView {
             let new_btn = new_album_btn.clone();
             let menu = menu_btn.clone();
             let cancel = cancel_btn.clone();
-            let title = selection_title.clone();
             let bar = action_bar.clone();
             let gv = grid_view.clone();
             let sel = multi_selection.clone();
+            let hdr = header.clone();
             let action = gio::SimpleAction::new("exit-selection", None);
             action.connect_activate(move |_, _| {
                 sm.set(false);
                 new_btn.set_visible(true);
                 menu.set_visible(true);
                 cancel.set_visible(false);
-                title.set_visible(false);
+                hdr.set_title_widget(None::<&gtk::Widget>);
                 bar.set_revealed(false);
                 sel.unselect_all();
                 // Hide checkboxes on all visible cards.
