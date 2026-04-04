@@ -158,6 +158,7 @@ impl ViewerInner {
         };
         let Some(id) = id else { return };
 
+        let gen = self.load_gen.get();
         let inner = Rc::clone(self);
         let library = Arc::clone(&self.library);
         let tokio = self.tokio.clone();
@@ -247,6 +248,11 @@ impl ViewerInner {
                 error!("failed to decode image for edit session");
                 return;
             };
+
+            // Discard stale result if the user navigated away during decode.
+            if inner.load_gen.get() != gen {
+                return;
+            }
 
             let existing_state = state_result.ok().and_then(|r| r.ok()).flatten();
 
