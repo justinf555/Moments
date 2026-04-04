@@ -21,21 +21,41 @@ pub fn show_preferences(
     let dialog = adw::PreferencesDialog::new();
     dialog.set_title("Preferences");
 
-    // ── General page ────────────────────────────────────────────────────
-    let general_page = adw::PreferencesPage::new();
-    general_page.set_title("General");
-    general_page.set_icon_name(Some("preferences-system-symbolic"));
+    dialog.add(&build_general_page(settings));
 
-    // Appearance group
-    let appearance_group = adw::PreferencesGroup::new();
-    appearance_group.set_title("Appearance");
+    let (library_page, stats_rows) = build_library_page(settings, is_immich, &library);
+    dialog.add(&library_page);
+    spawn_library_stats(library.clone(), stats_rows);
+
+    if is_immich {
+        let (immich_page, server_rows) = build_immich_page(settings, &library, &immich_server_url);
+        dialog.add(&immich_page);
+        spawn_server_stats(library.clone(), server_rows);
+    }
+
+    dialog.present(Some(window));
+}
+
+fn build_general_page(settings: &gio::Settings) -> adw::PreferencesPage {
+    let page = adw::PreferencesPage::new();
+    page.set_title("General");
+    page.set_icon_name(Some("preferences-system-symbolic"));
+
+    page.add(&build_appearance_group(settings));
+    page.add(&build_library_settings_group(settings));
+
+    page
+}
+
+fn build_appearance_group(settings: &gio::Settings) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::new();
+    group.set_title("Appearance");
 
     let theme_row = adw::ComboRow::new();
     theme_row.set_title("Color scheme");
     let themes = gtk::StringList::new(&["Follow System", "Light", "Dark"]);
     theme_row.set_model(Some(&themes));
 
-    // Map GSettings value to combo index: 0→0 (default), 1→1 (light), 4→2 (dark)
     let current = settings.uint("color-scheme");
     let idx = match current {
         1 => 1u32,
@@ -60,12 +80,14 @@ pub fn show_preferences(
         adw::StyleManager::default().set_color_scheme(scheme);
         debug!(color_scheme = value, "theme changed");
     });
-    appearance_group.add(&theme_row);
-    general_page.add(&appearance_group);
+    group.add(&theme_row);
 
-    // Library group
-    let library_group = adw::PreferencesGroup::new();
-    library_group.set_title("Library");
+    group
+}
+
+fn build_library_settings_group(settings: &gio::Settings) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::new();
+    group.set_title("Library");
 
     let recent_row = adw::SpinRow::new(
         Some(&gtk::Adjustment::new(30.0, 0.0, 365.0, 1.0, 10.0, 0.0)),
@@ -79,7 +101,7 @@ pub fn show_preferences(
     recent_row.connect_changed(move |row| {
         let _ = settings_recent.set_uint("recent-imports-days", row.value() as u32);
     });
-    library_group.add(&recent_row);
+    group.add(&recent_row);
 
     let trash_row = adw::SpinRow::new(
         Some(&gtk::Adjustment::new(30.0, 1.0, 365.0, 1.0, 10.0, 0.0)),
@@ -93,44 +115,87 @@ pub fn show_preferences(
     trash_row.connect_changed(move |row| {
         let _ = settings_trash.set_uint("trash-retention-days", row.value() as u32);
     });
-    library_group.add(&trash_row);
-    general_page.add(&library_group);
+    group.add(&trash_row);
 
-    dialog.add(&general_page);
+    group
+}
 
-    // ── Library page ────────────────────────────────────────────────────
-    let library_page = adw::PreferencesPage::new();
-    library_page.set_title("Library");
-    library_page.set_icon_name(Some("folder-symbolic"));
+struct LibraryStatsRows {
+    photos: adw::ActionRow,
+    videos: adw::ActionRow,
+    albums: adw::ActionRow,
+    people: adw::ActionRow,
+    cache_used: Option<adw::ActionRow>,
+}
 
-    let overview_group = adw::PreferencesGroup::new();
-    overview_group.set_title("Overview");
+fn build_library_page(
+    settings: &gio::Settings,
+    is_immich: bool,
+    library: &Option<Arc<dyn Library>>,
+) -> (adw::PreferencesPage, LibraryStatsRows) {
+    let page = adw::PreferencesPage::new();
+    page.set_title("Library");
+    page.set_icon_name(Some("folder-symbolic"));
+
+    let (overview_group, photos_row, videos_row, albums_row, people_row) =
+        build_overview_group();
+    page.add(&overview_group);
+
+    let (storage_group, cache_usage_row) =
+        build_storage_group(settings, is_immich, library);
+    page.add(&storage_group);
+
+    let stats_rows = LibraryStatsRows {
+        photos: photos_row,
+        videos: videos_row,
+        albums: albums_row,
+        people: people_row,
+        cache_used: cache_usage_row,
+    };
+
+    (page, stats_rows)
+}
+
+fn build_overview_group() -> (
+    adw::PreferencesGroup,
+    adw::ActionRow,
+    adw::ActionRow,
+    adw::ActionRow,
+    adw::ActionRow,
+) {
+    let group = adw::PreferencesGroup::new();
+    group.set_title("Overview");
 
     let photos_row = adw::ActionRow::new();
     photos_row.set_title("Photos");
     photos_row.set_subtitle("Loading...");
-    overview_group.add(&photos_row);
+    group.add(&photos_row);
 
     let videos_row = adw::ActionRow::new();
     videos_row.set_title("Videos");
     videos_row.set_subtitle("Loading...");
-    overview_group.add(&videos_row);
+    group.add(&videos_row);
 
     let albums_row = adw::ActionRow::new();
     albums_row.set_title("Albums");
     albums_row.set_subtitle("Loading...");
-    overview_group.add(&albums_row);
+    group.add(&albums_row);
 
     let people_row = adw::ActionRow::new();
     people_row.set_title("People");
     people_row.set_subtitle("Loading...");
-    overview_group.add(&people_row);
+    group.add(&people_row);
 
-    library_page.add(&overview_group);
+    (group, photos_row, videos_row, albums_row, people_row)
+}
 
-    // Storage group
-    let storage_group = adw::PreferencesGroup::new();
-    storage_group.set_title("Storage");
+fn build_storage_group(
+    settings: &gio::Settings,
+    is_immich: bool,
+    library: &Option<Arc<dyn Library>>,
+) -> (adw::PreferencesGroup, Option<adw::ActionRow>) {
+    let group = adw::PreferencesGroup::new();
+    group.set_title("Storage");
 
     let cache_usage_row = if is_immich {
         let cache_row = adw::SpinRow::new(
@@ -146,182 +211,203 @@ pub fn show_preferences(
         cache_row.connect_changed(move |row| {
             let mb = row.value() as u32;
             let _ = settings_cache.set_uint("originals-cache-max-mb", mb);
-            // Live-update the cache evictor without restart.
             if let Some(ref lib) = lib_cache {
                 lib.set_cache_limit(mb);
             }
         });
-        storage_group.add(&cache_row);
+        group.add(&cache_row);
 
         let usage_row = adw::ActionRow::new();
         usage_row.set_title("Cache used");
         usage_row.set_subtitle("Loading...");
-        storage_group.add(&usage_row);
+        group.add(&usage_row);
         Some(usage_row)
     } else {
         None
     };
 
-    library_page.add(&storage_group);
-    dialog.add(&library_page);
+    (group, cache_usage_row)
+}
 
-    // Load stats async.
-    if let Some(lib) = library.clone() {
-        let tokio = crate::application::MomentsApplication::default().tokio_handle();
-        let photos_weak = photos_row.downgrade();
-        let videos_weak = videos_row.downgrade();
-        let albums_weak = albums_row.downgrade();
-        let people_weak = people_row.downgrade();
-        let cache_weak = cache_usage_row.as_ref().map(|r| r.downgrade());
-        glib::MainContext::default().spawn_local(async move {
-            let result = tokio
-                .spawn(async move { lib.library_stats().await })
-                .await;
-            match result {
-                Ok(Ok(stats)) => {
-                    if let Some(r) = photos_weak.upgrade() {
-                        r.set_subtitle(&format_count(stats.photo_count, "photo"));
-                    }
-                    if let Some(r) = videos_weak.upgrade() {
-                        r.set_subtitle(&format_count(stats.video_count, "video"));
-                    }
-                    if let Some(r) = albums_weak.upgrade() {
-                        r.set_subtitle(&format_count(stats.album_count, "album"));
-                    }
-                    if let Some(r) = people_weak.upgrade() {
-                        r.set_subtitle(&format_count(stats.people_count, "person"));
-                    }
-                    if let Some(Some(r)) = cache_weak.as_ref().map(|w| w.upgrade()) {
-                        r.set_subtitle(&format_bytes(stats.cache_used_bytes));
-                    }
+fn spawn_library_stats(library: Option<Arc<dyn Library>>, rows: LibraryStatsRows) {
+    let Some(lib) = library else { return };
+    let tokio = crate::application::MomentsApplication::default().tokio_handle();
+    let photos_weak = rows.photos.downgrade();
+    let videos_weak = rows.videos.downgrade();
+    let albums_weak = rows.albums.downgrade();
+    let people_weak = rows.people.downgrade();
+    let cache_weak = rows.cache_used.as_ref().map(|r| r.downgrade());
+    glib::MainContext::default().spawn_local(async move {
+        let result = tokio
+            .spawn(async move { lib.library_stats().await })
+            .await;
+        match result {
+            Ok(Ok(stats)) => {
+                if let Some(r) = photos_weak.upgrade() {
+                    r.set_subtitle(&format_count(stats.photo_count, "photo"));
                 }
-                Ok(Err(e)) => {
-                    tracing::error!("library_stats failed: {e}");
-                    if let Some(r) = photos_weak.upgrade() { r.set_subtitle("—"); }
-                    if let Some(r) = videos_weak.upgrade() { r.set_subtitle("—"); }
-                    if let Some(r) = albums_weak.upgrade() { r.set_subtitle("—"); }
-                    if let Some(r) = people_weak.upgrade() { r.set_subtitle("—"); }
+                if let Some(r) = videos_weak.upgrade() {
+                    r.set_subtitle(&format_count(stats.video_count, "video"));
                 }
-                Err(e) => {
-                    tracing::error!("library_stats join failed: {e}");
+                if let Some(r) = albums_weak.upgrade() {
+                    r.set_subtitle(&format_count(stats.album_count, "album"));
+                }
+                if let Some(r) = people_weak.upgrade() {
+                    r.set_subtitle(&format_count(stats.people_count, "person"));
+                }
+                if let Some(Some(r)) = cache_weak.as_ref().map(|w| w.upgrade()) {
+                    r.set_subtitle(&format_bytes(stats.cache_used_bytes));
                 }
             }
-        });
-    }
-
-    // ── Immich page (conditional) ───────────────────────────────────────
-    if is_immich {
-        let immich_page = adw::PreferencesPage::new();
-        immich_page.set_title("Immich");
-        immich_page.set_icon_name(Some("network-server-symbolic"));
-
-        // Connection group
-        let conn_group = adw::PreferencesGroup::new();
-        conn_group.set_title("Connection");
-
-        if let Some(ref url) = immich_server_url {
-            let server_row = adw::ActionRow::new();
-            server_row.set_title("Server");
-            server_row.set_subtitle(url);
-            conn_group.add(&server_row);
-
-            // Open Immich web row
-            let open_row = adw::ActionRow::builder()
-                .title("Open Immich web")
-                .activatable(true)
-                .build();
-            open_row.add_suffix(&gtk::Image::from_icon_name("web-browser-symbolic"));
-            let url_clone = url.clone();
-            open_row.connect_activated(move |_| {
-                let _ = gio::AppInfo::launch_default_for_uri(&url_clone, gio::AppLaunchContext::NONE);
-            });
-            conn_group.add(&open_row);
-        }
-
-        immich_page.add(&conn_group);
-
-        // Sync group
-        let sync_group = adw::PreferencesGroup::new();
-        sync_group.set_title("Sync");
-
-        let interval_row = adw::SpinRow::new(
-            Some(&gtk::Adjustment::new(30.0, 5.0, 3600.0, 5.0, 30.0, 0.0)),
-            5.0,
-            0,
-        );
-        interval_row.set_title("Polling interval");
-        interval_row.set_subtitle("Seconds between sync cycles");
-        interval_row.set_value(settings.uint("sync-interval-seconds") as f64);
-        let settings_sync = settings.clone();
-        let lib_sync = library.clone();
-        interval_row.connect_changed(move |row| {
-            let secs = row.value() as u32;
-            let _ = settings_sync.set_uint("sync-interval-seconds", secs);
-            // Live-update the sync manager without restart.
-            if let Some(ref lib) = lib_sync {
-                lib.set_sync_interval(secs as u64);
+            Ok(Err(e)) => {
+                tracing::error!("library_stats failed: {e}");
+                if let Some(r) = photos_weak.upgrade() { r.set_subtitle("—"); }
+                if let Some(r) = videos_weak.upgrade() { r.set_subtitle("—"); }
+                if let Some(r) = albums_weak.upgrade() { r.set_subtitle("—"); }
+                if let Some(r) = people_weak.upgrade() { r.set_subtitle("—"); }
             }
-        });
-        sync_group.add(&interval_row);
-
-        immich_page.add(&sync_group);
-
-        // Server stats group — populated async alongside library stats.
-        let server_group = adw::PreferencesGroup::new();
-        server_group.set_title("Server");
-
-        let server_photos_row = adw::ActionRow::new();
-        server_photos_row.set_title("Photos");
-        server_photos_row.set_subtitle("Loading...");
-        server_group.add(&server_photos_row);
-
-        let server_videos_row = adw::ActionRow::new();
-        server_videos_row.set_title("Videos");
-        server_videos_row.set_subtitle("Loading...");
-        server_group.add(&server_videos_row);
-
-        let server_disk_row = adw::ActionRow::new();
-        server_disk_row.set_title("Disk usage");
-        server_disk_row.set_subtitle("Loading...");
-        server_group.add(&server_disk_row);
-
-        immich_page.add(&server_group);
-
-        // Load server stats async (reuses the same library_stats call).
-        if let Some(lib) = library.clone() {
-            let tokio = crate::application::MomentsApplication::default().tokio_handle();
-            let sp_weak = server_photos_row.downgrade();
-            let sv_weak = server_videos_row.downgrade();
-            let sd_weak = server_disk_row.downgrade();
-            glib::MainContext::default().spawn_local(async move {
-                let result = tokio
-                    .spawn(async move { lib.library_stats().await })
-                    .await;
-                if let Ok(Ok(stats)) = result {
-                    if let Some(server) = stats.server {
-                        if let Some(r) = sp_weak.upgrade() {
-                            r.set_subtitle(&format_count(server.server_photos, "photo"));
-                        }
-                        if let Some(r) = sv_weak.upgrade() {
-                            r.set_subtitle(&format_count(server.server_videos, "video"));
-                        }
-                        if let Some(r) = sd_weak.upgrade() {
-                            r.set_subtitle(&format!(
-                                "{} / {} ({:.1}%)",
-                                format_bytes(server.disk_use),
-                                format_bytes(server.disk_size),
-                                server.disk_usage_percentage
-                            ));
-                        }
-                    }
-                }
-            });
+            Err(e) => {
+                tracing::error!("library_stats join failed: {e}");
+            }
         }
+    });
+}
 
-        dialog.add(&immich_page);
+struct ServerStatsRows {
+    photos: adw::ActionRow,
+    videos: adw::ActionRow,
+    disk: adw::ActionRow,
+}
+
+fn build_immich_page(
+    settings: &gio::Settings,
+    library: &Option<Arc<dyn Library>>,
+    immich_server_url: &Option<String>,
+) -> (adw::PreferencesPage, ServerStatsRows) {
+    let page = adw::PreferencesPage::new();
+    page.set_title("Immich");
+    page.set_icon_name(Some("network-server-symbolic"));
+
+    page.add(&build_connection_group(immich_server_url));
+    page.add(&build_sync_group(settings, library));
+
+    let (server_group, server_rows) = build_server_stats_group();
+    page.add(&server_group);
+
+    (page, server_rows)
+}
+
+fn build_connection_group(immich_server_url: &Option<String>) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::new();
+    group.set_title("Connection");
+
+    if let Some(ref url) = immich_server_url {
+        let server_row = adw::ActionRow::new();
+        server_row.set_title("Server");
+        server_row.set_subtitle(url);
+        group.add(&server_row);
+
+        let open_row = adw::ActionRow::builder()
+            .title("Open Immich web")
+            .activatable(true)
+            .build();
+        open_row.add_suffix(&gtk::Image::from_icon_name("web-browser-symbolic"));
+        let url_clone = url.clone();
+        open_row.connect_activated(move |_| {
+            let _ = gio::AppInfo::launch_default_for_uri(&url_clone, gio::AppLaunchContext::NONE);
+        });
+        group.add(&open_row);
     }
 
-    dialog.present(Some(window));
+    group
+}
+
+fn build_sync_group(
+    settings: &gio::Settings,
+    library: &Option<Arc<dyn Library>>,
+) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::new();
+    group.set_title("Sync");
+
+    let interval_row = adw::SpinRow::new(
+        Some(&gtk::Adjustment::new(30.0, 5.0, 3600.0, 5.0, 30.0, 0.0)),
+        5.0,
+        0,
+    );
+    interval_row.set_title("Polling interval");
+    interval_row.set_subtitle("Seconds between sync cycles");
+    interval_row.set_value(settings.uint("sync-interval-seconds") as f64);
+    let settings_sync = settings.clone();
+    let lib_sync = library.clone();
+    interval_row.connect_changed(move |row| {
+        let secs = row.value() as u32;
+        let _ = settings_sync.set_uint("sync-interval-seconds", secs);
+        if let Some(ref lib) = lib_sync {
+            lib.set_sync_interval(secs as u64);
+        }
+    });
+    group.add(&interval_row);
+
+    group
+}
+
+fn build_server_stats_group() -> (adw::PreferencesGroup, ServerStatsRows) {
+    let group = adw::PreferencesGroup::new();
+    group.set_title("Server");
+
+    let photos_row = adw::ActionRow::new();
+    photos_row.set_title("Photos");
+    photos_row.set_subtitle("Loading...");
+    group.add(&photos_row);
+
+    let videos_row = adw::ActionRow::new();
+    videos_row.set_title("Videos");
+    videos_row.set_subtitle("Loading...");
+    group.add(&videos_row);
+
+    let disk_row = adw::ActionRow::new();
+    disk_row.set_title("Disk usage");
+    disk_row.set_subtitle("Loading...");
+    group.add(&disk_row);
+
+    let rows = ServerStatsRows {
+        photos: photos_row,
+        videos: videos_row,
+        disk: disk_row,
+    };
+
+    (group, rows)
+}
+
+fn spawn_server_stats(library: Option<Arc<dyn Library>>, rows: ServerStatsRows) {
+    let Some(lib) = library else { return };
+    let tokio = crate::application::MomentsApplication::default().tokio_handle();
+    let sp_weak = rows.photos.downgrade();
+    let sv_weak = rows.videos.downgrade();
+    let sd_weak = rows.disk.downgrade();
+    glib::MainContext::default().spawn_local(async move {
+        let result = tokio
+            .spawn(async move { lib.library_stats().await })
+            .await;
+        if let Ok(Ok(stats)) = result {
+            if let Some(server) = stats.server {
+                if let Some(r) = sp_weak.upgrade() {
+                    r.set_subtitle(&format_count(server.server_photos, "photo"));
+                }
+                if let Some(r) = sv_weak.upgrade() {
+                    r.set_subtitle(&format_count(server.server_videos, "video"));
+                }
+                if let Some(r) = sd_weak.upgrade() {
+                    r.set_subtitle(&format!(
+                        "{} / {} ({:.1}%)",
+                        format_bytes(server.disk_use),
+                        format_bytes(server.disk_size),
+                        server.disk_usage_percentage
+                    ));
+                }
+            }
+        }
+    });
 }
 
 /// Format a count with singular/plural label (e.g. "1,976 photos").
