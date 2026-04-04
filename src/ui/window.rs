@@ -325,18 +325,17 @@ impl MomentsWindow {
             });
         }
 
-        // Register the Albums placeholder view (lazy — replaced by full
-        // Albums grid view in #339).
-        coordinator.register_lazy("albums", || {
-            Rc::new(super::empty_library::EmptyLibraryView::from_status_page(
-                adw::StatusPage::builder()
-                    .icon_name("folder-symbolic")
-                    .title("Albums")
-                    .description("Album management is coming soon.")
-                    .vexpand(true)
-                    .build(),
-            ))
-        });
+        // Register the Albums grid view (lazy — created on first click).
+        {
+            let lib = Arc::clone(&library);
+            let tk = tokio.clone();
+            let s = settings.clone();
+            let tc = Rc::clone(&texture_cache);
+            let bs = bus_sender.clone();
+            coordinator.register_lazy("albums", move || {
+                Rc::new(super::album_grid::AlbumGridView::new(lib, tk, s, tc, bs))
+            });
+        }
 
         // Wrap the content stack in a NavigationPage for the split view.
         let content_nav_page = adw::NavigationPage::builder()

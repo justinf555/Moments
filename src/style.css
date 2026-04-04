@@ -89,6 +89,11 @@ collection-grid-cell .hidden-icon {
     opacity: 0.7;
 }
 
+/* Album card cover frame — rounded corners for the mosaic/thumbnail. */
+.album-cover-frame {
+    border-radius: 10px;
+}
+
 /* ── Filter swatches in the edit panel ─────────────────────────────────
  *
  * Each swatch is a small coloured preview representing the visual tone
