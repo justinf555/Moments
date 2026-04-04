@@ -5,7 +5,6 @@ use std::sync::Arc;
 use adw::prelude::*;
 use gettextrs::gettext;
 use gtk::{gdk, glib};
-use tracing::{debug, error};
 
 use crate::library::media::MediaMetadataRecord;
 use crate::library::Library;
@@ -15,9 +14,14 @@ use crate::ui::photo_grid::item::MediaItemObject;
 
 pub mod edit_panel;
 pub mod info_panel;
+mod loading;
+mod menu;
 
 use edit_panel::EditPanel;
 use info_panel::InfoPanel;
+
+// Re-export shared menu utilities used by video_viewer.
+pub use menu::{build_viewer_menu_popover, find_menu_button};
 
 // ── Inner state ───────────────────────────────────────────────────────────────
 
@@ -48,6 +52,7 @@ struct ViewerInner {
     current_index: Cell<usize>,
     /// Monotonically increasing counter. Async loads compare against this
     /// value captured at launch to discard stale results.
+    /// `None` when no deferred load is pending.
     load_gen: Cell<u64>,
     /// Set by `show_at` when the viewer is being pushed onto the
     /// NavigationView. The `shown` signal handler reads this to start
@@ -164,291 +169,6 @@ impl ViewerInner {
                 return;
             }
         }
-    }
-
-    /// Asynchronously load the original file at full resolution.
-    ///
-    /// Strategy:
-    /// 1. Resolve the original path from the library.
-    /// 2. Decode via `image::open()` on a blocking thread and upload RGBA
-    ///    bytes as a `gdk::MemoryTexture`.
-    /// 3. EXIF orientation is always applied before display.
-    ///
-    /// Falls back silently to the cached thumbnail on any error.
-    fn start_full_res_load(
-        self: &Rc<Self>,
-        gen: u64,
-        id: crate::library::media::MediaId,
-    ) {
-        let inner = Rc::clone(self);
-        let library = Arc::clone(&self.library);
-        let tokio = self.tokio.clone();
-
-        self.spinner.set_spinning(true);
-        self.spinner.set_visible(true);
-
-        glib::MainContext::default().spawn_local(async move {
-            // Resolve path on Tokio (async DB call).
-            let path = match tokio
-                .spawn(async move { library.original_path(&id).await })
-                .await
-                .ok()
-                .and_then(|r| r.ok())
-                .flatten()
-            {
-                Some(p) => p,
-                None => {
-                    inner.spinner.set_spinning(false);
-                    inner.spinner.set_visible(false);
-                    inner.bus_sender.send(AppEvent::Error(
-                        "Could not find original photo".into(),
-                    ));
-                    return;
-                }
-            };
-
-            if inner.load_gen.get() != gen {
-                inner.spinner.set_spinning(false);
-                inner.spinner.set_visible(false);
-                return;
-            }
-
-            // Guard: skip decode for video files (they use VideoViewer).
-            let ext = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.to_lowercase())
-                .unwrap_or_default();
-            if crate::library::format::registry::VIDEO_EXTENSIONS.contains(&ext.as_str()) {
-                inner.spinner.set_spinning(false);
-                inner.spinner.set_visible(false);
-                return;
-            }
-
-            // Decode full-res image on a blocking thread.
-            // RAW formats use rawler; standard formats use the image crate.
-            let is_raw = crate::library::format::registry::RAW_EXTENSIONS
-                .contains(&ext.as_str());
-            let pixels: Option<(Vec<u8>, i32, i32)> = tokio
-                .spawn(async move {
-                    tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, i32, i32)> {
-                        let img = if is_raw {
-                            use crate::library::format::raw::RawHandler;
-                            RawHandler
-                                .decode_full_res(&path)
-                                .map_err(|e| debug!("RAW full-res decode failed: {e}"))
-                                .ok()?
-                        } else {
-                            image::open(&path)
-                                .map_err(|e| debug!("full-res decode failed: {e}"))
-                                .ok()?
-                        };
-                        // Skip orientation for HEIC/HEIF (libheif applies it
-                        // automatically) and RAW (embedded JPEG previews from
-                        // cameras are typically pre-rotated; full demosaic
-                        // output from rawler is also pre-oriented). Applying
-                        // EXIF orientation again would double-rotate.
-                        let ext = path
-                            .extension()
-                            .and_then(|e| e.to_str())
-                            .map(|e| e.to_lowercase())
-                            .unwrap_or_default();
-                        let img = if matches!(ext.as_str(), "heic" | "heif") || is_raw {
-                            img
-                        } else {
-                            let orientation = crate::library::exif::extract_exif(&path)
-                                .orientation
-                                .unwrap_or(1);
-                            crate::library::thumbnailer::apply_orientation(img, orientation)
-                        };
-                        let rgba = img.into_rgba8();
-                        let (w, h) = rgba.dimensions();
-                        Some((rgba.into_raw(), w as i32, h as i32))
-                    })
-                    .await
-                    .ok()?
-                })
-                .await
-                .ok()
-                .flatten();
-
-            inner.spinner.set_spinning(false);
-            inner.spinner.set_visible(false);
-
-            if inner.load_gen.get() != gen {
-                return;
-            }
-
-            match pixels {
-                Some((raw, width, height)) => {
-                    let gbytes = glib::Bytes::from_owned(raw);
-                    let texture = gdk::MemoryTexture::new(
-                        width,
-                        height,
-                        gdk::MemoryFormat::R8g8b8a8,
-                        &gbytes,
-                        (width as usize) * 4,
-                    )
-                    .upcast::<gdk::Texture>();
-                    inner
-                        .picture
-                        .set_paintable(Some(texture.upcast_ref::<gdk::Paintable>()));
-                    debug!("full-res via MemoryTexture: {width}×{height}");
-                }
-                None => {
-                    debug!("full-res decode failed, keeping thumbnail");
-                    inner.bus_sender.send(AppEvent::Error(
-                        "Could not display full-resolution image".into(),
-                    ));
-                }
-            }
-        });
-    }
-
-    /// Start an edit session by loading the full-res image and existing edit state.
-    fn start_edit_session(self: &Rc<Self>) {
-        let id = {
-            let items = self.items.borrow();
-            let idx = self.current_index.get();
-            items.get(idx).map(|obj| obj.item().id.clone())
-        };
-        let Some(id) = id else { return };
-
-        let inner = Rc::clone(self);
-        let library = Arc::clone(&self.library);
-        let tokio = self.tokio.clone();
-        let id_for_state = id.clone();
-
-        glib::MainContext::default().spawn_local(async move {
-            // Load existing edit state and the original image in parallel.
-            let lib = Arc::clone(&library);
-            let tk = tokio.clone();
-
-            let state_result = tk
-                .spawn({
-                    let lib = Arc::clone(&lib);
-                    let id = id_for_state.clone();
-                    async move { lib.get_edit_state(&id).await }
-                })
-                .await;
-
-            let path = tk
-                .spawn({
-                    let lib = Arc::clone(&lib);
-                    let id = id.clone();
-                    async move { lib.original_path(&id).await }
-                })
-                .await
-                .ok()
-                .and_then(|r| r.ok())
-                .flatten();
-
-            let Some(path) = path else {
-                error!("could not resolve original path for edit session");
-                return;
-            };
-
-            // Decode the full-res image and create a downscaled preview on
-            // a blocking thread so the GTK thread is free for the sidebar
-            // slide-in animation.
-            let preview = tk
-                .spawn(async move {
-                    tokio::task::spawn_blocking(move || -> Option<Arc<image::DynamicImage>> {
-                        let ext = path
-                            .extension()
-                            .and_then(|e| e.to_str())
-                            .map(|e| e.to_lowercase())
-                            .unwrap_or_default();
-                        let is_raw = crate::library::format::registry::RAW_EXTENSIONS
-                            .contains(&ext.as_str());
-                        let img = if is_raw {
-                            use crate::library::format::raw::RawHandler;
-                            RawHandler
-                                .decode_full_res(&path)
-                                .map_err(|e| error!("edit session RAW decode failed: {e}"))
-                                .ok()?
-                        } else {
-                            image::open(&path)
-                                .map_err(|e| error!("edit session decode failed: {e}"))
-                                .ok()?
-                        };
-                        // Skip EXIF orientation for HEIC (libheif pre-applies)
-                        // and RAW (embedded previews / demosaic output are
-                        // pre-oriented).
-                        let img = if matches!(ext.as_str(), "heic" | "heif") || is_raw {
-                            img
-                        } else {
-                            let orientation = crate::library::exif::extract_exif(&path)
-                                .orientation
-                                .unwrap_or(1);
-                            crate::library::thumbnailer::apply_orientation(img, orientation)
-                        };
-                        // Downscale to ~1200px for fast preview rendering.
-                        let (w, h) = image::GenericImageView::dimensions(&img);
-                        let preview = if w <= 1200 && h <= 1200 {
-                            img
-                        } else {
-                            img.thumbnail(1200, 1200)
-                        };
-                        Some(Arc::new(preview))
-                    })
-                    .await
-                    .ok()?
-                })
-                .await
-                .ok()
-                .flatten();
-
-            let Some(preview) = preview else {
-                error!("failed to decode image for edit session");
-                return;
-            };
-
-            let existing_state = state_result.ok().and_then(|r| r.ok()).flatten();
-
-            inner.edit_panel.begin_session(
-                id,
-                preview,
-                existing_state,
-            );
-        });
-    }
-
-    /// Asynchronously fetch EXIF metadata and cache it for the info panel.
-    fn load_metadata_async(
-        self: &Rc<Self>,
-        gen: u64,
-        id: crate::library::media::MediaId,
-    ) {
-        let inner = Rc::clone(self);
-        let library = Arc::clone(&self.library);
-        let tokio = self.tokio.clone();
-
-        glib::MainContext::default().spawn_local(async move {
-            let metadata = tokio
-                .spawn(async move { library.media_metadata(&id).await })
-                .await
-                .ok()
-                .and_then(|r| r.ok())
-                .flatten();
-
-            if inner.load_gen.get() != gen {
-                return; // stale
-            }
-
-            *inner.current_metadata.borrow_mut() = metadata;
-
-            // If the panel is open, refresh it with the newly arrived metadata.
-            if inner.info_split.shows_sidebar() {
-                let items = inner.items.borrow();
-                let idx = inner.current_index.get();
-                if let Some(obj) = items.get(idx) {
-                    let item = obj.item().clone();
-                    let meta = inner.current_metadata.borrow();
-                    inner.info_panel.populate(&item, meta.as_ref());
-                }
-            }
-        });
     }
 }
 
@@ -810,74 +530,9 @@ impl PhotoViewer {
         }
 
         // ── Wire overflow menu buttons ──────────────────────────────────
-        {
-            let popover = menu_popover;
-
-            // Add to album
-            if let Some(btn) = find_menu_button(&popover, "add-to-album") {
-                let i = Rc::downgrade(&inner);
-                let mb = menu_btn.clone();
-                let pop = popover.downgrade();
-                btn.connect_clicked(move |_| {
-                    if let Some(p) = pop.upgrade() { p.popdown(); }
-                    let Some(inner) = i.upgrade() else { return };
-                    let id = {
-                        let items = inner.items.borrow();
-                        let idx = inner.current_index.get();
-                        items.get(idx).map(|obj| obj.item().id.clone())
-                    };
-                    let Some(id) = id else { return };
-                    crate::ui::album_picker_dialog::show_album_picker_dialog(
-                        mb.upcast_ref::<gtk::Widget>(),
-                        vec![id],
-                        Arc::clone(&inner.library),
-                        inner.tokio.clone(),
-                        inner.bus_sender.clone(),
-                    );
-                });
-            }
-
-            // Stub items — just close the popover on click.
-            for name in &["share", "export-original", "set-wallpaper", "show-in-files"] {
-                if let Some(btn) = find_menu_button(&popover, name) {
-                    let pop = popover.downgrade();
-                    btn.connect_clicked(move |_| {
-                        if let Some(p) = pop.upgrade() { p.popdown(); }
-                    });
-                }
-            }
-
-            // Delete photo — trash + pop back to grid.
-            if let Some(btn) = find_menu_button(&popover, "delete") {
-                let i = Rc::downgrade(&inner);
-                let pop = popover.downgrade();
-                btn.connect_clicked(move |_| {
-                    if let Some(p) = pop.upgrade() { p.popdown(); }
-                    let Some(inner) = i.upgrade() else { return };
-                    let id = {
-                        let items = inner.items.borrow();
-                        let idx = inner.current_index.get();
-                        items.get(idx).map(|obj| obj.item().id.clone())
-                    };
-                    let Some(id) = id else { return };
-                    inner.bus_sender.send(AppEvent::TrashRequested {
-                        ids: vec![id],
-                    });
-                    if let Some(nav_view) = inner.nav_page
-                        .parent()
-                        .and_then(|p| p.downcast::<adw::NavigationView>().ok())
-                    {
-                        nav_view.pop();
-                    }
-                });
-            }
-        }
+        menu::wire_overflow_menu(&menu_popover, &menu_btn, &inner);
 
         // Subscribe to bus: clear pending favourite state on confirmation.
-        // Error-based rollback is deferred until AppEvent::Error carries
-        // operation identity (PR 2 of #278). For now, the grid model's
-        // on_favorite_changed will correct the item state on the next
-        // successful toggle.
         {
             let i = Rc::downgrade(&inner);
             crate::event_bus::subscribe(move |event| {
@@ -910,82 +565,3 @@ impl PhotoViewer {
         self.inner.show_at(index);
     }
 }
-
-/// Build the overflow menu popover content for photo/video viewers.
-///
-/// `include_wallpaper` controls whether "Set as wallpaper" is shown
-/// (photos only, not videos). `delete_label` sets the destructive
-/// action label ("Delete photo" vs "Delete video").
-pub fn build_viewer_menu_popover(include_wallpaper: bool, delete_label: &str) -> gtk::Popover {
-    let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    vbox.set_margin_top(6);
-    vbox.set_margin_bottom(6);
-    vbox.set_margin_start(6);
-    vbox.set_margin_end(6);
-
-    // Section 1: actions
-    vbox.append(&overflow_btn("Add to album", "folder-new-symbolic", "add-to-album"));
-    vbox.append(&overflow_btn("Share", "send-to-symbolic", "share"));
-    vbox.append(&overflow_btn("Export original", "document-save-symbolic", "export-original"));
-    if include_wallpaper {
-        vbox.append(&overflow_btn("Set as wallpaper", "preferences-desktop-wallpaper-symbolic", "set-wallpaper"));
-    }
-
-    // Separator
-    let sep1 = gtk::Separator::new(gtk::Orientation::Horizontal);
-    sep1.set_margin_top(4);
-    sep1.set_margin_bottom(4);
-    vbox.append(&sep1);
-
-    // Section 2: file system
-    vbox.append(&overflow_btn("Show in Files", "folder-open-symbolic", "show-in-files"));
-
-    // Separator
-    let sep2 = gtk::Separator::new(gtk::Orientation::Horizontal);
-    sep2.set_margin_top(4);
-    sep2.set_margin_bottom(4);
-    vbox.append(&sep2);
-
-    // Section 3: destructive
-    let delete_btn = overflow_btn(delete_label, "user-trash-symbolic", "delete");
-    delete_btn.add_css_class("error");
-    vbox.append(&delete_btn);
-
-    let popover = gtk::Popover::new();
-    popover.set_child(Some(&vbox));
-    popover
-}
-
-/// Create a flat button with icon + label for the overflow menu.
-fn overflow_btn(label: &str, icon_name: &str, widget_name: &str) -> gtk::Button {
-    let hbox = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .build();
-    hbox.append(&gtk::Image::from_icon_name(icon_name));
-    hbox.append(&gtk::Label::new(Some(label)));
-
-    let btn = gtk::Button::builder()
-        .child(&hbox)
-        .build();
-    btn.add_css_class("flat");
-    btn.set_widget_name(widget_name);
-    btn
-}
-
-/// Find a button in the popover by its widget name.
-pub fn find_menu_button(popover: &gtk::Popover, name: &str) -> Option<gtk::Button> {
-    let child = popover.child()?;
-    let vbox = child.downcast_ref::<gtk::Box>()?;
-    let mut widget = vbox.first_child();
-    while let Some(w) = widget {
-        if let Some(btn) = w.downcast_ref::<gtk::Button>() {
-            if btn.widget_name() == name {
-                return Some(btn.clone());
-            }
-        }
-        widget = w.next_sibling();
-    }
-    None
-}
-
