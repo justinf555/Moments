@@ -49,12 +49,12 @@ mod imp {
             // Inner box — fixed width, centered in the cell. Frame and labels
             // are children of this box so their left edges align naturally.
             let inner = gtk::Box::new(gtk::Orientation::Vertical, 4);
-            inner.set_size_request(155, -1);
+            inner.set_size_request(205, -1);
             inner.set_halign(gtk::Align::Center);
 
             // Cover frame — clipped square with rounded corners.
             let frame = gtk::Frame::new(None);
-            frame.set_size_request(155, 155);
+            frame.set_size_request(205, 205);
             frame.set_overflow(gtk::Overflow::Hidden);
             frame.add_css_class("album-cover-frame");
 

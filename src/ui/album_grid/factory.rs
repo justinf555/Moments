@@ -17,7 +17,7 @@ pub fn build_factory(
     factory.connect_setup(|_, obj| {
         let list_item = obj.downcast_ref::<gtk::ListItem>().expect("is ListItem");
         let card = AlbumCard::new();
-        card.set_size_request(155, 155 + 52); // Cover + labels.
+        card.set_size_request(205, 205 + 52); // Cover + labels.
         list_item.set_child(Some(&card));
     });
 
