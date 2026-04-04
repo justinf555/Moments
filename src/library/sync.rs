@@ -1001,7 +1001,7 @@ fn parse_duration_ms(s: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::library::db::test_helpers::open_test_db;
+    use crate::library::db::test_helpers::{open_test_db, get_audit_record};
     use tempfile::tempdir;
 
     /// Create a SyncManager with a real test DB for handler tests.
@@ -1335,6 +1335,276 @@ mod tests {
         let items = db.list_album_media(&aid, None, 50).await.unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].id.as_str(), "link-asset");
+    }
+
+    // ── deserialize_entity tests ──────────────────────────────────────
+
+    #[test]
+    fn deserialize_entity_valid_asset() {
+        let json = serde_json::json!({
+            "id": "a1",
+            "originalFileName": "photo.jpg",
+            "type": "IMAGE",
+            "isFavorite": false,
+            "deletedAt": null,
+            "fileCreatedAt": "2024-01-01T00:00:00.000Z",
+            "localDateTime": null,
+            "duration": null,
+            "exifImageWidth": 100,
+            "exifImageHeight": 100,
+        });
+        let result: Result<SyncAssetV1, _> = deserialize_entity(&json, "AssetV1", 1);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().id, "a1");
+    }
+
+    #[test]
+    fn deserialize_entity_invalid_returns_error() {
+        let json = serde_json::json!({"unexpected": true});
+        let result: Result<SyncAssetV1, _> = deserialize_entity(&json, "AssetV1", 42);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("AssetV1"), "error should name the entity type: {err}");
+        assert!(err.contains("42"), "error should include line number: {err}");
+    }
+
+    // ── process_entity tests ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn process_entity_success_pushes_ack_and_increments_counter() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let (mgr, _events) = test_sync_manager(db.clone()).await;
+
+        let mut acks = Vec::new();
+        let mut success = 0usize;
+        let mut errors = 0usize;
+
+        mgr.process_entity(
+            "TestEntity", "test-id", "cycle-1", "upsert",
+            "ack-token-1".to_string(),
+            async { Ok(()) },
+            &mut acks, &mut success, &mut errors,
+        ).await;
+
+        assert_eq!(acks, vec!["ack-token-1"]);
+        assert_eq!(success, 1);
+        assert_eq!(errors, 0);
+    }
+
+    #[tokio::test]
+    async fn process_entity_failure_increments_error_and_skips_ack() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let (mgr, _events) = test_sync_manager(db.clone()).await;
+
+        let mut acks = Vec::new();
+        let mut success = 0usize;
+        let mut errors = 0usize;
+
+        mgr.process_entity(
+            "TestEntity", "test-id", "cycle-1", "upsert",
+            "ack-token-1".to_string(),
+            async { Err(LibraryError::Immich("simulated failure".into())) },
+            &mut acks, &mut success, &mut errors,
+        ).await;
+
+        assert!(acks.is_empty(), "failed entity should not be acked");
+        assert_eq!(success, 0);
+        assert_eq!(errors, 1);
+    }
+
+    #[tokio::test]
+    async fn process_entity_records_upsert_audit_action() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let (mgr, _events) = test_sync_manager(db.clone()).await;
+
+        let mut acks = Vec::new();
+        let mut success = 0usize;
+        let mut errors = 0usize;
+
+        mgr.process_entity(
+            "AssetV1", "audit-test-upsert", "cycle-audit", "upsert",
+            "ack-u".to_string(),
+            async { Ok(()) },
+            &mut acks, &mut success, &mut errors,
+        ).await;
+
+        let (action, _) = get_audit_record(&db, "audit-test-upsert").await.unwrap();
+        assert_eq!(action, "upsert");
+    }
+
+    #[tokio::test]
+    async fn process_entity_records_delete_audit_action() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let (mgr, _events) = test_sync_manager(db.clone()).await;
+
+        let mut acks = Vec::new();
+        let mut success = 0usize;
+        let mut errors = 0usize;
+
+        mgr.process_entity(
+            "AssetDeleteV1", "audit-test-delete", "cycle-audit", "delete",
+            "ack-d".to_string(),
+            async { Ok(()) },
+            &mut acks, &mut success, &mut errors,
+        ).await;
+
+        let (action, _) = get_audit_record(&db, "audit-test-delete").await.unwrap();
+        assert_eq!(action, "delete");
+    }
+
+    #[tokio::test]
+    async fn process_entity_records_error_audit_on_failure() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let (mgr, _events) = test_sync_manager(db.clone()).await;
+
+        let mut acks = Vec::new();
+        let mut success = 0usize;
+        let mut errors = 0usize;
+
+        mgr.process_entity(
+            "AssetV1", "audit-test-error", "cycle-audit", "upsert",
+            "ack-e".to_string(),
+            async { Err(LibraryError::Immich("boom".into())) },
+            &mut acks, &mut success, &mut errors,
+        ).await;
+
+        let (action, error_msg) = get_audit_record(&db, "audit-test-error").await.unwrap();
+        assert_eq!(action, "error");
+        assert!(error_msg.as_deref().unwrap().contains("boom"));
+    }
+
+    // ── handle_sync_reset tests ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn handle_sync_reset_clears_faces_people_checkpoints() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let (mgr, _events) = test_sync_manager(db.clone()).await;
+
+        // Insert an asset, person, face, and checkpoint.
+        let asset = SyncAssetV1 {
+            id: "reset-asset".to_string(),
+            original_file_name: "r.jpg".to_string(),
+            asset_type: "IMAGE".to_string(),
+            is_favorite: false,
+            deleted_at: None,
+            file_created_at: Some("2024-01-01T00:00:00.000Z".to_string()),
+            local_date_time: None,
+            duration: None,
+            width: None,
+            height: None,
+        };
+        mgr.handle_asset(asset).await.unwrap();
+
+        db.upsert_person("p1", "Alice", None, false, false, None, None).await.unwrap();
+        db.save_sync_checkpoints(&[("AssetV1".to_string(), "ack-1".to_string())]).await.unwrap();
+
+        let mut is_reset = false;
+        let mut existing_ids = None;
+
+        mgr.handle_sync_reset(&mut is_reset, &mut existing_ids).await.unwrap();
+
+        assert!(is_reset);
+        assert!(existing_ids.is_some());
+        let ids = existing_ids.unwrap();
+        assert!(ids.contains("reset-asset"), "existing_ids should contain the asset");
+
+        // People and checkpoints should be cleared.
+        let people = db.list_people(false, false).await.unwrap();
+        assert!(people.is_empty(), "people should be cleared after reset");
+    }
+
+    #[tokio::test]
+    async fn finish_sync_emits_complete_event() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let (mgr, events) = test_sync_manager(db.clone()).await;
+
+        let counters = SyncCounters {
+            assets: 5,
+            people: 2,
+            faces: 3,
+            errors: 1,
+            ..Default::default()
+        };
+
+        // finish_sync with no acks to flush (avoids HTTP call).
+        mgr.finish_sync(false, None, &mut Vec::new(), &counters).await.unwrap();
+
+        let event = events.try_recv().unwrap();
+        match event {
+            LibraryEvent::SyncComplete { assets, people, faces, errors } => {
+                assert_eq!(assets, 5);
+                assert_eq!(people, 2);
+                assert_eq!(faces, 3);
+                assert_eq!(errors, 1);
+            }
+            other => panic!("expected SyncComplete, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn finish_sync_emits_people_event_when_faces_synced() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let (mgr, events) = test_sync_manager(db.clone()).await;
+
+        let counters = SyncCounters { faces: 1, ..Default::default() };
+        mgr.finish_sync(false, None, &mut Vec::new(), &counters).await.unwrap();
+
+        let _ = events.try_recv(); // SyncComplete
+        let event = events.try_recv().unwrap();
+        assert!(matches!(event, LibraryEvent::PeopleSyncComplete));
+    }
+
+    #[tokio::test]
+    async fn finish_sync_no_people_event_when_no_faces_or_people() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let (mgr, events) = test_sync_manager(db.clone()).await;
+
+        let counters = SyncCounters { assets: 3, ..Default::default() };
+        mgr.finish_sync(false, None, &mut Vec::new(), &counters).await.unwrap();
+
+        let _ = events.try_recv(); // SyncComplete
+        assert!(events.try_recv().is_err(), "no PeopleSyncComplete should be emitted");
+    }
+
+    #[tokio::test]
+    async fn finish_sync_deletes_orphaned_assets_on_reset() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let (mgr, _events) = test_sync_manager(db.clone()).await;
+
+        // Insert an asset that will be "orphaned" (not seen during sync).
+        let asset = SyncAssetV1 {
+            id: "orphan-asset".to_string(),
+            original_file_name: "orphan.jpg".to_string(),
+            asset_type: "IMAGE".to_string(),
+            is_favorite: false,
+            deleted_at: None,
+            file_created_at: Some("2024-01-01T00:00:00.000Z".to_string()),
+            local_date_time: None,
+            duration: None,
+            width: None,
+            height: None,
+        };
+        mgr.handle_asset(asset).await.unwrap();
+
+        let id = MediaId::new("orphan-asset".to_string());
+        assert!(db.media_exists(&id).await.unwrap());
+
+        let mut orphaned = HashSet::new();
+        orphaned.insert("orphan-asset".to_string());
+
+        mgr.finish_sync(true, Some(orphaned), &mut Vec::new(), &SyncCounters::default()).await.unwrap();
+
+        assert!(!db.media_exists(&id).await.unwrap(), "orphaned asset should be deleted");
     }
 
     // ── handle_asset_delete tests ───────────────────────────────────────

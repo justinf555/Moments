@@ -157,6 +157,17 @@ pub(crate) mod test_helpers {
         }
     }
 
+    /// Query the audit action and error_msg for a given entity_id (test helper).
+    pub async fn get_audit_record(db: &Database, entity_id: &str) -> Option<(String, Option<String>)> {
+        sqlx::query_as::<_, (String, Option<String>)>(
+            "SELECT action, error_msg FROM sync_audit WHERE entity_id = ?"
+        )
+        .bind(entity_id)
+        .fetch_optional(&db.pool)
+        .await
+        .unwrap()
+    }
+
     pub fn record_with_imported_at(id: MediaId, path: &str, imported_at: i64) -> MediaRecord {
         MediaRecord {
             id,
