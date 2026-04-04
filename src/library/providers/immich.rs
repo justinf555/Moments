@@ -489,36 +489,7 @@ async fn evict_originals_cache(originals_dir: &std::path::Path, max_mb: u32) {
     }
     let max_bytes = max_mb as u64 * 1024 * 1024;
 
-    // Walk the cache directory and collect file info.
-    let mut entries: Vec<(PathBuf, u64, std::time::SystemTime)> = Vec::new();
-    let mut total_size: u64 = 0;
-
-    if let Ok(mut read_dir) = tokio::fs::read_dir(originals_dir).await {
-        while let Ok(Some(shard1)) = read_dir.next_entry().await {
-            if !shard1.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
-                continue;
-            }
-            if let Ok(mut shard1_dir) = tokio::fs::read_dir(shard1.path()).await {
-                while let Ok(Some(shard2)) = shard1_dir.next_entry().await {
-                    if !shard2.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
-                        continue;
-                    }
-                    if let Ok(mut shard2_dir) = tokio::fs::read_dir(shard2.path()).await {
-                        while let Ok(Some(file)) = shard2_dir.next_entry().await {
-                            if let Ok(meta) = file.metadata().await {
-                                if meta.is_file() {
-                                    let size = meta.len();
-                                    let modified = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
-                                    total_size += size;
-                                    entries.push((file.path(), size, modified));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    let (mut entries, total_size) = collect_cache_candidates(originals_dir).await;
 
     if total_size <= max_bytes {
         debug!(
@@ -530,21 +501,86 @@ async fn evict_originals_cache(originals_dir: &std::path::Path, max_mb: u32) {
         return;
     }
 
-    // Sort oldest first.
     entries.sort_by_key(|(_, _, modified)| *modified);
+    delete_oldest_entries(&entries, total_size, max_bytes).await;
+}
 
-    let mut evicted_count = 0u64;
-    let mut evicted_bytes = 0u64;
+async fn collect_cache_candidates(
+    originals_dir: &std::path::Path,
+) -> (Vec<(PathBuf, u64, std::time::SystemTime)>, u64) {
+    let mut entries = Vec::new();
+    let mut total_size: u64 = 0;
 
-    for (path, size, _) in &entries {
-        if total_size <= max_bytes {
+    let Ok(mut read_dir) = tokio::fs::read_dir(originals_dir).await else {
+        return (entries, total_size);
+    };
+
+    while let Ok(Some(shard1)) = read_dir.next_entry().await {
+        if !shard1.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        collect_shard_entries(shard1.path(), &mut entries, &mut total_size).await;
+    }
+
+    (entries, total_size)
+}
+
+async fn collect_shard_entries(
+    shard1_path: PathBuf,
+    entries: &mut Vec<(PathBuf, u64, std::time::SystemTime)>,
+    total_size: &mut u64,
+) {
+    let Ok(mut shard1_dir) = tokio::fs::read_dir(&shard1_path).await else {
+        return;
+    };
+
+    while let Ok(Some(shard2)) = shard1_dir.next_entry().await {
+        if !shard2.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        collect_file_entries(shard2.path(), entries, total_size).await;
+    }
+}
+
+async fn collect_file_entries(
+    shard2_path: PathBuf,
+    entries: &mut Vec<(PathBuf, u64, std::time::SystemTime)>,
+    total_size: &mut u64,
+) {
+    let Ok(mut shard2_dir) = tokio::fs::read_dir(&shard2_path).await else {
+        return;
+    };
+
+    while let Ok(Some(file)) = shard2_dir.next_entry().await {
+        let Ok(meta) = file.metadata().await else {
+            continue;
+        };
+        if meta.is_file() {
+            let size = meta.len();
+            let modified = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+            *total_size += size;
+            entries.push((file.path(), size, modified));
+        }
+    }
+}
+
+async fn delete_oldest_entries(
+    entries: &[(PathBuf, u64, std::time::SystemTime)],
+    mut remaining: u64,
+    max_bytes: u64,
+) {
+    let mut evicted_count: u64 = 0;
+    let mut evicted_bytes: u64 = 0;
+
+    for (path, size, _) in entries {
+        if remaining <= max_bytes {
             break;
         }
-        if let Err(e) = tokio::fs::remove_file(&path).await {
+        if let Err(e) = tokio::fs::remove_file(path).await {
             tracing::warn!(path = %path.display(), "failed to evict cached original: {e}");
             continue;
         }
-        total_size -= size;
+        remaining -= size;
         evicted_bytes += size;
         evicted_count += 1;
     }
@@ -552,7 +588,7 @@ async fn evict_originals_cache(originals_dir: &std::path::Path, max_mb: u32) {
     info!(
         evicted_files = evicted_count,
         evicted_mb = evicted_bytes / (1024 * 1024),
-        remaining_mb = total_size / (1024 * 1024),
+        remaining_mb = remaining / (1024 * 1024),
         "originals cache eviction complete"
     );
 }
