@@ -242,6 +242,13 @@ impl MomentsWindow {
 
         let sidebar = MomentsSidebar::new();
         sidebar.subscribe_to_bus();
+
+        // Hide People route for Local backend (no face detection).
+        let app = crate::application::MomentsApplication::default();
+        if !app.imp().is_immich.get() {
+            sidebar.hide_people();
+        }
+
         imp.split_view.set_sidebar(Some(&sidebar));
         imp.sidebar.set(sidebar.clone()).expect("sidebar set once in setup()");
 

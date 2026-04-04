@@ -17,6 +17,10 @@ mod imp {
 
     pub struct MomentsSidebar {
         pub sidebar: OnceCell<adw::Sidebar>,
+        pub route_section: OnceCell<adw::SidebarSection>,
+        pub people_item: OnceCell<adw::SidebarItem>,
+        /// Route IDs in display order (matches sidebar item indices).
+        pub active_routes: RefCell<Vec<&'static str>>,
         pub pinned_section: OnceCell<adw::SidebarSection>,
         /// Album IDs for pinned items, in display order.
         pub pinned_ids: RefCell<Vec<String>>,
@@ -59,6 +63,9 @@ mod imp {
         fn default() -> Self {
             Self {
                 sidebar: OnceCell::new(),
+                route_section: OnceCell::new(),
+                people_item: OnceCell::new(),
+                active_routes: RefCell::new(Vec::new()),
                 pinned_section: OnceCell::new(),
                 pinned_ids: RefCell::new(Vec::new()),
                 trash_badge: OnceCell::new(),
@@ -127,6 +134,7 @@ mod imp {
     impl MomentsSidebar {
         fn build_route_section(&self) -> adw::SidebarSection {
             let section = adw::SidebarSection::new();
+            let mut active = Vec::new();
 
             for route in ROUTES.iter() {
                 let mut builder = adw::SidebarItem::builder()
@@ -141,8 +149,18 @@ mod imp {
                     let _ = self.trash_badge.set(badge);
                 }
 
-                section.append(builder.build());
+                let item = builder.build();
+
+                if route.id == "people" {
+                    let _ = self.people_item.set(item.clone());
+                }
+
+                section.append(item);
+                active.push(route.id);
             }
+
+            *self.active_routes.borrow_mut() = active;
+            let _ = self.route_section.set(section.clone());
 
             section
         }
@@ -426,11 +444,13 @@ impl MomentsSidebar {
         let sidebar = self.imp().sidebar.get().unwrap().clone();
         let weak = self.downgrade();
         sidebar.connect_activated(move |_, index| {
-            let system_count = ROUTES.len() as u32;
+            let Some(sb) = weak.upgrade() else { return };
+            let active = sb.imp().active_routes.borrow();
+            let system_count = active.len() as u32;
             if index < system_count {
-                if let Some(route) = ROUTES.get(index as usize) {
-                    debug!(route = %route.id, "sidebar route selected");
-                    f(route.id);
+                if let Some(route_id) = active.get(index as usize) {
+                    debug!(route = %route_id, "sidebar route selected");
+                    f(route_id);
                 }
             } else {
                 // Pinned album item.
@@ -445,6 +465,16 @@ impl MomentsSidebar {
                 }
             }
         });
+    }
+
+    /// Hide the People sidebar item (used for Local backend which has no face detection).
+    pub fn hide_people(&self) {
+        let imp = self.imp();
+        if let (Some(section), Some(item)) = (imp.route_section.get(), imp.people_item.get()) {
+            section.remove(item);
+            imp.active_routes.borrow_mut().retain(|id| *id != "people");
+            debug!("people route hidden (local backend)");
+        }
     }
 
     /// Pre-select the first item (Photos) so the shell always has an active route.
