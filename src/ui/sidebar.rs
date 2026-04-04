@@ -476,19 +476,26 @@ impl MomentsSidebar {
                 valid_ids.push(id.clone());
             }
         }
+        // Prune stale entries (deleted albums) from GSettings.
+        if valid_ids.len() < ids.len() {
+            let strv: Vec<&str> = valid_ids.iter().map(|s| s.as_str()).collect();
+            settings.set_strv("pinned-album-ids", strv).ok();
+        }
         *imp.pinned_ids.borrow_mut() = valid_ids;
     }
 
     /// Pin an album to the sidebar. Returns false if already pinned or at limit.
     pub fn pin_album(&self, album_id: &str, album_name: &str, settings: &gtk::gio::Settings) -> bool {
         let imp = self.imp();
-        let mut ids = imp.pinned_ids.borrow_mut();
 
-        if ids.len() >= Self::MAX_PINNED || ids.contains(&album_id.to_string()) {
-            return false;
+        // Scope the borrow — must drop before GTK/GSettings calls.
+        {
+            let mut ids = imp.pinned_ids.borrow_mut();
+            if ids.len() >= Self::MAX_PINNED || ids.iter().any(|id| id == album_id) {
+                return false;
+            }
+            ids.push(album_id.to_string());
         }
-
-        ids.push(album_id.to_string());
 
         let section = imp.pinned_section.get().unwrap();
         let item = adw::SidebarItem::builder()
@@ -498,7 +505,7 @@ impl MomentsSidebar {
         section.append(item);
 
         // Persist.
-        let strv: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+        let strv: Vec<&str> = imp.pinned_ids.borrow().iter().map(|s| s.as_str()).collect();
         settings.set_strv("pinned-album-ids", strv).ok();
 
         debug!(album_id = %album_id, name = %album_name, "album pinned to sidebar");
@@ -508,21 +515,26 @@ impl MomentsSidebar {
     /// Unpin an album from the sidebar.
     pub fn unpin_album(&self, album_id: &str, settings: &gtk::gio::Settings) {
         let imp = self.imp();
-        let mut ids = imp.pinned_ids.borrow_mut();
 
-        if let Some(pos) = ids.iter().position(|id| id == album_id) {
-            ids.remove(pos);
-            let section = imp.pinned_section.get().unwrap();
-            if let Some(item) = section.item(pos as u32) {
-                section.remove(&item);
+        // Find position and remove — scoped to drop borrow before GTK calls.
+        let pos = {
+            let mut ids = imp.pinned_ids.borrow_mut();
+            match ids.iter().position(|id| id == album_id) {
+                Some(pos) => { ids.remove(pos); pos }
+                None => return,
             }
+        };
 
-            // Persist.
-            let strv: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
-            settings.set_strv("pinned-album-ids", strv).ok();
-
-            debug!(album_id = %album_id, "album unpinned from sidebar");
+        let section = imp.pinned_section.get().unwrap();
+        if let Some(item) = section.item(pos as u32) {
+            section.remove(&item);
         }
+
+        // Persist.
+        let strv: Vec<&str> = imp.pinned_ids.borrow().iter().map(|s| s.as_str()).collect();
+        settings.set_strv("pinned-album-ids", strv).ok();
+
+        debug!(album_id = %album_id, "album unpinned from sidebar");
     }
 
     /// Number of currently pinned albums.
