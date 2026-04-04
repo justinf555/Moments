@@ -8,8 +8,12 @@ pub struct SidebarRoute {
     pub icon: &'static str,
 }
 
-/// Top sidebar routes, displayed above the Albums section.
-pub const TOP_ROUTES: &[SidebarRoute] = &[
+/// All sidebar routes in display order.
+///
+/// Albums is a top-level destination (opens the Albums grid view).
+/// Trash is promoted from the old "bottom routes" section to the
+/// primary navigation alongside other system destinations.
+pub const ROUTES: &[SidebarRoute] = &[
     SidebarRoute {
         id: "photos",
         label: "Photos",
@@ -30,10 +34,11 @@ pub const TOP_ROUTES: &[SidebarRoute] = &[
         label: "People",
         icon: "system-users-symbolic",
     },
-];
-
-/// Bottom sidebar routes, displayed below the Albums section.
-pub const BOTTOM_ROUTES: &[SidebarRoute] = &[
+    SidebarRoute {
+        id: "albums",
+        label: "Albums",
+        icon: "folder-symbolic",
+    },
     SidebarRoute {
         id: "trash",
         label: "Trash",

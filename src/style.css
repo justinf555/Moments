@@ -74,6 +74,21 @@ collection-grid-cell .hidden-icon {
     -gtk-icon-shadow: 0 1px 3px rgba(0,0,0,0.6);
 }
 
+/* Sidebar trash count badge — subtle pill matching GNOME's dim badge
+ * style.  AdwSidebarItem has no built-in badge property, so we use a
+ * suffix widget.  Uses theme variables for dark/light/high-contrast
+ * compatibility. */
+.sidebar-badge {
+    background: alpha(currentColor, 0.1);
+    color: inherit;
+    border-radius: 999px;
+    min-width: 16px;
+    min-height: 0;
+    padding: 1px 6px;
+    font-size: 1.0rem;
+    opacity: 0.7;
+}
+
 /* ── Filter swatches in the edit panel ─────────────────────────────────
  *
  * Each swatch is a small coloured preview representing the visual tone

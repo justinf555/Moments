@@ -12,6 +12,13 @@ pub struct EmptyLibraryView {
 }
 
 impl EmptyLibraryView {
+    /// Create a view wrapping an existing `AdwStatusPage`.
+    pub fn from_status_page(page: adw::StatusPage) -> Self {
+        Self {
+            widget: page.upcast(),
+        }
+    }
+
     pub fn new() -> Self {
         let page = adw::StatusPage::builder()
             .icon_name("camera-photo-symbolic")
