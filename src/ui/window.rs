@@ -209,6 +209,24 @@ impl MomentsWindow {
             });
         }
 
+        // Load pinned albums for the sidebar.
+        {
+            let lib = Arc::clone(&library);
+            let tk = tokio.clone();
+            let sb = sidebar.clone();
+            let s = settings.clone();
+            glib::MainContext::default().spawn_local(async move {
+                let result = tk.spawn(async move { lib.list_albums().await }).await;
+                if let Ok(Ok(albums)) = result {
+                    let pairs: Vec<(String, String)> = albums
+                        .into_iter()
+                        .map(|a| (a.id.as_str().to_owned(), a.name))
+                        .collect();
+                    sb.load_pinned_albums(&s, &pairs);
+                }
+            });
+        }
+
         // Build content stack + coordinator.
         let content_stack = gtk::Stack::new();
         content_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
@@ -377,15 +395,46 @@ impl MomentsWindow {
             .set(coordinator)
             .expect("coordinator set once in setup()");
 
-        // Wire sidebar selection ��� coordinator navigation.
+        // Wire sidebar selection to coordinator navigation.
+        // Pinned album routes ("album:{id}") are registered dynamically on first click.
         {
             let obj_weak = self.downgrade();
+            let lib = Arc::clone(&library);
+            let tk = tokio.clone();
+            let s = settings.clone();
+            let tc = Rc::clone(&texture_cache);
+            let bs = bus_sender.clone();
             sidebar.connect_route_selected(move |id| {
                 let Some(win) = obj_weak.upgrade() else { return };
                 let Some(coordinator) = win.imp().coordinator.get() else { return };
-                let actions = coordinator.borrow_mut().navigate(id);
-                if let Some(actions) = actions {
-                    win.insert_action_group("view", Some(&actions));
+
+                if let Some(album_id_str) = id.strip_prefix("album:") {
+                    let mut coord = coordinator.borrow_mut();
+                    if !coord.has_route(id) {
+                        use crate::library::album::AlbumId;
+                        use crate::library::media::MediaFilter;
+                        let album_id = AlbumId::from_raw(album_id_str.to_owned());
+                        let model = Rc::new(PhotoGridModel::new(
+                            Arc::clone(&lib), tk.clone(),
+                            MediaFilter::Album { album_id }, bs.clone(),
+                        ));
+                        let view = Rc::new(PhotoGridView::new(
+                            Arc::clone(&lib), tk.clone(), s.clone(),
+                            Rc::clone(&tc), bs.clone(),
+                        ));
+                        view.set_model(Rc::clone(&model));
+                        model.subscribe_to_bus();
+                        coord.register(id, view);
+                    }
+                    let actions = coord.navigate(id);
+                    if let Some(actions) = actions {
+                        win.insert_action_group("view", Some(&actions));
+                    }
+                } else {
+                    let actions = coordinator.borrow_mut().navigate(id);
+                    if let Some(actions) = actions {
+                        win.insert_action_group("view", Some(&actions));
+                    }
                 }
             });
         }
