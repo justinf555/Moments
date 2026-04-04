@@ -106,16 +106,4 @@ impl Database {
         }
         Ok(())
     }
-
-    pub(crate) async fn expired_trash_ids(&self, max_age_secs: i64) -> Result<Vec<MediaId>, LibraryError> {
-        let cutoff = chrono::Utc::now().timestamp() - max_age_secs;
-        let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT id FROM media WHERE is_trashed = 1 AND trashed_at < ?",
-        )
-        .bind(cutoff)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(LibraryError::Db)?;
-        Ok(rows.into_iter().map(|(id,)| MediaId::new(id)).collect())
-    }
 }
