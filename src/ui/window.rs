@@ -22,7 +22,6 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::app_event::AppEvent;
 use gtk::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gio, glib};
@@ -393,7 +392,8 @@ impl MomentsWindow {
             sidebar.connect_route_selected(move |id| {
                 let Some(win) = obj_weak.upgrade() else { return };
                 let Some(coordinator) = win.imp().coordinator.get() else { return };
-                if let Some(actions) = coordinator.borrow_mut().navigate(id) {
+                let actions = coordinator.borrow_mut().navigate(id);
+                if let Some(actions) = actions {
                     win.insert_action_group("view", Some(&actions));
                 }
             });
