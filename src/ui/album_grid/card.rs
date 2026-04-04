@@ -114,6 +114,23 @@ mod imp {
             frame.set_child(Some(&overlay));
             inner.append(&frame);
 
+            // Hover controller — show checkbox on mouse enter/leave.
+            let motion = gtk::EventControllerMotion::new();
+            motion.set_propagation_phase(gtk::PropagationPhase::Capture);
+            let cell_weak = obj.downgrade();
+            motion.connect_enter(move |_, _x, _y| {
+                let Some(cell) = cell_weak.upgrade() else { return };
+                cell.imp().checkbox.set_visible(true);
+            });
+            let cell_weak = obj.downgrade();
+            motion.connect_leave(move |_| {
+                let Some(cell) = cell_weak.upgrade() else { return };
+                if !cell.imp().in_selection_mode.get() {
+                    cell.imp().checkbox.set_visible(false);
+                }
+            });
+            obj.add_controller(motion);
+
             // Name label.
             self.name_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
             self.name_label.set_max_width_chars(18);
