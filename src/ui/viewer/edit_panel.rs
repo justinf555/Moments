@@ -507,46 +507,12 @@ impl EditPanel {
 
     /// Render the current edit state as a preview.
     fn render_preview(&self) {
-        let (preview_img, state, gen) = {
+        let preview = {
             let session = self.session.borrow();
             let Some(s) = session.as_ref() else { return };
             (Arc::clone(&s.preview_image), s.state.clone(), s.render_gen)
         };
-
-        let pic = self.picture.clone();
-        let tk = self.tokio.clone();
-        let session_ref = Rc::clone(&self.session);
-
-        glib::MainContext::default().spawn_local(async move {
-            let result = tk
-                .spawn(async move {
-                    tokio::task::spawn_blocking(move || {
-                        let edited = apply_edits(&preview_img, &state);
-                        let rgba = edited.into_rgba8();
-                        let (w, h) = image::GenericImageView::dimensions(&rgba);
-                        (rgba.into_raw(), w as i32, h as i32)
-                    })
-                    .await
-                })
-                .await;
-
-            let current_gen = session_ref.borrow().as_ref().map(|s| s.render_gen);
-            if current_gen != Some(gen) {
-                return;
-            }
-
-            if let Ok(Ok((raw, w, h))) = result {
-                let gbytes = glib::Bytes::from_owned(raw);
-                let texture = gdk::MemoryTexture::new(
-                    w,
-                    h,
-                    gdk::MemoryFormat::R8g8b8a8,
-                    &gbytes,
-                    (w as usize) * 4,
-                );
-                pic.set_paintable(Some(texture.upcast_ref::<gdk::Paintable>()));
-            }
-        });
+        render_to_picture(&self.picture, &self.tokio, &self.session, preview);
     }
 
     /// Sync UI widgets (filter buttons, sliders) to match the current EditState.
