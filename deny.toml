@@ -1,11 +1,13 @@
 [advisories]
-vulnerability = "deny"
-unmaintained = "warn"
-yanked = "warn"
-notice = "warn"
+version = 2
+ignore = [
+    # rsa crate timing vulnerability — transitive dep via keyring/secret-service.
+    # No direct exposure in Moments (keyring is used for token storage, not crypto).
+    "RUSTSEC-2023-0071",
+]
 
 [licenses]
-unlicensed = "deny"
+version = 2
 allow = [
     "MIT",
     "Apache-2.0",

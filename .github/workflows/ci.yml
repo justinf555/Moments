@@ -55,6 +55,7 @@ jobs:
             --filesystem=~/.cargo:create \
             --env=SQLX_OFFLINE=true \
             --env=CARGO_HOME=$HOME/.cargo \
+            --env=PATH=/usr/lib/sdk/rust-stable/bin:/usr/bin:/bin \
             --command=bash \
             org.gnome.Sdk//50 -c '
               source /usr/lib/sdk/rust-stable/enable.sh
@@ -161,6 +162,7 @@ jobs:
             --filesystem=~/.cargo:create \
             --env=SQLX_OFFLINE=true \
             --env=CARGO_HOME=$HOME/.cargo \
+            --env=PATH=/usr/lib/sdk/rust-stable/bin:/usr/bin:/bin \
             --command=bash \
             org.gnome.Sdk//50 -c '
               source /usr/lib/sdk/rust-stable/enable.sh
