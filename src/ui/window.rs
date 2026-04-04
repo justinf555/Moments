@@ -171,14 +171,6 @@ impl MomentsWindow {
         debug!(width, height, is_maximized, "restored window state");
     }
 
-    /// Wire the library model into the shell and switch to the content page.
-    ///
-    /// Builds the sidebar, registers all content views with the coordinator,
-    /// then switches `main_stack` from "loading" to "content".
-    /// Wire the library into the shell and switch to the content page.
-    ///
-    /// Photos is created eagerly (always the default view). Other routes
-    /// are registered lazily — their views are materialised on first
     /// Wire the full shell: sidebar, coordinator, views.
     ///
     /// All models subscribe to the [`EventBus`] for event delivery.

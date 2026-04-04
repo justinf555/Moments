@@ -122,7 +122,7 @@ mod imp {
                     .icon_name(route.icon);
 
                 // Trash item gets a badge suffix showing the item count.
-                if i == route::TRASH_INDEX as usize {
+                if route.id == "trash" {
                     let badge = gtk::Label::new(None);
                     badge.add_css_class("sidebar-badge");
                     badge.set_visible(false);
@@ -254,17 +254,17 @@ mod imp {
 
             obj.set_child(Some(&bottom_sheet));
 
-            self.sidebar.set(sidebar).unwrap();
-            let _ = self.bottom_sheet.set(bottom_sheet);
-            let _ = self.progress_label.set(progress_label);
-            let _ = self.progress_bar.set(progress_bar);
-            let _ = self.detail_label.set(detail_label);
-            let _ = self.bar_stack.set(bar_stack);
-            let _ = self.idle_label.set(idle_label);
-            let _ = self.sync_label.set(sync_label);
-            let _ = self.thumb_label.set(thumb_label);
-            let _ = self.upload_label.set(upload_label);
-            let _ = self.complete_label.set(complete_label);
+            self.sidebar.set(sidebar).expect("set once in constructed");
+            self.bottom_sheet.set(bottom_sheet).expect("set once in constructed");
+            self.progress_label.set(progress_label).expect("set once in constructed");
+            self.progress_bar.set(progress_bar).expect("set once in constructed");
+            self.detail_label.set(detail_label).expect("set once in constructed");
+            self.bar_stack.set(bar_stack).expect("set once in constructed");
+            self.idle_label.set(idle_label).expect("set once in constructed");
+            self.sync_label.set(sync_label).expect("set once in constructed");
+            self.thumb_label.set(thumb_label).expect("set once in constructed");
+            self.upload_label.set(upload_label).expect("set once in constructed");
+            self.complete_label.set(complete_label).expect("set once in constructed");
         }
     }
 

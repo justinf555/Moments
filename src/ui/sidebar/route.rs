@@ -45,6 +45,3 @@ pub const ROUTES: &[SidebarRoute] = &[
         icon: "user-trash-symbolic",
     },
 ];
-
-/// Index of the Trash item in [`ROUTES`] for direct access (badge updates).
-pub const TRASH_INDEX: u32 = 5;
