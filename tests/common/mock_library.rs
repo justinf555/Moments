@@ -191,6 +191,14 @@ impl LibraryAlbums for StubLibrary {
     ) -> Result<std::collections::HashMap<AlbumId, usize>, LibraryError> {
         Ok(std::collections::HashMap::new())
     }
+
+    async fn album_cover_media_ids(
+        &self,
+        _album_id: &AlbumId,
+        _limit: u32,
+    ) -> Result<Vec<MediaId>, LibraryError> {
+        Ok(Vec::new())
+    }
 }
 
 #[async_trait]

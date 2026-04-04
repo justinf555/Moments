@@ -314,6 +314,14 @@ impl LibraryAlbums for LocalLibrary {
     ) -> Result<std::collections::HashMap<AlbumId, usize>, LibraryError> {
         self.db.albums_containing_media(media_ids).await
     }
+
+    async fn album_cover_media_ids(
+        &self,
+        album_id: &AlbumId,
+        limit: u32,
+    ) -> Result<Vec<MediaId>, LibraryError> {
+        self.db.album_cover_media_ids(album_id, limit).await
+    }
 }
 
 #[async_trait]

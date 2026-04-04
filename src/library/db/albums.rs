@@ -229,6 +229,27 @@ impl LibraryAlbums for Database {
             .map(|(aid, cnt)| (AlbumId::from_raw(aid), cnt as usize))
             .collect())
     }
+    async fn album_cover_media_ids(
+        &self,
+        album_id: &AlbumId,
+        limit: u32,
+    ) -> Result<Vec<MediaId>, LibraryError> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT am.media_id
+             FROM album_media am
+             JOIN media m ON am.media_id = m.id
+             WHERE am.album_id = ? AND m.is_trashed = 0
+             ORDER BY am.added_at DESC
+             LIMIT ?",
+        )
+        .bind(album_id.as_str())
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(LibraryError::Db)?;
+
+        Ok(rows.into_iter().map(|(id,)| MediaId::new(id)).collect())
+    }
 }
 
 #[cfg(test)]
