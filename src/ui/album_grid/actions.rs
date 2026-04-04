@@ -315,8 +315,18 @@ fn wire_rename_button(
                                 name: new_name,
                             });
                         }
-                        Ok(Err(e)) => tracing::error!("failed to rename album: {e}"),
-                        Err(e) => tracing::error!("tokio join error: {e}"),
+                        Ok(Err(e)) => {
+                            tracing::error!("failed to rename album: {e}");
+                            bs.send(crate::app_event::AppEvent::Error(
+                                format!("Failed to rename album: {e}"),
+                            ));
+                        }
+                        Err(e) => {
+                            tracing::error!("tokio join error: {e}");
+                            bs.send(crate::app_event::AppEvent::Error(
+                                format!("Failed to rename album: {e}"),
+                            ));
+                        }
                     }
                 });
             });
@@ -366,8 +376,18 @@ fn wire_delete_button(
                                 id: AlbumId::from_raw(aid),
                             });
                         }
-                        Ok(Err(e)) => tracing::error!("failed to delete album: {e}"),
-                        Err(e) => tracing::error!("tokio join error: {e}"),
+                        Ok(Err(e)) => {
+                            tracing::error!("failed to delete album: {e}");
+                            bs.send(crate::app_event::AppEvent::Error(
+                                format!("Failed to delete album: {e}"),
+                            ));
+                        }
+                        Err(e) => {
+                            tracing::error!("tokio join error: {e}");
+                            bs.send(crate::app_event::AppEvent::Error(
+                                format!("Failed to delete album: {e}"),
+                            ));
+                        }
                     }
                 });
             });

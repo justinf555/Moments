@@ -121,7 +121,7 @@ impl AlbumGridView {
         action_bar.set_revealed(false);
 
         // ── Wire selection mode with the real widgets ────────────────────
-        let _exit_selection = selection::wire_selection_mode(
+        selection::wire_selection_mode(
             &enter_selection,
             &header,
             &new_album_btn,

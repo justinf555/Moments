@@ -33,7 +33,7 @@ pub(crate) fn wire_selection_mode(
     library: &Arc<dyn Library>,
     tokio: &tokio::runtime::Handle,
     bus_sender: &crate::event_bus::EventSender,
-) -> gio::SimpleAction {
+) {
     // ── Enter selection mode ────────────────────────────────────────
     {
         let sm = Rc::clone(selection_mode);
@@ -107,7 +107,6 @@ pub(crate) fn wire_selection_mode(
         &exit_selection,
     );
 
-    exit_selection
 }
 
 /// Walk the grid view's children and toggle selection checkboxes on all cards.
@@ -207,8 +206,18 @@ fn wire_batch_delete(
                                 id: AlbumId::from_raw(aid.clone()),
                             });
                         }
-                        Ok(Err(e)) => tracing::error!("failed to delete album {aid}: {e}"),
-                        Err(e) => tracing::error!("tokio join error: {e}"),
+                        Ok(Err(e)) => {
+                            tracing::error!("failed to delete album {aid}: {e}");
+                            bs.send(crate::app_event::AppEvent::Error(
+                                format!("Failed to delete album: {e}"),
+                            ));
+                        }
+                        Err(e) => {
+                            tracing::error!("tokio join error: {e}");
+                            bs.send(crate::app_event::AppEvent::Error(
+                                format!("Failed to delete album: {e}"),
+                            ));
+                        }
                     }
                 }
                 exit.activate(None);
