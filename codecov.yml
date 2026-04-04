@@ -1,0 +1,22 @@
+coverage:
+  status:
+    project:
+      default:
+        target: auto    # don't let overall coverage drop from baseline
+        threshold: 1%   # allow 1% fluctuation
+    patch:
+      default:
+        target: 80%     # new/changed lines must be 80% covered
+        # Only enforce on library code — UI widget code is hard to test.
+        paths:
+          - "src/library/**"
+          - "src/app_event.rs"
+          - "src/event_bus.rs"
+
+# Exclude UI widget files from patch coverage enforcement.
+# These require GTK init + mutter and are tested via integration tests.
+ignore:
+  - "src/ui/**"
+  - "tests/**"
+  - "src/main.rs"
+  - "src/config.rs"

@@ -14,36 +14,78 @@ clean:
 # All test targets run inside the Flatpak SDK so that libadwaita 1.9
 # and other GNOME 50 dependencies are available.
 
+# Flatpak SDK runner — uses an isolated CARGO_HOME to avoid rustup shims
+# in ~/.cargo/bin shadowing the SDK's toolchain. Registry and git caches
+# are symlinked from the host for speed.
 FLATPAK_RUN = flatpak run --share=network \
 	--filesystem=$(CURDIR) \
-	--filesystem=$(HOME)/.cargo:create \
+	--filesystem=$(HOME)/.cargo/registry:create \
+	--filesystem=$(HOME)/.cargo/git:create \
 	--env=SQLX_OFFLINE=true \
-	--env=CARGO_HOME=$(HOME)/.cargo \
+	--env=CARGO_HOME=/tmp/flatpak-cargo \
 	--command=bash org.gnome.Sdk//50
 
+# Preamble sourced before every SDK command — sets up toolchain and cargo home.
+# Creates an isolated CARGO_HOME with bin/ writable (for cargo install)
+# and registry/git symlinked from the host cache for speed.
+SDK_INIT = source /usr/lib/sdk/rust-stable/enable.sh && \
+	mkdir -p /tmp/flatpak-cargo/bin && \
+	ln -sf $(HOME)/.cargo/registry /tmp/flatpak-cargo/registry 2>/dev/null; \
+	ln -sf $(HOME)/.cargo/git /tmp/flatpak-cargo/git 2>/dev/null; \
+	export PATH=/tmp/flatpak-cargo/bin:$$PATH && \
+	cd $(CURDIR)
+
 check:
-	$(FLATPAK_RUN) -c 'source /usr/lib/sdk/rust-stable/enable.sh && cd $(CURDIR) && cargo check'
+	$(FLATPAK_RUN) -c '$(SDK_INIT) && cargo check'
 
 test:
-	$(FLATPAK_RUN) -c 'source /usr/lib/sdk/rust-stable/enable.sh && cd $(CURDIR) && cargo test'
+	$(FLATPAK_RUN) -c '$(SDK_INIT) && cargo test'
+
+test-nextest:
+	$(FLATPAK_RUN) -c '$(SDK_INIT) && \
+		cargo install cargo-nextest --locked 2>/dev/null || true && \
+		cargo nextest run --profile ci'
 
 test-integration:
 	flatpak run --share=network \
 	  --socket=wayland \
 	  --filesystem=$(CURDIR) \
-	  --filesystem=$(HOME)/.cargo:create \
+	  --filesystem=$(HOME)/.cargo/registry:ro \
+	  --filesystem=$(HOME)/.cargo/git:ro \
 	  --filesystem=$(XDG_RUNTIME_DIR) \
 	  --env=SQLX_OFFLINE=true \
-	  --env=CARGO_HOME=$(HOME)/.cargo \
+	  --env=CARGO_HOME=/tmp/flatpak-cargo \
 	  --env=GSK_RENDERER=cairo \
 	  --env=GTK_A11Y=none \
 	  --env=GIO_USE_VFS=local \
 	  --env=XDG_RUNTIME_DIR=$(XDG_RUNTIME_DIR) \
 	  --env=WAYLAND_DISPLAY=$(WAYLAND_DISPLAY) \
 	  --command=bash org.gnome.Sdk//50 \
-	  -c 'source /usr/lib/sdk/rust-stable/enable.sh && cd $(CURDIR) && cargo test --features integration-tests -- --test-threads=1'
+	  -c '$(SDK_INIT) && cargo test --features integration-tests -- --test-threads=1'
 
 test-all: test test-integration
+
+# ── Linting & Analysis ──────────────────────────────────────────────────────
+
+lint:
+	$(FLATPAK_RUN) -c '$(SDK_INIT) && cargo clippy --all-targets -- -D warnings'
+
+audit:
+	cargo audit --ignore RUSTSEC-2023-0071
+	cargo deny check
+
+coverage:
+	$(FLATPAK_RUN) -c '$(SDK_INIT) && \
+		cargo install cargo-llvm-cov --locked 2>/dev/null || true && \
+		cargo llvm-cov --html && \
+		echo "Coverage report: target/llvm-cov/html/index.html"'
+
+metrics:
+	rust-code-analysis-cli --metrics -p src/ 2>/dev/null | head -50
+
+# ── Full CI locally ─────────────────────────────────────────────────────────
+
+ci-all: lint test test-integration audit
 
 # ── Release ───────────────────────────────────────────────────────────────────
 #

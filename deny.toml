@@ -1,0 +1,43 @@
+[advisories]
+version = 2
+ignore = [
+    # paste crate — unmaintained warning via gstreamer. No action available
+    # until gstreamer upstream migrates.
+    { id = "RUSTSEC-2024-0436", reason = "transitive dep via gstreamer, no alternative" },
+]
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "GPL-3.0-or-later",
+    "LGPL-2.1-only",
+    "LGPL-2.1-or-later",
+    "MPL-2.0",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+
+# rawler uses the deprecated SPDX identifier "LGPL-2.1" (without suffix).
+# Treat it as LGPL-2.1-only.
+[[licenses.clarify]]
+name = "rawler"
+expression = "LGPL-2.1-only"
+license-files = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
