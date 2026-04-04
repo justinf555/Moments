@@ -242,7 +242,7 @@ impl SyncManager {
                 "AssetV1" => {
                     let asset: SyncAssetV1 = deserialize_entity(&sync_line.data, "AssetV1", line_number)?;
                     let id = asset.id.clone();
-                    self.process_entity("AssetV1", &id, &sync_cycle, sync_line.ack,
+                    self.process_entity("AssetV1", &id, &sync_cycle, "upsert", sync_line.ack,
                         self.handle_asset(asset),
                         &mut acks, &mut counters.assets, &mut counters.errors,
                     ).await;
@@ -259,7 +259,7 @@ impl SyncManager {
                     if let Some(ref mut ids) = existing_ids {
                         ids.remove(&id);
                     }
-                    self.process_entity("AssetDeleteV1", &id, &sync_cycle, sync_line.ack,
+                    self.process_entity("AssetDeleteV1", &id, &sync_cycle, "delete", sync_line.ack,
                         self.handle_asset_delete(&id),
                         &mut acks, &mut counters.deletes, &mut counters.errors,
                     ).await;
@@ -267,7 +267,7 @@ impl SyncManager {
                 "AssetExifV1" => {
                     let exif: SyncAssetExifV1 = deserialize_entity(&sync_line.data, "AssetExifV1", line_number)?;
                     let id = exif.asset_id.clone();
-                    self.process_entity("AssetExifV1", &id, &sync_cycle, sync_line.ack,
+                    self.process_entity("AssetExifV1", &id, &sync_cycle, "upsert", sync_line.ack,
                         self.handle_asset_exif(exif),
                         &mut acks, &mut counters.exifs, &mut counters.errors,
                     ).await;
@@ -275,7 +275,7 @@ impl SyncManager {
                 "AlbumV1" => {
                     let album: SyncAlbumV1 = deserialize_entity(&sync_line.data, "AlbumV1", line_number)?;
                     let id = album.id.clone();
-                    self.process_entity("AlbumV1", &id, &sync_cycle, sync_line.ack,
+                    self.process_entity("AlbumV1", &id, &sync_cycle, "upsert", sync_line.ack,
                         self.handle_album(album),
                         &mut acks, &mut counters.albums, &mut counters.errors,
                     ).await;
@@ -283,7 +283,7 @@ impl SyncManager {
                 "AlbumDeleteV1" => {
                     let delete: SyncAlbumDeleteV1 = deserialize_entity(&sync_line.data, "AlbumDeleteV1", line_number)?;
                     let id = delete.album_id.clone();
-                    self.process_entity("AlbumDeleteV1", &id, &sync_cycle, sync_line.ack,
+                    self.process_entity("AlbumDeleteV1", &id, &sync_cycle, "delete", sync_line.ack,
                         self.handle_album_delete(&id),
                         &mut acks, &mut counters.deletes, &mut counters.errors,
                     ).await;
@@ -291,7 +291,7 @@ impl SyncManager {
                 "AlbumToAssetV1" => {
                     let assoc: SyncAlbumToAssetV1 = deserialize_entity(&sync_line.data, "AlbumToAssetV1", line_number)?;
                     let id = format!("{}:{}", assoc.album_id, assoc.asset_id);
-                    self.process_entity("AlbumToAssetV1", &id, &sync_cycle, sync_line.ack,
+                    self.process_entity("AlbumToAssetV1", &id, &sync_cycle, "upsert", sync_line.ack,
                         self.handle_album_asset(assoc),
                         &mut acks, &mut counters.albums, &mut counters.errors,
                     ).await;
@@ -299,7 +299,7 @@ impl SyncManager {
                 "AlbumToAssetDeleteV1" => {
                     let assoc: SyncAlbumToAssetDeleteV1 = deserialize_entity(&sync_line.data, "AlbumToAssetDeleteV1", line_number)?;
                     let id = format!("{}:{}", assoc.album_id, assoc.asset_id);
-                    self.process_entity("AlbumToAssetDeleteV1", &id, &sync_cycle, sync_line.ack,
+                    self.process_entity("AlbumToAssetDeleteV1", &id, &sync_cycle, "delete", sync_line.ack,
                         self.handle_album_asset_delete(assoc),
                         &mut acks, &mut counters.albums, &mut counters.errors,
                     ).await;
@@ -307,7 +307,7 @@ impl SyncManager {
                 "PersonV1" => {
                     let person: SyncPersonV1 = deserialize_entity(&sync_line.data, "PersonV1", line_number)?;
                     let id = person.id.clone();
-                    self.process_entity("PersonV1", &id, &sync_cycle, sync_line.ack,
+                    self.process_entity("PersonV1", &id, &sync_cycle, "upsert", sync_line.ack,
                         self.handle_person(person),
                         &mut acks, &mut counters.people, &mut counters.errors,
                     ).await;
@@ -315,7 +315,7 @@ impl SyncManager {
                 "PersonDeleteV1" => {
                     let delete: SyncPersonDeleteV1 = deserialize_entity(&sync_line.data, "PersonDeleteV1", line_number)?;
                     let id = delete.person_id.clone();
-                    self.process_entity("PersonDeleteV1", &id, &sync_cycle, sync_line.ack,
+                    self.process_entity("PersonDeleteV1", &id, &sync_cycle, "delete", sync_line.ack,
                         self.db.delete_person(&id),
                         &mut acks, &mut counters.deletes, &mut counters.errors,
                     ).await;
@@ -323,7 +323,7 @@ impl SyncManager {
                 "AssetFaceV1" => {
                     let face: SyncAssetFaceV1 = deserialize_entity(&sync_line.data, "AssetFaceV1", line_number)?;
                     let id = face.id.clone();
-                    self.process_entity("AssetFaceV1", &id, &sync_cycle, sync_line.ack,
+                    self.process_entity("AssetFaceV1", &id, &sync_cycle, "upsert", sync_line.ack,
                         self.handle_asset_face(face),
                         &mut acks, &mut counters.faces, &mut counters.errors,
                     ).await;
@@ -331,7 +331,7 @@ impl SyncManager {
                 "AssetFaceDeleteV1" => {
                     let delete: SyncAssetFaceDeleteV1 = deserialize_entity(&sync_line.data, "AssetFaceDeleteV1", line_number)?;
                     let id = delete.asset_face_id.clone();
-                    self.process_entity("AssetFaceDeleteV1", &id, &sync_cycle, sync_line.ack,
+                    self.process_entity("AssetFaceDeleteV1", &id, &sync_cycle, "delete", sync_line.ack,
                         self.db.delete_asset_face(&id),
                         &mut acks, &mut counters.deletes, &mut counters.errors,
                     ).await;
@@ -388,12 +388,15 @@ impl SyncManager {
 
     /// Process a single sync entity: audit, run handler, ack on success or
     /// log + increment error count on failure.
+    ///
+    /// On error the ack is not sent — the server will resend next cycle.
     #[allow(clippy::too_many_arguments)]
     async fn process_entity(
         &self,
         entity_type: &str,
         entity_id: &str,
         sync_cycle: &str,
+        audit_action: &str,
         ack: String,
         handler_result: impl std::future::Future<Output = Result<(), LibraryError>>,
         acks: &mut Vec<String>,
@@ -405,7 +408,7 @@ impl SyncManager {
         match handler_result.await {
             Ok(()) => {
                 if let Some(aid) = audit_id {
-                    let _ = self.db.complete_sync_audit(aid, "upsert").await;
+                    let _ = self.db.complete_sync_audit(aid, audit_action).await;
                 }
                 acks.push(ack);
                 *success_counter += 1;
