@@ -91,6 +91,13 @@ pub trait LibraryAlbums: Send + Sync {
         &self,
         media_ids: &[MediaId],
     ) -> Result<HashMap<AlbumId, usize>, LibraryError>;
+
+    /// Return up to `limit` most recent media IDs for an album's cover mosaic.
+    async fn album_cover_media_ids(
+        &self,
+        album_id: &AlbumId,
+        limit: u32,
+    ) -> Result<Vec<MediaId>, LibraryError>;
 }
 
 #[cfg(test)]

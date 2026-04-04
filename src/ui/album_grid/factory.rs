@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use gtk::prelude::*;
+use tracing::warn;
 
+use crate::library::album::AlbumId;
 use crate::library::Library;
 
 use super::card::AlbumCard;
@@ -34,15 +36,43 @@ pub fn build_factory(
 
         card.bind(&item);
 
-        // Load cover thumbnail asynchronously if not yet decoded.
-        if item.texture().is_none() {
-            if let Some(ref cover_id) = item.album().cover_media_id {
-                let path = library.thumbnail_path(cover_id);
-                let tk = tokio.clone();
-                let item_weak = item.downgrade();
+        // Load mosaic thumbnails: fetch up to 4 cover IDs, then decode each.
+        if item.mosaic_texture(0).is_none() {
+            let album_id = AlbumId::from_raw(item.album().id.as_str().to_owned());
+            let lib = Arc::clone(&library);
+            let tk = tokio.clone();
+            let item_weak = item.downgrade();
 
-                gtk::glib::MainContext::default().spawn_local(async move {
-                    let result = tk
+            gtk::glib::MainContext::default().spawn_local(async move {
+                // Fetch cover media IDs on Tokio.
+                let lib_for_ids = Arc::clone(&lib);
+                let aid = album_id.clone();
+                let cover_ids = match tk
+                    .spawn(async move { lib_for_ids.album_cover_media_ids(&aid, 4).await })
+                    .await
+                {
+                    Ok(Ok(ids)) => ids,
+                    Ok(Err(e)) => {
+                        warn!("failed to fetch album cover IDs: {e}");
+                        return;
+                    }
+                    Err(e) => {
+                        warn!("tokio join error fetching cover IDs: {e}");
+                        return;
+                    }
+                };
+
+                if cover_ids.is_empty() {
+                    return;
+                }
+
+                // Decode each thumbnail on a blocking thread.
+                for (i, media_id) in cover_ids.into_iter().enumerate() {
+                    let path = lib.thumbnail_path(&media_id);
+                    let tk2 = tk.clone();
+                    let item_weak2 = item_weak.clone();
+
+                    let result = tk2
                         .spawn(async move {
                             tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, u32, u32)> {
                                 let data = std::fs::read(&path).ok()?;
@@ -57,8 +87,9 @@ pub fn build_factory(
                         .await
                         .ok()
                         .flatten();
+
                     if let Some((pixels, width, height)) = result {
-                        if let Some(item) = item_weak.upgrade() {
+                        if let Some(item) = item_weak2.upgrade() {
                             let gbytes = gtk::glib::Bytes::from_owned(pixels);
                             let texture = gtk::gdk::MemoryTexture::new(
                                 width as i32,
@@ -67,11 +98,11 @@ pub fn build_factory(
                                 &gbytes,
                                 (width as usize) * 4,
                             );
-                            item.set_texture(Some(texture.upcast::<gtk::gdk::Texture>()));
+                            item.set_mosaic_texture(i, texture.upcast());
                         }
                     }
-                });
-            }
+                }
+            });
         }
     });
 
@@ -87,7 +118,10 @@ pub fn build_factory(
             .item()
             .and_then(|o| o.downcast::<AlbumItemObject>().ok())
         {
-            item.set_texture(None::<gtk::gdk::Texture>);
+            item.set_texture0(None::<gtk::gdk::Texture>);
+            item.set_texture1(None::<gtk::gdk::Texture>);
+            item.set_texture2(None::<gtk::gdk::Texture>);
+            item.set_texture3(None::<gtk::gdk::Texture>);
         }
     });
 
