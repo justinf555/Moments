@@ -17,6 +17,7 @@ use super::item::AlbumItemObject;
 /// `enter_selection` is created by the caller (needed by the factory before
 /// the grid view exists). This function wires its activate handler and
 /// creates + returns the `exit_selection` action.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn wire_selection_mode(
     enter_selection: &gio::SimpleAction,
     header: &adw::HeaderBar,

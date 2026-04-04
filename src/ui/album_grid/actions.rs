@@ -21,6 +21,7 @@ use super::item::AlbumItemObject;
 ///
 /// Used by both item activation (double-click) and the context menu Open button,
 /// eliminating previously duplicated drill-down logic.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn open_album_drilldown(
     library: &Arc<dyn Library>,
     tokio: &tokio::runtime::Handle,
@@ -66,6 +67,7 @@ pub(crate) fn open_album_drilldown(
 ///
 /// Resolves the grid position from (x, y), then builds a popover with
 /// Open, Rename, Pin to Sidebar, Share (stub), and Delete actions.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn show_context_menu(
     grid_view: &gtk::GridView,
     store: &gtk::gio::ListStore,
@@ -238,6 +240,7 @@ fn wire_pin_button(
 }
 
 /// Wire the Open button to push an album detail view.
+#[allow(clippy::too_many_arguments)]
 fn wire_open_button(
     open_btn: &gtk::Button,
     popover: &gtk::Popover,
@@ -269,6 +272,7 @@ fn wire_open_button(
 }
 
 /// Wire the Rename button to show a rename dialog.
+#[allow(clippy::too_many_arguments)]
 fn wire_rename_button(
     rename_btn: &gtk::Button,
     popover: &gtk::Popover,
@@ -321,6 +325,7 @@ fn wire_rename_button(
 }
 
 /// Wire the Delete button to show a confirmation dialog.
+#[allow(clippy::too_many_arguments)]
 fn wire_delete_button(
     delete_btn: &gtk::Button,
     popover: &gtk::Popover,
