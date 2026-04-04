@@ -184,19 +184,63 @@ impl MomentsWindow {
         bus: &crate::event_bus::EventBus,
     ) {
         let imp = self.imp();
-        use crate::library::media::MediaFilter;
-
         let bus_sender = bus.sender();
 
-        // Build sidebar — MomentsSidebar is already an AdwNavigationPage subclass.
+        let sidebar = self.setup_sidebar(&library, &tokio, &settings);
+
+        let texture_cache = Rc::new(TextureCache::new());
+
+        let (content_stack, coordinator, photos_model) = self.build_coordinator(
+            &library, &tokio, &settings, &texture_cache, &bus_sender, bus,
+        );
+
+        self.register_lazy_views(
+            &mut coordinator.borrow_mut(),
+            &library, &tokio, &settings, &texture_cache, &bus_sender,
+        );
+
+        let content_nav_page = adw::NavigationPage::builder()
+            .title("Photos")
+            .child(&content_stack)
+            .build();
+        imp.split_view.set_content(Some(&content_nav_page));
+
+        coordinator.borrow_mut().navigate("empty");
+
+        Self::connect_empty_toggle(&content_stack, &photos_model);
+
+        imp.coordinator
+            .set(Rc::clone(&coordinator))
+            .expect("coordinator set once in setup()");
+
+        self.connect_sidebar_navigation(
+            &sidebar, &library, &tokio, &settings, &texture_cache, &bus_sender,
+        );
+
+        sidebar.select_first();
+
+        self.install_show_toast_action();
+        self.install_toggle_sidebar_action();
+
+        debug!("switching main window to content page");
+        imp.main_stack.set_visible_child_name("content");
+    }
+
+    fn setup_sidebar(
+        &self,
+        library: &Arc<dyn Library>,
+        tokio: &tokio::runtime::Handle,
+        settings: &gio::Settings,
+    ) -> MomentsSidebar {
+        let imp = self.imp();
+
         let sidebar = MomentsSidebar::new();
         sidebar.subscribe_to_bus();
         imp.split_view.set_sidebar(Some(&sidebar));
-        let _ = imp.sidebar.set(sidebar.clone());
+        imp.sidebar.set(sidebar.clone()).expect("sidebar set once in setup()");
 
-        // Load initial trash count for the sidebar badge.
         {
-            let lib = Arc::clone(&library);
+            let lib = Arc::clone(library);
             let tk = tokio.clone();
             let sb = sidebar.clone();
             glib::MainContext::default().spawn_local(async move {
@@ -209,9 +253,8 @@ impl MomentsWindow {
             });
         }
 
-        // Load pinned albums for the sidebar.
         {
-            let lib = Arc::clone(&library);
+            let lib = Arc::clone(library);
             let tk = tokio.clone();
             let sb = sidebar.clone();
             let s = settings.clone();
@@ -227,42 +270,63 @@ impl MomentsWindow {
             });
         }
 
-        // Build content stack + coordinator.
+        sidebar
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn build_coordinator(
+        &self,
+        library: &Arc<dyn Library>,
+        tokio: &tokio::runtime::Handle,
+        settings: &gio::Settings,
+        texture_cache: &Rc<TextureCache>,
+        bus_sender: &crate::event_bus::EventSender,
+        bus: &crate::event_bus::EventBus,
+    ) -> (gtk::Stack, Rc<RefCell<ContentCoordinator>>, Rc<PhotoGridModel>) {
+        use crate::library::media::MediaFilter;
+
         let content_stack = gtk::Stack::new();
         content_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
         let mut coordinator = ContentCoordinator::new(content_stack.clone());
 
-        // Shared LRU cache for decoded thumbnail pixels — avoids re-decoding
-        // when scrolling back through previously-visible cells.
-        let texture_cache = Rc::new(TextureCache::new());
-
-        // Register the empty-library view (eager, no model).
         coordinator.register("empty", Rc::new(EmptyLibraryView::new()));
 
-        // Register the Photos view (eager — always the default).
         let photos_model = Rc::new(PhotoGridModel::new(
-            Arc::clone(&library),
+            Arc::clone(library),
             tokio.clone(),
             MediaFilter::All,
             bus_sender.clone(),
         ));
         let photos_view = Rc::new(PhotoGridView::new(
-            Arc::clone(&library),
+            Arc::clone(library),
             tokio.clone(),
             settings.clone(),
-            Rc::clone(&texture_cache),
+            Rc::clone(texture_cache),
             bus_sender.clone(),
         ));
         photos_view.set_model(Rc::clone(&photos_model));
         photos_model.subscribe(bus);
         coordinator.register("photos", photos_view);
 
-        // Register the Favorites view (lazy — created on first click).
+        (content_stack, Rc::new(RefCell::new(coordinator)), photos_model)
+    }
+
+    fn register_lazy_views(
+        &self,
+        coordinator: &mut ContentCoordinator,
+        library: &Arc<dyn Library>,
+        tokio: &tokio::runtime::Handle,
+        settings: &gio::Settings,
+        texture_cache: &Rc<TextureCache>,
+        bus_sender: &crate::event_bus::EventSender,
+    ) {
+        use crate::library::media::MediaFilter;
+
         {
-            let lib = Arc::clone(&library);
+            let lib = Arc::clone(library);
             let tk = tokio.clone();
             let s = settings.clone();
-            let tc = Rc::clone(&texture_cache);
+            let tc = Rc::clone(texture_cache);
             let bs = bus_sender.clone();
             coordinator.register_lazy("favorites", move || {
                 let model = Rc::new(PhotoGridModel::new(
@@ -278,12 +342,11 @@ impl MomentsWindow {
             });
         }
 
-        // Register the Recent Imports view (lazy — created on first click).
         {
-            let lib = Arc::clone(&library);
+            let lib = Arc::clone(library);
             let tk = tokio.clone();
             let s = settings.clone();
-            let tc = Rc::clone(&texture_cache);
+            let tc = Rc::clone(texture_cache);
             let bs = bus_sender.clone();
             coordinator.register_lazy("recent", move || {
                 let days = s.uint("recent-imports-days") as i64;
@@ -301,12 +364,11 @@ impl MomentsWindow {
             });
         }
 
-        // Register the Trash view (lazy — created on first click).
         {
-            let lib = Arc::clone(&library);
+            let lib = Arc::clone(library);
             let tk = tokio.clone();
             let s = settings.clone();
-            let tc = Rc::clone(&texture_cache);
+            let tc = Rc::clone(texture_cache);
             let bs = bus_sender.clone();
             coordinator.register_lazy("trash", move || {
                 let model = Rc::new(PhotoGridModel::new(
@@ -322,17 +384,15 @@ impl MomentsWindow {
             });
         }
 
-        // Register the People collection view (lazy — created on first click).
         {
-            let lib = Arc::clone(&library);
+            let lib = Arc::clone(library);
             let tk = tokio.clone();
             let s = settings.clone();
-            let tc = Rc::clone(&texture_cache);
+            let tc = Rc::clone(texture_cache);
             let bs = bus_sender.clone();
             let win_weak = self.downgrade();
             coordinator.register_lazy("people", move || {
                 let view = Rc::new(CollectionGridView::new_people(lib, tk, s, tc, bs));
-                // Store reload callback so PeopleSyncComplete can refresh the grid.
                 if let Some(win) = win_weak.upgrade() {
                     let view_ref = Rc::clone(&view);
                     *win.imp().people_reload.borrow_mut() = Some(ReloadCallback::new(move || {
@@ -343,110 +403,89 @@ impl MomentsWindow {
             });
         }
 
-        // Register the Albums grid view (lazy — created on first click).
         {
-            let lib = Arc::clone(&library);
+            let lib = Arc::clone(library);
             let tk = tokio.clone();
             let s = settings.clone();
-            let tc = Rc::clone(&texture_cache);
+            let tc = Rc::clone(texture_cache);
             let bs = bus_sender.clone();
             coordinator.register_lazy("albums", move || {
                 Rc::new(super::album_grid::AlbumGridView::new(lib, tk, s, tc, bs))
             });
         }
+    }
 
-        // Wrap the content stack in a NavigationPage for the split view.
-        let content_nav_page = adw::NavigationPage::builder()
-            .title("Photos")
-            .child(&content_stack)
-            .build();
-        imp.split_view.set_content(Some(&content_nav_page));
+    /// Wire the empty ↔ photos stack toggle based on store item count.
+    ///
+    /// Only switches on empty ↔ non-empty transitions — deliberately does NOT
+    /// override the visible child if the user has navigated away from Photos
+    /// (e.g. to Trash).
+    fn connect_empty_toggle(
+        content_stack: &gtk::Stack,
+        photos_model: &Rc<PhotoGridModel>,
+    ) {
+        let stack = content_stack.clone();
+        let was_empty = std::cell::Cell::new(true);
+        photos_model.store.connect_items_changed(move |store, _, _, _| {
+            let is_empty = store.n_items() == 0;
+            if is_empty && !was_empty.get() {
+                stack.set_visible_child_name("empty");
+                was_empty.set(true);
+            } else if !is_empty && was_empty.get() {
+                stack.set_visible_child_name("photos");
+                was_empty.set(false);
+            }
+        });
+    }
 
-        let coordinator = Rc::new(RefCell::new(coordinator));
+    fn connect_sidebar_navigation(
+        &self,
+        sidebar: &MomentsSidebar,
+        library: &Arc<dyn Library>,
+        tokio: &tokio::runtime::Handle,
+        settings: &gio::Settings,
+        texture_cache: &Rc<TextureCache>,
+        bus_sender: &crate::event_bus::EventSender,
+    ) {
+        let obj_weak = self.downgrade();
+        let lib = Arc::clone(library);
+        let tk = tokio.clone();
+        let s = settings.clone();
+        let tc = Rc::clone(texture_cache);
+        let bs = bus_sender.clone();
+        sidebar.connect_route_selected(move |id| {
+            let Some(win) = obj_weak.upgrade() else { return };
+            let Some(coordinator) = win.imp().coordinator.get() else { return };
 
-        // Start on "empty" — items-changed will switch to "photos" once
-        // the first page arrives.
-        coordinator.borrow_mut().navigate("empty");
-
-        // Toggle between empty-library placeholder and the current content
-        // view. Only switch when transitioning between "empty" ↔ "has items"
-        // (not on every store mutation), and never override the visible child
-        // if the user has navigated away from Photos (e.g. to Trash).
-        {
-            let stack = content_stack.clone();
-            let was_empty = std::cell::Cell::new(true);
-            photos_model.store.connect_items_changed(move |store, _, _, _| {
-                let is_empty = store.n_items() == 0;
-                if is_empty && !was_empty.get() {
-                    // Library just became empty — show the empty placeholder.
-                    stack.set_visible_child_name("empty");
-                    was_empty.set(true);
-                } else if !is_empty && was_empty.get() {
-                    // First items arrived — switch from empty placeholder to photos.
-                    stack.set_visible_child_name("photos");
-                    was_empty.set(false);
+            if let Some(album_id_str) = id.strip_prefix("album:") {
+                let mut coord = coordinator.borrow_mut();
+                if !coord.has_route(id) {
+                    use crate::library::album::AlbumId;
+                    use crate::library::media::MediaFilter;
+                    let album_id = AlbumId::from_raw(album_id_str.to_owned());
+                    let model = Rc::new(PhotoGridModel::new(
+                        Arc::clone(&lib), tk.clone(),
+                        MediaFilter::Album { album_id }, bs.clone(),
+                    ));
+                    let view = Rc::new(PhotoGridView::new(
+                        Arc::clone(&lib), tk.clone(), s.clone(),
+                        Rc::clone(&tc), bs.clone(),
+                    ));
+                    view.set_model(Rc::clone(&model));
+                    model.subscribe_to_bus();
+                    coord.register(id, view);
                 }
-                // Otherwise: items changed but we're already in the right state
-                // — don't override the visible child (user may be on another view).
-            });
-        }
-
-        imp.coordinator
-            .set(coordinator)
-            .expect("coordinator set once in setup()");
-
-        // Wire sidebar selection to coordinator navigation.
-        // Pinned album routes ("album:{id}") are registered dynamically on first click.
-        {
-            let obj_weak = self.downgrade();
-            let lib = Arc::clone(&library);
-            let tk = tokio.clone();
-            let s = settings.clone();
-            let tc = Rc::clone(&texture_cache);
-            let bs = bus_sender.clone();
-            sidebar.connect_route_selected(move |id| {
-                let Some(win) = obj_weak.upgrade() else { return };
-                let Some(coordinator) = win.imp().coordinator.get() else { return };
-
-                if let Some(album_id_str) = id.strip_prefix("album:") {
-                    let mut coord = coordinator.borrow_mut();
-                    if !coord.has_route(id) {
-                        use crate::library::album::AlbumId;
-                        use crate::library::media::MediaFilter;
-                        let album_id = AlbumId::from_raw(album_id_str.to_owned());
-                        let model = Rc::new(PhotoGridModel::new(
-                            Arc::clone(&lib), tk.clone(),
-                            MediaFilter::Album { album_id }, bs.clone(),
-                        ));
-                        let view = Rc::new(PhotoGridView::new(
-                            Arc::clone(&lib), tk.clone(), s.clone(),
-                            Rc::clone(&tc), bs.clone(),
-                        ));
-                        view.set_model(Rc::clone(&model));
-                        model.subscribe_to_bus();
-                        coord.register(id, view);
-                    }
-                    let actions = coord.navigate(id);
-                    if let Some(actions) = actions {
-                        win.insert_action_group("view", Some(&actions));
-                    }
-                } else {
-                    let actions = coordinator.borrow_mut().navigate(id);
-                    if let Some(actions) = actions {
-                        win.insert_action_group("view", Some(&actions));
-                    }
+                let actions = coord.navigate(id);
+                if let Some(actions) = actions {
+                    win.insert_action_group("view", Some(&actions));
                 }
-            });
-        }
-
-        sidebar.select_first();
-
-        // Add window-level actions.
-        self.install_show_toast_action();
-        self.install_toggle_sidebar_action();
-
-        debug!("switching main window to content page");
-        imp.main_stack.set_visible_child_name("content");
+            } else {
+                let actions = coordinator.borrow_mut().navigate(id);
+                if let Some(actions) = actions {
+                    win.insert_action_group("view", Some(&actions));
+                }
+            }
+        });
     }
 
     /// Access the sidebar for event-driven album updates.
