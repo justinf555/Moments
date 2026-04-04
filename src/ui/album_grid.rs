@@ -360,8 +360,8 @@ impl AlbumGridView {
                 vbox.append(&delete_btn);
 
                 popover.set_child(Some(&vbox));
-                popover.set_parent(&target);
-                popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, 0, 1, 1)));
+                popover.set_parent(&gv);
+                popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
                 popover.set_has_arrow(true);
 
                 // Wire Open — same as activation.
@@ -405,6 +405,7 @@ impl AlbumGridView {
                     let pop = popover.downgrade();
                     let lib = Arc::clone(&lib_ctx);
                     let tk = tk_ctx.clone();
+                    let bs = bs_ctx.clone();
                     let aid = album_id_str.clone();
                     let aname = album_name.clone();
                     let gv_ref = gv.clone();
@@ -412,17 +413,25 @@ impl AlbumGridView {
                         if let Some(p) = pop.upgrade() { p.popdown(); }
                         let lib = Arc::clone(&lib);
                         let tk = tk.clone();
+                        let bs = bs.clone();
                         let aid = aid.clone();
                         if let Some(win) = gv_ref.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
                             album_dialogs::show_rename_album_dialog(&win, &aname, move |new_name| {
                                 let lib = Arc::clone(&lib);
                                 let tk = tk.clone();
+                                let bs = bs.clone();
                                 let aid = aid.clone();
                                 glib::MainContext::default().spawn_local(async move {
                                     let n = new_name.clone();
                                     let id = AlbumId::from_raw(aid.clone());
                                     match tk.spawn(async move { lib.rename_album(&id, &n).await }).await {
-                                        Ok(Ok(())) => debug!(album_id = %aid, name = %new_name, "album renamed"),
+                                        Ok(Ok(())) => {
+                                            debug!(album_id = %aid, name = %new_name, "album renamed");
+                                            bs.send(crate::app_event::AppEvent::AlbumRenamed {
+                                                id: AlbumId::from_raw(aid),
+                                                name: new_name,
+                                            });
+                                        }
                                         Ok(Err(e)) => tracing::error!("failed to rename album: {e}"),
                                         Err(e) => tracing::error!("tokio join error: {e}"),
                                     }
@@ -437,6 +446,7 @@ impl AlbumGridView {
                     let pop = popover.downgrade();
                     let lib = Arc::clone(&lib_ctx);
                     let tk = tk_ctx.clone();
+                    let bs = bs_ctx.clone();
                     let aid = album_id_str.clone();
                     let aname = album_name.clone();
                     let gv_ref = gv.clone();
@@ -444,16 +454,23 @@ impl AlbumGridView {
                         if let Some(p) = pop.upgrade() { p.popdown(); }
                         let lib = Arc::clone(&lib);
                         let tk = tk.clone();
+                        let bs = bs.clone();
                         let aid = aid.clone();
                         if let Some(win) = gv_ref.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
                             album_dialogs::show_delete_album_dialog(&win, &aname, move || {
                                 let lib = Arc::clone(&lib);
                                 let tk = tk.clone();
+                                let bs = bs.clone();
                                 let aid = aid.clone();
                                 glib::MainContext::default().spawn_local(async move {
                                     let id = AlbumId::from_raw(aid.clone());
                                     match tk.spawn(async move { lib.delete_album(&id).await }).await {
-                                        Ok(Ok(())) => debug!(album_id = %aid, "album deleted"),
+                                        Ok(Ok(())) => {
+                                            debug!(album_id = %aid, "album deleted");
+                                            bs.send(crate::app_event::AppEvent::AlbumDeleted {
+                                                id: AlbumId::from_raw(aid),
+                                            });
+                                        }
                                         Ok(Err(e)) => tracing::error!("failed to delete album: {e}"),
                                         Err(e) => tracing::error!("tokio join error: {e}"),
                                     }
