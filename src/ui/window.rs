@@ -219,6 +219,12 @@ impl MomentsWindow {
 
         sidebar.select_first();
 
+        // Explicitly navigate to "photos" and install view actions.
+        // AdwSidebar::set_selected() does not emit `activated` (only user
+        // interactions do), so the sidebar callback that installs zoom
+        // actions won't fire on startup.
+        self.navigate("photos");
+
         self.install_show_toast_action();
         self.install_toggle_sidebar_action();
 
