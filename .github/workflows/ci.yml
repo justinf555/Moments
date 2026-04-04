@@ -5,6 +5,9 @@ on:
   push:
     branches: [main]
 
+permissions:
+  pull-requests: write
+
 env:
   SQLX_OFFLINE: "true"
   # Isolated CARGO_HOME avoids rustup shims in ~/.cargo/bin shadowing
@@ -256,3 +259,27 @@ jobs:
           dbus-run-session \
             mutter --headless --wayland --no-x11 --virtual-monitor 1024x768 -- \
             /tmp/run-tests.sh
+
+  # ── PR Summary Comment ──────────────────────────────────────────────
+  summary:
+    name: CI summary
+    runs-on: ubuntu-latest
+    needs: [lint, test, coverage, integration-tests]
+    if: github.event_name == 'pull_request' && always()
+
+    steps:
+      - name: Post PR comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: ci-summary
+          message: |
+            ## 🔨 CI Summary
+
+            | Check | Status |
+            |-------|--------|
+            | Clippy lint | ${{ needs.lint.result == 'success' && '✅ Pass' || '❌ Fail' }} |
+            | Unit tests | ${{ needs.test.result == 'success' && '✅ Pass' || '❌ Fail' }} |
+            | Integration tests | ${{ needs.integration-tests.result == 'success' && '✅ Pass' || '❌ Fail' }} |
+            | Coverage | ${{ needs.coverage.result == 'success' && '✅ Pass' || '❌ Fail' }} |
+
+            <sub>[full run log](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})</sub>

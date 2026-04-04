@@ -5,6 +5,9 @@ on:
   push:
     branches: [main]
 
+permissions:
+  pull-requests: write
+
 jobs:
   complexity:
     name: Code complexity
@@ -20,13 +23,9 @@ jobs:
         run: cargo install rust-code-analysis-cli --locked
 
       - name: Run complexity analysis
+        id: metrics
         run: |
-          echo "## Code Complexity Report" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Top 20 functions by cognitive complexity" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          rust-code-analysis-cli --metrics -O json -p src/ 2>/dev/null | \
+          REPORT=$(rust-code-analysis-cli --metrics -O json -p src/ 2>/dev/null | \
             python3 -c "
           import json, sys
 
@@ -58,5 +57,29 @@ jobs:
           for cc, sloc, f, name in funcs[:20]:
               short_f = f.replace('src/', '')
               print(f'{cc:>10.0f}  {sloc:>6.0f}  {short_f}::{name}')
-          " >> $GITHUB_STEP_SUMMARY 2>&1 || echo "Analysis parsing failed" >> $GITHUB_STEP_SUMMARY
+          " 2>&1 || echo "Analysis failed")
+
+          # Save to job summary.
+          echo "## Code Complexity Report" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "$REPORT" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          # Save for PR comment.
+          echo "report<<EOF" >> $GITHUB_OUTPUT
+          echo "$REPORT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Post PR comment
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: code-complexity
+          message: |
+            ## 📊 Code Complexity Report
+
+            ```
+            ${{ steps.metrics.outputs.report }}
+            ```
+
+            <sub>Top 20 functions by cognitive complexity · [job log](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})</sub>

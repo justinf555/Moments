@@ -7,6 +7,9 @@ on:
   schedule:
     - cron: '0 8 * * 1'  # Weekly Monday 8am UTC
 
+permissions:
+  pull-requests: write
+
 jobs:
   audit:
     name: Cargo audit
@@ -22,7 +25,23 @@ jobs:
         run: cargo install cargo-audit --locked
 
       - name: Run audit
-        run: cargo audit --ignore RUSTSEC-2023-0071
+        id: audit
+        run: |
+          OUTPUT=$(cargo audit --ignore RUSTSEC-2023-0071 2>&1) || true
+          echo "$OUTPUT"
+
+          if echo "$OUTPUT" | grep -q "vulnerability found"; then
+            echo "status=⚠️ Vulnerabilities found" >> $GITHUB_OUTPUT
+          else
+            echo "status=✅ No vulnerabilities" >> $GITHUB_OUTPUT
+          fi
+
+          echo "output<<EOF" >> $GITHUB_OUTPUT
+          echo "$OUTPUT" | tail -20 >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # Fail if real vulnerabilities (not just warnings).
+          cargo audit --ignore RUSTSEC-2023-0071
 
   deny:
     name: Cargo deny
@@ -38,4 +57,34 @@ jobs:
         run: cargo install cargo-deny --locked
 
       - name: Run deny
-        run: cargo deny check
+        id: deny
+        run: |
+          OUTPUT=$(cargo deny check 2>&1) || true
+          echo "$OUTPUT"
+
+          RESULT=$(echo "$OUTPUT" | tail -1)
+          echo "status=$RESULT" >> $GITHUB_OUTPUT
+
+          # Fail on actual errors (not just warnings).
+          cargo deny check
+
+  comment:
+    name: Post security report
+    runs-on: ubuntu-latest
+    needs: [audit, deny]
+    if: github.event_name == 'pull_request' && always()
+
+    steps:
+      - name: Post PR comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: security-audit
+          message: |
+            ## 🔒 Security Report
+
+            | Check | Status |
+            |-------|--------|
+            | Cargo audit | ${{ needs.audit.result == 'success' && '✅ Pass' || '❌ Fail' }} |
+            | Cargo deny | ${{ needs.deny.result == 'success' && '✅ Pass' || '❌ Fail' }} |
+
+            <sub>[job log](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})</sub>
