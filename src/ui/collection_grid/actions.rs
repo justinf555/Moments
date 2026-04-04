@@ -2,6 +2,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use adw::prelude::*;
+use gettextrs::gettext;
 use gtk::{gio, glib};
 use tracing::{debug, info};
 
@@ -109,7 +110,7 @@ pub(super) fn wire_context_menu(
     let filter_ctx = Rc::clone(filter);
 
     gesture.connect_pressed(move |gesture, _, x, y| {
-        let Some(pos) = find_clicked_position(&gv, x, y) else {
+        let Some(pos) = find_clicked_position(&gv, &store_ctx, x, y) else {
             return;
         };
 
@@ -133,13 +134,13 @@ pub(super) fn wire_context_menu(
         let popover = gtk::Popover::new();
 
         // ── Rename button ──
-        let rename_btn = gtk::Button::with_label("Rename");
+        let rename_btn = gtk::Button::with_label(&gettext("Rename"));
         rename_btn.add_css_class("flat");
         vbox.append(&rename_btn);
 
         // ── Hide/Unhide button ──
-        let hide_label = if is_hidden { "Unhide" } else { "Hide" };
-        let hide_btn = gtk::Button::with_label(hide_label);
+        let hide_label = if is_hidden { gettext("Unhide") } else { gettext("Hide") };
+        let hide_btn = gtk::Button::with_label(&hide_label);
         hide_btn.add_css_class("flat");
         vbox.append(&hide_btn);
 
@@ -185,32 +186,39 @@ pub(super) fn wire_context_menu(
     grid_view.add_controller(gesture);
 }
 
-/// Walk the grid view's widget tree to find which cell position was clicked.
-fn find_clicked_position(grid_view: &gtk::GridView, x: f64, y: f64) -> Option<u32> {
+/// Find the store position of the item at (x, y) by resolving the cell's
+/// bound data. This is correct even when the grid is scrolled (unlike
+/// counting siblings, which only works for non-virtualized lists).
+fn find_clicked_position(
+    grid_view: &gtk::GridView,
+    store: &gio::ListStore,
+    x: f64,
+    y: f64,
+) -> Option<u32> {
     let picked = grid_view.pick(x, y, gtk::PickFlags::DEFAULT)?;
 
-    let grid_widget = grid_view.upcast_ref::<gtk::Widget>();
-    let mut target = Some(picked);
-    while let Some(ref w) = target {
-        if w.parent().as_ref() == Some(grid_widget) {
-            break;
-        }
-        target = w.parent();
-    }
-    let target = target?;
-
-    let mut pos = 0u32;
-    let mut child = grid_view.first_child();
-    loop {
-        match child {
-            Some(ref c) if c.eq(&target) => return Some(pos),
-            Some(ref c) => {
-                pos += 1;
-                child = c.next_sibling();
+    // Walk up from the picked widget to find the CollectionGridCell.
+    let mut widget = Some(picked);
+    while let Some(ref w) = widget {
+        if let Some(cell) = w.downcast_ref::<super::cell::CollectionGridCell>() {
+            let item = cell.bound_item()?;
+            let target_id = item.data().id.clone();
+            // Search the store for the matching item.
+            for i in 0..store.n_items() {
+                if let Some(obj) = store
+                    .item(i)
+                    .and_then(|o| o.downcast::<CollectionItemObject>().ok())
+                {
+                    if obj.data().id == target_id {
+                        return Some(i);
+                    }
+                }
             }
-            None => return None,
+            return None;
         }
+        widget = w.parent();
     }
+    None
 }
 
 /// Wire the Rename button to show a rename dialog.

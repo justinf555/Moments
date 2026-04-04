@@ -195,6 +195,11 @@ impl PhotoGridCell {
         });
     }
 
+    /// Return the currently bound item, if any.
+    pub fn bound_item(&self) -> Option<MediaItemObject> {
+        self.imp().bindings.borrow().as_ref()?.item.upgrade()
+    }
+
     /// Disconnect signals and reset visual state.
     pub fn unbind(&self) {
         let imp = self.imp();

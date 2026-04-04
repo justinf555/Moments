@@ -24,6 +24,10 @@ flatpak-build-dev/
 .idea/
 *.swp
 *.swo
+*~
+
+# Coverage output
+lcov.info
 
 # OS files
 .DS_Store

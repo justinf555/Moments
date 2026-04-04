@@ -63,14 +63,33 @@ pub(crate) fn open_album_drilldown(
     nav_view.push(&page);
 }
 
+/// Find the clicked album item by resolving the cell's bound data.
+/// Walks up from the picked widget to find the `AlbumCard`, then searches
+/// the store for the matching item. Correct regardless of scroll position.
+fn find_clicked_item(
+    grid_view: &gtk::GridView,
+    x: f64,
+    y: f64,
+) -> Option<AlbumItemObject> {
+    let picked = grid_view.pick(x, y, gtk::PickFlags::DEFAULT)?;
+
+    let mut widget = Some(picked);
+    while let Some(ref w) = widget {
+        if let Some(card) = w.downcast_ref::<super::card::AlbumCard>() {
+            return card.bound_item();
+        }
+        widget = w.parent();
+    }
+    None
+}
+
 /// Build and show a right-click context menu popover for an album card.
 ///
-/// Resolves the grid position from (x, y), then builds a popover with
+/// Resolves the clicked item from (x, y), then builds a popover with
 /// Open, Rename, Pin to Sidebar, Share (stub), and Delete actions.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn show_context_menu(
     grid_view: &gtk::GridView,
-    store: &gtk::gio::ListStore,
     library: &Arc<dyn Library>,
     tokio: &tokio::runtime::Handle,
     settings: &gtk::gio::Settings,
@@ -80,36 +99,9 @@ pub(crate) fn show_context_menu(
     x: f64,
     y: f64,
 ) {
-    // Find which grid item was clicked.
-    let Some(picked) = grid_view.pick(x, y, gtk::PickFlags::DEFAULT) else {
-        return;
-    };
-
-    let grid_widget = grid_view.upcast_ref::<gtk::Widget>();
-    let mut target = Some(picked);
-    while let Some(ref w) = target {
-        if w.parent().as_ref() == Some(grid_widget) {
-            break;
-        }
-        target = w.parent();
-    }
-    let Some(target) = target else { return };
-
-    let mut pos = 0u32;
-    let mut child = grid_view.first_child();
-    loop {
-        let Some(c) = child else { return };
-        if c == target {
-            break;
-        }
-        pos += 1;
-        child = c.next_sibling();
-    }
-
-    let Some(obj) = store
-        .item(pos)
-        .and_then(|o| o.downcast::<AlbumItemObject>().ok())
-    else {
+    // Find which grid item was clicked by resolving the cell's bound data.
+    // This is correct even when the grid is scrolled (GridView is virtualized).
+    let Some(obj) = find_clicked_item(grid_view, x, y) else {
         return;
     };
 
