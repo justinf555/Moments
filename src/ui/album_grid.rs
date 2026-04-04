@@ -59,7 +59,7 @@ impl AlbumGridView {
         let new_album_btn = gtk::Button::builder()
             .label(&gettext("New Album"))
             .build();
-        new_album_btn.add_css_class("pill");
+        new_album_btn.add_css_class("flat");
         header.pack_start(&new_album_btn);
 
         // Overflow menu (⋮) with sort options.
