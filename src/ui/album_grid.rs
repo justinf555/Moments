@@ -144,9 +144,8 @@ impl AlbumGridView {
             let connect_create = move |btn: &gtk::Button| {
                 let lib = Arc::clone(&lib);
                 let tk = tk.clone();
-                let btn_weak = btn.downgrade();
                 album_dialogs::show_create_album_dialog(
-                    &btn.root().and_downcast::<gtk::Window>().unwrap(),
+                    btn,
                     move |name| {
                         let lib = Arc::clone(&lib);
                         let tk = tk.clone();
@@ -284,10 +283,11 @@ fn reload_albums(
         let result = tk.spawn(async move { lib.list_albums().await }).await;
         match result {
             Ok(Ok(albums)) => {
-                store.remove_all();
-                for album in albums {
-                    store.append(&AlbumItemObject::new(album));
-                }
+                let objects: Vec<glib::Object> = albums
+                    .into_iter()
+                    .map(|a| AlbumItemObject::new(a).upcast())
+                    .collect();
+                store.splice(0, store.n_items(), &objects);
                 debug!(count = store.n_items(), "albums loaded");
             }
             Ok(Err(e)) => tracing::error!("failed to load albums: {e}"),

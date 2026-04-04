@@ -67,7 +67,7 @@ mod imp {
             self.placeholder.set_valign(gtk::Align::Center);
             overlay.set_child(Some(&self.placeholder));
 
-            self.picture.set_size_request(155, 155);
+            self.picture.set_size_request(205, 205);
             self.picture.set_content_fit(gtk::ContentFit::Cover);
             self.picture.set_visible(false);
             overlay.add_overlay(&self.picture);
