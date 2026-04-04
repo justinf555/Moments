@@ -237,7 +237,7 @@ impl MomentsWindow {
         let sidebar = MomentsSidebar::new();
         sidebar.subscribe_to_bus();
         imp.split_view.set_sidebar(Some(&sidebar));
-        let _ = imp.sidebar.set(sidebar.clone());
+        imp.sidebar.set(sidebar.clone()).expect("sidebar set once in setup()");
 
         {
             let lib = Arc::clone(library);
@@ -415,6 +415,11 @@ impl MomentsWindow {
         }
     }
 
+    /// Wire the empty ↔ photos stack toggle based on store item count.
+    ///
+    /// Only switches on empty ↔ non-empty transitions — deliberately does NOT
+    /// override the visible child if the user has navigated away from Photos
+    /// (e.g. to Trash).
     fn connect_empty_toggle(
         content_stack: &gtk::Stack,
         photos_model: &Rc<PhotoGridModel>,
