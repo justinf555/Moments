@@ -296,7 +296,7 @@ mod tests {
         let album_id = db.create_album("To Delete").await.unwrap();
         let media_id = MediaId::new("d".repeat(64));
         db.insert_media(&test_record(media_id.clone())).await.unwrap();
-        db.add_to_album(&album_id, &[media_id.clone()]).await.unwrap();
+        db.add_to_album(&album_id, std::slice::from_ref(&media_id)).await.unwrap();
         db.delete_album(&album_id).await.unwrap();
         assert!(db.list_albums().await.unwrap().is_empty());
         assert!(db.media_exists(&media_id).await.unwrap());
@@ -325,8 +325,8 @@ mod tests {
         let album_id = db.create_album("Dupes").await.unwrap();
         let media_id = MediaId::new("e".repeat(64));
         db.insert_media(&test_record(media_id.clone())).await.unwrap();
-        db.add_to_album(&album_id, &[media_id.clone()]).await.unwrap();
-        db.add_to_album(&album_id, &[media_id.clone()]).await.unwrap();
+        db.add_to_album(&album_id, std::slice::from_ref(&media_id)).await.unwrap();
+        db.add_to_album(&album_id, std::slice::from_ref(&media_id)).await.unwrap();
         assert_eq!(db.list_album_media(&album_id, None, 50).await.unwrap().len(), 1);
     }
 
@@ -366,7 +366,7 @@ mod tests {
         let album_id = db.create_album("Cover").await.unwrap();
         let id_a = MediaId::new("a".repeat(64));
         db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000))).await.unwrap();
-        db.add_to_album(&album_id, &[id_a.clone()]).await.unwrap();
+        db.add_to_album(&album_id, std::slice::from_ref(&id_a)).await.unwrap();
         assert_eq!(db.list_albums().await.unwrap()[0].cover_media_id, Some(id_a));
     }
 
@@ -377,7 +377,7 @@ mod tests {
         let album_id = db.create_album("Trash Test").await.unwrap();
         let media_id = MediaId::new("t".repeat(64));
         db.insert_media(&test_record(media_id.clone())).await.unwrap();
-        db.add_to_album(&album_id, &[media_id.clone()]).await.unwrap();
+        db.add_to_album(&album_id, std::slice::from_ref(&media_id)).await.unwrap();
         db.trash(&[media_id]).await.unwrap();
         assert!(db.list_album_media(&album_id, None, 50).await.unwrap().is_empty());
     }
@@ -435,7 +435,7 @@ mod tests {
         let id_b = MediaId::new("b".repeat(64));
         db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000))).await.unwrap();
         db.insert_media(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000))).await.unwrap();
-        db.add_to_album(&album1, &[id_a.clone()]).await.unwrap();
+        db.add_to_album(&album1, std::slice::from_ref(&id_a)).await.unwrap();
         db.add_to_album(&album2, &[id_a.clone(), id_b.clone()]).await.unwrap();
 
         let result = db.albums_containing_media(&[id_a, id_b]).await.unwrap();
@@ -453,7 +453,7 @@ mod tests {
         let id_b = MediaId::new("b".repeat(64));
         db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000))).await.unwrap();
         db.insert_media(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000))).await.unwrap();
-        db.add_to_album(&album_id, &[id_a.clone()]).await.unwrap();
+        db.add_to_album(&album_id, std::slice::from_ref(&id_a)).await.unwrap();
 
         let result = db.albums_containing_media(&[id_a, id_b]).await.unwrap();
         assert_eq!(result.len(), 1);
@@ -479,7 +479,7 @@ mod tests {
         let album_id = db.create_album("Cascade").await.unwrap();
         let media_id = MediaId::new("c".repeat(64));
         db.insert_media(&test_record(media_id.clone())).await.unwrap();
-        db.add_to_album(&album_id, &[media_id.clone()]).await.unwrap();
+        db.add_to_album(&album_id, std::slice::from_ref(&media_id)).await.unwrap();
         db.delete_permanently(&[media_id]).await.unwrap();
         assert!(db.list_album_media(&album_id, None, 50).await.unwrap().is_empty());
     }

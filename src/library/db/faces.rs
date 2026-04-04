@@ -88,6 +88,7 @@ impl Database {
     }
 
     /// Upsert a person record (from sync).
+    #[allow(clippy::too_many_arguments)]
     pub async fn upsert_person(
         &self,
         id: &str,

@@ -339,6 +339,12 @@ fn format_timestamp(ts: i64) -> Option<String> {
     Some(dt.format("%B %-d, %Y \u{b7} %H:%M").to_string())
 }
 
+impl Default for InfoPanel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

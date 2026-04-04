@@ -184,7 +184,7 @@ impl SyncManager {
 
         let byte_stream = response
             .bytes_stream()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
+            .map_err(std::io::Error::other);
         let reader = tokio::io::BufReader::new(
             tokio_util::io::StreamReader::new(byte_stream),
         );
@@ -258,7 +258,7 @@ impl SyncManager {
                         }
                     }
 
-                    if asset_count % 500 == 0 && asset_count > 0 {
+                    if asset_count.is_multiple_of(500) && asset_count > 0 {
                         info!(assets = asset_count, "sync progress");
                     }
 
@@ -731,7 +731,7 @@ impl SyncManager {
     #[instrument(skip(self))]
     async fn handle_asset_delete(&self, asset_id: &str) -> Result<(), LibraryError> {
         let id = MediaId::new(asset_id.to_owned());
-        self.db.delete_permanently(&[id.clone()]).await?;
+        self.db.delete_permanently(std::slice::from_ref(&id)).await?;
         let _ = self.events.send(LibraryEvent::AssetDeletedRemote { media_id: id });
         Ok(())
     }
@@ -902,14 +902,14 @@ impl ThumbnailDownloader {
             download_count += 1;
 
             // Emit progress every 10 thumbnails to update the status bar.
-            if download_count % 10 == 0 {
+            if download_count.is_multiple_of(10) {
                 let _ = self.events.send(LibraryEvent::ThumbnailDownloadProgress {
                     completed: download_count,
                     total: download_count, // Total not known upfront; shows running count.
                 });
             }
 
-            if download_count % 100 == 0 {
+            if download_count.is_multiple_of(100) {
                 info!(queued = download_count, "thumbnail download progress");
             }
 

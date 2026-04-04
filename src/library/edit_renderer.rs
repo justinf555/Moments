@@ -179,8 +179,10 @@ fn apply_pixel_adjustments(
 /// Built-in filter presets. Each preset is an `EditState` with exposure and
 /// color values tuned for a particular look.
 pub fn filter_preset(name: &str) -> Option<EditState> {
-    let mut state = EditState::default();
-    state.filter = Some(name.to_string());
+    let mut state = EditState {
+        filter: Some(name.to_string()),
+        ..Default::default()
+    };
 
     match name {
         "bw" => {

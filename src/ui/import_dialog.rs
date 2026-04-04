@@ -104,3 +104,9 @@ impl ImportDialog {
         imp.action_button.set_label("Done");
     }
 }
+
+impl Default for ImportDialog {
+    fn default() -> Self {
+        Self::new()
+    }
+}

@@ -69,13 +69,13 @@ impl CollectionGridView {
 
         let unnamed_toggle = gtk::ToggleButton::builder()
             .icon_name("person-symbolic")
-            .tooltip_text(&gettext("Show Unnamed"))
+            .tooltip_text(gettext("Show Unnamed"))
             .build();
         unnamed_toggle.add_css_class("flat");
 
         let hidden_toggle = gtk::ToggleButton::builder()
             .icon_name("view-reveal-symbolic")
-            .tooltip_text(&gettext("Show Hidden"))
+            .tooltip_text(gettext("Show Hidden"))
             .build();
         hidden_toggle.add_css_class("flat");
 
@@ -202,7 +202,7 @@ impl CollectionGridView {
                 };
 
                 let person_page = adw::NavigationPage::builder()
-                    .tag(&format!("person:{}", data.id))
+                    .tag(format!("person:{}", data.id))
                     .title(&display_name)
                     .child(view.widget())
                     .build();

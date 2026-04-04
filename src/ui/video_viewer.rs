@@ -209,7 +209,7 @@ impl VideoViewer {
         // ── Overflow menu (far right) ────────────────────────────────────
         let menu_btn = gtk::MenuButton::builder()
             .icon_name("view-more-symbolic")
-            .tooltip_text(&gettext("Menu"))
+            .tooltip_text(gettext("Menu"))
             .build();
         let menu_popover = crate::ui::viewer::build_viewer_menu_popover(false, "Delete video");
         menu_btn.set_popover(Some(&menu_popover));
@@ -218,14 +218,14 @@ impl VideoViewer {
         // ── Info toggle ─────────────────────────────────────────────────
         let info_toggle = gtk::ToggleButton::builder()
             .icon_name("dialog-information-symbolic")
-            .tooltip_text(&gettext("Video Information (F9)"))
+            .tooltip_text(gettext("Video Information (F9)"))
             .build();
         header.pack_end(&info_toggle);
 
         // ── Favourite ───────────────────────────────────────────────────
         let star_btn = gtk::Button::builder()
             .icon_name("non-starred-symbolic")
-            .tooltip_text(&gettext("Toggle Favourite"))
+            .tooltip_text(gettext("Toggle Favourite"))
             .build();
         star_btn.add_css_class("flat");
         header.pack_end(&star_btn);
@@ -240,7 +240,7 @@ impl VideoViewer {
         // ── OSD prev / next buttons ──────────────────────────────────────────
         let prev_btn = gtk::Button::builder()
             .icon_name("go-previous-symbolic")
-            .tooltip_text(&gettext("Previous"))
+            .tooltip_text(gettext("Previous"))
             .valign(gtk::Align::Center)
             .halign(gtk::Align::Start)
             .margin_start(12)
@@ -251,7 +251,7 @@ impl VideoViewer {
 
         let next_btn = gtk::Button::builder()
             .icon_name("go-next-symbolic")
-            .tooltip_text(&gettext("Next"))
+            .tooltip_text(gettext("Next"))
             .valign(gtk::Align::Center)
             .halign(gtk::Align::End)
             .margin_end(12)

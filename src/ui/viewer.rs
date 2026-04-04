@@ -478,7 +478,7 @@ impl PhotoViewer {
         // ── Overflow menu (far right) ────────────────────────────────────
         let menu_btn = gtk::MenuButton::builder()
             .icon_name("view-more-symbolic")
-            .tooltip_text(&gettext("Menu"))
+            .tooltip_text(gettext("Menu"))
             .build();
         let menu_popover = build_viewer_menu_popover(true, "Delete photo");
         menu_btn.set_popover(Some(&menu_popover));
@@ -487,7 +487,7 @@ impl PhotoViewer {
         // ── Edit toggle ─────────────────────────────────────────────────
         let edit_toggle = gtk::ToggleButton::builder()
             .icon_name("document-edit-symbolic")
-            .tooltip_text(&gettext("Edit Photo"))
+            .tooltip_text(gettext("Edit Photo"))
             .build();
         #[cfg(feature = "editing")]
         header.pack_end(&edit_toggle);
@@ -495,14 +495,14 @@ impl PhotoViewer {
         // ── Info toggle ─────────────────────────────────────────────────
         let info_toggle = gtk::ToggleButton::builder()
             .icon_name("dialog-information-symbolic")
-            .tooltip_text(&gettext("Photo Information (F9)"))
+            .tooltip_text(gettext("Photo Information (F9)"))
             .build();
         header.pack_end(&info_toggle);
 
         // ── Favourite ───────────────────────────────────────────────────
         let star_btn = gtk::Button::builder()
             .icon_name("non-starred-symbolic")
-            .tooltip_text(&gettext("Toggle Favourite"))
+            .tooltip_text(gettext("Toggle Favourite"))
             .build();
         star_btn.add_css_class("flat");
         header.pack_end(&star_btn);
@@ -535,7 +535,7 @@ impl PhotoViewer {
         // ── OSD prev / next buttons ──────────────────────────────────────────
         let prev_btn = gtk::Button::builder()
             .icon_name("go-previous-symbolic")
-            .tooltip_text(&gettext("Previous Photo"))
+            .tooltip_text(gettext("Previous Photo"))
             .valign(gtk::Align::Center)
             .halign(gtk::Align::Start)
             .margin_start(12)
@@ -546,7 +546,7 @@ impl PhotoViewer {
 
         let next_btn = gtk::Button::builder()
             .icon_name("go-next-symbolic")
-            .tooltip_text(&gettext("Next Photo"))
+            .tooltip_text(gettext("Next Photo"))
             .valign(gtk::Align::Center)
             .halign(gtk::Align::End)
             .margin_end(12)
