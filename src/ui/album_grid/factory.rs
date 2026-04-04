@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use gtk::prelude::*;
+use gtk::{prelude::*, subclass::prelude::*};
 use tracing::warn;
 
 use crate::library::album::AlbumId;
@@ -47,7 +47,7 @@ pub fn build_factory(
         {
             let checkbox = card.imp().checkbox.clone();
             let sel = selection.clone();
-            let handler_id = checkbox.connect_toggled(move |cb| {
+            let handler_id = checkbox.connect_toggled(move |cb: &gtk::CheckButton| {
                 if cb.is_active() {
                     sel.select_item(position, false);
                 } else {
