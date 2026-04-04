@@ -73,14 +73,16 @@ mod imp {
             // Name label.
             self.name_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
             self.name_label.set_max_width_chars(18);
-            self.name_label.set_halign(gtk::Align::Center);
+            self.name_label.set_halign(gtk::Align::Start);
+            self.name_label.set_xalign(0.0);
             self.name_label.add_css_class("heading");
             self.name_label.set_parent(&*obj);
 
             // Count label.
             self.count_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
             self.count_label.set_max_width_chars(18);
-            self.count_label.set_halign(gtk::Align::Center);
+            self.count_label.set_halign(gtk::Align::Start);
+            self.count_label.set_xalign(0.0);
             self.count_label.add_css_class("dim-label");
             self.count_label.add_css_class("caption");
             self.count_label.set_parent(&*obj);
