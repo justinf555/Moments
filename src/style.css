@@ -83,8 +83,8 @@ collection-grid-cell .hidden-icon {
     color: inherit;
     border-radius: 999px;
     min-width: 16px;
-    min-height: 16px;
-    padding: 0 6px;
+    min-height: 0;
+    padding: 1px 6px;
     font-size: 0.7rem;
     opacity: 0.7;
 }
