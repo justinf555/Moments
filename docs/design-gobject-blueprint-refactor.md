@@ -52,7 +52,7 @@ A full audit of `src/ui/` found:
 |---|--------|------|-------------|-----------|----------|--------|
 | 1 | `PhotoViewer` | `viewer.rs` | library, tokio, bus_sender | Yes — static headerbar + overlay + split | First (fewest deps, most static) | **Done** (#433) |
 | 2 | `VideoViewer` | `video_viewer.rs` | library, tokio, bus_sender | Yes — similar to PhotoViewer | First (same shape) | **Done** (#435) |
-| 3 | `EditPanel` | `viewer/edit_panel.rs` | tokio, library, bus_sender | Partial — section skeleton yes, dynamic sliders no | Second | Pending |
+| 3 | `EditPanel` | `viewer/edit_panel.rs` | tokio, library, bus_sender | Partial — skeleton + transforms in Blueprint, sliders/filters in Rust | Second | **Done** (#437) |
 | 4 | `AlbumGridView` | `album_grid.rs` | library, tokio, texture_cache, bus_sender | Partial — headerbar/empty state yes, grid no | Third | Pending |
 | 5 | `PhotoGridView` | `photo_grid.rs` | library, tokio, bus_sender, texture_cache | Partial — headerbar/action bar yes, grid no | Third | Pending |
 | 6 | `CollectionGridView` | `collection_grid.rs` | library | Partial — headerbar/filter buttons yes | Third | Pending |
@@ -443,13 +443,13 @@ The compiler sees the `Ref<'_>` destructor running after the GObject drops.
 Fix: explicitly `drop(borrow)` before the block ends, or extract into a
 tighter scope.
 
-### 5. `dispose_template()` required for composite templates
+### 5. `dispose_template()` required — no unparent loop
 
 Composite template widgets must call `self.dispose_template()` in their
-`ObjectImpl::dispose()` override. Without it, `TemplateChild` fields are
-never released — `bind_template()` places strong refs that can cause
-refcount cycles. Even when widgets live for the process lifetime, include
-it for correctness:
+`ObjectImpl::dispose()` override. This is sufficient — do NOT add a
+`while let Some(child) = self.obj().first_child() { child.unparent(); }`
+loop. GTK4 handles widget hierarchy teardown during disposal, and the
+loop is redundant with `dispose_template()`:
 
 ```rust
 impl ObjectImpl for FooView {
@@ -459,7 +459,23 @@ impl ObjectImpl for FooView {
 }
 ```
 
-### 6. Clippy requires `Default` impl
+### 6. `Cell<Option<SourceId>>` can't be cloned into closures
+
+`glib::SourceId` is not `Copy`, so `Cell<Option<SourceId>>` on the imp
+struct can't be cloned into closures (unlike the old `Rc<Cell<>>` which
+could be `Rc::clone`d). Fix: capture a weak ref to the panel and access
+the cell through it after upgrading:
+
+```rust
+let weak = panel.downgrade();
+let source_id = glib::timeout_add_local_once(duration, move || {
+    let Some(panel) = weak.upgrade() else { return };
+    panel.imp().debounce_cell.set(None);
+    // ...
+});
+```
+
+### 7. Clippy requires `Default` impl
 
 When `new()` takes no arguments, clippy fires `new_without_default`. Add
 `impl Default for FooView { fn default() -> Self { Self::new() } }`.

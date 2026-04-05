@@ -13,7 +13,6 @@ use crate::ui::album_dialogs;
 use crate::ui::photo_grid::model::PhotoGridModel;
 use crate::ui::photo_grid::texture_cache::TextureCache;
 use crate::ui::photo_grid::PhotoGridView;
-use crate::ui::ContentView;
 
 use super::item::AlbumItemObject;
 
@@ -53,12 +52,6 @@ pub(crate) fn open_album_drilldown(
         .title(album_name)
         .child(view.widget())
         .build();
-
-    if let Some(actions) = view.view_actions() {
-        if let Some(win) = nav_view.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
-            win.insert_action_group("view", Some(actions));
-        }
-    }
 
     nav_view.push(&page);
 }

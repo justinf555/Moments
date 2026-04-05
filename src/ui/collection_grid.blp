@@ -1,0 +1,44 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $MomentsCollectionGridView : Gtk.Widget {
+  Adw.NavigationView nav_view {
+    Adw.NavigationPage grid_page {
+      tag: "collection";
+      title: _("People");
+
+      child: Adw.ToolbarView {
+        [top]
+        Adw.HeaderBar {
+          [start]
+          Gtk.Box {
+            orientation: horizontal;
+            spacing: 0;
+
+            Gtk.ToggleButton unnamed_toggle {
+              icon-name: "avatar-default-symbolic";
+              tooltip-text: _("Show Unnamed");
+              styles ["flat"]
+            }
+
+            Gtk.ToggleButton hidden_toggle {
+              icon-name: "view-reveal-symbolic";
+              tooltip-text: _("Show Hidden");
+              styles ["flat"]
+            }
+          }
+        }
+
+        content: Gtk.ScrolledWindow {
+          hscrollbar-policy: never;
+          vexpand: true;
+
+          child: Gtk.GridView grid_view {
+            min-columns: 3;
+            max-columns: 8;
+          };
+        };
+      };
+    }
+  }
+}

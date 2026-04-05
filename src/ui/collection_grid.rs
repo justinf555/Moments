@@ -3,13 +3,12 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use adw::prelude::*;
-use gettextrs::gettext;
+use adw::subclass::prelude::*;
 use gtk::{gio, glib};
 use tracing::{debug, info};
 
 use crate::library::Library;
 use crate::ui::photo_grid::texture_cache::TextureCache;
-use crate::ui::ContentView;
 
 mod actions;
 pub mod cell;
@@ -19,122 +18,114 @@ pub mod item;
 use factory::ThumbnailStyle;
 use item::{CollectionItemData, CollectionItemObject};
 
-/// Shared filter state for the people grid, wrapped in `Rc` so that
-/// toggle buttons, load, reload, and context menu closures can all access it.
+/// Shared filter state for the people grid.
 struct PeopleFilter {
     include_hidden: Cell<bool>,
     include_unnamed: Cell<bool>,
 }
 
-/// A reusable grid view for browsing collections (people, memories, etc.).
-///
-/// Displays a grid of items with thumbnails and labels. Clicking an item
-/// pushes a `PhotoGridView` onto the internal `NavigationView`, filtered
-/// to show that item's media.
-pub struct CollectionGridView {
-    widget: gtk::Widget,
-    store: gio::ListStore,
-    library: Arc<dyn Library>,
-    filter: Rc<PeopleFilter>,
+// ── GObject subclass ─────────────────────────────────────────────────────────
+
+mod imp {
+    use super::*;
+    use std::cell::OnceCell;
+
+    use gtk::CompositeTemplate;
+
+    #[derive(Default, CompositeTemplate)]
+    #[template(resource = "/io/github/justinf555/Moments/ui/collection_grid.ui")]
+    pub struct CollectionGridView {
+        #[template_child]
+        pub nav_view: TemplateChild<adw::NavigationView>,
+        #[template_child]
+        pub grid_view: TemplateChild<gtk::GridView>,
+        #[template_child]
+        pub unnamed_toggle: TemplateChild<gtk::ToggleButton>,
+        #[template_child]
+        pub hidden_toggle: TemplateChild<gtk::ToggleButton>,
+
+        // Service dependencies
+        pub library: OnceCell<Arc<dyn Library>>,
+
+        // State
+        pub(super) store: OnceCell<gio::ListStore>,
+        pub(super) filter: OnceCell<Rc<PeopleFilter>>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for CollectionGridView {
+        const NAME: &'static str = "MomentsCollectionGridView";
+        type Type = super::CollectionGridView;
+        type ParentType = gtk::Widget;
+
+        fn class_init(klass: &mut Self::Class) {
+            klass.bind_template();
+            klass.set_layout_manager_type::<gtk::BinLayout>();
+        }
+
+        fn instance_init(obj: &glib::subclass::InitializingObject<Self>) {
+            obj.init_template();
+        }
+    }
+
+    impl ObjectImpl for CollectionGridView {
+        fn dispose(&self) {
+            self.dispose_template();
+            while let Some(child) = self.obj().first_child() {
+                child.unparent();
+            }
+        }
+    }
+    impl WidgetImpl for CollectionGridView {}
 }
 
-impl std::fmt::Debug for CollectionGridView {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CollectionGridView").finish_non_exhaustive()
+glib::wrapper! {
+    pub struct CollectionGridView(ObjectSubclass<imp::CollectionGridView>)
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+
+impl Default for CollectionGridView {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 impl CollectionGridView {
-    /// Create a new collection grid view for People.
-    ///
-    /// Loads people from the library asynchronously and populates the grid.
-    /// Clicking a person pushes a `PhotoGridView` filtered to that person.
-    pub fn new_people(
+    pub fn new() -> Self {
+        glib::Object::new()
+    }
+
+    /// Set up the People collection grid view.
+    pub fn setup_people(
+        &self,
         library: Arc<dyn Library>,
         tokio: tokio::runtime::Handle,
         settings: gio::Settings,
         texture_cache: Rc<TextureCache>,
         bus_sender: crate::event_bus::EventSender,
-    ) -> Self {
-        let header = adw::HeaderBar::new();
+    ) {
+        let imp = self.imp();
+        assert!(imp.library.set(Arc::clone(&library)).is_ok(), "setup called twice");
 
-        // ── Filter toggle buttons ────────────────────────────────────────
         let filter = Rc::new(PeopleFilter {
             include_hidden: Cell::new(false),
             include_unnamed: Cell::new(false),
         });
-
-        let unnamed_toggle = gtk::ToggleButton::builder()
-            .icon_name("avatar-default-symbolic")
-            .tooltip_text(gettext("Show Unnamed"))
-            .build();
-        unnamed_toggle.add_css_class("flat");
-
-        let hidden_toggle = gtk::ToggleButton::builder()
-            .icon_name("view-reveal-symbolic")
-            .tooltip_text(gettext("Show Hidden"))
-            .build();
-        hidden_toggle.add_css_class("flat");
-
-        let toggle_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        toggle_box.append(&unnamed_toggle);
-        toggle_box.append(&hidden_toggle);
-        header.pack_start(&toggle_box);
-
-        let grid_view = gtk::GridView::new(
-            None::<gtk::NoSelection>,
-            None::<gtk::SignalListItemFactory>,
-        );
-        grid_view.set_min_columns(3);
-        grid_view.set_max_columns(8);
+        let store = gio::ListStore::new::<CollectionItemObject>();
 
         let cell_size = 140;
         let factory = factory::build_factory(cell_size, ThumbnailStyle::Circular);
-        let store = gio::ListStore::new::<CollectionItemObject>();
         let selection = gtk::NoSelection::new(Some(store.clone()));
-        grid_view.set_model(Some(&selection));
-        grid_view.set_factory(Some(&factory));
+        imp.grid_view.set_model(Some(&selection));
+        imp.grid_view.set_factory(Some(&factory));
 
-        let scrolled = gtk::ScrolledWindow::new();
-        scrolled.set_hscrollbar_policy(gtk::PolicyType::Never);
-        scrolled.set_vexpand(true);
-        scrolled.set_child(Some(&grid_view));
-
-        let toolbar_view = adw::ToolbarView::new();
-        toolbar_view.add_top_bar(&header);
-        toolbar_view.set_content(Some(&scrolled));
-
-        let grid_page = adw::NavigationPage::builder()
-            .tag("collection")
-            .title("People")
-            .child(&toolbar_view)
-            .build();
-
-        let nav_view = adw::NavigationView::new();
-        nav_view.push(&grid_page);
-
-        let widget = nav_view.clone().upcast::<gtk::Widget>();
-
-        // Remove the person grid's zoom actions when navigating back.
-        nav_view.connect_popped(|nav, _page| {
-            let is_collection = nav
-                .visible_page()
-                .and_then(|p| p.tag())
-                .map(|t| t == "collection")
-                .unwrap_or(false);
-            if is_collection {
-                if let Some(win) = nav.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
-                    win.insert_action_group("view", None::<&gtk::gio::SimpleActionGroup>);
-                }
-            }
-        });
-
-        // ── Wire toggle buttons to reload ────────────────────────────────
+        // Wire toggle buttons to reload.
         {
             let f = Rc::clone(&filter);
             let s = store.clone();
             let lib = Arc::clone(&library);
-            unnamed_toggle.connect_toggled(move |btn| {
+            imp.unnamed_toggle.connect_toggled(move |btn| {
                 f.include_unnamed.set(btn.is_active());
                 debug!(include_unnamed = btn.is_active(), "unnamed toggle changed");
                 full_reload(&s, &lib, &f);
@@ -144,38 +135,41 @@ impl CollectionGridView {
             let f = Rc::clone(&filter);
             let s = store.clone();
             let lib = Arc::clone(&library);
-            hidden_toggle.connect_toggled(move |btn| {
+            imp.hidden_toggle.connect_toggled(move |btn| {
                 f.include_hidden.set(btn.is_active());
                 debug!(include_hidden = btn.is_active(), "hidden toggle changed");
                 full_reload(&s, &lib, &f);
             });
         }
 
-        // ── Wire item activation and context menu ────────────────────────
+        // Wire item activation and context menu.
         actions::wire_activation(
-            &grid_view, &store, &nav_view, &library,
+            &imp.grid_view, &store, &imp.nav_view, &library,
             &tokio, &settings, &texture_cache, &bus_sender,
         );
         actions::wire_context_menu(
-            &grid_view, &store, &library, &tokio, &filter,
+            &imp.grid_view, &store, &library, &tokio, &filter,
         );
 
         // Load people asynchronously.
         load_people(&store, &library, &filter);
 
-        Self {
-            widget,
-            store,
-            library,
-            filter,
-        }
+        assert!(imp.store.set(store).is_ok());
+        assert!(imp.filter.set(filter).is_ok());
     }
 
     /// Reload the people grid from the database.
     pub fn reload(&self) {
-        incremental_reload(&self.store, &self.library, &self.filter);
+        let imp = self.imp();
+        if let (Some(store), Some(library), Some(filter)) =
+            (imp.store.get(), imp.library.get(), imp.filter.get())
+        {
+            incremental_reload(store, library, filter);
+        }
     }
 }
+
+// ── Free functions ───────────────────────────────────────────────────────────
 
 /// Load people from the library and populate the store (initial load).
 fn load_people(store: &gio::ListStore, library: &Arc<dyn Library>, filter: &Rc<PeopleFilter>) {
@@ -341,10 +335,4 @@ fn incremental_reload(
             store.append(&item);
         }
     });
-}
-
-impl ContentView for CollectionGridView {
-    fn widget(&self) -> &gtk::Widget {
-        &self.widget
-    }
 }
