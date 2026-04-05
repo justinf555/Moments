@@ -41,7 +41,7 @@ mod photo_grid_imp {
         pub empty_page: OnceCell<adw::StatusPage>,
         pub selection: RefCell<Option<gtk::MultiSelection>>,
         /// Kept alive so lazy-loading stays wired after `set_model`.
-        pub model: RefCell<Option<Rc<PhotoGridModel>>>,
+        pub model: RefCell<Option<PhotoGridModel>>,
         pub zoom_level: Cell<usize>,
         /// Library reference for the factory (star button persist).
         pub library: OnceCell<Arc<dyn Library>>,
@@ -214,7 +214,7 @@ impl PhotoGrid {
     #[instrument(skip_all)]
     pub fn set_model(
         &self,
-        model: Rc<PhotoGridModel>,
+        model: PhotoGridModel,
         library: Arc<dyn Library>,
         tokio: tokio::runtime::Handle,
         bus_sender: crate::event_bus::EventSender,
@@ -232,7 +232,7 @@ impl PhotoGrid {
         let grid_view = imp.grid_view.get().unwrap();
         let scrolled = imp.scrolled.get().unwrap();
 
-        let selection = gtk::MultiSelection::new(Some(model.store.clone()));
+        let selection = gtk::MultiSelection::new(Some(model.store().clone()));
         grid_view.set_model(Some(&selection));
         *imp.selection.borrow_mut() = Some(selection.clone());
 
@@ -257,7 +257,7 @@ impl PhotoGrid {
 
         let update_empty: Rc<dyn Fn()> = {
             let stack = stack.clone();
-            let store = model.store.clone();
+            let store = model.store().clone();
             Rc::new(move || {
                 let name = if store.n_items() == 0 { "empty" } else { "grid" };
                 stack.set_visible_child_name(name);
@@ -265,12 +265,12 @@ impl PhotoGrid {
         };
         {
             let update = Rc::clone(&update_empty);
-            model.store.connect_items_changed(move |_, _, _, _| update());
+            model.store().connect_items_changed(move |_, _, _, _| update());
         }
 
         model.load_more();
 
-        let model_scroll = Rc::clone(&model);
+        let model_scroll = model.clone();
         let adj = scrolled.vadjustment();
         adj.connect_value_changed(move |adj| {
             let visible_end = adj.value() + adj.page_size();
@@ -280,7 +280,7 @@ impl PhotoGrid {
             }
         });
 
-        let model_ready = Rc::clone(&model);
+        let model_ready = model.clone();
         let adj_ready = scrolled.vadjustment();
         let update_on_ready = Rc::clone(&update_empty);
         model.set_on_page_ready(move || {
@@ -596,7 +596,7 @@ impl PhotoGridView {
         imp.nav_view.insert_action_group("view", Some(&action_group));
     }
 
-    pub fn set_model(&self, model: Rc<PhotoGridModel>) {
+    pub fn set_model(&self, model: PhotoGridModel) {
         let imp = self.imp();
         let library = Arc::clone(imp.library.get().unwrap());
         let tokio = imp.tokio.get().unwrap().clone();
@@ -605,7 +605,7 @@ impl PhotoGridView {
         let filter = model.filter();
 
         imp.photo_grid.set_model(
-            Rc::clone(&model),
+            model.clone(),
             Arc::clone(&library),
             tokio.clone(),
             bus_sender.clone(),

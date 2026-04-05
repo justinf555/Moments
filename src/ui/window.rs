@@ -295,7 +295,7 @@ impl MomentsWindow {
         texture_cache: &Rc<TextureCache>,
         bus_sender: &crate::event_bus::EventSender,
         bus: &crate::event_bus::EventBus,
-    ) -> (gtk::Stack, Rc<RefCell<ContentCoordinator>>, Rc<PhotoGridModel>) {
+    ) -> (gtk::Stack, Rc<RefCell<ContentCoordinator>>, PhotoGridModel) {
         use crate::library::media::MediaFilter;
 
         let content_stack = gtk::Stack::new();
@@ -305,12 +305,12 @@ impl MomentsWindow {
         let empty = EmptyLibraryView::new();
         coordinator.register("empty", empty.widget());
 
-        let photos_model = Rc::new(PhotoGridModel::new(
+        let photos_model = PhotoGridModel::new(
             Arc::clone(library),
             tokio.clone(),
             MediaFilter::All,
             bus_sender.clone(),
-        ));
+        );
         let photos_view = PhotoGridView::new();
         photos_view.setup(
             Arc::clone(library),
@@ -319,7 +319,7 @@ impl MomentsWindow {
             Rc::clone(texture_cache),
             bus_sender.clone(),
         );
-        photos_view.set_model(Rc::clone(&photos_model));
+        photos_view.set_model(photos_model.clone());
         photos_model.subscribe(bus);
         coordinator.register("photos", &photos_view);
 
@@ -344,15 +344,15 @@ impl MomentsWindow {
             let tc = Rc::clone(texture_cache);
             let bs = bus_sender.clone();
             coordinator.register_lazy("favorites", move || {
-                let model = Rc::new(PhotoGridModel::new(
+                let model = PhotoGridModel::new(
                     Arc::clone(&lib),
                     tk.clone(),
                     MediaFilter::Favorites,
                     bs.clone(),
-                ));
+                );
                 let view = PhotoGridView::new();
                 view.setup(lib, tk, s, tc, bs);
-                view.set_model(Rc::clone(&model));
+                view.set_model(model.clone());
                 model.subscribe_to_bus();
                 view.upcast()
             });
@@ -367,15 +367,15 @@ impl MomentsWindow {
             coordinator.register_lazy("recent", move || {
                 let days = s.uint("recent-imports-days") as i64;
                 let since = chrono::Utc::now().timestamp() - days * 86400;
-                let model = Rc::new(PhotoGridModel::new(
+                let model = PhotoGridModel::new(
                     Arc::clone(&lib),
                     tk.clone(),
                     MediaFilter::RecentImports { since },
                     bs.clone(),
-                ));
+                );
                 let view = PhotoGridView::new();
                 view.setup(lib, tk, s, tc, bs);
-                view.set_model(Rc::clone(&model));
+                view.set_model(model.clone());
                 model.subscribe_to_bus();
                 view.upcast()
             });
@@ -388,15 +388,15 @@ impl MomentsWindow {
             let tc = Rc::clone(texture_cache);
             let bs = bus_sender.clone();
             coordinator.register_lazy("trash", move || {
-                let model = Rc::new(PhotoGridModel::new(
+                let model = PhotoGridModel::new(
                     Arc::clone(&lib),
                     tk.clone(),
                     MediaFilter::Trashed,
                     bs.clone(),
-                ));
+                );
                 let view = PhotoGridView::new();
                 view.setup(lib, tk, s, tc, bs);
-                view.set_model(Rc::clone(&model));
+                view.set_model(model.clone());
                 model.subscribe_to_bus();
                 view.upcast()
             });
@@ -443,11 +443,11 @@ impl MomentsWindow {
     /// (e.g. to Trash).
     fn connect_empty_toggle(
         content_stack: &gtk::Stack,
-        photos_model: &Rc<PhotoGridModel>,
+        photos_model: &PhotoGridModel,
     ) {
         let stack = content_stack.clone();
         let was_empty = std::cell::Cell::new(true);
-        photos_model.store.connect_items_changed(move |store, _, _, _| {
+        photos_model.store().connect_items_changed(move |store, _, _, _| {
             let is_empty = store.n_items() == 0;
             if is_empty && !was_empty.get() {
                 stack.set_visible_child_name("empty");
@@ -484,16 +484,16 @@ impl MomentsWindow {
                     use crate::library::album::AlbumId;
                     use crate::library::media::MediaFilter;
                     let album_id = AlbumId::from_raw(album_id_str.to_owned());
-                    let model = Rc::new(PhotoGridModel::new(
+                    let model = PhotoGridModel::new(
                         Arc::clone(&lib), tk.clone(),
                         MediaFilter::Album { album_id }, bs.clone(),
-                    ));
+                    );
                     let view = PhotoGridView::new();
                     view.setup(
                         Arc::clone(&lib), tk.clone(), s.clone(),
                         Rc::clone(&tc), bs.clone(),
                     );
-                    view.set_model(Rc::clone(&model));
+                    view.set_model(model.clone());
                     model.subscribe_to_bus();
                     coord.register(id, &view);
                 }

@@ -51,12 +51,12 @@ pub(super) fn wire_activation(
         let filter = MediaFilter::Person {
             person_id: person_id.clone(),
         };
-        let model = Rc::new(PhotoGridModel::new(
+        let model = PhotoGridModel::new(
             Arc::clone(&lib),
             tk.clone(),
             filter,
             bs.clone(),
-        ));
+        );
         let view = PhotoGridView::new();
         view.setup(
             Arc::clone(&lib),
@@ -65,7 +65,7 @@ pub(super) fn wire_activation(
             Rc::clone(&tc),
             bs.clone(),
         );
-        view.set_model(Rc::clone(&model));
+        view.set_model(model.clone());
         model.subscribe_to_bus();
 
         let display_name = if data.name.is_empty() {
