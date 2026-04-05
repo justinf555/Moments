@@ -42,6 +42,20 @@ template $MomentsPhotoGridView : Gtk.Widget {
             tooltip-text: _("Menu");
             styles ["flat"]
           }
+
+          [end]
+          Gtk.Button empty_trash_btn {
+            label: _("Empty Trash");
+            visible: false;
+            styles ["destructive-action"]
+          }
+
+          [end]
+          Gtk.Button restore_all_btn {
+            label: _("Restore All");
+            visible: false;
+            styles ["flat"]
+          }
         }
 
         content: $MomentsPhotoGrid photo_grid {};

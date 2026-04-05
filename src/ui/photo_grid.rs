@@ -4,11 +4,12 @@ use std::sync::Arc;
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
+use gettextrs::gettext;
 use gtk::{gio, glib};
 use tracing::instrument;
 
 use crate::app_event::AppEvent;
-use crate::library::media::MediaType;
+use crate::library::media::{MediaFilter, MediaType};
 use crate::library::Library;
 use crate::ui::video_viewer::VideoViewer;
 use crate::ui::viewer::PhotoViewer;
@@ -342,6 +343,10 @@ mod view_imp {
         pub photo_grid: TemplateChild<PhotoGrid>,
         #[template_child]
         pub action_bar: TemplateChild<gtk::ActionBar>,
+        #[template_child]
+        pub restore_all_btn: TemplateChild<gtk::Button>,
+        #[template_child]
+        pub empty_trash_btn: TemplateChild<gtk::Button>,
 
         // Service dependencies
         pub library: OnceCell<Arc<dyn Library>>,
@@ -680,6 +685,64 @@ impl PhotoGridView {
 
         if let Some(ref album_btn) = bar_buttons.album_btn {
             actions::wire_album_controls(&ctx, album_btn);
+        }
+
+        // ── Trash header buttons (Restore All / Empty Trash) ───────────
+        if filter == MediaFilter::Trashed {
+            imp.restore_all_btn.set_visible(true);
+            imp.empty_trash_btn.set_visible(true);
+
+            {
+                let bs = bus_sender.clone();
+                imp.restore_all_btn.connect_clicked(move |b| {
+                    let bs = bs.clone();
+                    let win = b.root().and_then(|r| r.downcast::<gtk::Window>().ok());
+                    let dialog = adw::AlertDialog::new(
+                        Some(&gettext("Restore all photos?")),
+                        Some(&gettext("All trashed photos will be moved back to the library.")),
+                    );
+                    dialog.add_response("cancel", &gettext("Cancel"));
+                    dialog.add_response("restore", &gettext("Restore All"));
+                    dialog.set_default_response(Some("cancel"));
+                    dialog.set_close_response("cancel");
+                    dialog.connect_response(None, move |_, response| {
+                        if response == "restore" {
+                            bs.send(AppEvent::RestoreAllTrashRequested);
+                        }
+                    });
+                    if let Some(ref w) = win {
+                        dialog.present(Some(w));
+                    }
+                });
+            }
+
+            {
+                let bs = bus_sender.clone();
+                imp.empty_trash_btn.connect_clicked(move |b| {
+                    let bs = bs.clone();
+                    let win = b.root().and_then(|r| r.downcast::<gtk::Window>().ok());
+                    let dialog = adw::AlertDialog::new(
+                        Some(&gettext("Empty Trash?")),
+                        Some(&gettext("All trashed photos will be permanently deleted. This cannot be undone.")),
+                    );
+                    dialog.add_response("cancel", &gettext("Cancel"));
+                    dialog.add_response("delete", &gettext("Empty Trash"));
+                    dialog.set_response_appearance(
+                        "delete",
+                        adw::ResponseAppearance::Destructive,
+                    );
+                    dialog.set_default_response(Some("cancel"));
+                    dialog.set_close_response("cancel");
+                    dialog.connect_response(None, move |_, response| {
+                        if response == "delete" {
+                            bs.send(AppEvent::EmptyTrashRequested);
+                        }
+                    });
+                    if let Some(ref w) = win {
+                        dialog.present(Some(w));
+                    }
+                });
+            }
         }
 
         // Subscribe for exit-selection on result events.

@@ -150,6 +150,16 @@ impl EventSender {
         Self { tx }
     }
 
+    /// Create a sender + receiver pair for unit tests.
+    ///
+    /// Unlike [`no_op`](Self::no_op), the receiver is returned so tests can
+    /// assert on emitted events.
+    #[cfg(test)]
+    pub fn test_channel() -> (Self, mpsc::Receiver<AppEvent>) {
+        let (tx, rx) = mpsc::channel();
+        (Self { tx }, rx)
+    }
+
     /// Send an event. Safe to call from any thread.
     ///
     /// The event is delivered to all subscribers on the next GTK main

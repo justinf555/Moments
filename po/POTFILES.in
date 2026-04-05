@@ -6,6 +6,7 @@ data/io.github.justinf555.Moments.gschema.xml
 src/application.rs
 src/ui/collection_grid.rs
 src/ui/collection_grid/cell.rs
+src/ui/photo_grid.blp
 src/ui/photo_grid.rs
 src/ui/photo_grid/cell.rs
 src/ui/photo_grid/factory.rs
