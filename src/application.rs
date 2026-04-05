@@ -229,13 +229,9 @@ impl MomentsApplication {
 
     fn show_about(&self) {
         let Some(window) = self.active_window() else { return };
-        let app_name = if PROFILE == "development" {
-            "Moments (Development)".to_string()
-        } else {
-            "Moments".to_string()
-        };
+        let app_name = if PROFILE == "development" { "Moments (Development)" } else { "Moments" };
         let about = adw::AboutDialog::builder()
-            .application_name(&app_name)
+            .application_name(app_name)
             .application_icon(APP_ID)
             .developer_name("Unknown")
             .version(VERSION)
