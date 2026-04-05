@@ -38,17 +38,14 @@ jobs:
             org.gnome.Platform//50 \
             org.freedesktop.Sdk.Extension.rust-stable//25.08
 
-      - name: Cache cargo registry and build artifacts
+      - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: gnome50-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/*.rs') }}
-          restore-keys: |
-            gnome50-cargo-${{ hashFiles('**/Cargo.lock') }}-
-            gnome50-cargo-
+          key: gnome50-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: gnome50-cargo-
 
       - name: Generate config.rs stub
         run: |
@@ -99,17 +96,14 @@ jobs:
             org.gnome.Platform//50 \
             org.freedesktop.Sdk.Extension.rust-stable//25.08
 
-      - name: Cache cargo registry and build artifacts
+      - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: gnome50-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/*.rs') }}
-          restore-keys: |
-            gnome50-cargo-${{ hashFiles('**/Cargo.lock') }}-
-            gnome50-cargo-
+          key: gnome50-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: gnome50-cargo-
 
       - name: Generate config.rs stub
         run: |
@@ -169,17 +163,14 @@ jobs:
             org.gnome.Platform//50 \
             org.freedesktop.Sdk.Extension.rust-stable//25.08
 
-      - name: Cache cargo registry and build artifacts
+      - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: gnome50-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/*.rs') }}
-          restore-keys: |
-            gnome50-cargo-${{ hashFiles('**/Cargo.lock') }}-
-            gnome50-cargo-
+          key: gnome50-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: gnome50-cargo-
 
       - name: Generate config.rs stub
         run: |
@@ -239,17 +230,14 @@ jobs:
             org.gnome.Platform//50 \
             org.freedesktop.Sdk.Extension.rust-stable//25.08
 
-      - name: Cache cargo registry and build artifacts
+      - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: gnome50-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/*.rs') }}
-          restore-keys: |
-            gnome50-cargo-${{ hashFiles('**/Cargo.lock') }}-
-            gnome50-cargo-
+          key: gnome50-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: gnome50-cargo-
 
       - name: Generate config.rs stub
         run: |
