@@ -31,12 +31,12 @@ pub(crate) fn open_album_drilldown(
     album_id: AlbumId,
     album_name: &str,
 ) {
-    let model = Rc::new(PhotoGridModel::new(
+    let model = PhotoGridModel::new(
         Arc::clone(library),
         tokio.clone(),
         MediaFilter::Album { album_id },
         bus_sender.clone(),
-    ));
+    );
     let view = PhotoGridView::new();
     view.setup(
         Arc::clone(library),
@@ -45,7 +45,7 @@ pub(crate) fn open_album_drilldown(
         Rc::clone(texture_cache),
         bus_sender.clone(),
     );
-    view.set_model(Rc::clone(&model));
+    view.set_model(model.clone());
     model.subscribe_to_bus();
 
     let page = adw::NavigationPage::builder()
