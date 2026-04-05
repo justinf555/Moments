@@ -22,6 +22,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Cache Flatpak SDK
+        uses: actions/cache@v4
+        with:
+          path: /var/lib/flatpak
+          key: flatpak-gnome50-sdk-v1
+
       - name: Install Flatpak and GNOME 50 SDK
         run: |
           sudo apt-get update -qq
@@ -73,6 +79,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Cache Flatpak SDK
+        uses: actions/cache@v4
+        with:
+          path: /var/lib/flatpak
+          key: flatpak-gnome50-sdk-v1
 
       - name: Install Flatpak and GNOME 50 SDK
         run: |
@@ -135,6 +147,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Cache Flatpak SDK
+        uses: actions/cache@v4
+        with:
+          path: /var/lib/flatpak
+          key: flatpak-gnome50-sdk-v1
+
       - name: Install Flatpak and GNOME 50 SDK
         run: |
           sudo apt-get update -qq
@@ -195,6 +213,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Cache Flatpak SDK
+        uses: actions/cache@v4
+        with:
+          path: /var/lib/flatpak
+          key: flatpak-gnome50-sdk-v1
 
       - name: Install Flatpak, GNOME 50 SDK, and mutter
         run: |
