@@ -280,7 +280,7 @@ impl PhotoGrid {
             }
         });
 
-        let model_ready = model.clone();
+        let model_weak = model.downgrade();
         let adj_ready = scrolled.vadjustment();
         let update_on_ready = Rc::clone(&update_empty);
         model.set_on_page_ready(move || {
@@ -288,7 +288,9 @@ impl PhotoGrid {
             let visible_end = adj_ready.value() + adj_ready.page_size();
             let trigger_point = adj_ready.upper() * 0.75;
             if visible_end >= trigger_point {
-                model_ready.load_more();
+                if let Some(model) = model_weak.upgrade() {
+                    model.load_more();
+                }
             }
         });
 

@@ -66,12 +66,6 @@ glib::wrapper! {
     pub struct PhotoGridModel(ObjectSubclass<imp::PhotoGridModel>);
 }
 
-impl Default for PhotoGridModel {
-    fn default() -> Self {
-        glib::Object::new()
-    }
-}
-
 impl PhotoGridModel {
     pub fn new(
         library: Arc<dyn Library>,

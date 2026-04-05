@@ -279,8 +279,8 @@ mod bus_broadcast {
         });
         flush_events();
 
-        assert_eq!(model_a.store.n_items(), 0);
-        assert_eq!(model_b.store.n_items(), 0);
+        assert_eq!(model_a.store().n_items(), 0);
+        assert_eq!(model_b.store().n_items(), 0);
     }
 
     #[gtk::test]
@@ -301,8 +301,8 @@ mod bus_broadcast {
         });
         flush_events();
 
-        let obj_a = model_a.store.item(0).unwrap().downcast::<MediaItemObject>().unwrap();
-        let obj_b = model_b.store.item(0).unwrap().downcast::<MediaItemObject>().unwrap();
+        let obj_a = model_a.store().item(0).unwrap().downcast::<MediaItemObject>().unwrap();
+        let obj_b = model_b.store().item(0).unwrap().downcast::<MediaItemObject>().unwrap();
         assert!(obj_a.is_favorite());
         assert!(obj_b.is_favorite());
     }
@@ -320,7 +320,7 @@ mod bus_broadcast {
         });
         flush_events();
 
-        assert_eq!(model_all.store.n_items(), 0);
+        assert_eq!(model_all.store().n_items(), 0);
     }
 
     #[gtk::test]
@@ -337,8 +337,8 @@ mod bus_broadcast {
         });
         flush_events();
 
-        assert_eq!(model_all.store.n_items(), 1, "non-trashed → All");
-        assert_eq!(model_trash.store.n_items(), 0, "non-trashed ≠ Trashed");
+        assert_eq!(model_all.store().n_items(), 1, "non-trashed → All");
+        assert_eq!(model_trash.store().n_items(), 0, "non-trashed ≠ Trashed");
     }
 
     #[gtk::test]
@@ -355,8 +355,8 @@ mod bus_broadcast {
         bus.sender().send(AppEvent::AssetSynced { item });
         flush_events();
 
-        assert_eq!(model_all.store.n_items(), 0, "trashed ≠ All");
-        assert_eq!(model_trash.store.n_items(), 1, "trashed → Trashed");
+        assert_eq!(model_all.store().n_items(), 0, "trashed ≠ All");
+        assert_eq!(model_trash.store().n_items(), 1, "trashed → Trashed");
     }
 }
 
