@@ -184,20 +184,6 @@ impl AlbumGridView {
 
         let widget = nav_view.clone().upcast::<gtk::Widget>();
 
-        // Remove drill-down view actions when popping back to the album grid.
-        nav_view.connect_popped(|nav, _page| {
-            let is_albums = nav
-                .visible_page()
-                .and_then(|p| p.tag())
-                .map(|t| t == "albums")
-                .unwrap_or(false);
-            if is_albums {
-                if let Some(win) = nav.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
-                    win.insert_action_group("view", None::<&gtk::gio::SimpleActionGroup>);
-                }
-            }
-        });
-
         // ── Toggle empty ↔ grid based on store count ────────────────────
         {
             let stack = content_stack.clone();

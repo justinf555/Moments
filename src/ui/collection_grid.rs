@@ -120,20 +120,6 @@ impl CollectionGridView {
         imp.grid_view.set_model(Some(&selection));
         imp.grid_view.set_factory(Some(&factory));
 
-        // Remove the person grid's zoom actions when navigating back.
-        imp.nav_view.connect_popped(|nav, _page| {
-            let is_collection = nav
-                .visible_page()
-                .and_then(|p| p.tag())
-                .map(|t| t == "collection")
-                .unwrap_or(false);
-            if is_collection {
-                if let Some(win) = nav.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
-                    win.insert_action_group("view", None::<&gtk::gio::SimpleActionGroup>);
-                }
-            }
-        });
-
         // Wire toggle buttons to reload.
         {
             let f = Rc::clone(&filter);
