@@ -343,7 +343,7 @@ pub struct PhotoGridView {
     nav_view: adw::NavigationView,
     photo_grid: PhotoGrid,
     photo_viewer: PhotoViewer,
-    video_viewer: Rc<VideoViewer>,
+    video_viewer: VideoViewer,
     library: Arc<dyn Library>,
     tokio: tokio::runtime::Handle,
     texture_cache: Rc<texture_cache::TextureCache>,
@@ -462,7 +462,8 @@ impl PhotoGridView {
         // ── Viewers (reused across activations) ──────────────────────────────
         let photo_viewer = PhotoViewer::new();
         photo_viewer.setup(Arc::clone(&library), tokio.clone(), bus_sender.clone());
-        let video_viewer = Rc::new(VideoViewer::new(Arc::clone(&library), tokio.clone(), bus_sender.clone()));
+        let video_viewer = VideoViewer::new();
+        video_viewer.setup(Arc::clone(&library), tokio.clone(), bus_sender.clone());
 
         // ── Zoom actions ─────────────────────────────────────────────────────
         let action_group = gio::SimpleActionGroup::new();
@@ -644,8 +645,7 @@ impl PhotoGridView {
             {
                 let nav_view = self.nav_view.clone();
                 let photo_viewer = self.photo_viewer.clone();
-                let video_viewer = Rc::clone(&self.video_viewer);
-                let video_nav_page = self.video_viewer.nav_page().clone();
+                let video_viewer = self.video_viewer.clone();
                 move |items, index| {
                     let media_type = items
                         .get(index)
@@ -661,7 +661,7 @@ impl PhotoGridView {
 
                     let (tag, nav_page): (&str, adw::NavigationPage) = if media_type == MediaType::Video {
                         video_viewer.show(items, index);
-                        ("video-viewer", video_nav_page.clone())
+                        ("video-viewer", video_viewer.clone().upcast())
                     } else {
                         photo_viewer.show(items, index);
                         ("viewer", photo_viewer.clone().upcast())

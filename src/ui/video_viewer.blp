@@ -1,0 +1,80 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $MomentsVideoViewer : Adw.NavigationPage {
+  tag: "video-viewer";
+  title: "Video";
+
+  child: Adw.ToolbarView toolbar_view {
+    focusable: true;
+
+    [top]
+    Adw.HeaderBar header {
+      [end]
+      Gtk.MenuButton menu_btn {
+        icon-name: "view-more-symbolic";
+        tooltip-text: _("Menu");
+      }
+
+      [end]
+      Gtk.ToggleButton info_toggle {
+        icon-name: "dialog-information-symbolic";
+        tooltip-text: _("Video Information (F9)");
+      }
+
+      [end]
+      Gtk.Button star_btn {
+        icon-name: "non-starred-symbolic";
+        tooltip-text: _("Toggle Favourite");
+
+        styles ["flat"]
+      }
+    }
+
+    content: Adw.OverlaySplitView info_split {
+      show-sidebar: false;
+      sidebar-position: end;
+
+      content: Gtk.Overlay overlay {
+        Gtk.Video video {
+          hexpand: true;
+          vexpand: true;
+          autoplay: true;
+        }
+
+        [overlay]
+        Gtk.Spinner spinner {
+          halign: center;
+          valign: center;
+          width-request: 32;
+          height-request: 32;
+          visible: false;
+        }
+
+        [overlay]
+        Gtk.Button prev_btn {
+          icon-name: "go-previous-symbolic";
+          tooltip-text: _("Previous");
+          valign: center;
+          halign: start;
+          margin-start: 12;
+          visible: false;
+
+          styles ["circular", "osd"]
+        }
+
+        [overlay]
+        Gtk.Button next_btn {
+          icon-name: "go-next-symbolic";
+          tooltip-text: _("Next");
+          valign: center;
+          halign: end;
+          margin-end: 12;
+          visible: false;
+
+          styles ["circular", "osd"]
+        }
+      };
+    };
+  };
+}
