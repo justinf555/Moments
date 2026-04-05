@@ -38,3 +38,45 @@ impl CommandHandler for FavoriteCommand {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::test_helpers::MockLibrary;
+    use crate::library::media::MediaId;
+
+    #[tokio::test]
+    async fn handles_favorite_requested() {
+        assert!(FavoriteCommand.handles(&AppEvent::FavoriteRequested { ids: vec![], state: true }));
+    }
+
+    #[tokio::test]
+    async fn ignores_other_events() {
+        assert!(!FavoriteCommand.handles(&AppEvent::Ready));
+    }
+
+    #[tokio::test]
+    async fn success_emits_favorite_changed() {
+        let lib = MockLibrary::mock();
+        let (bus, rx) = crate::event_bus::EventSender::test_channel();
+        let ids = vec![MediaId::new("abc".into())];
+        FavoriteCommand.execute(
+            AppEvent::FavoriteRequested { ids: ids.clone(), state: true },
+            &lib, &bus,
+        ).await;
+        let event = rx.try_recv().unwrap();
+        assert!(matches!(event, AppEvent::FavoriteChanged { ids: ref got, is_favorite: true } if got == &ids));
+    }
+
+    #[tokio::test]
+    async fn failure_emits_error() {
+        let lib = MockLibrary::mock_failing("db error");
+        let (bus, rx) = crate::event_bus::EventSender::test_channel();
+        FavoriteCommand.execute(
+            AppEvent::FavoriteRequested { ids: vec![MediaId::new("x".into())], state: false },
+            &lib, &bus,
+        ).await;
+        let event = rx.try_recv().unwrap();
+        assert!(matches!(event, AppEvent::Error(msg) if msg.contains("favourite")));
+    }
+}

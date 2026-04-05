@@ -35,3 +35,39 @@ impl CommandHandler for DeleteCommand {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::test_helpers::MockLibrary;
+    use crate::library::media::MediaId;
+
+    #[tokio::test]
+    async fn handles_delete_requested() {
+        assert!(DeleteCommand.handles(&AppEvent::DeleteRequested { ids: vec![] }));
+    }
+
+    #[tokio::test]
+    async fn ignores_other_events() {
+        assert!(!DeleteCommand.handles(&AppEvent::Ready));
+    }
+
+    #[tokio::test]
+    async fn success_emits_deleted() {
+        let lib = MockLibrary::mock();
+        let (bus, rx) = crate::event_bus::EventSender::test_channel();
+        let ids = vec![MediaId::new("abc".into())];
+        DeleteCommand.execute(AppEvent::DeleteRequested { ids: ids.clone() }, &lib, &bus).await;
+        let event = rx.try_recv().unwrap();
+        assert!(matches!(event, AppEvent::Deleted { ids: ref got } if got == &ids));
+    }
+
+    #[tokio::test]
+    async fn failure_emits_error() {
+        let lib = MockLibrary::mock_failing("db error");
+        let (bus, rx) = crate::event_bus::EventSender::test_channel();
+        DeleteCommand.execute(AppEvent::DeleteRequested { ids: vec![MediaId::new("x".into())] }, &lib, &bus).await;
+        let event = rx.try_recv().unwrap();
+        assert!(matches!(event, AppEvent::Error(msg) if msg.contains("delete")));
+    }
+}
