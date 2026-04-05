@@ -20,6 +20,7 @@ struct VideoViewerInner {
     nav_page: adw::NavigationPage,
     toolbar_view: adw::ToolbarView,
     video: gtk::Video,
+    spinner: gtk::Spinner,
     prev_btn: gtk::Button,
     next_btn: gtk::Button,
     star_btn: gtk::Button,
@@ -102,8 +103,10 @@ impl VideoViewerInner {
 
         debug!(%id, "load_video: resolving path");
 
-        // Stop any current playback.
+        // Stop any current playback and show loading spinner.
         self.video.set_file(None::<&gio::File>);
+        self.spinner.set_spinning(true);
+        self.spinner.set_visible(true);
 
         glib::MainContext::default().spawn_local(async move {
             let path = match tokio
@@ -115,7 +118,12 @@ impl VideoViewerInner {
             {
                 Some(p) => p,
                 None => {
+                    inner.spinner.set_spinning(false);
+                    inner.spinner.set_visible(false);
                     tracing::warn!("load_video: could not resolve original path");
+                    inner.bus_sender.send(AppEvent::Error(
+                        "Could not find original video".into(),
+                    ));
                     return;
                 }
             };
@@ -123,6 +131,8 @@ impl VideoViewerInner {
             debug!(path = %path.display(), exists = path.exists(), "load_video: setting file on GtkVideo");
             let file = gio::File::for_path(&path);
             inner.video.set_file(Some(&file));
+            inner.spinner.set_spinning(false);
+            inner.spinner.set_visible(false);
             debug!("load_video: file set, playback should start (autoplay=true)");
         });
     }
@@ -260,8 +270,18 @@ impl VideoViewer {
         next_btn.add_css_class("circular");
         next_btn.add_css_class("osd");
 
+        // ── Spinner (centred over video while loading) ────────────────────────
+        let spinner = gtk::Spinner::builder()
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .width_request(32)
+            .height_request(32)
+            .visible(false)
+            .build();
+
         let overlay = gtk::Overlay::new();
         overlay.set_child(Some(&video));
+        overlay.add_overlay(&spinner);
         overlay.add_overlay(&prev_btn);
         overlay.add_overlay(&next_btn);
 
@@ -291,6 +311,7 @@ impl VideoViewer {
             nav_page,
             toolbar_view: toolbar_view.clone(),
             video,
+            spinner,
             prev_btn,
             next_btn,
             star_btn,
