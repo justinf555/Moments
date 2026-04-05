@@ -18,11 +18,7 @@
         "append-path" : "/usr/lib/sdk/rust-stable/bin",
         "build-args" : [
             "--share=network"
-        ],
-        "env" : {
-            "RUST_BACKTRACE" : "1",
-            "PKG_CONFIG_PATH" : "/app/lib/pkgconfig:/app/share/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig"
-        }
+        ]
     },
     "cleanup" : [
         "/include",
