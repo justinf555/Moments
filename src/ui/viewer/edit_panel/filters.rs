@@ -1,12 +1,12 @@
-use std::rc::Rc;
 use std::sync::Arc;
 
 use adw::prelude::*;
+use adw::subclass::prelude::*;
 use gtk::glib;
 
 use crate::library::edit_renderer::{filter_preset, FILTER_NAMES};
 
-use super::{render_to_picture, EditPanel, RENDER_DEBOUNCE_MS};
+use super::{EditPanel, RENDER_DEBOUNCE_MS};
 
 /// Convert a filter preset name to a user-facing display name.
 pub(super) fn filter_display_name(name: &str) -> &str {
@@ -61,7 +61,9 @@ fn make_filter_swatch(display_name: &str, preset_name: Option<&str>) -> gtk::Tog
 
 impl EditPanel {
     /// Populate the Filters expander with preset grid and strength slider.
-    pub(super) fn build_filters_content(&self, expander: &adw::ExpanderRow) {
+    pub(super) fn build_filters_content(&self) {
+        let imp = self.imp();
+
         // ── Filter preset grid ───────────────────────────────────────────────
         let filter_box = gtk::FlowBox::builder()
             .selection_mode(gtk::SelectionMode::None)
@@ -80,29 +82,24 @@ impl EditPanel {
         let original_btn = make_filter_swatch("None", None);
         filter_box.append(&original_btn);
 
-        {
-            let filter_buttons = Rc::clone(&self.filter_buttons);
-            self.filter_buttons
-                .borrow_mut()
-                .push(("original".to_string(), original_btn.clone()));
+        imp.filter_buttons
+            .borrow_mut()
+            .push(("original".to_string(), original_btn));
 
-            for name in FILTER_NAMES {
-                let display_name = filter_display_name(name);
-                let btn = make_filter_swatch(display_name, Some(name));
-                filter_box.append(&btn);
-                filter_buttons.borrow_mut().push((name.to_string(), btn));
-            }
+        for name in FILTER_NAMES {
+            let display_name = filter_display_name(name);
+            let btn = make_filter_swatch(display_name, Some(name));
+            filter_box.append(&btn);
+            imp.filter_buttons
+                .borrow_mut()
+                .push((name.to_string(), btn));
         }
 
         // Wire filter button clicks.
-        let buttons = self.filter_buttons.borrow().clone();
+        let buttons = imp.filter_buttons.borrow().clone();
         for (name, btn) in &buttons {
-            let session = Rc::clone(&self.session);
-            let picture = self.picture.clone();
-            let tokio = self.tokio.clone();
-            let all_buttons = Rc::clone(&self.filter_buttons);
+            let weak = self.downgrade();
             let auto_save = self.auto_save_closure();
-            let filter_subtitle = Rc::clone(&self.filter_subtitle);
             let name = name.clone();
 
             btn.connect_clicked(move |clicked_btn| {
@@ -110,8 +107,11 @@ impl EditPanel {
                     return;
                 }
 
+                let Some(panel) = weak.upgrade() else { return };
+                let imp = panel.imp();
+
                 // Deactivate other filter buttons.
-                for (other_name, other_btn) in all_buttons.borrow().iter() {
+                for (other_name, other_btn) in imp.filter_buttons.borrow().iter() {
                     if *other_name != name {
                         other_btn.set_active(false);
                     }
@@ -123,12 +123,10 @@ impl EditPanel {
                 } else {
                     filter_display_name(&name)
                 };
-                if let Some(ref lbl) = *filter_subtitle.borrow() {
-                    lbl.set_label(display);
-                }
+                imp.filter_subtitle.set_label(display);
 
                 let preview = {
-                    let mut session = session.borrow_mut();
+                    let mut session = imp.session.borrow_mut();
                     let Some(s) = session.as_mut() else { return };
 
                     if name == "original" {
@@ -145,7 +143,7 @@ impl EditPanel {
                     (Arc::clone(&s.preview_image), s.state.clone(), s.render_gen)
                 };
 
-                render_to_picture(&picture, &tokio, &session, preview);
+                panel.render_to_picture(preview);
                 auto_save();
             });
         }
@@ -155,25 +153,24 @@ impl EditPanel {
             .selectable(false)
             .child(&filter_box)
             .build();
-        expander.add_row(&grid_row);
+        imp.filters_expander.add_row(&grid_row);
 
         // ── Strength slider ──────────────────────────────────────────────────
         let strength_row = self.make_slider_row("Strength", 0.0, 1.0, 1.0, move |val| {
             (val * 100.0).round() as i32
         });
         {
-            let session = Rc::clone(&self.session);
-            let picture = self.picture.clone();
-            let tokio = self.tokio.clone();
-            let render_debounce = Rc::clone(&self.render_debounce);
+            let weak = self.downgrade();
             let auto_save = self.auto_save_closure();
             let scale = strength_row.1.clone();
 
             scale.connect_value_changed(move |scale| {
+                let Some(panel) = weak.upgrade() else { return };
+                let imp = panel.imp();
                 let strength = scale.value();
 
                 {
-                    let mut session = session.borrow_mut();
+                    let mut session = imp.session.borrow_mut();
                     let Some(s) = session.as_mut() else { return };
 
                     if let Some(ref filter_name) = s.state.filter.clone() {
@@ -195,31 +192,24 @@ impl EditPanel {
                     s.render_gen += 1;
                 }
 
-                if let Some(id) = render_debounce.take() {
+                if let Some(id) = imp.render_debounce.take() {
                     id.remove();
                 }
 
-                let session_inner = Rc::clone(&session);
-                let picture_inner = picture.clone();
-                let tokio_inner = tokio.clone();
-                let debounce_cell = Rc::clone(&render_debounce);
+                let weak_inner = panel.downgrade();
                 let source_id = glib::timeout_add_local_once(
                     std::time::Duration::from_millis(RENDER_DEBOUNCE_MS as u64),
                     move || {
-                        debounce_cell.set(None);
-                        let preview = {
-                            let session = session_inner.borrow();
-                            let Some(s) = session.as_ref() else { return };
-                            (Arc::clone(&s.preview_image), s.state.clone(), s.render_gen)
-                        };
-                        render_to_picture(&picture_inner, &tokio_inner, &session_inner, preview);
+                        let Some(panel) = weak_inner.upgrade() else { return };
+                        panel.imp().render_debounce.set(None);
+                        panel.render_preview();
                     },
                 );
-                render_debounce.set(Some(source_id));
+                imp.render_debounce.set(Some(source_id));
 
                 auto_save();
             });
         }
-        expander.add_row(&strength_row.0);
+        imp.filters_expander.add_row(&strength_row.0);
     }
 }

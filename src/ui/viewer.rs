@@ -140,14 +140,15 @@ impl PhotoViewer {
 
         // Build sub-panels and add to sidebar stack.
         let info_panel = InfoPanel::new();
-        let edit_panel = EditPanel::new(
+        let edit_panel = EditPanel::new();
+        edit_panel.setup(
             imp.picture.clone(),
             library,
             tokio,
             bus_sender,
         );
         imp.sidebar_stack.add_named(info_panel.widget(), Some("info"));
-        imp.sidebar_stack.add_named(edit_panel.widget(), Some("edit"));
+        imp.sidebar_stack.add_named(&edit_panel, Some("edit"));
         *imp.info_panel.borrow_mut() = Some(info_panel);
         *imp.edit_panel.borrow_mut() = Some(edit_panel);
 

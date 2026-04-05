@@ -9,6 +9,7 @@
     <file preprocess="xml-stripblanks">ui/setup_window/immich_setup_page.ui</file>
     <file preprocess="xml-stripblanks">ui/viewer.ui</file>
     <file preprocess="xml-stripblanks">ui/video_viewer.ui</file>
+    <file preprocess="xml-stripblanks">ui/viewer/edit_panel.ui</file>
     <file preprocess="xml-stripblanks">shortcuts-dialog.ui</file>
     <file>style.css</file>
   </gresource>
