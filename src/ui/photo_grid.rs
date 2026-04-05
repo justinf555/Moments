@@ -355,7 +355,7 @@ pub struct PhotoGridView {
     exit_selection: gio::SimpleAction,
     /// Selection count label shown in selection mode headerbar.
     selection_title: gtk::Label,
-    /// Action bar — kept alive; buttons rebuilt per-filter in `set_model`.
+    /// Action bar — field keeps the widget alive alongside the toolbar view.
     #[allow(dead_code)]
     action_bar: gtk::ActionBar,
     /// Box inside the action bar holding the current buttons.

@@ -5,11 +5,16 @@ use tracing::instrument;
 
 use super::error::LibraryError;
 
-/// Content-addressable identity for every media asset in the library.
+/// Opaque identity for every media asset in the library.
 ///
-/// The value is the lowercase hex-encoded BLAKE3 hash of the file's raw bytes.
-/// This is stable across renames and re-imports of the same content, and serves
-/// as the primary key in the `media` database table and the thumbnail filename.
+/// The format depends on the backend:
+/// - **Local**: 64-char lowercase hex BLAKE3 hash of the file's raw bytes.
+///   Stable across renames and re-imports of the same content.
+/// - **Immich**: server-assigned UUID (e.g. `"a1b2c3d4-..."`).
+///
+/// Consumers should treat the value as an opaque string — never parse or
+/// validate the format. Serves as the primary key in the `media` database
+/// table and the thumbnail filename.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MediaId(String);
 

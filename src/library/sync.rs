@@ -126,6 +126,8 @@ impl SyncHandle {
 struct SyncManager {
     client: ImmichClient,
     db: Database,
+    /// Event channel to the GTK idle loop. Sends use `let _ =` because
+    /// the receiver may be dropped during app shutdown — this is intentional.
     events: Sender<LibraryEvent>,
     shutdown_rx: tokio::sync::watch::Receiver<bool>,
     thumbnail_tx: tokio::sync::mpsc::Sender<MediaId>,

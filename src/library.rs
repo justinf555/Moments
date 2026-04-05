@@ -2,7 +2,6 @@ pub mod album;
 pub mod bundle;
 pub mod config;
 pub mod db;
-#[allow(dead_code)]
 pub mod edit_renderer;
 pub mod editing;
 pub mod error;

@@ -146,6 +146,7 @@ impl LibraryStorage for ImmichLibrary {
     }
 
     fn set_cache_limit(&self, mb: u32) {
+        // Receiver may be gone during shutdown — intentionally ignored.
         let _ = self.cache_limit_tx.send(mb);
     }
 }
