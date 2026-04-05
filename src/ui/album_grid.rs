@@ -11,7 +11,6 @@ use crate::library::album::{Album, AlbumId};
 use crate::library::Library;
 use crate::ui::album_dialogs;
 use crate::ui::photo_grid::texture_cache::TextureCache;
-use crate::ui::ContentView;
 
 mod actions;
 pub mod card;
@@ -353,8 +352,8 @@ impl AlbumGridView {
     }
 }
 
-impl ContentView for AlbumGridView {
-    fn widget(&self) -> &gtk::Widget {
+impl AlbumGridView {
+    pub fn widget(&self) -> &gtk::Widget {
         &self.widget
     }
 }

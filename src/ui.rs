@@ -1,5 +1,3 @@
-use gtk;
-
 pub mod album_dialogs;
 pub mod album_grid;
 pub mod album_picker_dialog;
@@ -18,22 +16,3 @@ pub mod window;
 
 pub use setup_window::MomentsSetupWindow;
 pub use window::MomentsWindow;
-
-/// A view that can be placed in the content area of the main shell.
-///
-/// Each implementor owns its own `AdwToolbarView` + `AdwHeaderBar`, following
-/// the Fractal / GNOME Settings pattern of per-view header bars rather than
-/// a shared header with swappable controls.
-pub trait ContentView {
-    /// The root widget to place inside the split-view content pane.
-    fn widget(&self) -> &gtk::Widget;
-
-    /// Optional action group for view-specific actions (e.g. zoom).
-    ///
-    /// When the coordinator navigates to this view, the returned group is
-    /// installed on the window under the `"view"` prefix so that accelerators
-    /// and action-name references resolve to the correct view.
-    fn view_actions(&self) -> Option<&gtk::gio::SimpleActionGroup> {
-        None
-    }
-}

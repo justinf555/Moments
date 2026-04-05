@@ -1,8 +1,6 @@
 use adw::prelude::*;
 use gtk;
 
-use super::ContentView;
-
 /// Full-screen status page shown when the library has no photos.
 ///
 /// Registered as the "empty" route in the `ContentCoordinator`. The
@@ -30,16 +28,14 @@ impl EmptyLibraryView {
         let widget = page.upcast::<gtk::Widget>();
         Self { widget }
     }
+
+    pub fn widget(&self) -> &gtk::Widget {
+        &self.widget
+    }
 }
 
 impl Default for EmptyLibraryView {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl ContentView for EmptyLibraryView {
-    fn widget(&self) -> &gtk::Widget {
-        &self.widget
     }
 }

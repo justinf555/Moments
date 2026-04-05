@@ -1,17 +1,15 @@
 use std::collections::HashMap;
-use std::rc::Rc;
 
+use gtk::prelude::*;
 use tracing::{debug, warn};
-
-use super::ContentView;
 
 /// A view slot that is either ready to display or waiting to be materialised.
 enum ViewSlot {
-    /// View is constructed and its widget is in the stack.
-    Ready(Rc<dyn ContentView>),
+    /// View widget is in the stack.
+    Ready,
     /// View will be constructed on first [`ContentCoordinator::navigate`] call.
     /// The `Option` wrapper allows `take()` to move the `FnOnce` out.
-    Lazy(Option<Box<dyn FnOnce() -> Rc<dyn ContentView>>>),
+    Lazy(Option<Box<dyn FnOnce() -> gtk::Widget>>),
 }
 
 /// Routes sidebar navigation to the correct content view.
@@ -21,6 +19,9 @@ enum ViewSlot {
 /// Lazily registered views are materialised on first navigation — the factory
 /// closure creates the view, its widget is added to the stack, and the slot
 /// is replaced with `Ready`.
+///
+/// View-specific action groups are self-installed by each view on its own
+/// widget — GTK's action resolution walks up the widget tree to find them.
 ///
 /// See `docs/design-lazy-view-loading.md` for the full design rationale.
 pub struct ContentCoordinator {
@@ -44,22 +45,22 @@ impl ContentCoordinator {
         }
     }
 
-    /// Register a view under the given route id (eager).
+    /// Register a view widget under the given route id (eager).
     ///
-    /// The view's root widget is added as a named child of the stack immediately.
-    pub fn register(&mut self, id: &str, view: Rc<dyn ContentView>) {
-        self.stack.add_named(view.widget(), Some(id));
-        self.slots.insert(id.to_owned(), ViewSlot::Ready(view));
+    /// The widget is added as a named child of the stack immediately.
+    pub fn register(&mut self, id: &str, widget: &impl IsA<gtk::Widget>) {
+        self.stack.add_named(widget, Some(id));
+        self.slots.insert(id.to_owned(), ViewSlot::Ready);
     }
 
     /// Register a view factory that will be called on first navigation (lazy).
     ///
     /// No widget is added to the stack until [`navigate`](Self::navigate) is
-    /// called with this route id. The factory closure should create the view,
-    /// subscribe its model to the event bus, and return the view.
+    /// called with this route id. The factory closure should create the view
+    /// widget, set up its model and event subscriptions, and return the widget.
     pub fn register_lazy<F>(&mut self, id: &str, factory: F)
     where
-        F: FnOnce() -> Rc<dyn ContentView> + 'static,
+        F: FnOnce() -> gtk::Widget + 'static,
     {
         self.slots
             .insert(id.to_owned(), ViewSlot::Lazy(Some(Box::new(factory))));
@@ -69,31 +70,22 @@ impl ContentCoordinator {
     ///
     /// If the slot is `Lazy`, the factory is called to materialise the view
     /// and add its widget to the stack. Subsequent navigations are instant.
-    ///
-    /// Returns the view's optional action group so the caller can install it
-    /// on the window (e.g. under the `"view"` prefix for zoom actions).
-    pub fn navigate(&mut self, id: &str) -> Option<gtk::gio::SimpleActionGroup> {
+    pub fn navigate(&mut self, id: &str) {
         let Some(slot) = self.slots.get_mut(id) else {
             warn!(route = %id, "navigate: unknown route");
-            return None;
+            return;
         };
 
         // Materialise lazy views on first access.
         if let ViewSlot::Lazy(factory) = slot {
             let factory = factory.take().expect("lazy factory called once");
             debug!(route = %id, "materialising lazy view");
-            let view = factory();
-            self.stack.add_named(view.widget(), Some(id));
-            *slot = ViewSlot::Ready(view);
+            let widget = factory();
+            self.stack.add_named(&widget, Some(id));
+            *slot = ViewSlot::Ready;
         }
 
         self.stack.set_visible_child_name(id);
-
-        if let Some(ViewSlot::Ready(view)) = self.slots.get(id) {
-            view.view_actions().cloned()
-        } else {
-            None
-        }
     }
 
     /// Returns `true` if a route with the given id is registered.

@@ -9,7 +9,6 @@ use tracing::{debug, info};
 
 use crate::library::Library;
 use crate::ui::photo_grid::texture_cache::TextureCache;
-use crate::ui::ContentView;
 
 mod actions;
 pub mod cell;
@@ -343,8 +342,8 @@ fn incremental_reload(
     });
 }
 
-impl ContentView for CollectionGridView {
-    fn widget(&self) -> &gtk::Widget {
+impl CollectionGridView {
+    pub fn widget(&self) -> &gtk::Widget {
         &self.widget
     }
 }

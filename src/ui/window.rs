@@ -302,7 +302,8 @@ impl MomentsWindow {
         content_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
         let mut coordinator = ContentCoordinator::new(content_stack.clone());
 
-        coordinator.register("empty", Rc::new(EmptyLibraryView::new()));
+        let empty = EmptyLibraryView::new();
+        coordinator.register("empty", empty.widget());
 
         let photos_model = Rc::new(PhotoGridModel::new(
             Arc::clone(library),
@@ -319,7 +320,7 @@ impl MomentsWindow {
         ));
         photos_view.set_model(Rc::clone(&photos_model));
         photos_model.subscribe(bus);
-        coordinator.register("photos", photos_view);
+        coordinator.register("photos", photos_view.widget());
 
         (content_stack, Rc::new(RefCell::new(coordinator)), photos_model)
     }
@@ -351,7 +352,7 @@ impl MomentsWindow {
                 let view = Rc::new(PhotoGridView::new(lib, tk, s, tc, bs));
                 view.set_model(Rc::clone(&model));
                 model.subscribe_to_bus();
-                view
+                view.widget().clone()
             });
         }
 
@@ -373,7 +374,7 @@ impl MomentsWindow {
                 let view = Rc::new(PhotoGridView::new(lib, tk, s, tc, bs));
                 view.set_model(Rc::clone(&model));
                 model.subscribe_to_bus();
-                view
+                view.widget().clone()
             });
         }
 
@@ -393,7 +394,7 @@ impl MomentsWindow {
                 let view = Rc::new(PhotoGridView::new(lib, tk, s, tc, bs));
                 view.set_model(Rc::clone(&model));
                 model.subscribe_to_bus();
-                view
+                view.widget().clone()
             });
         }
 
@@ -412,7 +413,7 @@ impl MomentsWindow {
                         view_ref.reload();
                     }));
                 }
-                view
+                view.widget().clone()
             });
         }
 
@@ -423,7 +424,8 @@ impl MomentsWindow {
             let tc = Rc::clone(texture_cache);
             let bs = bus_sender.clone();
             coordinator.register_lazy("albums", move || {
-                Rc::new(super::album_grid::AlbumGridView::new(lib, tk, s, tc, bs))
+                let view = super::album_grid::AlbumGridView::new(lib, tk, s, tc, bs);
+                view.widget().clone()
             });
         }
     }
@@ -486,17 +488,11 @@ impl MomentsWindow {
                     ));
                     view.set_model(Rc::clone(&model));
                     model.subscribe_to_bus();
-                    coord.register(id, view);
+                    coord.register(id, view.widget());
                 }
-                let actions = coord.navigate(id);
-                if let Some(actions) = actions {
-                    win.insert_action_group("view", Some(&actions));
-                }
+                coord.navigate(id);
             } else {
-                let actions = coordinator.borrow_mut().navigate(id);
-                if let Some(actions) = actions {
-                    win.insert_action_group("view", Some(&actions));
-                }
+                coordinator.borrow_mut().navigate(id);
             }
         });
     }
@@ -509,9 +505,7 @@ impl MomentsWindow {
     /// Navigate to the given route by id (e.g. "recent", "photos").
     pub fn navigate(&self, route_id: &str) {
         if let Some(coordinator) = self.imp().coordinator.get() {
-            if let Some(actions) = coordinator.borrow_mut().navigate(route_id) {
-                self.insert_action_group("view", Some(&actions));
-            }
+            coordinator.borrow_mut().navigate(route_id);
         }
     }
 

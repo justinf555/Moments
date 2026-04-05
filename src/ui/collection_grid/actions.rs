@@ -12,7 +12,6 @@ use crate::library::Library;
 use crate::ui::photo_grid::model::PhotoGridModel;
 use crate::ui::photo_grid::texture_cache::TextureCache;
 use crate::ui::photo_grid::PhotoGridView;
-use crate::ui::ContentView;
 
 use super::item::{CollectionItemData, CollectionItemObject};
 use super::PeopleFilter;
@@ -79,13 +78,6 @@ pub(super) fn wire_activation(
             .title(&display_name)
             .child(view.widget())
             .build();
-
-        // Install the person grid's zoom actions on the window.
-        if let Some(actions) = view.view_actions() {
-            if let Some(win) = nav.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
-                win.insert_action_group("view", Some(actions));
-            }
-        }
 
         nav.push(&person_page);
     });

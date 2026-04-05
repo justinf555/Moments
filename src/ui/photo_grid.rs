@@ -12,7 +12,7 @@ use crate::library::media::MediaType;
 use crate::library::Library;
 use crate::ui::video_viewer::VideoViewer;
 use crate::ui::viewer::PhotoViewer;
-use crate::ui::ContentView;
+use gtk::prelude::WidgetExt;
 
 pub mod action_bar;
 pub mod actions;
@@ -348,7 +348,6 @@ pub struct PhotoGridView {
     tokio: tokio::runtime::Handle,
     texture_cache: Rc<texture_cache::TextureCache>,
     widget: gtk::Widget,
-    view_actions: gio::SimpleActionGroup,
     /// Shared selection mode flag — read by factory closures.
     selection_mode: Rc<Cell<bool>>,
     /// Selection mode exit action — triggered by cancel, escape, or auto-exit.
@@ -613,6 +612,10 @@ impl PhotoGridView {
 
         let widget = nav_view.clone().upcast::<gtk::Widget>();
 
+        // Install view actions on the nav_view so GTK's action resolution
+        // finds them when walking up the widget tree.
+        nav_view.insert_action_group("view", Some(&action_group));
+
         Self {
             nav_view,
             photo_grid,
@@ -622,7 +625,6 @@ impl PhotoGridView {
             tokio,
             texture_cache,
             widget,
-            view_actions: action_group,
             selection_mode,
             exit_selection,
             selection_title,
@@ -828,13 +830,9 @@ fn set_empty_state_for_filter(
     page.set_description(Some(description));
 }
 
-impl ContentView for PhotoGridView {
-    fn widget(&self) -> &gtk::Widget {
+impl PhotoGridView {
+    pub fn widget(&self) -> &gtk::Widget {
         &self.widget
-    }
-
-    fn view_actions(&self) -> Option<&gio::SimpleActionGroup> {
-        Some(&self.view_actions)
     }
 }
 
