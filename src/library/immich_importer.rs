@@ -37,11 +37,13 @@ impl ImmichImportJob {
         // Insert all candidates into the upload queue.
         for path in &candidates {
             let path_str = path.to_string_lossy();
+            // Best-effort: queue tracking is advisory, not blocking.
             let _ = self.db.insert_upload_pending(&path_str, now).await;
         }
 
         for (idx, path) in candidates.iter().enumerate() {
             let current = idx + 1;
+            // Receiver may be dropped during shutdown.
             let _ = self.events.send(LibraryEvent::ImportProgress {
                 current,
                 total,
@@ -57,15 +59,17 @@ impl ImmichImportJob {
                 Err(e) => {
                     let path_str = path.to_string_lossy();
                     tracing::warn!(path = %path_str, "upload failed: {e}");
+                    // Best-effort: status tracking is advisory.
                     let _ = self.db.set_upload_status(&path_str, 2, Some(&e.to_string())).await;
                     summary.failed += 1;
                 }
             }
         }
 
-        // Clean up completed uploads.
+        // Best-effort: cleanup failure doesn't affect the import result.
         let _ = self.db.clear_completed_uploads().await;
 
+        // Receiver may be dropped during shutdown.
         let _ = self.events.send(LibraryEvent::ImportComplete(summary));
     }
 
@@ -86,6 +90,7 @@ impl ImmichImportJob {
             .unwrap_or_default();
 
         if formats.media_type_with_sniff(source, &ext).is_none() {
+            // Best-effort: status tracking is advisory.
             let _ = self.db.set_upload_status(&path_str, 3, None).await;
             return Ok(UploadResult::Unsupported);
         }
@@ -100,6 +105,7 @@ impl ImmichImportJob {
         .await
         .map_err(|e| LibraryError::Runtime(e.to_string()))??;
 
+        // Best-effort: status tracking is advisory.
         let _ = self.db.set_upload_hash(&path_str, &sha1_hex).await;
 
         // Get file created time for the upload.
@@ -136,6 +142,7 @@ impl ImmichImportJob {
             .await?;
 
         if resp.status == "duplicate" {
+            // Best-effort: status tracking is advisory.
             let _ = self.db.set_upload_status(&path_str, 3, None).await;
             return Ok(UploadResult::Duplicate);
         }
@@ -181,7 +188,9 @@ impl ImmichImportJob {
         };
 
         self.db.upsert_media(&record).await?;
+        // Receiver may be dropped during shutdown.
         let _ = self.events.send(LibraryEvent::AssetSynced { item });
+        // Best-effort: status tracking is advisory.
         let _ = self.db.set_upload_status(&path_str, 1, None).await;
 
         Ok(UploadResult::Created)

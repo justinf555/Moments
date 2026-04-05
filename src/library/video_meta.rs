@@ -54,11 +54,13 @@ pub fn extract_video_metadata(path: &Path) -> VideoMetaInfo {
     // PAUSED reads container headers without decoding frames.
     if pipeline.set_state(gst::State::Paused).is_err() {
         warn!("failed to pause pipeline");
+        // Best-effort: pipeline may already be torn down.
         let _ = pipeline.set_state(gst::State::Null);
         return info;
     }
 
     // Wait for state change (up to 5 seconds).
+    // Ignore result — timeout just means we proceed without full state info.
     let _ = pipeline.state(Some(gst::ClockTime::from_seconds(5)));
 
     if let Some(duration) = pipeline.query_duration::<gst::ClockTime>() {
@@ -69,6 +71,7 @@ pub fn extract_video_metadata(path: &Path) -> VideoMetaInfo {
         warn!("could not determine video duration");
     }
 
+    // Best-effort: pipeline may already be torn down.
     let _ = pipeline.set_state(gst::State::Null);
     info
 }

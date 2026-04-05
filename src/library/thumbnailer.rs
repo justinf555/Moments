@@ -56,6 +56,7 @@ impl ThumbnailJob {
     pub async fn generate(self, media_id: MediaId, source: PathBuf) {
         if let Err(e) = self.try_generate(&media_id, &source).await {
             warn!(%media_id, error = %e, "thumbnail generation failed");
+            // Best-effort: DB failure here doesn't warrant a second error path.
             let _ = self.db.set_thumbnail_failed(&media_id).await;
         }
     }
@@ -113,6 +114,7 @@ impl ThumbnailJob {
             .await?;
 
         debug!(%media_id, "thumbnail ready");
+        // Receiver may be dropped during shutdown.
         self.events
             .send(LibraryEvent::ThumbnailReady {
                 media_id: media_id.clone(),
