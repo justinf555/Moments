@@ -48,15 +48,15 @@ A full audit of `src/ui/` found:
 
 ## Conversion targets
 
-| # | Struct | File | Service deps | Blueprint | Priority |
-|---|--------|------|-------------|-----------|----------|
-| 1 | `PhotoViewer` | `viewer.rs` | library, tokio, bus_sender | Yes — static headerbar + overlay + split | First (fewest deps, most static) |
-| 2 | `VideoViewer` | `video_viewer.rs` | library, tokio, bus_sender | Yes — similar to PhotoViewer | First (same shape) |
-| 3 | `EditPanel` | `viewer/edit_panel.rs` | tokio, library, bus_sender | Partial — section skeleton yes, dynamic sliders no | Second |
-| 4 | `AlbumGridView` | `album_grid.rs` | library, tokio, texture_cache, bus_sender | Partial — headerbar/empty state yes, grid no | Third |
-| 5 | `PhotoGridView` | `photo_grid.rs` | library, tokio, bus_sender, texture_cache | Partial — headerbar/action bar yes, grid no | Third |
-| 6 | `CollectionGridView` | `collection_grid.rs` | library | Partial — headerbar/filter buttons yes | Third |
-| 7 | `PhotoGridModel` | `photo_grid/model.rs` | library, bus_sender | No — pure logic, no layout | Last |
+| # | Struct | File | Service deps | Blueprint | Priority | Status |
+|---|--------|------|-------------|-----------|----------|--------|
+| 1 | `PhotoViewer` | `viewer.rs` | library, tokio, bus_sender | Yes — static headerbar + overlay + split | First (fewest deps, most static) | **Done** (#433) |
+| 2 | `VideoViewer` | `video_viewer.rs` | library, tokio, bus_sender | Yes — similar to PhotoViewer | First (same shape) | Pending |
+| 3 | `EditPanel` | `viewer/edit_panel.rs` | tokio, library, bus_sender | Partial — section skeleton yes, dynamic sliders no | Second | Pending |
+| 4 | `AlbumGridView` | `album_grid.rs` | library, tokio, texture_cache, bus_sender | Partial — headerbar/empty state yes, grid no | Third | Pending |
+| 5 | `PhotoGridView` | `photo_grid.rs` | library, tokio, bus_sender, texture_cache | Partial — headerbar/action bar yes, grid no | Third | Pending |
+| 6 | `CollectionGridView` | `collection_grid.rs` | library | Partial — headerbar/filter buttons yes | Third | Pending |
+| 7 | `PhotoGridModel` | `photo_grid/model.rs` | library, bus_sender | No — pure logic, no layout | Last | Pending |
 
 ### What does NOT get converted
 
@@ -111,8 +111,16 @@ impl FooView {
 mod imp {
     use std::cell::OnceCell;
 
-    #[derive(Default)]
+    // NOTE: Do NOT derive Debug — Arc<dyn Library> and EventSender
+    // don't implement Debug, so OnceCell::set().unwrap() would fail
+    // to compile. Use assert!() for setup guards instead.
+    #[derive(Default, gtk::CompositeTemplate)]
+    #[template(resource = "/io/github/justinf555/Moments/ui/foo_view.ui")]
     pub struct FooView {
+        // Blueprint template children
+        #[template_child]
+        pub(super) header: TemplateChild<adw::HeaderBar>,
+
         // Service dependencies — set once via setup()
         pub(super) library: OnceCell<Arc<dyn Library>>,
         pub(super) tokio: OnceCell<tokio::runtime::Handle>,
@@ -126,35 +134,18 @@ mod imp {
     impl ObjectSubclass for FooView {
         const NAME: &'static str = "MomentsFooView";
         type Type = super::FooView;
-        type ParentType = gtk::Widget;  // or adw::Bin, etc.
+        type ParentType = gtk::Widget;  // or adw::NavigationPage, etc.
 
         fn class_init(klass: &mut Self::Class) {
-            // If using Blueprint:
             klass.bind_template();
-            // Set layout manager if needed:
-            klass.set_layout_manager_type::<gtk::BinLayout>();
-            klass.set_css_name("foo-view");
         }
 
         fn instance_init(obj: &glib::subclass::InitializingObject<Self>) {
-            obj.init_template();  // If using Blueprint
+            obj.init_template();
         }
     }
 
-    impl ObjectImpl for FooView {
-        fn constructed(&self) {
-            self.parent_constructed();
-            // Build static widget tree here (or use Blueprint template)
-        }
-
-        fn dispose(&self) {
-            // Unparent children if this is a gtk::Widget subclass
-            while let Some(child) = self.obj().first_child() {
-                child.unparent();
-            }
-        }
-    }
-
+    impl ObjectImpl for FooView {}
     impl WidgetImpl for FooView {}
 }
 
@@ -162,6 +153,12 @@ glib::wrapper! {
     pub struct FooView(ObjectSubclass<imp::FooView>)
         @extends gtk::Widget,
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+
+impl Default for FooView {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl FooView {
@@ -177,18 +174,22 @@ impl FooView {
         bus_sender: EventSender,
     ) {
         let imp = self.imp();
-        imp.library.set(library).unwrap();
-        imp.tokio.set(tokio).unwrap();
-        imp.bus_sender.set(bus_sender).unwrap();
+        // Use assert! — OnceCell::set().unwrap() requires Debug on the
+        // error type (the value itself), which our deps don't implement.
+        assert!(imp.library.set(library).is_ok(), "setup called twice");
+        assert!(imp.tokio.set(tokio).is_ok(), "setup called twice");
+        assert!(imp.bus_sender.set(bus_sender).is_ok(), "setup called twice");
 
         self.setup_signals();
     }
 
     fn setup_signals(&self) {
-        // Signal handlers access deps via self.imp() — no cloning
-        let view_weak = self.downgrade();
+        // Signal handlers access deps via self.imp() — no cloning deps
+        // into closures. Use `weak` for the WeakRef variable name to
+        // avoid shadowing when upgrading at multiple points in async blocks.
+        let weak = self.downgrade();
         button.connect_clicked(move |_| {
-            let Some(view) = view_weak.upgrade() else { return };
+            let Some(view) = weak.upgrade() else { return };
             let imp = view.imp();
             let lib = imp.library.get().unwrap().clone();
             let bus = imp.bus_sender.get().unwrap().clone();
@@ -272,14 +273,19 @@ readability.
 Each conversion is one PR. Every PR must:
 
 - [ ] Create a feature branch
-- [ ] Add `mod imp {}` with `ObjectSubclass`, `ObjectImpl`, `WidgetImpl`
+- [ ] Add `mod imp {}` with `ObjectSubclass`, `ObjectImpl`, `WidgetImpl` (+ parent-specific impl)
 - [ ] Move service deps to `OnceCell` fields on imp struct
-- [ ] Replace constructor with `new()` + `setup()` pattern
+- [ ] Replace constructor with `new()` + `Default` impl + `setup()` pattern
+- [ ] Use `assert!(imp.field.set(x).is_ok())` instead of `.unwrap()` for OnceCell guards
 - [ ] Migrate signal handlers to use `self.imp()` access
+- [ ] Name weak refs `weak` (not the type name) to avoid shadowing in async blocks
+- [ ] Add `use adw::subclass::prelude::*` in any split-out files that call `.imp()` or `.downgrade()`
 - [ ] Extract static layout to `.blp` template (if applicable per table above)
-- [ ] Add `.blp` file to `src/io.github.justinf555.Moments.gresource.xml`
+- [ ] Add `.blp` to `src/meson.build` blueprint input list
+- [ ] Add `.ui` to `src/moments.gresource.xml`
 - [ ] Add translatable strings to `po/POTFILES.in` (if Blueprint has i18n strings)
 - [ ] Remove `#[allow(clippy::too_many_arguments)]` if present
+- [ ] Remove `Rc<>` wrappers from callers — GObject ref-counting replaces `Rc`
 - [ ] Verify: `make lint`, `make test`, `make test-integration`
 - [ ] Verify: `make run-dev` — manual smoke test of affected view
 
@@ -397,6 +403,45 @@ viewer.setup(library, tokio, bus_sender);
 nav_view.push(&viewer);  // viewer IS the NavigationPage
 viewer.show(items, index);
 ```
+
+## Lessons learned (PhotoViewer conversion)
+
+Gotchas encountered during the first conversion that apply to all subsequent PRs:
+
+### 1. No `Debug` on imp struct
+
+`Arc<dyn Library>` and `EventSender` don't implement `Debug`. Since
+`OnceCell::set()` returns `Result<(), T>`, calling `.unwrap()` requires
+`T: Debug`. Use `assert!(field.set(x).is_ok(), "setup called twice")`
+instead. Also means the imp struct cannot `#[derive(Debug)]` — use
+`#[derive(Default, CompositeTemplate)]` only.
+
+### 2. Weak ref naming in async blocks
+
+Name the weak ref variable `weak` (not `viewer`/`view`). Async blocks
+often upgrade at multiple points — if you name the weak `viewer` and
+then write `let Some(viewer) = viewer.upgrade()`, the second upgrade
+attempt tries to call `.upgrade()` on the already-upgraded strong ref
+(which doesn't have that method), or the WeakRef gets moved on first use.
+
+### 3. `adw::subclass::prelude::*` required in split files
+
+Files like `loading.rs` and `menu.rs` that call `self.imp()` or
+`self.downgrade()` need `use adw::subclass::prelude::*`. These traits
+are not re-exported through `adw::prelude::*`.
+
+### 4. RefCell borrows in async blocks
+
+A `RefCell::borrow()` taken inside an async block can outlive the GObject
+ref it borrows through if both are local variables in the same scope.
+The compiler sees the `Ref<'_>` destructor running after the GObject drops.
+Fix: explicitly `drop(borrow)` before the block ends, or extract into a
+tighter scope.
+
+### 5. Clippy requires `Default` impl
+
+When `new()` takes no arguments, clippy fires `new_without_default`. Add
+`impl Default for FooView { fn default() -> Self { Self::new() } }`.
 
 ## Risks and mitigations
 
