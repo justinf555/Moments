@@ -37,20 +37,21 @@ pub(crate) fn open_album_drilldown(
         MediaFilter::Album { album_id },
         bus_sender.clone(),
     ));
-    let view = Rc::new(PhotoGridView::new(
+    let view = PhotoGridView::new();
+    view.setup(
         Arc::clone(library),
         tokio.clone(),
         settings.clone(),
         Rc::clone(texture_cache),
         bus_sender.clone(),
-    ));
+    );
     view.set_model(Rc::clone(&model));
     model.subscribe_to_bus();
 
     let page = adw::NavigationPage::builder()
         .tag("album-detail")
         .title(album_name)
-        .child(view.widget())
+        .child(&view)
         .build();
 
     nav_view.push(&page);
