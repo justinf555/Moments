@@ -105,9 +105,6 @@ mod imp {
     impl ObjectImpl for EditPanel {
         fn dispose(&self) {
             self.dispose_template();
-            while let Some(child) = self.obj().first_child() {
-                child.unparent();
-            }
         }
     }
     impl WidgetImpl for EditPanel {}
@@ -458,40 +455,15 @@ impl EditPanel {
             }
             imp.adjust_subtitle.set_label("No changes");
 
-            // Re-render original.
+            // Re-render original via the shared render pipeline.
             let preview = {
                 let session = imp.session.borrow();
-                session.as_ref().map(|s| Arc::clone(&s.preview_image))
+                session.as_ref().map(|s| {
+                    (Arc::clone(&s.preview_image), EditState::default(), s.render_gen)
+                })
             };
             if let Some(preview) = preview {
-                let pic = imp.picture.get().unwrap().clone();
-                let tk = imp.tokio.get().unwrap().clone();
-                glib::MainContext::default().spawn_local(async move {
-                    let state = EditState::default();
-                    let result = tk
-                        .spawn(async move {
-                            tokio::task::spawn_blocking(move || {
-                                let edited = apply_edits(&preview, &state);
-                                let rgba = edited.into_rgba8();
-                                let (w, h) = image::GenericImageView::dimensions(&rgba);
-                                (rgba.into_raw(), w as i32, h as i32)
-                            })
-                            .await
-                        })
-                        .await;
-
-                    if let Ok(Ok((raw, w, h))) = result {
-                        let gbytes = glib::Bytes::from_owned(raw);
-                        let texture = gdk::MemoryTexture::new(
-                            w,
-                            h,
-                            gdk::MemoryFormat::R8g8b8a8,
-                            &gbytes,
-                            (w as usize) * 4,
-                        );
-                        pic.set_paintable(Some(texture.upcast_ref::<gdk::Paintable>()));
-                    }
-                });
+                panel.render_to_picture(preview);
             }
 
             // Delete from DB.
