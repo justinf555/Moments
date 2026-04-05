@@ -1,13 +1,10 @@
 use std::rc::Rc;
-use std::sync::Arc;
 
 use gettextrs::gettext;
 use adw::prelude::*;
-use gtk::{gio, glib};
-use tracing::debug;
+use gtk::gio;
 
 use crate::library::album::AlbumId;
-use crate::library::Library;
 
 use super::card;
 use super::item::AlbumItemObject;
@@ -30,8 +27,6 @@ pub(crate) fn wire_selection_mode(
     multi_selection: &gtk::MultiSelection,
     store: &gio::ListStore,
     selection_mode: &Rc<std::cell::Cell<bool>>,
-    library: &Arc<dyn Library>,
-    tokio: &tokio::runtime::Handle,
     bus_sender: &crate::event_bus::EventSender,
 ) {
     // ── Enter selection mode ────────────────────────────────────────
@@ -101,8 +96,6 @@ pub(crate) fn wire_selection_mode(
         action_bar,
         multi_selection,
         store,
-        library,
-        tokio,
         bus_sender,
         &exit_selection,
     );
@@ -129,8 +122,6 @@ fn wire_batch_delete(
     action_bar: &gtk::ActionBar,
     multi_selection: &gtk::MultiSelection,
     store: &gio::ListStore,
-    library: &Arc<dyn Library>,
-    tokio: &tokio::runtime::Handle,
     bus_sender: &crate::event_bus::EventSender,
     exit_selection: &gio::SimpleAction,
 ) {
@@ -143,8 +134,6 @@ fn wire_batch_delete(
 
     let sel = multi_selection.clone();
     let st = store.clone();
-    let lib = Arc::clone(library);
-    let tk = tokio.clone();
     let bs = bus_sender.clone();
     let exit = exit_selection.clone();
     delete_btn.connect_clicked(move |btn| {
@@ -158,13 +147,11 @@ fn wire_batch_delete(
         for i in 0..st.n_items() {
             if sel.is_selected(i) {
                 if let Some(obj) = st.item(i).and_then(|o| o.downcast::<AlbumItemObject>().ok()) {
-                    ids.push(obj.album().id.as_str().to_owned());
+                    ids.push(AlbumId::from_raw(obj.album().id.as_str().to_owned()));
                 }
             }
         }
 
-        let lib = Arc::clone(&lib);
-        let tk = tk.clone();
         let bs = bs.clone();
         let exit = exit.clone();
         let msg = if n == 1 {
@@ -185,43 +172,14 @@ fn wire_batch_delete(
         dialog.set_default_response(Some("cancel"));
         dialog.set_close_response("cancel");
 
-        let ids_clone = ids.clone();
         dialog.connect_response(None, move |_, response| {
             if response != "delete" {
                 return;
             }
-            let lib = Arc::clone(&lib);
-            let tk = tk.clone();
-            let bs = bs.clone();
-            let exit = exit.clone();
-            let ids = ids_clone.clone();
-            glib::MainContext::default().spawn_local(async move {
-                for aid in &ids {
-                    let lib = Arc::clone(&lib);
-                    let id = AlbumId::from_raw(aid.clone());
-                    match tk.spawn(async move { lib.delete_album(&id).await }).await {
-                        Ok(Ok(())) => {
-                            debug!(album_id = %aid, "album deleted (batch)");
-                            bs.send(crate::app_event::AppEvent::AlbumDeleted {
-                                id: AlbumId::from_raw(aid.clone()),
-                            });
-                        }
-                        Ok(Err(e)) => {
-                            tracing::error!("failed to delete album {aid}: {e}");
-                            bs.send(crate::app_event::AppEvent::Error(
-                                format!("Failed to delete album: {e}"),
-                            ));
-                        }
-                        Err(e) => {
-                            tracing::error!("tokio join error: {e}");
-                            bs.send(crate::app_event::AppEvent::Error(
-                                format!("Failed to delete album: {e}"),
-                            ));
-                        }
-                    }
-                }
-                exit.activate(None);
+            bs.send(crate::app_event::AppEvent::DeleteAlbumRequested {
+                ids: ids.clone(),
             });
+            exit.activate(None);
         });
 
         if let Some(win) = btn.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {

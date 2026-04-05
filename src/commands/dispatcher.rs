@@ -7,6 +7,7 @@ use super::CommandHandler;
 use super::add_to_album::AddToAlbumCommand;
 use super::create_album::CreateAlbumCommand;
 use super::delete::DeleteCommand;
+use super::delete_album::DeleteAlbumCommand;
 use super::favorite::FavoriteCommand;
 use super::remove_from_album::RemoveFromAlbumCommand;
 use super::restore::RestoreCommand;
@@ -36,6 +37,7 @@ impl CommandDispatcher {
             Arc::new(RemoveFromAlbumCommand),
             Arc::new(AddToAlbumCommand),
             Arc::new(CreateAlbumCommand),
+            Arc::new(DeleteAlbumCommand),
         ];
 
         let tx = bus.sender();

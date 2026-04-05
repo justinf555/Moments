@@ -1,6 +1,7 @@
 pub mod add_to_album;
 pub mod create_album;
 pub mod delete;
+pub mod delete_album;
 pub mod dispatcher;
 pub mod favorite;
 pub mod remove_from_album;
