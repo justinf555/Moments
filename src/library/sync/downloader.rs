@@ -59,7 +59,7 @@ impl ThumbnailDownloader {
             // Emit progress every 10 thumbnails to update the status bar.
             if download_count.is_multiple_of(10) {
                 // Receiver may be dropped during shutdown.
-            let _ = self.events.send(LibraryEvent::ThumbnailDownloadProgress {
+                let _ = self.events.send(LibraryEvent::ThumbnailDownloadProgress {
                     completed: download_count,
                     total: download_count, // Total not known upfront; shows running count.
                 });
@@ -98,7 +98,7 @@ async fn download_thumbnail(
         let now = chrono::Utc::now().timestamp();
         db.set_thumbnail_ready(media_id, &path.to_string_lossy(), now).await?;
         // Receiver may be dropped during shutdown.
-    let _ = events.send(LibraryEvent::ThumbnailReady {
+        let _ = events.send(LibraryEvent::ThumbnailReady {
             media_id: media_id.clone(),
         });
         return Ok(());
