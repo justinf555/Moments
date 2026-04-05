@@ -5,6 +5,8 @@ pub mod dispatcher;
 pub mod favorite;
 pub mod remove_from_album;
 pub mod restore;
+#[cfg(test)]
+mod test_helpers;
 pub mod trash;
 
 use std::sync::Arc;

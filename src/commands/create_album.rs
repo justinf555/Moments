@@ -55,3 +55,64 @@ impl CommandHandler for CreateAlbumCommand {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::test_helpers::MockLibrary;
+    use crate::library::media::MediaId;
+
+    #[tokio::test]
+    async fn handles_create_album_requested() {
+        let event = AppEvent::CreateAlbumRequested { name: "Test".into(), ids: vec![] };
+        assert!(CreateAlbumCommand.handles(&event));
+    }
+
+    #[tokio::test]
+    async fn ignores_other_events() {
+        assert!(!CreateAlbumCommand.handles(&AppEvent::Ready));
+    }
+
+    #[tokio::test]
+    async fn success_without_ids_emits_album_created() {
+        let lib = MockLibrary::mock();
+        let (bus, rx) = crate::event_bus::EventSender::test_channel();
+        CreateAlbumCommand.execute(
+            AppEvent::CreateAlbumRequested { name: "Vacation".into(), ids: vec![] },
+            &lib, &bus,
+        ).await;
+        let event = rx.try_recv().unwrap();
+        assert!(matches!(event, AppEvent::AlbumCreated { ref name, .. } if name == "Vacation"));
+        // No AlbumMediaChanged since ids was empty.
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn success_with_ids_emits_created_and_media_changed() {
+        let lib = MockLibrary::mock();
+        let (bus, rx) = crate::event_bus::EventSender::test_channel();
+        CreateAlbumCommand.execute(
+            AppEvent::CreateAlbumRequested {
+                name: "Trip".into(),
+                ids: vec![MediaId::new("photo1".into())],
+            },
+            &lib, &bus,
+        ).await;
+        let event1 = rx.try_recv().unwrap();
+        assert!(matches!(event1, AppEvent::AlbumCreated { ref name, .. } if name == "Trip"));
+        let event2 = rx.try_recv().unwrap();
+        assert!(matches!(event2, AppEvent::AlbumMediaChanged { .. }));
+    }
+
+    #[tokio::test]
+    async fn failure_emits_error() {
+        let lib = MockLibrary::mock_failing("db error");
+        let (bus, rx) = crate::event_bus::EventSender::test_channel();
+        CreateAlbumCommand.execute(
+            AppEvent::CreateAlbumRequested { name: "Fail".into(), ids: vec![] },
+            &lib, &bus,
+        ).await;
+        let event = rx.try_recv().unwrap();
+        assert!(matches!(event, AppEvent::Error(msg) if msg.contains("create album")));
+    }
+}
