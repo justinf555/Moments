@@ -40,6 +40,9 @@
             "name" : "moments",
             "builddir" : true,
             "buildsystem" : "meson",
+            "config-opts" : [
+                "-Dbuildtype=release"
+            ],
             "sources" : [
                 {
                     "type" : "git",
