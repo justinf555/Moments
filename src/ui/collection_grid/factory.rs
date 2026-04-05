@@ -8,9 +8,6 @@ use super::item::CollectionItemObject;
 pub enum ThumbnailStyle {
     /// Circular clipping (used for People).
     Circular,
-    /// Square with rounded corners (used for Memories, Places, etc.).
-    #[allow(dead_code)]
-    Square,
 }
 
 /// Build a `SignalListItemFactory` for the collection grid.

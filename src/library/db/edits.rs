@@ -67,7 +67,6 @@ impl Database {
     }
 
     /// Mark the edit as rendered (uploaded to server).
-    #[allow(dead_code)]
     pub async fn mark_edit_rendered(&self, id: &MediaId) -> Result<(), LibraryError> {
         let id_str = id.as_str();
         let now = chrono::Utc::now().timestamp();

@@ -42,9 +42,6 @@ mod imp {
         /// Click handler for the checkbox — connected in factory `bind`,
         /// disconnected in factory `unbind`.
         pub checkbox_handler: RefCell<Option<glib::SignalHandlerId>>,
-        /// Debounce timer for thumbnail loading — cancelled on unbind so
-        /// fast-scrolled cells never decode textures.
-        pub texture_timer: RefCell<Option<glib::SourceId>>,
     }
 
     #[glib::object_subclass]

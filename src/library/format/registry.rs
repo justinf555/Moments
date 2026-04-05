@@ -128,7 +128,6 @@ impl FormatRegistry {
     }
 
     /// All extensions supported across all registered handlers.
-    #[allow(dead_code)]
     pub fn supported_extensions(&self) -> impl Iterator<Item = &str> {
         self.handlers.keys().map(String::as_str)
     }

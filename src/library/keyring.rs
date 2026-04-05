@@ -50,8 +50,8 @@ pub fn lookup_access_token(server_url: &str) -> Result<Option<String>, LibraryEr
     Ok(secret.map(|s| s.to_string()))
 }
 
-#[allow(dead_code)]
 /// Delete a stored Immich session token from the GNOME Keyring.
+#[allow(dead_code)] // Will be called by logout flow (not yet implemented)
 #[instrument(fields(server_url = %server_url))]
 pub fn delete_access_token(server_url: &str) -> Result<(), LibraryError> {
     let schema = schema();
