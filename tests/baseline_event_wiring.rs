@@ -11,8 +11,6 @@
 
 mod common;
 
-use std::rc::Rc;
-
 use gtk::prelude::*;
 
 use moments::app_event::AppEvent;
@@ -53,9 +51,9 @@ fn test_item_at(id: &str, taken_at: i64) -> MediaItem {
     item
 }
 
-fn make_model(filter: MediaFilter) -> Rc<PhotoGridModel> {
+fn make_model(filter: MediaFilter) -> PhotoGridModel {
     let (lib, tokio) = stub_deps();
-    Rc::new(PhotoGridModel::new(lib, tokio, filter, moments::event_bus::EventSender::no_op()))
+    PhotoGridModel::new(lib, tokio, filter, moments::event_bus::EventSender::no_op())
 }
 
 // ── MediaItemObject property tests ──────────────────────────────────────────
@@ -136,10 +134,10 @@ mod photo_grid_model {
     fn insert_item_sorted_adds_to_store() {
         let model = make_model(MediaFilter::All);
         model.insert_item_sorted(test_item("id-1"));
-        assert_eq!(model.store.n_items(), 1);
+        assert_eq!(model.store().n_items(), 1);
 
         model.insert_item_sorted(test_item("id-2"));
-        assert_eq!(model.store.n_items(), 2);
+        assert_eq!(model.store().n_items(), 2);
     }
 
     #[gtk::test]
@@ -147,7 +145,7 @@ mod photo_grid_model {
         let model = make_model(MediaFilter::All);
         model.insert_item_sorted(test_item("dup-id"));
         model.insert_item_sorted(test_item("dup-id"));
-        assert_eq!(model.store.n_items(), 1, "duplicate should be skipped");
+        assert_eq!(model.store().n_items(), 1, "duplicate should be skipped");
     }
 
     #[gtk::test]
@@ -158,9 +156,9 @@ mod photo_grid_model {
         model.insert_item_sorted(test_item_at("new", 3000));
         model.insert_item_sorted(test_item_at("mid", 2000));
 
-        let first = model.store.item(0).unwrap().downcast::<MediaItemObject>().unwrap();
-        let second = model.store.item(1).unwrap().downcast::<MediaItemObject>().unwrap();
-        let third = model.store.item(2).unwrap().downcast::<MediaItemObject>().unwrap();
+        let first = model.store().item(0).unwrap().downcast::<MediaItemObject>().unwrap();
+        let second = model.store().item(1).unwrap().downcast::<MediaItemObject>().unwrap();
+        let third = model.store().item(2).unwrap().downcast::<MediaItemObject>().unwrap();
 
         assert_eq!(first.item().id.as_str(), "new");
         assert_eq!(second.item().id.as_str(), "mid");
@@ -172,12 +170,12 @@ mod photo_grid_model {
         let model = make_model(MediaFilter::All);
         model.insert_item_sorted(test_item("keep"));
         model.insert_item_sorted(test_item("delete-me"));
-        assert_eq!(model.store.n_items(), 2);
+        assert_eq!(model.store().n_items(), 2);
 
         model.on_deleted(&MediaId::new("delete-me".to_string()));
-        assert_eq!(model.store.n_items(), 1);
+        assert_eq!(model.store().n_items(), 1);
 
-        let remaining = model.store.item(0).unwrap().downcast::<MediaItemObject>().unwrap();
+        let remaining = model.store().item(0).unwrap().downcast::<MediaItemObject>().unwrap();
         assert_eq!(remaining.item().id.as_str(), "keep");
     }
 
@@ -187,7 +185,7 @@ mod photo_grid_model {
         model.insert_item_sorted(test_item("exists"));
 
         model.on_deleted(&MediaId::new("not-in-store".to_string()));
-        assert_eq!(model.store.n_items(), 1, "store should be unchanged");
+        assert_eq!(model.store().n_items(), 1, "store should be unchanged");
     }
 
     #[gtk::test]
@@ -198,11 +196,11 @@ mod photo_grid_model {
         let id = MediaId::new("fav-test".to_string());
         model.on_favorite_changed(&id, true);
 
-        let obj = model.store.item(0).unwrap().downcast::<MediaItemObject>().unwrap();
+        let obj = model.store().item(0).unwrap().downcast::<MediaItemObject>().unwrap();
         assert!(obj.is_favorite(), "should be marked as favorite");
 
         model.on_favorite_changed(&id, false);
-        let obj = model.store.item(0).unwrap().downcast::<MediaItemObject>().unwrap();
+        let obj = model.store().item(0).unwrap().downcast::<MediaItemObject>().unwrap();
         assert!(!obj.is_favorite(), "should be unmarked");
     }
 
@@ -213,20 +211,20 @@ mod photo_grid_model {
         let mut item = test_item("fav-item");
         item.is_favorite = true;
         model.insert_item_sorted(item);
-        assert_eq!(model.store.n_items(), 1);
+        assert_eq!(model.store().n_items(), 1);
 
         model.on_favorite_changed(&MediaId::new("fav-item".to_string()), false);
-        assert_eq!(model.store.n_items(), 0, "unfavorited item should be removed");
+        assert_eq!(model.store().n_items(), 0, "unfavorited item should be removed");
     }
 
     #[gtk::test]
     fn on_trashed_removes_from_all_filter() {
         let model = make_model(MediaFilter::All);
         model.insert_item_sorted(test_item("trash-me"));
-        assert_eq!(model.store.n_items(), 1);
+        assert_eq!(model.store().n_items(), 1);
 
         model.on_trashed(&MediaId::new("trash-me".to_string()), true);
-        assert_eq!(model.store.n_items(), 0, "trashed item removed from All");
+        assert_eq!(model.store().n_items(), 0, "trashed item removed from All");
     }
 
     #[gtk::test]
@@ -236,10 +234,10 @@ mod photo_grid_model {
         let mut item = test_item("in-trash");
         item.is_trashed = true;
         model.insert_item_sorted(item);
-        assert_eq!(model.store.n_items(), 1);
+        assert_eq!(model.store().n_items(), 1);
 
         model.on_trashed(&MediaId::new("in-trash".to_string()), false);
-        assert_eq!(model.store.n_items(), 0, "restored item removed from Trash");
+        assert_eq!(model.store().n_items(), 0, "restored item removed from Trash");
     }
 
     #[gtk::test]
@@ -247,7 +245,7 @@ mod photo_grid_model {
         let model = make_model(MediaFilter::Trashed);
         let id = MediaId::new("nonexistent".to_string());
         model.on_favorite_changed(&id, true);
-        assert_eq!(model.store.n_items(), 0);
+        assert_eq!(model.store().n_items(), 0);
     }
 
     #[gtk::test]
