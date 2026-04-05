@@ -75,7 +75,11 @@ mod imp {
         }
     }
 
-    impl ObjectImpl for VideoViewer {}
+    impl ObjectImpl for VideoViewer {
+        fn dispose(&self) {
+            self.dispose_template();
+        }
+    }
     impl WidgetImpl for VideoViewer {}
     impl NavigationPageImpl for VideoViewer {}
 }

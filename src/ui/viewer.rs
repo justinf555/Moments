@@ -98,7 +98,11 @@ mod imp {
         }
     }
 
-    impl ObjectImpl for PhotoViewer {}
+    impl ObjectImpl for PhotoViewer {
+        fn dispose(&self) {
+            self.dispose_template();
+        }
+    }
     impl WidgetImpl for PhotoViewer {}
     impl NavigationPageImpl for PhotoViewer {}
 }
