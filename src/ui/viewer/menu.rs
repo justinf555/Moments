@@ -1,11 +1,11 @@
-use std::rc::Rc;
 use std::sync::Arc;
 
 use adw::prelude::*;
+use adw::subclass::prelude::*;
 
 use crate::app_event::AppEvent;
 
-use super::ViewerInner;
+use super::PhotoViewer;
 
 /// Build the overflow menu popover content for photo/video viewers.
 ///
@@ -96,31 +96,30 @@ pub fn find_menu_button(popover: &gtk::Popover, name: &str) -> Option<gtk::Butto
 /// Connects: Add to album, Share/Export/Wallpaper/Files stubs, Delete (trash + pop).
 pub(super) fn wire_overflow_menu(
     popover: &gtk::Popover,
-    menu_btn: &gtk::MenuButton,
-    inner: &Rc<ViewerInner>,
+    viewer: &PhotoViewer,
 ) {
     // Add to album
     if let Some(btn) = find_menu_button(popover, "add-to-album") {
-        let i = Rc::downgrade(inner);
-        let mb = menu_btn.clone();
+        let v = viewer.downgrade();
         let pop = popover.downgrade();
         btn.connect_clicked(move |_| {
             if let Some(p) = pop.upgrade() {
                 p.popdown();
             }
-            let Some(inner) = i.upgrade() else { return };
+            let Some(viewer) = v.upgrade() else { return };
+            let imp = viewer.imp();
             let id = {
-                let items = inner.items.borrow();
-                let idx = inner.current_index.get();
+                let items = imp.items.borrow();
+                let idx = imp.current_index.get();
                 items.get(idx).map(|obj| obj.item().id.clone())
             };
             let Some(id) = id else { return };
             crate::ui::album_picker_dialog::show_album_picker_dialog(
-                mb.upcast_ref::<gtk::Widget>(),
+                viewer.upcast_ref::<gtk::Widget>(),
                 vec![id],
-                Arc::clone(&inner.library),
-                inner.tokio.clone(),
-                inner.bus_sender.clone(),
+                Arc::clone(imp.library.get().unwrap()),
+                imp.tokio.get().unwrap().clone(),
+                imp.bus_sender.get().unwrap().clone(),
             );
         });
     }
@@ -139,22 +138,22 @@ pub(super) fn wire_overflow_menu(
 
     // Delete photo — trash + pop back to grid.
     if let Some(btn) = find_menu_button(popover, "delete") {
-        let i = Rc::downgrade(inner);
+        let v = viewer.downgrade();
         let pop = popover.downgrade();
         btn.connect_clicked(move |_| {
             if let Some(p) = pop.upgrade() {
                 p.popdown();
             }
-            let Some(inner) = i.upgrade() else { return };
+            let Some(viewer) = v.upgrade() else { return };
+            let imp = viewer.imp();
             let id = {
-                let items = inner.items.borrow();
-                let idx = inner.current_index.get();
+                let items = imp.items.borrow();
+                let idx = imp.current_index.get();
                 items.get(idx).map(|obj| obj.item().id.clone())
             };
             let Some(id) = id else { return };
-            inner.bus_sender.send(AppEvent::TrashRequested { ids: vec![id] });
-            if let Some(nav_view) = inner
-                .nav_page
+            imp.bus_sender.get().unwrap().send(AppEvent::TrashRequested { ids: vec![id] });
+            if let Some(nav_view) = viewer
                 .parent()
                 .and_then(|p| p.downcast::<adw::NavigationView>().ok())
             {

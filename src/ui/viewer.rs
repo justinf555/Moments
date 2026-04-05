@@ -1,12 +1,11 @@
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
 use std::sync::Arc;
 
 use adw::prelude::*;
+use adw::subclass::prelude::*;
 use gettextrs::gettext;
 use gtk::{gdk, glib};
 
-use crate::library::media::MediaMetadataRecord;
+use crate::library::media::{MediaId, MediaMetadataRecord};
 use crate::library::Library;
 use crate::app_event::AppEvent;
 use crate::event_bus::EventSender;
@@ -23,61 +22,158 @@ use info_panel::InfoPanel;
 // Re-export shared menu utilities used by video_viewer.
 pub use menu::{build_viewer_menu_popover, find_menu_button};
 
-// ── Inner state ───────────────────────────────────────────────────────────────
+// ── GObject subclass ─────────────────────────────────────────────────────────
 
-/// All mutable viewer state plus convenience widget handles.
-///
-/// Wrapped in `Rc<ViewerInner>` so signal-handler closures can share it without
-/// unsafe code. Closures hold `Rc::clone(inner)` for async work or
-/// `Rc::downgrade(inner)` for purely reactive handlers where outliving the
-/// viewer would be a bug.
-struct ViewerInner {
-    nav_page: adw::NavigationPage,
-    /// Focusable container for the key controller (← → F9 Escape).
-    toolbar_view: adw::ToolbarView,
-    picture: gtk::Picture,
-    spinner: gtk::Spinner,
-    prev_btn: gtk::Button,
-    next_btn: gtk::Button,
-    star_btn: gtk::Button,
-    info_split: adw::OverlaySplitView,
-    info_panel: InfoPanel,
-    edit_panel: EditPanel,
-    /// Stack in the sidebar to switch between info and edit panels.
-    sidebar_stack: gtk::Stack,
-    info_toggle: gtk::ToggleButton,
-    edit_toggle: gtk::ToggleButton,
-    /// Snapshot of the grid's item list taken at activation time.
-    items: RefCell<Vec<MediaItemObject>>,
-    current_index: Cell<usize>,
-    /// Monotonically increasing counter. Async loads compare against this
-    /// value captured at launch to discard stale results.
-    /// `None` when no deferred load is pending.
-    load_gen: Cell<u64>,
-    /// Set by `show_at` when the viewer is being pushed onto the
-    /// NavigationView. The `shown` signal handler reads this to start
-    /// the full-res load after the slide-in animation completes.
-    /// `None` when no deferred load is pending.
-    pending_load: RefCell<Option<crate::library::media::MediaId>>,
-    /// Cached metadata for the currently displayed item.
-    current_metadata: RefCell<Option<MediaMetadataRecord>>,
-    /// Tracks a pending optimistic favourite toggle for rollback on failure.
-    /// Contains `(media_id, previous_favourite_state)`.
-    pending_fav: RefCell<Option<(crate::library::media::MediaId, bool)>>,
-    library: Arc<dyn Library>,
-    tokio: tokio::runtime::Handle,
-    bus_sender: EventSender,
+mod imp {
+    use super::*;
+    use std::cell::{Cell, OnceCell, RefCell};
+
+    use gtk::CompositeTemplate;
+
+    #[derive(Default, CompositeTemplate)]
+    #[template(resource = "/io/github/justinf555/Moments/ui/viewer.ui")]
+    pub struct PhotoViewer {
+        // Template children (from Blueprint)
+        #[template_child]
+        pub toolbar_view: TemplateChild<adw::ToolbarView>,
+        #[template_child]
+        pub picture: TemplateChild<gtk::Picture>,
+        #[template_child]
+        pub spinner: TemplateChild<gtk::Spinner>,
+        #[template_child]
+        pub prev_btn: TemplateChild<gtk::Button>,
+        #[template_child]
+        pub next_btn: TemplateChild<gtk::Button>,
+        #[template_child]
+        pub star_btn: TemplateChild<gtk::Button>,
+        #[template_child]
+        pub info_split: TemplateChild<adw::OverlaySplitView>,
+        #[template_child]
+        pub sidebar_stack: TemplateChild<gtk::Stack>,
+        #[template_child]
+        pub info_toggle: TemplateChild<gtk::ToggleButton>,
+        #[template_child]
+        pub edit_toggle: TemplateChild<gtk::ToggleButton>,
+        #[template_child]
+        pub menu_btn: TemplateChild<gtk::MenuButton>,
+
+        // Service dependencies (set once in setup)
+        pub library: OnceCell<Arc<dyn Library>>,
+        pub tokio: OnceCell<tokio::runtime::Handle>,
+        pub bus_sender: OnceCell<EventSender>,
+
+        // Owned sub-panels (set in setup, not GObject yet)
+        pub info_panel: RefCell<Option<InfoPanel>>,
+        pub edit_panel: RefCell<Option<EditPanel>>,
+
+        // Mutable state
+        pub items: RefCell<Vec<MediaItemObject>>,
+        pub current_index: Cell<usize>,
+        /// Monotonically increasing counter. Async loads compare against this
+        /// value captured at launch to discard stale results.
+        pub load_gen: Cell<u64>,
+        /// Set by `show_at` when the viewer is being pushed onto the
+        /// NavigationView. The `shown` signal handler reads this to start
+        /// the full-res load after the slide-in animation completes.
+        pub pending_load: RefCell<Option<MediaId>>,
+        /// Cached metadata for the currently displayed item.
+        pub current_metadata: RefCell<Option<MediaMetadataRecord>>,
+        /// Tracks a pending optimistic favourite toggle for rollback on failure.
+        /// Contains `(media_id, previous_favourite_state)`.
+        pub pending_fav: RefCell<Option<(MediaId, bool)>>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for PhotoViewer {
+        const NAME: &'static str = "MomentsPhotoViewer";
+        type Type = super::PhotoViewer;
+        type ParentType = adw::NavigationPage;
+
+        fn class_init(klass: &mut Self::Class) {
+            klass.bind_template();
+        }
+
+        fn instance_init(obj: &glib::subclass::InitializingObject<Self>) {
+            obj.init_template();
+        }
+    }
+
+    impl ObjectImpl for PhotoViewer {}
+    impl WidgetImpl for PhotoViewer {}
+    impl NavigationPageImpl for PhotoViewer {}
 }
 
-impl ViewerInner {
+glib::wrapper! {
+    pub struct PhotoViewer(ObjectSubclass<imp::PhotoViewer>)
+        @extends adw::NavigationPage, gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+
+impl Default for PhotoViewer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PhotoViewer {
+    pub fn new() -> Self {
+        glib::Object::new()
+    }
+
+    /// Inject service dependencies, build sub-panels, and wire signal handlers.
+    pub fn setup(
+        &self,
+        library: Arc<dyn Library>,
+        tokio: tokio::runtime::Handle,
+        bus_sender: EventSender,
+    ) {
+        let imp = self.imp();
+
+        // Store service deps.
+        assert!(imp.library.set(library.clone()).is_ok(), "setup called twice");
+        assert!(imp.tokio.set(tokio.clone()).is_ok(), "setup called twice");
+        assert!(imp.bus_sender.set(bus_sender.clone()).is_ok(), "setup called twice");
+
+        // Build sub-panels and add to sidebar stack.
+        let info_panel = InfoPanel::new();
+        let edit_panel = EditPanel::new(
+            imp.picture.clone(),
+            library,
+            tokio,
+            bus_sender,
+        );
+        imp.sidebar_stack.add_named(info_panel.widget(), Some("info"));
+        imp.sidebar_stack.add_named(edit_panel.widget(), Some("edit"));
+        *imp.info_panel.borrow_mut() = Some(info_panel);
+        *imp.edit_panel.borrow_mut() = Some(edit_panel);
+
+        // Build and attach overflow menu.
+        let menu_popover = menu::build_viewer_menu_popover(true, "Delete photo");
+        imp.menu_btn.set_popover(Some(&menu_popover));
+
+        // Wire all signal handlers.
+        self.setup_signals(&menu_popover);
+    }
+
+    /// Load `items` and navigate to `index`.
+    ///
+    /// Replaces the current item list, resets async state, and starts loading
+    /// the new photo. Call this every time the user activates a grid item.
+    pub fn show(&self, items: Vec<MediaItemObject>, index: usize) {
+        *self.imp().items.borrow_mut() = items;
+        self.show_at(index);
+    }
+
     /// Switch to the item at `index`.
     ///
     /// Updates the title, sets the thumbnail immediately, updates navigation
     /// button visibility, and kicks off async loads for full-res and metadata.
-    fn show_at(self: &Rc<Self>, index: usize) {
+    fn show_at(&self, index: usize) {
+        let imp = self.imp();
+
         // Extract what we need before releasing the borrow.
         let (id, filename, texture, count) = {
-            let items = self.items.borrow();
+            let items = imp.items.borrow();
             let Some(obj) = items.get(index) else { return };
             (
                 obj.item().id.clone(),
@@ -87,64 +183,65 @@ impl ViewerInner {
             )
         };
 
-        self.current_index.set(index);
-        let gen = self.load_gen.get() + 1;
-        self.load_gen.set(gen);
-        *self.current_metadata.borrow_mut() = None;
+        imp.current_index.set(index);
+        let gen = imp.load_gen.get() + 1;
+        imp.load_gen.set(gen);
+        *imp.current_metadata.borrow_mut() = None;
 
         // AdwHeaderBar reads the title directly from the NavigationPage.
-        self.nav_page.set_title(&filename);
+        self.set_title(&filename);
 
         // Show cached thumbnail while full-res loads.
-        self.picture
+        imp.picture
             .set_paintable(texture.as_ref().map(|t| t.upcast_ref::<gdk::Paintable>()));
 
-        self.prev_btn.set_visible(index > 0);
-        self.next_btn.set_visible(index + 1 < count);
+        imp.prev_btn.set_visible(index > 0);
+        imp.next_btn.set_visible(index + 1 < count);
 
         // Sync star button with the current item's favourite state.
         {
-            let items = self.items.borrow();
+            let items = imp.items.borrow();
             if let Some(obj) = items.get(index) {
                 let is_fav = obj.is_favorite();
-                self.star_btn.set_icon_name(if is_fav {
+                imp.star_btn.set_icon_name(if is_fav {
                     "starred-symbolic"
                 } else {
                     "non-starred-symbolic"
                 });
                 if is_fav {
-                    self.star_btn.add_css_class("warning");
+                    imp.star_btn.add_css_class("warning");
                 } else {
-                    self.star_btn.remove_css_class("warning");
+                    imp.star_btn.remove_css_class("warning");
                 }
                 let fav_label = if is_fav {
                     gettext("Remove from favourites")
                 } else {
                     gettext("Add to favourites")
                 };
-                self.star_btn
+                imp.star_btn
                     .update_property(&[gtk::accessible::Property::Label(&fav_label)]);
             }
         }
 
         // Collapse info panel to avoid showing stale metadata.
-        self.info_split.set_show_sidebar(false);
+        imp.info_split.set_show_sidebar(false);
 
         // Defer full-res load until the page transition completes (shown
         // signal) to avoid a stutter as the large image replaces the
         // thumbnail mid-animation. If the page is already visible (e.g.
         // prev/next navigation), start immediately.
-        if self.nav_page.is_mapped() {
+        if self.is_mapped() {
             self.start_full_res_load(gen, id.clone());
             self.load_metadata_async(gen, id);
         } else {
-            *self.pending_load.borrow_mut() = Some(id);
+            *imp.pending_load.borrow_mut() = Some(id);
         }
     }
 
-    fn navigate_prev(self: &Rc<Self>) {
-        let items = self.items.borrow();
-        let mut idx = self.current_index.get();
+    fn navigate_prev(&self) {
+        let imp = self.imp();
+        let items = imp.items.borrow();
+        let mut idx = imp.current_index.get();
         // Skip video items — they belong in VideoViewer.
         while idx > 0 {
             idx -= 1;
@@ -156,10 +253,11 @@ impl ViewerInner {
         }
     }
 
-    fn navigate_next(self: &Rc<Self>) {
-        let items = self.items.borrow();
+    fn navigate_next(&self) {
+        let imp = self.imp();
+        let items = imp.items.borrow();
         let len = items.len();
-        let mut idx = self.current_index.get();
+        let mut idx = imp.current_index.get();
         // Skip video items — they belong in VideoViewer.
         while idx + 1 < len {
             idx += 1;
@@ -170,226 +268,55 @@ impl ViewerInner {
             }
         }
     }
-}
 
-// ── Public API ────────────────────────────────────────────────────────────────
-
-/// Full-resolution photo viewer with prev/next navigation and a metadata panel.
-///
-/// Designed to be pushed onto an [`adw::NavigationView`] when a grid item is
-/// activated. The same `PhotoViewer` instance is reused across activations —
-/// call [`PhotoViewer::show`] to load a new item list and navigate to an index.
-pub struct PhotoViewer {
-    inner: Rc<ViewerInner>,
-}
-
-impl PhotoViewer {
-    pub fn new(library: Arc<dyn Library>, tokio: tokio::runtime::Handle, bus_sender: EventSender) -> Self {
-        // ── Header bar ───────────────────────────────────────────────────────
-        //
-        // Layout (pack_end is right-to-left):
-        //   start: [← back]
-        //   end:   [★] [ℹ] [✏] [⋮]
-        //
-        // Album, Share, Export, Wallpaper, Show in Files, and Delete
-        // live in the overflow menu (⋮).
-        let header = adw::HeaderBar::new();
-
-        // ── Overflow menu (far right) ────────────────────────────────────
-        let menu_btn = gtk::MenuButton::builder()
-            .icon_name("view-more-symbolic")
-            .tooltip_text(gettext("Menu"))
-            .build();
-        let menu_popover = build_viewer_menu_popover(true, "Delete photo");
-        menu_btn.set_popover(Some(&menu_popover));
-        header.pack_end(&menu_btn);
-
-        // ── Edit toggle ─────────────────────────────────────────────────
-        let edit_toggle = gtk::ToggleButton::builder()
-            .icon_name("document-edit-symbolic")
-            .tooltip_text(gettext("Edit Photo"))
-            .build();
-        header.pack_end(&edit_toggle);
-
-        // ── Info toggle ─────────────────────────────────────────────────
-        let info_toggle = gtk::ToggleButton::builder()
-            .icon_name("dialog-information-symbolic")
-            .tooltip_text(gettext("Photo Information (F9)"))
-            .build();
-        header.pack_end(&info_toggle);
-
-        // ── Favourite ───────────────────────────────────────────────────
-        let star_btn = gtk::Button::builder()
-            .icon_name("non-starred-symbolic")
-            .tooltip_text(gettext("Toggle Favourite"))
-            .build();
-        star_btn.add_css_class("flat");
-        header.pack_end(&star_btn);
-
-        // ── Picture ──────────────────────────────────────────────────────────
-        let picture = gtk::Picture::builder()
-            .content_fit(gtk::ContentFit::Contain)
-            .can_shrink(true)
-            .hexpand(true)
-            .vexpand(true)
-            .build();
-
-        let scrolled = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Automatic)
-            .vscrollbar_policy(gtk::PolicyType::Automatic)
-            .hexpand(true)
-            .vexpand(true)
-            .child(&picture)
-            .build();
-
-        // ── Spinner (centred over picture) ───────────────────────────────────
-        let spinner = gtk::Spinner::builder()
-            .halign(gtk::Align::Center)
-            .valign(gtk::Align::Center)
-            .width_request(32)
-            .height_request(32)
-            .visible(false)
-            .build();
-
-        // ── OSD prev / next buttons ──────────────────────────────────────────
-        let prev_btn = gtk::Button::builder()
-            .icon_name("go-previous-symbolic")
-            .tooltip_text(gettext("Previous Photo"))
-            .valign(gtk::Align::Center)
-            .halign(gtk::Align::Start)
-            .margin_start(12)
-            .visible(false)
-            .build();
-        prev_btn.add_css_class("circular");
-        prev_btn.add_css_class("osd");
-
-        let next_btn = gtk::Button::builder()
-            .icon_name("go-next-symbolic")
-            .tooltip_text(gettext("Next Photo"))
-            .valign(gtk::Align::Center)
-            .halign(gtk::Align::End)
-            .margin_end(12)
-            .visible(false)
-            .build();
-        next_btn.add_css_class("circular");
-        next_btn.add_css_class("osd");
-
-        let overlay = gtk::Overlay::new();
-        overlay.set_child(Some(&scrolled));
-        overlay.add_overlay(&spinner);
-        overlay.add_overlay(&prev_btn);
-        overlay.add_overlay(&next_btn);
-
-        // ── Info panel ───────────────────────────────────────────────────────
-        let info_panel = InfoPanel::new();
-
-        // ── Edit panel ──────────────────────────────────────────────────────
-        let edit_panel = EditPanel::new(
-            picture.clone(),
-            Arc::clone(&library),
-            tokio.clone(),
-            bus_sender.clone(),
-        );
-
-        // ── Sidebar stack (info | edit) ──────────────────────────────────────
-        let sidebar_stack = gtk::Stack::new();
-        sidebar_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
-        sidebar_stack.add_named(info_panel.widget(), Some("info"));
-        sidebar_stack.add_named(edit_panel.widget(), Some("edit"));
-
-        // ── Overlay split view (content | sidebar stack) ─────────────────────
-        let info_split = adw::OverlaySplitView::new();
-        info_split.set_content(Some(&overlay));
-        info_split.set_sidebar(Some(&sidebar_stack));
-        info_split.set_sidebar_position(gtk::PackType::End);
-        info_split.set_show_sidebar(false);
-        info_split.set_min_sidebar_width(340.0);
-        info_split.set_max_sidebar_width(400.0);
-
-        // ── Toolbar view ─────────────────────────────────────────────────────
-        let toolbar_view = adw::ToolbarView::new();
-        toolbar_view.add_top_bar(&header);
-        toolbar_view.set_content(Some(&info_split));
-        toolbar_view.set_focusable(true);
-
-        // ── Navigation page ───────────────────────────────────────────────────
-        let nav_page = adw::NavigationPage::builder()
-            .tag("viewer")
-            .title("Photo")
-            .child(&toolbar_view)
-            .build();
-
-        // ── Assemble ─────────────────────────────────────────────────────────
-        let inner = Rc::new(ViewerInner {
-            nav_page,
-            toolbar_view: toolbar_view.clone(),
-            picture,
-            spinner,
-            prev_btn,
-            next_btn,
-            star_btn,
-            info_split,
-            info_panel,
-            edit_panel,
-            sidebar_stack,
-            info_toggle: info_toggle.clone(),
-            edit_toggle: edit_toggle.clone(),
-            items: RefCell::new(Vec::new()),
-            current_index: Cell::new(0),
-            load_gen: Cell::new(0),
-            pending_load: RefCell::new(None),
-            current_metadata: RefCell::new(None),
-            pending_fav: RefCell::new(None),
-            library,
-            tokio,
-            bus_sender,
-        });
-
-        // ── Signal handlers ───────────────────────────────────────────────────
+    fn setup_signals(&self, menu_popover: &gtk::Popover) {
+        let imp = self.imp();
 
         // Start deferred full-res load after the slide-in animation completes,
         // and grab focus so the key controller (← → F9 Escape) works immediately.
         {
-            let i = Rc::downgrade(&inner);
-            inner.nav_page.connect_shown(move |_| {
-                let Some(inner) = i.upgrade() else { return };
-                inner.toolbar_view.grab_focus();
-                let pending = inner.pending_load.borrow_mut().take();
+            let viewer = self.downgrade();
+            self.connect_shown(move |_| {
+                let Some(viewer) = viewer.upgrade() else { return };
+                let imp = viewer.imp();
+                imp.toolbar_view.grab_focus();
+                let pending = imp.pending_load.borrow_mut().take();
                 if let Some(id) = pending {
-                    let gen = inner.load_gen.get();
-                    inner.start_full_res_load(gen, id.clone());
-                    inner.load_metadata_async(gen, id);
+                    let gen = imp.load_gen.get();
+                    viewer.start_full_res_load(gen, id.clone());
+                    viewer.load_metadata_async(gen, id);
                 }
             });
         }
 
         // Prev button
         {
-            let i = Rc::downgrade(&inner);
-            inner.prev_btn.connect_clicked(move |_| {
-                if let Some(i) = i.upgrade() {
-                    i.navigate_prev();
+            let viewer = self.downgrade();
+            imp.prev_btn.connect_clicked(move |_| {
+                if let Some(viewer) = viewer.upgrade() {
+                    viewer.navigate_prev();
                 }
             });
         }
 
         // Next button
         {
-            let i = Rc::downgrade(&inner);
-            inner.next_btn.connect_clicked(move |_| {
-                if let Some(i) = i.upgrade() {
-                    i.navigate_next();
+            let viewer = self.downgrade();
+            imp.next_btn.connect_clicked(move |_| {
+                if let Some(viewer) = viewer.upgrade() {
+                    viewer.navigate_next();
                 }
             });
         }
 
         // Star (favourite) button — optimistic toggle with rollback on failure.
         {
-            let i = Rc::downgrade(&inner);
-            inner.star_btn.connect_clicked(move |btn| {
-                let Some(inner) = i.upgrade() else { return };
-                let items = inner.items.borrow();
-                let idx = inner.current_index.get();
+            let viewer = self.downgrade();
+            imp.star_btn.connect_clicked(move |btn| {
+                let Some(viewer) = viewer.upgrade() else { return };
+                let imp = viewer.imp();
+                let items = imp.items.borrow();
+                let idx = imp.current_index.get();
                 let Some(obj) = items.get(idx) else { return };
 
                 let was_fav = obj.is_favorite();
@@ -415,9 +342,9 @@ impl PhotoViewer {
                 obj.set_is_favorite(new_fav);
 
                 let id = obj.item().id.clone();
-                *inner.pending_fav.borrow_mut() = Some((id.clone(), was_fav));
+                *imp.pending_fav.borrow_mut() = Some((id.clone(), was_fav));
 
-                inner.bus_sender.send(AppEvent::FavoriteRequested {
+                imp.bus_sender.get().unwrap().send(AppEvent::FavoriteRequested {
                     ids: vec![id],
                     state: new_fav,
                 });
@@ -426,94 +353,101 @@ impl PhotoViewer {
 
         // Info toggle → show info sidebar
         {
-            let i = Rc::downgrade(&inner);
-            info_toggle.connect_toggled(move |btn| {
-                let Some(inner) = i.upgrade() else { return };
+            let viewer = self.downgrade();
+            imp.info_toggle.connect_toggled(move |btn| {
+                let Some(viewer) = viewer.upgrade() else { return };
+                let imp = viewer.imp();
                 if btn.is_active() {
                     // Deactivate edit toggle (mutually exclusive).
-                    inner.edit_toggle.set_active(false);
-                    inner.sidebar_stack.set_visible_child_name("info");
-                    inner.info_split.set_show_sidebar(true);
+                    imp.edit_toggle.set_active(false);
+                    imp.sidebar_stack.set_visible_child_name("info");
+                    imp.info_split.set_show_sidebar(true);
 
                     // Populate info panel.
-                    let items = inner.items.borrow();
-                    let idx = inner.current_index.get();
+                    let items = imp.items.borrow();
+                    let idx = imp.current_index.get();
                     if let Some(obj) = items.get(idx) {
                         let item = obj.item().clone();
-                        let meta = inner.current_metadata.borrow();
-                        inner.info_panel.populate(&item, meta.as_ref());
+                        let meta = imp.current_metadata.borrow();
+                        if let Some(ref panel) = *imp.info_panel.borrow() {
+                            panel.populate(&item, meta.as_ref());
+                        }
                     }
-                } else if !inner.edit_toggle.is_active() {
-                    inner.info_split.set_show_sidebar(false);
+                } else if !imp.edit_toggle.is_active() {
+                    imp.info_split.set_show_sidebar(false);
                 }
             });
         }
 
         // Edit toggle → show edit sidebar and start edit session
         {
-            let i = Rc::downgrade(&inner);
-            edit_toggle.connect_toggled(move |btn| {
-                let Some(inner) = i.upgrade() else { return };
+            let viewer = self.downgrade();
+            imp.edit_toggle.connect_toggled(move |btn| {
+                let Some(viewer) = viewer.upgrade() else { return };
+                let imp = viewer.imp();
                 if btn.is_active() {
                     // Deactivate info toggle (mutually exclusive).
-                    inner.info_toggle.set_active(false);
-                    inner.sidebar_stack.set_visible_child_name("edit");
-                    inner.info_split.set_show_sidebar(true);
+                    imp.info_toggle.set_active(false);
+                    imp.sidebar_stack.set_visible_child_name("edit");
+                    imp.info_split.set_show_sidebar(true);
 
                     // Start edit session — load original image for preview.
-                    inner.start_edit_session();
+                    viewer.start_edit_session();
                 } else {
-                    if !inner.info_toggle.is_active() {
-                        inner.info_split.set_show_sidebar(false);
+                    if !imp.info_toggle.is_active() {
+                        imp.info_split.set_show_sidebar(false);
                     }
-                    inner.edit_panel.end_session();
+                    if let Some(ref panel) = *imp.edit_panel.borrow() {
+                        panel.end_session();
+                    }
                 }
             });
         }
 
         // Split view sidebar closed externally → sync toggles
         {
-            let i = Rc::downgrade(&inner);
-            inner.info_split.connect_show_sidebar_notify(move |split| {
+            let viewer = self.downgrade();
+            imp.info_split.connect_show_sidebar_notify(move |split| {
                 if !split.shows_sidebar() {
-                    if let Some(inner) = i.upgrade() {
-                        inner.info_toggle.set_active(false);
-                        if inner.edit_toggle.is_active() {
-                            inner.edit_toggle.set_active(false);
-                            inner.edit_panel.end_session();
+                    let Some(viewer) = viewer.upgrade() else { return };
+                    let imp = viewer.imp();
+                    imp.info_toggle.set_active(false);
+                    if imp.edit_toggle.is_active() {
+                        imp.edit_toggle.set_active(false);
+                        if let Some(ref panel) = *imp.edit_panel.borrow() {
+                            panel.end_session();
                         }
                     }
                 }
             });
         }
 
-        // Keyboard navigation (← →)
+        // Keyboard navigation (← → F9 Escape)
         {
             let key_ctrl = gtk::EventControllerKey::new();
-            toolbar_view.add_controller(key_ctrl.clone());
-            let i = Rc::downgrade(&inner);
+            imp.toolbar_view.add_controller(key_ctrl.clone());
+            let viewer = self.downgrade();
             key_ctrl.connect_key_pressed(move |_, keyval, _, _| {
-                let Some(inner) = i.upgrade() else {
+                let Some(viewer) = viewer.upgrade() else {
                     return glib::Propagation::Proceed;
                 };
                 match keyval {
                     gdk::Key::Left | gdk::Key::KP_Left => {
-                        inner.navigate_prev();
+                        viewer.navigate_prev();
                         glib::Propagation::Stop
                     }
                     gdk::Key::Right | gdk::Key::KP_Right => {
-                        inner.navigate_next();
+                        viewer.navigate_next();
                         glib::Propagation::Stop
                     }
                     gdk::Key::F9 => {
-                        let active = inner.info_toggle.is_active();
-                        inner.info_toggle.set_active(!active);
+                        let active = viewer.imp().info_toggle.is_active();
+                        viewer.imp().info_toggle.set_active(!active);
                         glib::Propagation::Stop
                     }
                     gdk::Key::Escape => {
                         // Pop the viewer page to return to the grid.
-                        if let Some(nav_view) = inner
-                            .nav_page
+                        if let Some(nav_view) = viewer
                             .parent()
                             .and_then(|p| p.downcast::<adw::NavigationView>().ok())
                         {
@@ -528,16 +462,17 @@ impl PhotoViewer {
             });
         }
 
-        // ── Wire overflow menu buttons ──────────────────────────────────
-        menu::wire_overflow_menu(&menu_popover, &menu_btn, &inner);
+        // Wire overflow menu buttons.
+        menu::wire_overflow_menu(menu_popover, self);
 
         // Subscribe to bus: clear pending favourite state on confirmation.
         {
-            let i = Rc::downgrade(&inner);
+            let viewer = self.downgrade();
             crate::event_bus::subscribe(move |event| {
                 if let AppEvent::FavoriteChanged { ids, .. } = event {
-                    let Some(inner) = i.upgrade() else { return };
-                    let mut pf = inner.pending_fav.borrow_mut();
+                    let Some(viewer) = viewer.upgrade() else { return };
+                    let imp = viewer.imp();
+                    let mut pf = imp.pending_fav.borrow_mut();
                     if let Some((ref pending_id, _)) = *pf {
                         if ids.contains(pending_id) {
                             *pf = None;
@@ -546,21 +481,5 @@ impl PhotoViewer {
                 }
             });
         }
-
-        Self { inner }
-    }
-
-    /// The `NavigationPage` to push onto an [`adw::NavigationView`].
-    pub fn nav_page(&self) -> &adw::NavigationPage {
-        &self.inner.nav_page
-    }
-
-    /// Load `items` and navigate to `index`.
-    ///
-    /// Replaces the current item list, resets async state, and starts loading
-    /// the new photo. Call this every time the user activates a grid item.
-    pub fn show(&self, items: Vec<MediaItemObject>, index: usize) {
-        *self.inner.items.borrow_mut() = items;
-        self.inner.show_at(index);
     }
 }

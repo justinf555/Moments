@@ -342,7 +342,7 @@ pub struct PhotoGridView {
     /// The `NavigationView` is the outermost widget returned by `widget()`.
     nav_view: adw::NavigationView,
     photo_grid: PhotoGrid,
-    photo_viewer: Rc<PhotoViewer>,
+    photo_viewer: PhotoViewer,
     video_viewer: Rc<VideoViewer>,
     library: Arc<dyn Library>,
     tokio: tokio::runtime::Handle,
@@ -460,7 +460,8 @@ impl PhotoGridView {
         nav_view.push(&grid_page);
 
         // ── Viewers (reused across activations) ──────────────────────────────
-        let photo_viewer = Rc::new(PhotoViewer::new(Arc::clone(&library), tokio.clone(), bus_sender.clone()));
+        let photo_viewer = PhotoViewer::new();
+        photo_viewer.setup(Arc::clone(&library), tokio.clone(), bus_sender.clone());
         let video_viewer = Rc::new(VideoViewer::new(Arc::clone(&library), tokio.clone(), bus_sender.clone()));
 
         // ── Zoom actions ─────────────────────────────────────────────────────
@@ -642,8 +643,8 @@ impl PhotoGridView {
             Rc::clone(&self.texture_cache),
             {
                 let nav_view = self.nav_view.clone();
-                let photo_viewer = Rc::clone(&self.photo_viewer);
-                let photo_nav_page = self.photo_viewer.nav_page().clone();
+                let photo_viewer = self.photo_viewer.clone();
+                let photo_nav_page = self.photo_viewer.clone().upcast::<adw::NavigationPage>();
                 let video_viewer = Rc::clone(&self.video_viewer);
                 let video_nav_page = self.video_viewer.nav_page().clone();
                 move |items, index| {
