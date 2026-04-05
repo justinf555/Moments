@@ -17,6 +17,9 @@ blueprints = custom_target(
     'ui/album_grid.blp',
     'ui/photo_grid.blp',
     'ui/viewer/edit_panel.blp',
+    'ui/photo_grid/cell.blp',
+    'ui/album_grid/card.blp',
+    'ui/collection_grid/cell.blp',
   ),
   output: '.',
   command: [

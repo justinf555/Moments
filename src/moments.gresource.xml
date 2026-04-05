@@ -13,6 +13,9 @@
     <file preprocess="xml-stripblanks">ui/collection_grid.ui</file>
     <file preprocess="xml-stripblanks">ui/album_grid.ui</file>
     <file preprocess="xml-stripblanks">ui/photo_grid.ui</file>
+    <file preprocess="xml-stripblanks">ui/photo_grid/cell.ui</file>
+    <file preprocess="xml-stripblanks">ui/album_grid/card.ui</file>
+    <file preprocess="xml-stripblanks">ui/collection_grid/cell.ui</file>
     <file preprocess="xml-stripblanks">shortcuts-dialog.ui</file>
     <file>style.css</file>
   </gresource>

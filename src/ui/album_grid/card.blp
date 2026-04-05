@@ -1,0 +1,115 @@
+using Gtk 4.0;
+
+template $MomentsAlbumCard : Gtk.Widget {
+  Gtk.Box inner {
+    orientation: vertical;
+    spacing: 4;
+    width-request: 205;
+    halign: center;
+
+    Gtk.Frame cover_frame {
+      width-request: 205;
+      height-request: 205;
+      overflow: hidden;
+
+      styles ["album-cover-frame"]
+
+      child: Gtk.Overlay overlay {
+        child: Gtk.Image placeholder {
+          pixel-size: 48;
+          icon-name: "folder-symbolic";
+          halign: center;
+          valign: center;
+          styles ["dim-label"]
+        };
+
+        [overlay]
+        Gtk.Picture single_picture {
+          content-fit: cover;
+          hexpand: true;
+          vexpand: true;
+          visible: false;
+        }
+
+        [overlay]
+        Gtk.Grid mosaic_grid {
+          row-spacing: 2;
+          column-spacing: 2;
+          row-homogeneous: true;
+          column-homogeneous: true;
+          visible: false;
+
+          Gtk.Picture pic0 {
+            content-fit: cover;
+            hexpand: true;
+            vexpand: true;
+
+            layout {
+              column: 0;
+              row: 0;
+            }
+          }
+
+          Gtk.Picture pic1 {
+            content-fit: cover;
+            hexpand: true;
+            vexpand: true;
+
+            layout {
+              column: 1;
+              row: 0;
+            }
+          }
+
+          Gtk.Picture pic2 {
+            content-fit: cover;
+            hexpand: true;
+            vexpand: true;
+
+            layout {
+              column: 0;
+              row: 1;
+            }
+          }
+
+          Gtk.Picture pic3 {
+            content-fit: cover;
+            hexpand: true;
+            vexpand: true;
+
+            layout {
+              column: 1;
+              row: 1;
+            }
+          }
+        }
+
+        [overlay]
+        Gtk.CheckButton checkbox {
+          halign: start;
+          valign: start;
+          margin-start: 6;
+          margin-top: 6;
+          visible: false;
+          styles ["selection-mode", "osd"]
+        }
+      };
+    }
+
+    Gtk.Label name_label {
+      ellipsize: end;
+      max-width-chars: 18;
+      halign: start;
+      xalign: 0;
+      styles ["heading"]
+    }
+
+    Gtk.Label count_label {
+      ellipsize: end;
+      max-width-chars: 18;
+      halign: start;
+      xalign: 0;
+      styles ["dim-label", "caption"]
+    }
+  }
+}

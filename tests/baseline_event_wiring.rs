@@ -367,16 +367,19 @@ mod bus_broadcast {
 
 #[cfg(test)]
 mod photo_grid_cell {
+    use crate::common::resources::ensure_resources;
     use moments::ui::photo_grid::cell::PhotoGridCell;
 
     #[gtk::test]
     fn new_cell_can_be_constructed() {
+        ensure_resources();
         let _cell = PhotoGridCell::new();
         // If this doesn't panic, the GObject subclass is correctly registered
     }
 
     #[gtk::test]
     fn selection_mode_roundtrip() {
+        ensure_resources();
         let cell = PhotoGridCell::new();
         // These are public methods — we verify they don't panic
         cell.set_selection_mode(true);
@@ -385,6 +388,7 @@ mod photo_grid_cell {
 
     #[gtk::test]
     fn set_checked_roundtrip() {
+        ensure_resources();
         let cell = PhotoGridCell::new();
         cell.set_checked(true);
         cell.set_checked(false);

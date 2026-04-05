@@ -19,19 +19,32 @@ pub struct CardBindings {
 
 mod imp {
     use super::*;
+    use gtk::CompositeTemplate;
 
-    #[derive(Default)]
+    #[derive(Default, CompositeTemplate)]
+    #[template(resource = "/io/github/justinf555/Moments/ui/album_grid/card.ui")]
     pub struct AlbumCard {
-        /// Single cover picture (shown for 1–3 photos).
-        pub single_picture: gtk::Picture,
-        /// 4 pictures for the 2×2 mosaic (shown for 4+ photos).
-        pub pictures: [gtk::Picture; 4],
-        /// Mosaic grid widget.
-        pub mosaic_grid: std::cell::OnceCell<gtk::Grid>,
-        pub placeholder: gtk::Image,
-        pub checkbox: gtk::CheckButton,
-        pub name_label: gtk::Label,
-        pub count_label: gtk::Label,
+        #[template_child]
+        pub single_picture: TemplateChild<gtk::Picture>,
+        #[template_child]
+        pub mosaic_grid: TemplateChild<gtk::Grid>,
+        #[template_child]
+        pub pic0: TemplateChild<gtk::Picture>,
+        #[template_child]
+        pub pic1: TemplateChild<gtk::Picture>,
+        #[template_child]
+        pub pic2: TemplateChild<gtk::Picture>,
+        #[template_child]
+        pub pic3: TemplateChild<gtk::Picture>,
+        #[template_child]
+        pub placeholder: TemplateChild<gtk::Image>,
+        #[template_child]
+        pub checkbox: TemplateChild<gtk::CheckButton>,
+        #[template_child]
+        pub name_label: TemplateChild<gtk::Label>,
+        #[template_child]
+        pub count_label: TemplateChild<gtk::Label>,
+
         pub in_selection_mode: Cell<bool>,
         /// Click handler for the checkbox — connected in factory bind.
         pub checkbox_handler: RefCell<Option<glib::SignalHandlerId>>,
@@ -45,76 +58,22 @@ mod imp {
         type ParentType = gtk::Widget;
 
         fn class_init(klass: &mut Self::Class) {
+            klass.bind_template();
             klass.set_layout_manager_type::<gtk::BinLayout>();
             klass.set_css_name("album-card");
+        }
+
+        fn instance_init(obj: &glib::subclass::InitializingObject<Self>) {
+            obj.init_template();
         }
     }
 
     impl ObjectImpl for AlbumCard {
         fn constructed(&self) {
             self.parent_constructed();
-            let obj = self.obj();
-
-            // Inner box — fixed width, centered in the cell.
-            let inner = gtk::Box::new(gtk::Orientation::Vertical, 4);
-            inner.set_size_request(205, -1);
-            inner.set_halign(gtk::Align::Center);
-
-            // Cover frame — clipped square with rounded corners.
-            let frame = gtk::Frame::new(None);
-            frame.set_size_request(205, 205);
-            frame.set_overflow(gtk::Overflow::Hidden);
-            frame.add_css_class("album-cover-frame");
-
-            let overlay = gtk::Overlay::new();
-
-            // Placeholder (shown when no photos).
-            self.placeholder.set_pixel_size(48);
-            self.placeholder.set_icon_name(Some("folder-symbolic"));
-            self.placeholder.add_css_class("dim-label");
-            self.placeholder.set_halign(gtk::Align::Center);
-            self.placeholder.set_valign(gtk::Align::Center);
-            overlay.set_child(Some(&self.placeholder));
-
-            // Single cover picture (1–3 photos).
-            self.single_picture.set_content_fit(gtk::ContentFit::Cover);
-            self.single_picture.set_hexpand(true);
-            self.single_picture.set_vexpand(true);
-            self.single_picture.set_visible(false);
-            overlay.add_overlay(&self.single_picture);
-
-            // 2×2 mosaic grid (4+ photos).
-            let grid = gtk::Grid::new();
-            grid.set_row_spacing(2);
-            grid.set_column_spacing(2);
-            grid.set_row_homogeneous(true);
-            grid.set_column_homogeneous(true);
-            grid.set_visible(false);
-
-            for (i, pic) in self.pictures.iter().enumerate() {
-                pic.set_content_fit(gtk::ContentFit::Cover);
-                pic.set_hexpand(true);
-                pic.set_vexpand(true);
-                grid.attach(pic, (i % 2) as i32, (i / 2) as i32, 1, 1);
-            }
-
-            overlay.add_overlay(&grid);
-            let _ = self.mosaic_grid.set(grid);
-
-            // Selection checkbox — top-left, shown in selection mode.
-            self.checkbox.set_halign(gtk::Align::Start);
-            self.checkbox.set_valign(gtk::Align::Start);
-            self.checkbox.set_margin_start(6);
-            self.checkbox.set_margin_top(6);
-            self.checkbox.add_css_class("selection-mode");
-            self.checkbox.add_css_class("osd");
-            self.checkbox.set_visible(false);
-            overlay.add_overlay(&self.checkbox);
-
-            frame.set_child(Some(&overlay));
-            inner.append(&frame);
 
             // Hover controller — show checkbox on mouse enter/leave.
+            let obj = self.obj();
             let motion = gtk::EventControllerMotion::new();
             motion.set_propagation_phase(gtk::PropagationPhase::Capture);
             let cell_weak = obj.downgrade();
@@ -130,31 +89,10 @@ mod imp {
                 }
             });
             obj.add_controller(motion);
-
-            // Name label.
-            self.name_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            self.name_label.set_max_width_chars(18);
-            self.name_label.set_halign(gtk::Align::Start);
-            self.name_label.set_xalign(0.0);
-            self.name_label.add_css_class("heading");
-            inner.append(&self.name_label);
-
-            // Count label.
-            self.count_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            self.count_label.set_max_width_chars(18);
-            self.count_label.set_halign(gtk::Align::Start);
-            self.count_label.set_xalign(0.0);
-            self.count_label.add_css_class("dim-label");
-            self.count_label.add_css_class("caption");
-            inner.append(&self.count_label);
-
-            inner.set_parent(&*obj);
         }
 
         fn dispose(&self) {
-            while let Some(child) = self.obj().first_child() {
-                child.unparent();
-            }
+            self.dispose_template();
         }
     }
 
@@ -245,7 +183,8 @@ impl AlbumCard {
             }
         }
         imp.single_picture.set_paintable(None::<&gtk::gdk::Texture>);
-        for pic in &imp.pictures {
+        let pictures = [&*imp.pic0, &*imp.pic1, &*imp.pic2, &*imp.pic3];
+        for pic in &pictures {
             pic.set_paintable(None::<&gtk::gdk::Texture>);
         }
         imp.checkbox.set_visible(false);
@@ -280,9 +219,10 @@ impl AlbumCard {
             self.set_display_mode(DisplayMode::Single);
         } else {
             // Full mosaic: set all 4 pictures.
-            for i in 0..4 {
+            let pictures = [&*imp.pic0, &*imp.pic1, &*imp.pic2, &*imp.pic3];
+            for (i, pic) in pictures.iter().enumerate() {
                 if let Some(texture) = item.mosaic_texture(i) {
-                    imp.pictures[i].set_paintable(Some(&texture));
+                    pic.set_paintable(Some(&texture));
                 }
             }
             self.set_display_mode(DisplayMode::Mosaic);
@@ -294,8 +234,6 @@ impl AlbumCard {
         let imp = self.imp();
         imp.placeholder.set_visible(mode == DisplayMode::Placeholder);
         imp.single_picture.set_visible(mode == DisplayMode::Single);
-        if let Some(grid) = imp.mosaic_grid.get() {
-            grid.set_visible(mode == DisplayMode::Mosaic);
-        }
+        imp.mosaic_grid.set_visible(mode == DisplayMode::Mosaic);
     }
 }
