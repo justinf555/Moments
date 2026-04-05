@@ -10,7 +10,10 @@ This project uses **Meson** as its build system and is packaged as a **Flatpak**
 # Build and run via Flatpak (primary workflow)
 make run
 
-# Clean the Flatpak build directory
+# Build with editing feature, debug logs, installs as Flatpak
+make run-dev
+
+# Clean the Flatpak build directories
 make clean
 ```
 
@@ -18,15 +21,22 @@ The Flatpak manifest is `io.github.justinf555.Moments.json` (local dev) and `io.
 
 ### Dev build
 
-```bash
-# Build with editing feature enabled, debug logs, installs as Flatpak
-make run-dev
+The dev manifest (`io.github.justinf555.Moments.dev.json`) uses `type: "dir"` — picks up working tree changes without committing. It uses a **separate state dir** (`.flatpak-builder-dev/`) so switching between `make run` and `make run-dev` doesn't invalidate the cargo cache. It installs under the **same app ID** as production (`io.github.justinf555.Moments`) so Flatpak portals work correctly.
 
+```bash
 # Release: creates PR with version bump, merging triggers tag + GitHub Release
 make release VERSION=0.2.0
-```
 
-The dev manifest (`io.github.justinf555.Moments.dev.json`) uses `type: "dir"` — picks up working tree changes without committing. It installs under the **same app ID** as production (`io.github.justinf555.Moments`) so Flatpak portals work correctly. `flatpak-builder --run` does not support portals.
+# Testing & linting (all run inside Flatpak SDK)
+make lint              # cargo clippy
+make test              # cargo test (unit tests)
+make test-integration  # headless GTK integration tests (requires Wayland)
+make check             # cargo check
+make coverage          # cargo-llvm-cov HTML report
+make metrics           # complexity report (top 20 functions)
+make ci-all            # lint + test + test-integration + audit
+make audit             # cargo audit + cargo deny
+```
 
 GNOME Builder can also use the dev manifest — configure it in the project build settings.
 
@@ -64,7 +74,8 @@ src/
     error.rs           — LibraryError enum (thiserror-based)
     event.rs           — LibraryEvent enum (channel-based backend → GTK communication)
     db.rs              — Database struct (sqlx::SqlitePool), LibraryStats, ServerStats
-    db/media.rs        — LibraryMedia impl, MediaRow, filter_clause/sort_expr
+    db/media.rs        — LibraryMedia impl, MediaRow, filter_clause/sort_expr (read queries)
+    db/media_write.rs  — Insert, favourite, trash, restore, delete (write queries)
     db/albums.rs       — LibraryAlbums impl
     db/edits.rs        — Edit state CRUD (get/upsert/delete/mark_rendered)
     db/faces.rs        — People/face CRUD (upsert, list, face_count maintenance)
@@ -98,30 +109,43 @@ src/
     create_album.rs    — CreateAlbumCommand handler
   ui/
     window.rs          — MomentsWindow; wires sidebar, coordinator, views
-    sidebar.rs         — MomentsSidebar with dynamic album section + persistent status bar
+    sidebar.rs         — MomentsSidebar (AdwSidebar) with pinned albums + persistent status bar
     sidebar/
-      route.rs         — TOP_ROUTES / BOTTOM_ROUTES definitions (Photos, Favorites, Recent, People, Trash)
-      row.rs           — MomentsSidebarRow widget
+      route.rs         — ROUTES definitions (Photos, Favorites, Recent, People, Albums, Trash)
     coordinator.rs     — ContentCoordinator (stack-based view routing, returns view_actions)
     collection_grid.rs — CollectionGridView (reusable grid for People, future Memories/Places)
     collection_grid/
+      actions.rs       — Drill-down, context menu (rename, hide/unhide)
       cell.rs          — CollectionGridCell widget (thumbnail + name + subtitle)
       factory.rs       — Cell factory with ThumbnailStyle (Circular/Square)
       item.rs          — CollectionItemObject (GObject wrapper for collection items)
     photo_grid.rs      — PhotoGridView (zoom, selection, empty states, viewer integration)
     photo_grid/
-      actions.rs       — Action wiring: context menu, album controls
+      actions.rs       — Context menu (per-action handlers), album controls
       action_bar.rs    — Selection mode action bar (favourite, album, trash/restore/delete)
       model.rs         — PhotoGridModel (pagination, filtering, incremental updates, bus errors)
       factory.rs       — Cell factory (bind/unbind with texture management + decode semaphore)
       cell.rs          — PhotoGridCell widget (placeholder → thumbnail → star + checkbox)
       item.rs          — MediaItemObject (GObject wrapper for grid items)
       texture_cache.rs — LRU cache for decoded RGBA thumbnail pixels
-    viewer.rs          — PhotoViewer (full-res display, overflow menu, edit session)
+    viewer.rs          — PhotoViewer (navigation, signal handlers, star toggle)
     viewer/
+      loading.rs       — Full-res decode, edit session setup, metadata fetching
+      menu.rs          — Shared overflow menu builder + photo viewer menu wiring
       info_panel.rs    — EXIF metadata display panel
-      edit_panel.rs    — Edit panel with exposure/color sliders, transform controls
-    video_viewer.rs    — VideoViewer (GStreamer playback, matching overflow menu)
+      edit_panel.rs    — Edit panel coordinator (session mgmt, save/revert, render)
+      edit_panel/
+        transforms.rs  — Rotate/flip buttons
+        filters.rs     — Filter preset grid + strength slider
+        sliders.rs     — Adjust sliders (exposure, colour)
+    video_viewer.rs    — VideoViewer (GStreamer playback, spinner, overflow menu)
+    album_grid.rs      — AlbumGridView (sort, empty state, bus subscription)
+    album_grid/
+      actions.rs       — Context menu (open, rename, pin, delete) + drill-down helper
+      selection.rs     — Enter/exit selection mode, batch delete
+      card.rs          — AlbumCard widget (cover mosaic, name, count, checkbox)
+      factory.rs       — Card factory (bind/unbind with cover thumbnail loading)
+      item.rs          — AlbumItemObject (GObject wrapper for album items)
     album_dialogs.rs   — Create/rename/delete album dialogs
     album_picker_dialog.rs — Album picker dialog entry point (async data fetch + present)
     album_picker_dialog/
@@ -182,7 +206,9 @@ CI sets `SQLX_OFFLINE=true` and uses the committed `.sqlx/` snapshot.
 
 Access shared application state (Tokio handle, settings, etc.) via `MomentsApplication::default()` with typed accessors like `tokio_handle()`. Don't walk the widget tree with `.root().application()`. This follows the standard GNOME Rust pattern (Fractal, Planify).
 
-### Sidebar status bar
+### Sidebar
+
+The sidebar uses `AdwSidebar` with routes defined in `sidebar/route.rs`. People route is hidden for the Local backend (no face detection). Pinned albums are added dynamically as a separate `AdwSidebarSection`.
 
 The sidebar bottom bar is a persistent `AdwBottomSheet` with a `GtkStack` that switches between five states: Idle ("Synced X ago"), Sync ("Syncing..."), Thumbnails ("Thumbnails X/Y"), Upload (expandable with progress bar), and Complete ("Upload Complete"). Priority-based: upload > sync > thumbnails > idle. See `docs/design-sidebar-status-bar.md`.
 
@@ -214,7 +240,7 @@ All content views implement `ContentView` (widget + optional view_actions). When
 
 ### Viewer headerbar and overflow menu
 
-Photo and video viewers use a clean headerbar: `[★] [ℹ] [✏] [⋮]`. The overflow menu (⋮) is a manual `gtk::Popover` with icon+label buttons (not `GMenuModel` — GTK4's `PopoverMenu` does not render icons from `GMenuModel` attributes). Items: Add to album, Share, Export original, Set as wallpaper (photo only), Show in Files, Delete (destructive, separated). Shared builder: `build_viewer_menu_popover()` and `find_menu_button()` in `viewer.rs`.
+Photo and video viewers use a clean headerbar: `[★] [ℹ] [✏] [⋮]`. The overflow menu (⋮) is a manual `gtk::Popover` with icon+label buttons (not `GMenuModel` — GTK4's `PopoverMenu` does not render icons from `GMenuModel` attributes). Items: Add to album, Share, Export original, Set as wallpaper (photo only), Show in Files, Delete (destructive, separated). Shared builder: `build_viewer_menu_popover()` and `find_menu_button()` in `viewer/menu.rs` (re-exported from `viewer.rs` for `video_viewer.rs`).
 
 ### Album picker dialog
 
@@ -252,6 +278,10 @@ Design docs live in `docs/` and follow a consistent format with issue links, sta
 - `docs/design-photo-editing.md` — Non-destructive editing: data model, renderer, UI, Immich integration
 - `docs/design-event-bus.md` — EventBus architecture, AppEvent enum, CommandDispatcher pattern
 - `docs/design-integration-testing.md` — Headless GTK4 testing with mutter, CI config, coverage tracking
+
+### Blueprint templates
+
+Some widgets use Blueprint (`.blp`) declarative templates compiled to GTK XML: `window.blp`, `setup_window.blp` + pages, `import_dialog.blp`, `shortcuts-dialog.blp`. New widgets should evaluate whether their layout is static enough to benefit from Blueprint (see #417 for the decision framework).
 
 ### Feature flags
 
