@@ -15,6 +15,7 @@ blueprints = custom_target(
     'ui/video_viewer.blp',
     'ui/collection_grid.blp',
     'ui/album_grid.blp',
+    'ui/photo_grid.blp',
     'ui/viewer/edit_panel.blp',
   ),
   output: '.',

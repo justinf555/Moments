@@ -311,16 +311,17 @@ impl MomentsWindow {
             MediaFilter::All,
             bus_sender.clone(),
         ));
-        let photos_view = Rc::new(PhotoGridView::new(
+        let photos_view = PhotoGridView::new();
+        photos_view.setup(
             Arc::clone(library),
             tokio.clone(),
             settings.clone(),
             Rc::clone(texture_cache),
             bus_sender.clone(),
-        ));
+        );
         photos_view.set_model(Rc::clone(&photos_model));
         photos_model.subscribe(bus);
-        coordinator.register("photos", photos_view.widget());
+        coordinator.register("photos", &photos_view);
 
         (content_stack, Rc::new(RefCell::new(coordinator)), photos_model)
     }
@@ -349,10 +350,11 @@ impl MomentsWindow {
                     MediaFilter::Favorites,
                     bs.clone(),
                 ));
-                let view = Rc::new(PhotoGridView::new(lib, tk, s, tc, bs));
+                let view = PhotoGridView::new();
+                view.setup(lib, tk, s, tc, bs);
                 view.set_model(Rc::clone(&model));
                 model.subscribe_to_bus();
-                view.widget().clone()
+                view.upcast()
             });
         }
 
@@ -371,10 +373,11 @@ impl MomentsWindow {
                     MediaFilter::RecentImports { since },
                     bs.clone(),
                 ));
-                let view = Rc::new(PhotoGridView::new(lib, tk, s, tc, bs));
+                let view = PhotoGridView::new();
+                view.setup(lib, tk, s, tc, bs);
                 view.set_model(Rc::clone(&model));
                 model.subscribe_to_bus();
-                view.widget().clone()
+                view.upcast()
             });
         }
 
@@ -391,10 +394,11 @@ impl MomentsWindow {
                     MediaFilter::Trashed,
                     bs.clone(),
                 ));
-                let view = Rc::new(PhotoGridView::new(lib, tk, s, tc, bs));
+                let view = PhotoGridView::new();
+                view.setup(lib, tk, s, tc, bs);
                 view.set_model(Rc::clone(&model));
                 model.subscribe_to_bus();
-                view.widget().clone()
+                view.upcast()
             });
         }
 
@@ -484,13 +488,14 @@ impl MomentsWindow {
                         Arc::clone(&lib), tk.clone(),
                         MediaFilter::Album { album_id }, bs.clone(),
                     ));
-                    let view = Rc::new(PhotoGridView::new(
+                    let view = PhotoGridView::new();
+                    view.setup(
                         Arc::clone(&lib), tk.clone(), s.clone(),
                         Rc::clone(&tc), bs.clone(),
-                    ));
+                    );
                     view.set_model(Rc::clone(&model));
                     model.subscribe_to_bus();
-                    coord.register(id, view.widget());
+                    coord.register(id, &view);
                 }
                 coord.navigate(id);
             } else {

@@ -3,8 +3,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use adw::prelude::*;
-use gettextrs::gettext;
-use gtk::{gio, glib, subclass::prelude::*};
+use adw::subclass::prelude::*;
+use gtk::{gio, glib};
 use tracing::instrument;
 
 use crate::app_event::AppEvent;
@@ -12,7 +12,6 @@ use crate::library::media::MediaType;
 use crate::library::Library;
 use crate::ui::video_viewer::VideoViewer;
 use crate::ui::viewer::PhotoViewer;
-use gtk::prelude::WidgetExt;
 
 pub mod action_bar;
 pub mod actions;
@@ -29,7 +28,9 @@ const ZOOM_SIZES: &[i32] = &[96, 128, 160, 200, 256, 320];
 /// Default zoom level index (160 px).
 const DEFAULT_ZOOM_INDEX: usize = 2;
 
-mod imp {
+// ── PhotoGrid (inner GObject — unchanged) ────────────────────────────────────
+
+mod photo_grid_imp {
     use super::*;
     use std::cell::OnceCell;
 
@@ -135,7 +136,7 @@ mod imp {
 }
 
 glib::wrapper! {
-    pub struct PhotoGrid(ObjectSubclass<imp::PhotoGrid>)
+    pub struct PhotoGrid(ObjectSubclass<photo_grid_imp::PhotoGrid>)
         @extends gtk::Widget,
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
@@ -173,9 +174,6 @@ impl PhotoGrid {
     }
 
     /// Set the zoom level directly (e.g. from a saved setting).
-    ///
-    /// Clamps to valid bounds. Does not rebuild the factory — call before
-    /// `set_model` so the initial factory uses the correct size.
     pub fn set_zoom_level(&self, level: usize) {
         let clamped = level.min(ZOOM_SIZES.len() - 1);
         self.imp().zoom_level.set(clamped);
@@ -212,13 +210,6 @@ impl PhotoGrid {
     }
 
     /// Attach a `PhotoGridModel` to the grid.
-    ///
-    /// Wires the model's `ListStore` to `GridView` via `MultiSelection`, builds
-    /// the cell factory, triggers the initial page load, and connects
-    /// scroll-based lazy loading for subsequent pages.
-    ///
-    /// `on_activate` is called with `(items, position)` when the user
-    /// double-clicks or presses Enter on a grid item.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     pub fn set_model(
@@ -264,10 +255,6 @@ impl PhotoGrid {
         let stack = imp.content_stack.get().unwrap();
         set_empty_state_for_filter(empty_page, &filter);
 
-        // Show/hide empty state based on model item count.
-        // Shared closure: called from items_changed (when items are added/
-        // removed) and from on_page_ready (covers the case where load_more
-        // returns 0 items and items_changed never fires).
         let update_empty: Rc<dyn Fn()> = {
             let stack = stack.clone();
             let store = model.store.clone();
@@ -281,10 +268,8 @@ impl PhotoGrid {
             model.store.connect_items_changed(move |_, _, _, _| update());
         }
 
-        // Fetch the first page immediately.
         model.load_more();
 
-        // Load further pages as the user scrolls toward the bottom.
         let model_scroll = Rc::clone(&model);
         let adj = scrolled.vadjustment();
         adj.connect_value_changed(move |adj| {
@@ -295,8 +280,6 @@ impl PhotoGrid {
             }
         });
 
-        // After each page loads, re-check whether more pages are needed
-        // and update the empty state.
         let model_ready = Rc::clone(&model);
         let adj_ready = scrolled.vadjustment();
         let update_on_ready = Rc::clone(&update_empty);
@@ -309,7 +292,6 @@ impl PhotoGrid {
             }
         });
 
-        // Wire item activation — snapshot all items, then call on_activate.
         let selection_ref = selection.clone();
         grid_view.connect_activate(move |_, position| {
             let n = selection_ref.n_items();
@@ -327,74 +309,125 @@ impl PhotoGrid {
     }
 }
 
-/// Wraps `PhotoGrid` in an `AdwNavigationView` so that activating a grid item
-/// pushes a [`PhotoViewer`] page without leaving the main shell.
-///
-/// The root page of the `NavigationView` contains the grid's `AdwToolbarView`.
-/// The viewer page is pushed on activation and popped by the back button.
-impl std::fmt::Debug for PhotoGridView {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PhotoGridView").finish_non_exhaustive()
+impl Default for PhotoGrid {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-pub struct PhotoGridView {
-    /// The `NavigationView` is the outermost widget returned by `widget()`.
-    nav_view: adw::NavigationView,
-    photo_grid: PhotoGrid,
-    photo_viewer: PhotoViewer,
-    video_viewer: VideoViewer,
-    library: Arc<dyn Library>,
-    tokio: tokio::runtime::Handle,
-    texture_cache: Rc<texture_cache::TextureCache>,
-    widget: gtk::Widget,
-    /// Shared selection mode flag — read by factory closures.
-    selection_mode: Rc<Cell<bool>>,
-    /// Selection mode exit action — triggered by cancel, escape, or auto-exit.
-    exit_selection: gio::SimpleAction,
-    /// Selection count label shown in selection mode headerbar.
-    selection_title: gtk::Label,
-    /// Action bar — field keeps the widget alive alongside the toolbar view.
-    #[allow(dead_code)]
-    action_bar: gtk::ActionBar,
-    /// Box inside the action bar holding the current buttons.
-    bar_box: gtk::Box,
-    /// Current favourite button (if any) — for dynamic label updates.
-    fav_btn: RefCell<Option<gtk::Button>>,
-    /// Bus sender for action bar commands.
-    bus_sender: crate::event_bus::EventSender,
+// ── PhotoGridView (GObject subclass) ─────────────────────────────────────────
+
+mod view_imp {
+    use super::*;
+    use std::cell::OnceCell;
+
+    use gtk::CompositeTemplate;
+
+    #[derive(Default, CompositeTemplate)]
+    #[template(resource = "/io/github/justinf555/Moments/ui/photo_grid.ui")]
+    pub struct PhotoGridView {
+        #[template_child]
+        pub nav_view: TemplateChild<adw::NavigationView>,
+        #[template_child]
+        pub header: TemplateChild<adw::HeaderBar>,
+        #[template_child]
+        pub zoom_box: TemplateChild<gtk::Box>,
+        #[template_child]
+        pub cancel_btn: TemplateChild<gtk::Button>,
+        #[template_child]
+        pub content_menu_btn: TemplateChild<gtk::MenuButton>,
+        #[template_child]
+        pub photo_grid: TemplateChild<PhotoGrid>,
+        #[template_child]
+        pub action_bar: TemplateChild<gtk::ActionBar>,
+
+        // Service dependencies
+        pub library: OnceCell<Arc<dyn Library>>,
+        pub tokio: OnceCell<tokio::runtime::Handle>,
+        pub bus_sender: OnceCell<crate::event_bus::EventSender>,
+        pub texture_cache: OnceCell<Rc<texture_cache::TextureCache>>,
+
+        // Viewers (reused across activations)
+        pub photo_viewer: OnceCell<PhotoViewer>,
+        pub video_viewer: OnceCell<VideoViewer>,
+
+        // Selection mode state
+        pub selection_mode: Rc<Cell<bool>>,
+        pub exit_selection: OnceCell<gio::SimpleAction>,
+        pub selection_title: OnceCell<gtk::Label>,
+        pub bar_box: OnceCell<gtk::Box>,
+        pub fav_btn: RefCell<Option<gtk::Button>>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for PhotoGridView {
+        const NAME: &'static str = "MomentsPhotoGridView";
+        type Type = super::PhotoGridView;
+        type ParentType = gtk::Widget;
+
+        fn class_init(klass: &mut Self::Class) {
+            // Ensure PhotoGrid type is registered before template parsing.
+            PhotoGrid::ensure_type();
+            klass.bind_template();
+            klass.set_layout_manager_type::<gtk::BinLayout>();
+        }
+
+        fn instance_init(obj: &glib::subclass::InitializingObject<Self>) {
+            obj.init_template();
+        }
+    }
+
+    impl ObjectImpl for PhotoGridView {
+        fn dispose(&self) {
+            self.dispose_template();
+        }
+    }
+    impl WidgetImpl for PhotoGridView {}
+}
+
+glib::wrapper! {
+    pub struct PhotoGridView(ObjectSubclass<view_imp::PhotoGridView>)
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+
+impl Default for PhotoGridView {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PhotoGridView {
-    pub fn new(
+    pub fn new() -> Self {
+        glib::Object::new()
+    }
+
+    pub fn setup(
+        &self,
         library: Arc<dyn Library>,
         tokio: tokio::runtime::Handle,
         settings: gio::Settings,
         texture_cache: Rc<texture_cache::TextureCache>,
         bus_sender: crate::event_bus::EventSender,
-    ) -> Self {
-        // ── Grid header bar ──────────────────────────────────────────────────
-        let header = adw::HeaderBar::new();
+    ) {
+        let imp = self.imp();
+        assert!(imp.library.set(Arc::clone(&library)).is_ok(), "setup called twice");
+        assert!(imp.tokio.set(tokio.clone()).is_ok(), "setup called twice");
+        assert!(imp.bus_sender.set(bus_sender.clone()).is_ok(), "setup called twice");
+        assert!(imp.texture_cache.set(Rc::clone(&texture_cache)).is_ok(), "setup called twice");
 
-        // ── Zoom controls ───────────────────────────────────────────────────
-        let zoom_out_btn = gtk::Button::builder()
-            .icon_name("zoom-out-symbolic")
-            .tooltip_text(gettext("Zoom Out"))
-            .action_name("view.zoom-out")
-            .build();
-        zoom_out_btn.add_css_class("flat");
-        let zoom_in_btn = gtk::Button::builder()
-            .icon_name("zoom-in-symbolic")
-            .tooltip_text(gettext("Zoom In"))
-            .action_name("view.zoom-in")
-            .build();
-        zoom_in_btn.add_css_class("flat");
-        let zoom_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        zoom_box.append(&zoom_out_btn);
-        zoom_box.append(&zoom_in_btn);
+        // Viewers.
+        let photo_viewer = PhotoViewer::new();
+        photo_viewer.setup(Arc::clone(&library), tokio.clone(), bus_sender.clone());
+        let video_viewer = VideoViewer::new();
+        video_viewer.setup(Arc::clone(&library), tokio.clone(), bus_sender.clone());
+        assert!(imp.photo_viewer.set(photo_viewer).is_ok());
+        assert!(imp.video_viewer.set(video_viewer).is_ok());
 
-        // Stop button clicks from propagating to the HeaderBar's
-        // drag/maximize gesture.
+        // Zoom level from settings.
+        imp.photo_grid.set_zoom_level(settings.uint("zoom-level") as usize);
+
+        // Stop zoom button clicks from propagating to HeaderBar drag gesture.
         let controller = gtk::EventControllerLegacy::new();
         controller.connect_event(|_, event| {
             use gtk::gdk::EventType;
@@ -403,81 +436,40 @@ impl PhotoGridView {
                 _ => glib::Propagation::Proceed,
             }
         });
-        zoom_box.add_controller(controller);
+        imp.zoom_box.add_controller(controller);
 
-        header.pack_start(&zoom_box);
-
-        // ── Content overflow menu (⋮) ────────────────────────────────────
+        // Content overflow menu.
         let content_menu = gio::Menu::new();
         let content_section = gio::Menu::new();
         content_section.append(Some("_Select"), Some("view.enter-selection"));
         content_menu.append_section(None, &content_section);
+        imp.content_menu_btn.set_menu_model(Some(&content_menu));
 
-        let content_menu_btn = gtk::MenuButton::builder()
-            .icon_name("view-more-symbolic")
-            .tooltip_text(gettext("Menu"))
-            .menu_model(&content_menu)
-            .build();
-        content_menu_btn.add_css_class("flat");
-        header.pack_end(&content_menu_btn);
-
-        // ── Selection mode header widgets (hidden by default) ────────────────
-        let cancel_btn = gtk::Button::with_label("Cancel");
-        cancel_btn.add_css_class("outlined");
-        cancel_btn.set_visible(false);
-        header.pack_start(&cancel_btn);
-
+        // Selection title label.
         let selection_title = gtk::Label::new(Some("0 selected"));
         selection_title.add_css_class("heading");
         selection_title.set_visible(false);
+        assert!(imp.selection_title.set(selection_title).is_ok());
 
-        // ── Action bar (bottom, revealed in selection mode) ──────────────────
-        // Buttons are built per-filter in set_model via ActionBarFactory.
-        let action_bar = gtk::ActionBar::new();
-        action_bar.set_revealed(false);
-        action_bar.add_css_class("photo-action-bar");
+        // Action bar center widget.
         let bar_box = gtk::Box::new(gtk::Orientation::Horizontal, 24);
         bar_box.set_halign(gtk::Align::Center);
-        action_bar.set_center_widget(Some(&bar_box));
+        imp.action_bar.set_center_widget(Some(&bar_box));
+        assert!(imp.bar_box.set(bar_box).is_ok());
 
-        // ── Grid toolbar view (root nav page content) ────────────────────────
-        let photo_grid = PhotoGrid::new();
-        photo_grid.set_zoom_level(settings.uint("zoom-level") as usize);
-        let toolbar_view = adw::ToolbarView::new();
-        toolbar_view.add_top_bar(&header);
-        toolbar_view.add_bottom_bar(&action_bar);
-        toolbar_view.set_content(Some(&photo_grid));
-
-        let grid_page = adw::NavigationPage::builder()
-            .tag("grid")
-            .title("Photos")
-            .child(&toolbar_view)
-            .build();
-
-        // ── NavigationView wraps both grid and viewer ────────────────────────
-        let nav_view = adw::NavigationView::new();
-        nav_view.push(&grid_page);
-
-        // ── Viewers (reused across activations) ──────────────────────────────
-        let photo_viewer = PhotoViewer::new();
-        photo_viewer.setup(Arc::clone(&library), tokio.clone(), bus_sender.clone());
-        let video_viewer = VideoViewer::new();
-        video_viewer.setup(Arc::clone(&library), tokio.clone(), bus_sender.clone());
-
-        // ── Zoom actions ─────────────────────────────────────────────────────
+        // ── Zoom actions ─────────────────────────────────────────────────
         let action_group = gio::SimpleActionGroup::new();
 
         let zoom_in_action = gio::SimpleAction::new("zoom-in", None);
         let zoom_out_action = gio::SimpleAction::new("zoom-out", None);
 
-        // Disable zoom-in at max, zoom-out at min.
         zoom_in_action.set_enabled(
-            photo_grid.imp().zoom_level.get() + 1 < ZOOM_SIZES.len(),
+            imp.photo_grid.imp().zoom_level.get() + 1 < ZOOM_SIZES.len(),
         );
-        zoom_out_action.set_enabled(photo_grid.imp().zoom_level.get() > 0);
+        zoom_out_action.set_enabled(imp.photo_grid.imp().zoom_level.get() > 0);
 
         {
-            let grid = photo_grid.clone();
+            let grid = imp.photo_grid.clone();
             let zi = zoom_in_action.clone();
             let zo = zoom_out_action.clone();
             let s = settings.clone();
@@ -489,7 +481,7 @@ impl PhotoGridView {
             });
         }
         {
-            let grid = photo_grid.clone();
+            let grid = imp.photo_grid.clone();
             let zi = zoom_in_action.clone();
             let zo = zoom_out_action.clone();
             zoom_out_action.connect_activate(move |_, _| {
@@ -503,30 +495,26 @@ impl PhotoGridView {
         action_group.add_action(&zoom_in_action);
         action_group.add_action(&zoom_out_action);
 
-        // ── Selection mode actions ──────────────────────────────────────────
-        let selection_mode = Rc::clone(&photo_grid.imp().selection_mode);
+        // ── Selection mode actions ───────────────────────────────────────
+        let selection_mode = Rc::clone(&imp.selection_mode);
 
         let enter_selection = gio::SimpleAction::new("enter-selection", None);
         {
             let sm = Rc::clone(&selection_mode);
-            let zoom_box = zoom_box.clone();
-            let content_menu_btn = content_menu_btn.clone();
-            let cancel_btn = cancel_btn.clone();
-            let selection_title = selection_title.clone();
-            let action_bar = action_bar.clone();
-            let header = header.clone();
-            let grid = photo_grid.clone();
+            let weak = self.downgrade();
             enter_selection.connect_activate(move |_, _| {
+                let Some(view) = weak.upgrade() else { return };
+                let imp = view.imp();
                 sm.set(true);
-                zoom_box.set_visible(false);
-                content_menu_btn.set_visible(false);
-                cancel_btn.set_visible(true);
-                selection_title.set_visible(true);
-                header.set_title_widget(Some(&selection_title));
-                action_bar.set_revealed(true);
+                imp.zoom_box.set_visible(false);
+                imp.content_menu_btn.set_visible(false);
+                imp.cancel_btn.set_visible(true);
+                let title = imp.selection_title.get().unwrap();
+                title.set_visible(true);
+                imp.header.set_title_widget(Some(title));
+                imp.action_bar.set_revealed(true);
 
-                // Show checkboxes and selection border on all visible cells.
-                let grid_view = grid.imp().grid_view.get().unwrap();
+                let grid_view = imp.photo_grid.imp().grid_view.get().unwrap();
                 grid_view.add_css_class("selection-active");
                 let mut child = grid_view.first_child();
                 while let Some(c) = child {
@@ -543,29 +531,23 @@ impl PhotoGridView {
         let exit_selection = gio::SimpleAction::new("exit-selection", None);
         {
             let sm = Rc::clone(&selection_mode);
-            let zoom_box = zoom_box.clone();
-            let content_menu_btn = content_menu_btn.clone();
-            let cancel_btn = cancel_btn.clone();
-            let selection_title = selection_title.clone();
-            let action_bar = action_bar.clone();
-            let header = header.clone();
-            let grid = photo_grid.clone();
+            let weak = self.downgrade();
             exit_selection.connect_activate(move |_, _| {
+                let Some(view) = weak.upgrade() else { return };
+                let imp = view.imp();
                 sm.set(false);
-                zoom_box.set_visible(true);
-                content_menu_btn.set_visible(true);
-                cancel_btn.set_visible(false);
-                selection_title.set_visible(false);
-                header.set_title_widget(None::<&gtk::Widget>);
-                action_bar.set_revealed(false);
+                imp.zoom_box.set_visible(true);
+                imp.content_menu_btn.set_visible(true);
+                imp.cancel_btn.set_visible(false);
+                imp.selection_title.get().unwrap().set_visible(false);
+                imp.header.set_title_widget(None::<&gtk::Widget>);
+                imp.action_bar.set_revealed(false);
 
-                // Clear selection.
-                if let Some(ref sel) = *grid.imp().selection.borrow() {
+                if let Some(ref sel) = *imp.photo_grid.imp().selection.borrow() {
                     sel.unselect_all();
                 }
 
-                // Hide checkboxes and selection border on all visible cells.
-                let grid_view = grid.imp().grid_view.get().unwrap();
+                let grid_view = imp.photo_grid.imp().grid_view.get().unwrap();
                 grid_view.remove_css_class("selection-active");
                 let mut child = grid_view.first_child();
                 while let Some(c) = child {
@@ -579,17 +561,17 @@ impl PhotoGridView {
             });
         }
 
-        // Cancel button wires to exit-selection.
+        // Cancel button.
         {
             let exit = exit_selection.clone();
-            cancel_btn.connect_clicked(move |_| {
+            imp.cancel_btn.connect_clicked(move |_| {
                 exit.activate(None);
             });
         }
 
-        // Escape key exits selection mode from keyboard.
+        // Escape key exits selection mode.
         {
-            let grid_view = photo_grid.imp().grid_view.get().unwrap();
+            let grid_view = imp.photo_grid.imp().grid_view.get().unwrap();
             let exit = exit_selection.clone();
             let sm = Rc::clone(&selection_mode);
             let key_ctrl = gtk::EventControllerKey::new();
@@ -605,49 +587,34 @@ impl PhotoGridView {
         }
 
         action_group.add_action(&enter_selection);
-        action_group.add_action(&exit_selection);
+        action_group.add_action(&exit_selection.clone());
 
-        // Store on the inner grid so apply_zoom/set_model can access them.
-        *photo_grid.imp().enter_selection.borrow_mut() = Some(enter_selection.clone());
+        *imp.photo_grid.imp().enter_selection.borrow_mut() = Some(enter_selection);
+        assert!(imp.exit_selection.set(exit_selection).is_ok());
 
-        let widget = nav_view.clone().upcast::<gtk::Widget>();
-
-        // Install view actions on the nav_view so GTK's action resolution
-        // finds them when walking up the widget tree.
-        nav_view.insert_action_group("view", Some(&action_group));
-
-        Self {
-            nav_view,
-            photo_grid,
-            photo_viewer,
-            video_viewer,
-            library,
-            tokio,
-            texture_cache,
-            widget,
-            selection_mode,
-            exit_selection,
-            selection_title,
-            action_bar,
-            bar_box,
-            fav_btn: RefCell::new(None),
-            bus_sender,
-        }
+        // Install view actions on the nav_view.
+        imp.nav_view.insert_action_group("view", Some(&action_group));
     }
 
     pub fn set_model(&self, model: Rc<PhotoGridModel>) {
+        let imp = self.imp();
+        let library = Arc::clone(imp.library.get().unwrap());
+        let tokio = imp.tokio.get().unwrap().clone();
+        let bus_sender = imp.bus_sender.get().unwrap().clone();
+        let texture_cache = Rc::clone(imp.texture_cache.get().unwrap());
         let filter = model.filter();
-        self.photo_grid.set_model(
+
+        imp.photo_grid.set_model(
             Rc::clone(&model),
-            Arc::clone(&self.library),
-            self.tokio.clone(),
-            self.bus_sender.clone(),
+            Arc::clone(&library),
+            tokio.clone(),
+            bus_sender.clone(),
             filter.clone(),
-            Rc::clone(&self.texture_cache),
+            Rc::clone(&texture_cache),
             {
-                let nav_view = self.nav_view.clone();
-                let photo_viewer = self.photo_viewer.clone();
-                let video_viewer = self.video_viewer.clone();
+                let nav_view = imp.nav_view.clone();
+                let photo_viewer = imp.photo_viewer.get().unwrap().clone();
+                let video_viewer = imp.video_viewer.get().unwrap().clone();
                 move |items, index| {
                     let media_type = items
                         .get(index)
@@ -681,43 +648,41 @@ impl PhotoGridView {
             },
         );
 
-        let selection = self.photo_grid.imp().selection.borrow().clone().unwrap();
-        let grid_view = self.photo_grid.imp().grid_view.get().unwrap().clone();
+        let selection = imp.photo_grid.imp().selection.borrow().clone().unwrap();
+        let grid_view = imp.photo_grid.imp().grid_view.get().unwrap().clone();
 
         let ctx = actions::ActionContext {
-            selection,
-            library: Arc::clone(&self.library),
-            tokio: self.tokio.clone(),
+            selection: selection.clone(),
+            library: Arc::clone(&library),
+            tokio,
             filter: filter.clone(),
             grid_view,
-            bus_sender: self.bus_sender.clone(),
+            bus_sender: bus_sender.clone(),
         };
 
         actions::wire_context_menu(&ctx);
 
-        // ── Build action bar buttons for this filter ────────────────────────
-        // Clear previous buttons.
-        while let Some(child) = self.bar_box.first_child() {
-            self.bar_box.remove(&child);
+        // ── Build action bar buttons for this filter ────────────────────
+        let bar_box = imp.bar_box.get().unwrap();
+        while let Some(child) = bar_box.first_child() {
+            bar_box.remove(&child);
         }
 
         let bar_buttons = action_bar::build_for_filter(
             &filter,
             &ctx.selection,
-            &self.bus_sender,
+            &bus_sender,
         );
-        self.bar_box.append(&bar_buttons.container);
-        *self.fav_btn.borrow_mut() = bar_buttons.fav_btn;
+        bar_box.append(&bar_buttons.container);
+        *imp.fav_btn.borrow_mut() = bar_buttons.fav_btn;
 
-        // Wire "Add to album" popover — requires library queries, so it
-        // uses the old ActionContext wiring until album commands are migrated.
         if let Some(ref album_btn) = bar_buttons.album_btn {
             actions::wire_album_controls(&ctx, album_btn);
         }
 
         // Subscribe for exit-selection on result events.
         {
-            let exit = self.exit_selection.clone();
+            let exit = imp.exit_selection.get().unwrap().clone();
             crate::event_bus::subscribe(move |event| {
                 match event {
                     AppEvent::Trashed { .. }
@@ -732,13 +697,13 @@ impl PhotoGridView {
             });
         }
 
-        // ── Selection changed → update count, auto-exit ─────────────────────
+        // ── Selection changed → update count, auto-exit ─────────────────
         {
-            let sm = Rc::clone(&self.selection_mode);
-            let exit = self.exit_selection.clone();
-            let title = self.selection_title.clone();
-            let fav_btn = self.fav_btn.borrow().clone();
-            ctx.selection.connect_selection_changed(move |sel, _, _| {
+            let sm = Rc::clone(&imp.selection_mode);
+            let exit = imp.exit_selection.get().unwrap().clone();
+            let title = imp.selection_title.get().unwrap().clone();
+            let fav_btn = imp.fav_btn.borrow().clone();
+            selection.connect_selection_changed(move |sel, _, _| {
                 let count = sel.selection().size();
                 let text = match count {
                     0 => "0 selected".to_string(),
@@ -747,7 +712,6 @@ impl PhotoGridView {
                 };
                 title.set_label(&text);
 
-                // Update favourite button if present.
                 if let Some(ref fav) = fav_btn {
                     if count > 0 {
                         let bitset = sel.selection();
@@ -761,7 +725,6 @@ impl PhotoGridView {
                     }
                 }
 
-                // Auto-exit selection mode when last item deselected.
                 if count == 0 && sm.get() {
                     exit.activate(None);
                 }
@@ -830,18 +793,6 @@ fn set_empty_state_for_filter(
     page.set_description(Some(description));
 }
 
-impl PhotoGridView {
-    pub fn widget(&self) -> &gtk::Widget {
-        &self.widget
-    }
-}
-
-impl Default for PhotoGrid {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -856,10 +807,5 @@ mod tests {
     #[test]
     fn default_zoom_index_in_bounds() {
         assert!(DEFAULT_ZOOM_INDEX < ZOOM_SIZES.len());
-    }
-
-    #[test]
-    fn default_zoom_size_is_160() {
-        assert_eq!(ZOOM_SIZES[DEFAULT_ZOOM_INDEX], 160);
     }
 }

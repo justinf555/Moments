@@ -57,13 +57,14 @@ pub(super) fn wire_activation(
             filter,
             bs.clone(),
         ));
-        let view = Rc::new(PhotoGridView::new(
+        let view = PhotoGridView::new();
+        view.setup(
             Arc::clone(&lib),
             tk.clone(),
             s.clone(),
             Rc::clone(&tc),
             bs.clone(),
-        ));
+        );
         view.set_model(Rc::clone(&model));
         model.subscribe_to_bus();
 
@@ -76,7 +77,7 @@ pub(super) fn wire_activation(
         let person_page = adw::NavigationPage::builder()
             .tag(format!("person:{}", data.id))
             .title(&display_name)
-            .child(view.widget())
+            .child(&view)
             .build();
 
         nav.push(&person_page);

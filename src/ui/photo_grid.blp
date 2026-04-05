@@ -1,0 +1,57 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $MomentsPhotoGridView : Gtk.Widget {
+  Adw.NavigationView nav_view {
+    Adw.NavigationPage grid_page {
+      tag: "grid";
+
+      child: Adw.ToolbarView {
+        [top]
+        Adw.HeaderBar header {
+          [start]
+          Gtk.Box zoom_box {
+            orientation: horizontal;
+            spacing: 0;
+
+            Gtk.Button {
+              icon-name: "zoom-out-symbolic";
+              tooltip-text: _("Zoom Out");
+              action-name: "view.zoom-out";
+              styles ["flat"]
+            }
+
+            Gtk.Button {
+              icon-name: "zoom-in-symbolic";
+              tooltip-text: _("Zoom In");
+              action-name: "view.zoom-in";
+              styles ["flat"]
+            }
+          }
+
+          [start]
+          Gtk.Button cancel_btn {
+            label: "Cancel";
+            visible: false;
+            styles ["outlined"]
+          }
+
+          [end]
+          Gtk.MenuButton content_menu_btn {
+            icon-name: "view-more-symbolic";
+            tooltip-text: _("Menu");
+            styles ["flat"]
+          }
+        }
+
+        content: $MomentsPhotoGrid photo_grid {};
+
+        [bottom]
+        Gtk.ActionBar action_bar {
+          revealed: false;
+          styles ["photo-action-bar"]
+        }
+      };
+    }
+  }
+}
