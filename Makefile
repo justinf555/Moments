@@ -90,6 +90,38 @@ metrics:
 
 ci-all: lint test test-integration audit
 
+# ── Flathub build test ──────────────────────────────────────────────────────
+#
+# Build the app using the Flathub manifest against the current working tree.
+# This validates that the release build, cargo vendoring, and all Flathub-specific
+# config works before pushing to Flathub.
+
+test-flathub:
+	@echo "==> Generating cargo-sources.json from Cargo.lock"
+	@if [ ! -f /tmp/flatpak-cargo-generator.py ]; then \
+		curl -sL https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py -o /tmp/flatpak-cargo-generator.py; \
+	fi
+	python3 /tmp/flatpak-cargo-generator.py Cargo.lock -o cargo-sources.json
+	@echo "==> Building from Flathub manifest (local source)"
+	@BRANCH=$$(git rev-parse --abbrev-ref HEAD); \
+	COMMIT=$$(git rev-parse HEAD); \
+	TMP_MANIFEST=$$(mktemp); \
+	python3 -c " \
+import json, sys; \
+m = json.load(open('io.github.justinf555.Moments.flathub.json')); \
+src = m['modules'][0]['sources'][0]; \
+src['url'] = 'file://$(CURDIR)'; \
+src['branch'] = '$$BRANCH'; \
+src.pop('tag', None); \
+src['commit'] = '$$COMMIT'; \
+json.dump(m, open('$$TMP_MANIFEST', 'w'), indent=2); \
+	";\
+	flatpak-builder --user --install --force-clean \
+		--state-dir=.flatpak-builder-flathub \
+		flatpak-build-flathub "$$TMP_MANIFEST"; \
+	rm -f "$$TMP_MANIFEST"
+	@echo "==> Flathub build installed. Run with: flatpak run io.github.justinf555.Moments"
+
 # ── Release ───────────────────────────────────────────────────────────────────
 #
 # Usage: make release VERSION=0.2.0
