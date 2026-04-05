@@ -66,6 +66,12 @@ mod imp {
 
         fn dispose(&self) {
             self.dispose_template();
+            // Unparent direct children not tracked as TemplateChild fields
+            // (thumbnail_frame, name_label, subtitle_label are parented by
+            // BoxLayout but only the inner widgets have bindings).
+            while let Some(child) = self.obj().first_child() {
+                child.unparent();
+            }
         }
     }
 
