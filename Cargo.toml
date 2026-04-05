@@ -10,7 +10,6 @@ keywords = ["photos", "gnome", "gtk4", "image-management"]
 categories = ["multimedia::images"]
 
 [features]
-editing = []
 integration-tests = []
 
 [dependencies]

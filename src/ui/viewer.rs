@@ -209,7 +209,6 @@ impl PhotoViewer {
             .icon_name("document-edit-symbolic")
             .tooltip_text(gettext("Edit Photo"))
             .build();
-        #[cfg(feature = "editing")]
         header.pack_end(&edit_toggle);
 
         // ── Info toggle ─────────────────────────────────────────────────
