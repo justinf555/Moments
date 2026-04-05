@@ -1,0 +1,100 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $MomentsPhotoViewer : Adw.NavigationPage {
+  tag: "viewer";
+  title: "Photo";
+
+  child: Adw.ToolbarView toolbar_view {
+    focusable: true;
+
+    [top]
+    Adw.HeaderBar header {
+      [end]
+      Gtk.MenuButton menu_btn {
+        icon-name: "view-more-symbolic";
+        tooltip-text: _("Menu");
+      }
+
+      [end]
+      Gtk.ToggleButton edit_toggle {
+        icon-name: "document-edit-symbolic";
+        tooltip-text: _("Edit Photo");
+      }
+
+      [end]
+      Gtk.ToggleButton info_toggle {
+        icon-name: "dialog-information-symbolic";
+        tooltip-text: _("Photo Information (F9)");
+      }
+
+      [end]
+      Gtk.Button star_btn {
+        icon-name: "non-starred-symbolic";
+        tooltip-text: _("Toggle Favourite");
+
+        styles ["flat"]
+      }
+    }
+
+    content: Adw.OverlaySplitView info_split {
+      show-sidebar: false;
+      sidebar-position: end;
+      min-sidebar-width: 340;
+      max-sidebar-width: 400;
+
+      content: Gtk.Overlay overlay {
+        Gtk.ScrolledWindow {
+          hscrollbar-policy: automatic;
+          vscrollbar-policy: automatic;
+          hexpand: true;
+          vexpand: true;
+
+          child: Gtk.Picture picture {
+            content-fit: contain;
+            can-shrink: true;
+            hexpand: true;
+            vexpand: true;
+          };
+        }
+
+        [overlay]
+        Gtk.Spinner spinner {
+          halign: center;
+          valign: center;
+          width-request: 32;
+          height-request: 32;
+          visible: false;
+        }
+
+        [overlay]
+        Gtk.Button prev_btn {
+          icon-name: "go-previous-symbolic";
+          tooltip-text: _("Previous Photo");
+          valign: center;
+          halign: start;
+          margin-start: 12;
+          visible: false;
+
+          styles ["circular", "osd"]
+        }
+
+        [overlay]
+        Gtk.Button next_btn {
+          icon-name: "go-next-symbolic";
+          tooltip-text: _("Next Photo");
+          valign: center;
+          halign: end;
+          margin-end: 12;
+          visible: false;
+
+          styles ["circular", "osd"]
+        }
+      };
+
+      sidebar: Gtk.Stack sidebar_stack {
+        transition-type: crossfade;
+      };
+    };
+  };
+}
