@@ -101,6 +101,7 @@ impl SyncManager {
         };
 
         debug!("starting sync stream");
+        // Receiver may be dropped during shutdown.
         let _ = self.events.send(LibraryEvent::SyncStarted);
         let response = self.client.post_stream("/sync/stream", &request).await?;
 
@@ -259,6 +260,7 @@ impl SyncManager {
 
             if acks.len() >= ACK_FLUSH_THRESHOLD {
                 self.flush_acks(&mut acks).await?;
+                // Receiver may be dropped during shutdown.
                 let _ = self.events.send(LibraryEvent::SyncProgress {
                     assets: counters.assets,
                     people: counters.people,
@@ -303,11 +305,13 @@ impl SyncManager {
         success_counter: &mut usize,
         error_counter: &mut usize,
     ) {
+        // Audit trail is best-effort — failure shouldn't block sync processing.
         let audit_id = self.db.start_sync_audit(entity_type, entity_id, sync_cycle).await.ok();
 
         match handler_result.await {
             Ok(()) => {
                 if let Some(aid) = audit_id {
+                    // Audit completion is best-effort.
                     let _ = self.db.complete_sync_audit(aid, audit_action).await;
                 }
                 acks.push(ack);
@@ -316,6 +320,7 @@ impl SyncManager {
             Err(e) => {
                 warn!(entity_type, entity_id, error = %e, "skipping sync entity");
                 if let Some(aid) = audit_id {
+                    // Audit failure recording is best-effort.
                     let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
                 }
                 *error_counter += 1;
@@ -347,6 +352,7 @@ impl SyncManager {
             self.flush_acks(acks).await?;
         }
 
+        // Receiver may be dropped during shutdown.
         let _ = self.events.send(LibraryEvent::SyncComplete {
             assets: counters.assets,
             people: counters.people,
@@ -355,6 +361,7 @@ impl SyncManager {
         });
 
         if counters.people > 0 || counters.faces > 0 {
+            // Receiver may be dropped during shutdown.
             let _ = self.events.send(LibraryEvent::PeopleSyncComplete);
         }
 
@@ -452,6 +459,7 @@ impl SyncManager {
             trashed_at: record.trashed_at,
             duration_ms: record.duration_ms,
         };
+        // Receiver may be dropped during shutdown.
         let _ = self.events.send(LibraryEvent::AssetSynced { item });
 
         // Queue thumbnail download — the worker pool handles concurrency.
@@ -490,6 +498,7 @@ impl SyncManager {
     pub(crate) async fn handle_asset_delete(&self, asset_id: &str) -> Result<(), LibraryError> {
         let id = MediaId::new(asset_id.to_owned());
         self.db.delete_permanently(std::slice::from_ref(&id)).await?;
+        // Receiver may be dropped during shutdown.
         let _ = self.events.send(LibraryEvent::AssetDeletedRemote { media_id: id });
         Ok(())
     }
@@ -504,6 +513,7 @@ impl SyncManager {
             .upsert_album(&album.id, &album.name, created_at, updated_at)
             .await?;
 
+        // Receiver may be dropped during shutdown.
         let _ = self.events.send(LibraryEvent::AlbumCreated {
             id: AlbumId::from_raw(album.id),
             name: album.name,
@@ -518,6 +528,7 @@ impl SyncManager {
         let id = AlbumId::from_raw(album_id.to_owned());
         self.db.delete_album(&id).await?;
 
+        // Receiver may be dropped during shutdown.
         let _ = self.events.send(LibraryEvent::AlbumDeleted { id });
 
         Ok(())
@@ -530,6 +541,7 @@ impl SyncManager {
             .upsert_album_media(&assoc.album_id, &assoc.asset_id, now)
             .await?;
 
+        // Receiver may be dropped during shutdown.
         let _ = self.events.send(LibraryEvent::AlbumMediaChanged {
             album_id: AlbumId::from_raw(assoc.album_id),
         });
@@ -560,8 +572,10 @@ impl SyncManager {
             match self.client.get_bytes(&api_path).await {
                 Ok(bytes) => {
                     if let Some(parent) = thumb_path.parent() {
+                        // Best-effort: dir may already exist.
                         let _ = tokio::fs::create_dir_all(parent).await;
                     }
+                    // Best-effort: person thumbnail is non-critical.
                     let _ = tokio::fs::write(&thumb_path, &bytes).await;
                     debug!(person_id = %person.id, "person thumbnail downloaded");
                 }
@@ -609,6 +623,7 @@ impl SyncManager {
             .delete_album_media_entry(&assoc.album_id, &assoc.asset_id)
             .await?;
 
+        // Receiver may be dropped during shutdown.
         let _ = self.events.send(LibraryEvent::AlbumMediaChanged {
             album_id: AlbumId::from_raw(assoc.album_id),
         });

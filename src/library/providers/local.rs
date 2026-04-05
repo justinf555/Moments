@@ -94,10 +94,12 @@ impl LibraryStorage for LocalLibrary {
                             // Remove original file.
                             if let Ok(Some(rel)) = db.media_relative_path(id).await {
                                 let path = originals.join(&rel);
+                                // Best-effort: file may already be gone.
                                 let _ = tokio::fs::remove_file(&path).await;
                             }
                             // Remove thumbnail file.
                             let thumb = crate::library::thumbnail::sharded_thumbnail_path(&thumbnails, id);
+                            // Best-effort: thumbnail may already be gone.
                             let _ = tokio::fs::remove_file(&thumb).await;
                         }
                         if let Err(e) = db.delete_permanently(&ids).await {

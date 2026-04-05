@@ -58,7 +58,8 @@ impl ThumbnailDownloader {
 
             // Emit progress every 10 thumbnails to update the status bar.
             if download_count.is_multiple_of(10) {
-                let _ = self.events.send(LibraryEvent::ThumbnailDownloadProgress {
+                // Receiver may be dropped during shutdown.
+            let _ = self.events.send(LibraryEvent::ThumbnailDownloadProgress {
                     completed: download_count,
                     total: download_count, // Total not known upfront; shows running count.
                 });
@@ -72,6 +73,7 @@ impl ThumbnailDownloader {
             tokio::time::sleep(super::THUMBNAIL_THROTTLE).await;
         }
 
+        // Receiver may be dropped during shutdown.
         let _ = self.events.send(LibraryEvent::ThumbnailDownloadsComplete {
             total: download_count,
         });
@@ -95,7 +97,8 @@ async fn download_thumbnail(
         debug!("thumbnail already cached, skipping download");
         let now = chrono::Utc::now().timestamp();
         db.set_thumbnail_ready(media_id, &path.to_string_lossy(), now).await?;
-        let _ = events.send(LibraryEvent::ThumbnailReady {
+        // Receiver may be dropped during shutdown.
+    let _ = events.send(LibraryEvent::ThumbnailReady {
             media_id: media_id.clone(),
         });
         return Ok(());
@@ -118,6 +121,7 @@ async fn download_thumbnail(
     // Update DB status and emit event.
     let now = chrono::Utc::now().timestamp();
     db.set_thumbnail_ready(media_id, &path.to_string_lossy(), now).await?;
+    // Receiver may be dropped during shutdown.
     let _ = events.send(LibraryEvent::ThumbnailReady {
         media_id: media_id.clone(),
     });

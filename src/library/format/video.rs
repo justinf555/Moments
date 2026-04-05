@@ -101,7 +101,7 @@ fn extract_poster_frame(path: &Path) -> Result<image::DynamicImage, LibraryError
     // Read rotation from stream tags before shutting down the pipeline.
     let rotation = read_rotation_tag(&appsink);
 
-    // Clean up pipeline.
+    // Best-effort: pipeline may already be torn down.
     let _ = pipeline.set_state(gst::State::Null);
 
     let img = image::DynamicImage::ImageRgb8(img);
