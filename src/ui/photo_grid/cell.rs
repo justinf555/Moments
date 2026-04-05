@@ -23,8 +23,6 @@ mod imp {
     #[template(resource = "/io/github/justinf555/Moments/ui/photo_grid/cell.ui")]
     pub struct PhotoGridCell {
         #[template_child]
-        pub overlay: TemplateChild<gtk::Overlay>,
-        #[template_child]
         pub picture: TemplateChild<gtk::Picture>,
         #[template_child]
         pub placeholder: TemplateChild<gtk::Image>,
