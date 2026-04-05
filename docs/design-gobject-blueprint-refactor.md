@@ -53,10 +53,10 @@ A full audit of `src/ui/` found:
 | 1 | `PhotoViewer` | `viewer.rs` | library, tokio, bus_sender | Yes — static headerbar + overlay + split | First (fewest deps, most static) | **Done** (#433) |
 | 2 | `VideoViewer` | `video_viewer.rs` | library, tokio, bus_sender | Yes — similar to PhotoViewer | First (same shape) | **Done** (#435) |
 | 3 | `EditPanel` | `viewer/edit_panel.rs` | tokio, library, bus_sender | Partial — skeleton + transforms in Blueprint, sliders/filters in Rust | Second | **Done** (#437) |
-| 4 | `AlbumGridView` | `album_grid.rs` | library, tokio, texture_cache, bus_sender | Partial — headerbar/empty state yes, grid no | Third | Pending |
-| 5 | `PhotoGridView` | `photo_grid.rs` | library, tokio, bus_sender, texture_cache | Partial — headerbar/action bar yes, grid no | Third | Pending |
-| 6 | `CollectionGridView` | `collection_grid.rs` | library | Partial — headerbar/filter buttons yes | Third | Pending |
-| 7 | `PhotoGridModel` | `photo_grid/model.rs` | library, bus_sender | No — pure logic, no layout | Last | Pending |
+| 4 | `AlbumGridView` | `album_grid.rs` | library, tokio, texture_cache, bus_sender | Partial — headerbar/empty state yes, grid no | Third | **Done** (#440) |
+| 5 | `PhotoGridView` | `photo_grid.rs` | library, tokio, bus_sender, texture_cache | Partial — headerbar/action bar yes, grid no | Third | **Done** (#442) |
+| 6 | `CollectionGridView` | `collection_grid.rs` | library | Partial — headerbar/filter buttons yes | Third | **Done** (#439) |
+| 7 | `PhotoGridModel` | `photo_grid/model.rs` | library, bus_sender | No — pure logic, glib::Object subclass | Last | **Done** (#443) |
 
 ### What does NOT get converted
 
