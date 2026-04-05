@@ -380,9 +380,6 @@ mod view_imp {
     impl ObjectImpl for PhotoGridView {
         fn dispose(&self) {
             self.dispose_template();
-            while let Some(child) = self.obj().first_child() {
-                child.unparent();
-            }
         }
     }
     impl WidgetImpl for PhotoGridView {}
