@@ -1,10 +1,9 @@
 use std::cell::{Cell, RefCell};
-use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
 use adw::prelude::*;
-use gettextrs::gettext;
+use adw::subclass::prelude::*;
 use gtk::{gdk, glib};
 use image::DynamicImage;
 use tracing::{debug, error, warn};
@@ -13,7 +12,7 @@ use crate::library::edit_renderer::apply_edits;
 use crate::library::editing::EditState;
 use crate::library::media::MediaId;
 use crate::library::Library;
-use crate::ui::widgets::{expander_row, wire_single_expansion};
+use crate::ui::widgets::wire_single_expansion;
 
 mod filters;
 mod sliders;
@@ -35,92 +34,128 @@ pub struct EditSession {
     /// Shared via `Arc` — render tasks read from it without cloning.
     pub preview_image: Arc<DynamicImage>,
     /// Generation counter for discarding stale render results.
-    render_gen: u64,
+    pub(super) render_gen: u64,
 }
 
-/// Scrollable edit panel displayed in the viewer sidebar.
-///
-/// Uses three `AdwExpanderRow` sections:
-/// - **Transform**: crop, rotate, flip (collapsed by default)
-/// - **Filters**: preset filter grid + strength slider (expanded by default)
-/// - **Adjust**: Light, Colour slider groups (expanded by default)
-///
-/// Edit state is auto-saved to the database after 100ms of inactivity
-/// and on session end. No explicit Save button — follows GNOME HIG.
-pub struct EditPanel {
-    /// Root widget containing the view switcher and stack.
-    root: gtk::Box,
-    /// The currently active editing session, if any.
-    session: Rc<RefCell<Option<EditSession>>>,
-    /// Reference to the picture widget for updating the preview.
-    picture: gtk::Picture,
-    /// Tokio handle for spawning blocking render tasks.
-    tokio: tokio::runtime::Handle,
-    /// Library for persisting edit state.
-    library: Arc<dyn Library>,
-    /// The media ID being edited.
-    media_id: Rc<RefCell<Option<MediaId>>>,
-    /// Source ID of the pending render debounce timer, if any.
-    render_debounce: Rc<Cell<Option<glib::SourceId>>>,
-    /// Source ID of the pending save debounce timer, if any.
-    save_debounce: Rc<Cell<Option<glib::SourceId>>>,
-    /// Whether a DB write is currently in-flight.
-    save_in_flight: Rc<Cell<bool>>,
-    /// Filter toggle buttons, keyed by name, for programmatic updates.
-    filter_buttons: Rc<RefCell<Vec<(String, gtk::ToggleButton)>>>,
-    /// Subtitle label on the Filters expander, updated when filter changes.
-    filter_subtitle: Rc<RefCell<Option<gtk::Label>>>,
-    /// Subtitle label on the Adjust expander, updated when sliders change.
-    adjust_subtitle: Rc<RefCell<Option<gtk::Label>>>,
-    /// All adjust slider scales, for resetting on revert.
-    adjust_scales: Rc<RefCell<Vec<gtk::Scale>>>,
-    /// Bus sender for emitting user-facing error toasts.
-    bus_sender: crate::event_bus::EventSender,
+// ── GObject subclass ─────────────────────────────────────────────────────────
+
+mod imp {
+    use super::*;
+    use std::cell::OnceCell;
+
+    use gtk::CompositeTemplate;
+
+    #[derive(Default, CompositeTemplate)]
+    #[template(resource = "/io/github/justinf555/Moments/ui/viewer/edit_panel.ui")]
+    pub struct EditPanel {
+        // Template children
+        #[template_child]
+        pub transform_expander: TemplateChild<adw::ExpanderRow>,
+        #[template_child]
+        pub filters_expander: TemplateChild<adw::ExpanderRow>,
+        #[template_child]
+        pub adjust_expander: TemplateChild<adw::ExpanderRow>,
+        #[template_child]
+        pub filter_subtitle: TemplateChild<gtk::Label>,
+        #[template_child]
+        pub adjust_subtitle: TemplateChild<gtk::Label>,
+        #[template_child]
+        pub revert_btn: TemplateChild<gtk::Button>,
+        #[template_child]
+        pub rotate_ccw_btn: TemplateChild<gtk::Button>,
+        #[template_child]
+        pub rotate_cw_btn: TemplateChild<gtk::Button>,
+        #[template_child]
+        pub flip_h_btn: TemplateChild<gtk::Button>,
+        #[template_child]
+        pub flip_v_btn: TemplateChild<gtk::Button>,
+
+        // Service dependencies (set once in setup)
+        pub picture: OnceCell<gtk::Picture>,
+        pub library: OnceCell<Arc<dyn Library>>,
+        pub tokio: OnceCell<tokio::runtime::Handle>,
+        pub bus_sender: OnceCell<crate::event_bus::EventSender>,
+
+        // Mutable state
+        pub session: RefCell<Option<super::EditSession>>,
+        pub media_id: RefCell<Option<MediaId>>,
+        pub render_debounce: Cell<Option<glib::SourceId>>,
+        pub save_debounce: Cell<Option<glib::SourceId>>,
+        pub save_in_flight: Cell<bool>,
+        pub filter_buttons: RefCell<Vec<(String, gtk::ToggleButton)>>,
+        pub adjust_scales: RefCell<Vec<gtk::Scale>>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for EditPanel {
+        const NAME: &'static str = "MomentsEditPanel";
+        type Type = super::EditPanel;
+        type ParentType = gtk::Widget;
+
+        fn class_init(klass: &mut Self::Class) {
+            klass.bind_template();
+            klass.set_layout_manager_type::<gtk::BinLayout>();
+        }
+
+        fn instance_init(obj: &glib::subclass::InitializingObject<Self>) {
+            obj.init_template();
+        }
+    }
+
+    impl ObjectImpl for EditPanel {
+        fn dispose(&self) {
+            self.dispose_template();
+            while let Some(child) = self.obj().first_child() {
+                child.unparent();
+            }
+        }
+    }
+    impl WidgetImpl for EditPanel {}
+}
+
+glib::wrapper! {
+    pub struct EditPanel(ObjectSubclass<imp::EditPanel>)
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+
+impl Default for EditPanel {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EditPanel {
-    pub fn new(
+    pub fn new() -> Self {
+        glib::Object::new()
+    }
+
+    /// Inject service dependencies and wire signal handlers.
+    pub fn setup(
+        &self,
         picture: gtk::Picture,
         library: Arc<dyn Library>,
         tokio: tokio::runtime::Handle,
         bus_sender: crate::event_bus::EventSender,
-    ) -> Self {
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    ) {
+        let imp = self.imp();
+        assert!(imp.picture.set(picture).is_ok(), "setup called twice");
+        assert!(imp.library.set(library).is_ok(), "setup called twice");
+        assert!(imp.tokio.set(tokio).is_ok(), "setup called twice");
+        assert!(imp.bus_sender.set(bus_sender).is_ok(), "setup called twice");
 
-        let session: Rc<RefCell<Option<EditSession>>> = Rc::new(RefCell::new(None));
-        let media_id: Rc<RefCell<Option<MediaId>>> = Rc::new(RefCell::new(None));
-        let render_debounce: Rc<Cell<Option<glib::SourceId>>> = Rc::new(Cell::new(None));
-        let save_debounce: Rc<Cell<Option<glib::SourceId>>> = Rc::new(Cell::new(None));
-        let save_in_flight: Rc<Cell<bool>> = Rc::new(Cell::new(false));
-        let filter_buttons: Rc<RefCell<Vec<(String, gtk::ToggleButton)>>> =
-            Rc::new(RefCell::new(Vec::new()));
-        let filter_subtitle: Rc<RefCell<Option<gtk::Label>>> = Rc::new(RefCell::new(None));
-        let adjust_subtitle: Rc<RefCell<Option<gtk::Label>>> = Rc::new(RefCell::new(None));
-        let adjust_scales: Rc<RefCell<Vec<gtk::Scale>>> = Rc::new(RefCell::new(Vec::new()));
+        // Wire single-expansion: only one section open at a time.
+        wire_single_expansion(&[
+            &imp.transform_expander,
+            &imp.filters_expander,
+            &imp.adjust_expander,
+        ]);
 
-        let panel = Self {
-            root,
-            session,
-            picture,
-            tokio,
-            library,
-            media_id,
-            render_debounce,
-            save_debounce,
-            save_in_flight,
-            filter_buttons,
-            filter_subtitle,
-            adjust_subtitle,
-            adjust_scales,
-            bus_sender,
-        };
-
-        panel.build_ui();
-        panel
-    }
-
-    pub fn widget(&self) -> &gtk::Widget {
-        self.root.upcast_ref()
+        // Build dynamic content and wire signals.
+        self.build_filters_content();
+        self.build_adjust_content();
+        self.wire_transform_buttons();
+        self.wire_revert_button();
     }
 
     /// Start an editing session for the given media item.
@@ -130,12 +165,13 @@ impl EditPanel {
         preview_image: Arc<DynamicImage>,
         existing_state: Option<EditState>,
     ) {
+        let imp = self.imp();
         let state = existing_state.unwrap_or_default();
 
         debug!(media_id = %id, "begin edit session");
 
-        *self.media_id.borrow_mut() = Some(id);
-        *self.session.borrow_mut() = Some(EditSession {
+        *imp.media_id.borrow_mut() = Some(id);
+        *imp.session.borrow_mut() = Some(EditSession {
             state,
             preview_image,
             render_gen: 0,
@@ -145,7 +181,7 @@ impl EditPanel {
         self.sync_ui_from_state();
 
         // Render initial preview if state is not identity.
-        let is_identity = self
+        let is_identity = imp
             .session
             .borrow()
             .as_ref()
@@ -158,38 +194,41 @@ impl EditPanel {
 
     /// End the current editing session, auto-saving any pending changes.
     pub fn end_session(&self) {
+        let imp = self.imp();
+
         // Cancel any pending save debounce — we'll save immediately.
-        if let Some(id) = self.save_debounce.take() {
+        if let Some(id) = imp.save_debounce.take() {
             id.remove();
         }
 
         // Persist current state before closing.
         self.save_to_db("navigate away");
 
-        let media_id = self.media_id.borrow().clone();
+        let media_id = imp.media_id.borrow().clone();
         if let Some(id) = &media_id {
             debug!(media_id = %id, "end edit session");
         }
 
-        *self.session.borrow_mut() = None;
-        *self.media_id.borrow_mut() = None;
+        *imp.session.borrow_mut() = None;
+        *imp.media_id.borrow_mut() = None;
     }
 
     // ── Auto-save ────────────────────────────────────────────────────────────
 
     /// Persist the current edit state to the database.
     fn save_to_db(&self, reason: &'static str) {
+        let imp = self.imp();
         let (id, state) = {
-            let session = self.session.borrow();
+            let session = imp.session.borrow();
             let Some(session) = session.as_ref() else { return };
-            let Some(id) = self.media_id.borrow().clone() else { return };
+            let Some(id) = imp.media_id.borrow().clone() else { return };
 
             // Don't persist identity state — delete instead if it exists.
             if session.state.is_identity() {
-                let lib = Arc::clone(&self.library);
-                let tk = self.tokio.clone();
+                let lib = Arc::clone(imp.library.get().unwrap());
+                let tk = imp.tokio.get().unwrap().clone();
                 let id_log = id.clone();
-                let tx = self.bus_sender.clone();
+                let tx = imp.bus_sender.get().unwrap().clone();
                 glib::MainContext::default().spawn_local(async move {
                     let start = Instant::now();
                     let result = tk
@@ -223,25 +262,28 @@ impl EditPanel {
             (id, session.state.clone())
         };
 
-        if self.save_in_flight.get() {
+        if imp.save_in_flight.get() {
             debug!(media_id = %id, reason, "save skipped — write already in-flight");
             return;
         }
 
-        self.save_in_flight.set(true);
-        let in_flight = Rc::clone(&self.save_in_flight);
-        let lib = Arc::clone(&self.library);
-        let tk = self.tokio.clone();
+        imp.save_in_flight.set(true);
+        let lib = Arc::clone(imp.library.get().unwrap());
+        let tk = imp.tokio.get().unwrap().clone();
         let id_log = id.clone();
-        let tx = self.bus_sender.clone();
+        let tx = imp.bus_sender.get().unwrap().clone();
 
+        let weak = self.downgrade();
         glib::MainContext::default().spawn_local(async move {
             let start = Instant::now();
             let result = tk
                 .spawn(async move { lib.save_edit_state(&id, &state).await })
                 .await;
             let elapsed = start.elapsed();
-            in_flight.set(false);
+
+            if let Some(panel) = weak.upgrade() {
+                panel.imp().save_in_flight.set(false);
+            }
 
             match result {
                 Ok(Ok(())) => {
@@ -277,141 +319,153 @@ impl EditPanel {
         });
     }
 
-    // ── UI construction ──────────────────────────��───────────────────────────
+    /// Create a closure that schedules a debounced auto-save.
+    pub(super) fn auto_save_closure(&self) -> impl Fn() {
+        let weak = self.downgrade();
 
-    fn build_ui(&self) {
-        let vbox = gtk::Box::new(gtk::Orientation::Vertical, 12);
-        vbox.set_margin_top(12);
-        vbox.set_margin_bottom(12);
-        vbox.set_margin_start(12);
-        vbox.set_margin_end(12);
+        move || {
+            let Some(panel) = weak.upgrade() else { return };
+            let imp = panel.imp();
 
-        // ── Transform section (collapsed by default) ─────────────────────────
-        let list_transform = gtk::ListBox::new();
-        list_transform.add_css_class("boxed-list");
-        list_transform.set_selection_mode(gtk::SelectionMode::None);
+            // Cancel any pending save timer.
+            if let Some(id) = imp.save_debounce.take() {
+                id.remove();
+            }
 
-        let (transform_exp, _) = expander_row(
-            Some("object-rotate-right-symbolic"),
-            "Transform",
-            "Crop, rotate, flip",
-            false,
-        );
-        self.build_transform_content(&transform_exp);
-        list_transform.append(&transform_exp);
-        vbox.append(&list_transform);
-
-        // ── Filters section (expanded by default) ────────────────────────────
-        let list_filters = gtk::ListBox::new();
-        list_filters.add_css_class("boxed-list");
-        list_filters.set_selection_mode(gtk::SelectionMode::None);
-
-        let (filters_exp, filter_subtitle_label) = expander_row(
-            Some("color-select-symbolic"),
-            "Filters",
-            "None",
-            true,
-        );
-        *self.filter_subtitle.borrow_mut() = Some(filter_subtitle_label);
-        self.build_filters_content(&filters_exp);
-        list_filters.append(&filters_exp);
-        vbox.append(&list_filters);
-
-        // ── Adjust section (collapsed by default) ────────────────────────────
-        let list_adjust = gtk::ListBox::new();
-        list_adjust.add_css_class("boxed-list");
-        list_adjust.set_selection_mode(gtk::SelectionMode::None);
-
-        let (adjust_exp, adjust_subtitle_label) = expander_row(
-            Some("preferences-other-symbolic"),
-            "Adjust",
-            "No changes",
-            false,
-        );
-        *self.adjust_subtitle.borrow_mut() = Some(adjust_subtitle_label);
-        self.build_adjust_content(&adjust_exp);
-        list_adjust.append(&adjust_exp);
-        vbox.append(&list_adjust);
-
-        // Wire single-expansion: only one section open at a time.
-        wire_single_expansion(&[&transform_exp, &filters_exp, &adjust_exp]);
-
-        // ── Scrolled content ─────────────────────��───────────────────────────
-        let scrolled = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .vexpand(true)
-            .build();
-        scrolled.set_child(Some(&vbox));
-        self.root.append(&scrolled);
-
-        // ── Revert button (always visible at bottom) ─────────────────────────
-        let revert_btn = gtk::Button::builder()
-            .label("Revert to Original")
-            .tooltip_text(gettext("Remove all edits and restore the original image"))
-            .hexpand(true)
-            .margin_top(12)
-            .margin_bottom(12)
-            .margin_start(12)
-            .margin_end(12)
-            .build();
-        revert_btn.add_css_class("destructive-action");
-        self.root.append(&revert_btn);
-
-        // Wire revert.
-        self.wire_revert_button(&revert_btn);
+            let weak_inner = panel.downgrade();
+            let source_id = glib::timeout_add_local_once(
+                std::time::Duration::from_millis(SAVE_DEBOUNCE_MS as u64),
+                move || {
+                    let Some(panel) = weak_inner.upgrade() else { return };
+                    panel.imp().save_debounce.set(None);
+                    panel.save_to_db("auto-save");
+                },
+            );
+            imp.save_debounce.set(Some(source_id));
+        }
     }
 
-    /// Wire the Revert to Original button.
-    fn wire_revert_button(&self, revert_btn: &gtk::Button) {
-        let session = Rc::clone(&self.session);
-        let media_id = Rc::clone(&self.media_id);
-        let library = Arc::clone(&self.library);
-        let tokio = self.tokio.clone();
-        let picture = self.picture.clone();
-        let save_debounce = Rc::clone(&self.save_debounce);
-        let filter_buttons = Rc::clone(&self.filter_buttons);
-        let filter_subtitle = Rc::clone(&self.filter_subtitle);
-        let adjust_subtitle = Rc::clone(&self.adjust_subtitle);
-        let adjust_scales = Rc::clone(&self.adjust_scales);
-        let tx = self.bus_sender.clone();
-        revert_btn.connect_clicked(move |_| {
+    /// Render the current edit state as a preview.
+    pub(super) fn render_preview(&self) {
+        let imp = self.imp();
+        let preview = {
+            let session = imp.session.borrow();
+            let Some(s) = session.as_ref() else { return };
+            (Arc::clone(&s.preview_image), s.state.clone(), s.render_gen)
+        };
+        self.render_to_picture(preview);
+    }
+
+    /// Render an edit state preview and display it on the picture widget.
+    pub(super) fn render_to_picture(
+        &self,
+        preview: (Arc<DynamicImage>, EditState, u64),
+    ) {
+        let imp = self.imp();
+        let pic = imp.picture.get().unwrap().clone();
+        let tk = imp.tokio.get().unwrap().clone();
+        let (preview_img, state, gen) = preview;
+
+        let weak = self.downgrade();
+        glib::MainContext::default().spawn_local(async move {
+            let result = tk
+                .spawn(async move {
+                    tokio::task::spawn_blocking(move || {
+                        let edited = apply_edits(&preview_img, &state);
+                        let rgba = edited.into_rgba8();
+                        let (w, h) = image::GenericImageView::dimensions(&rgba);
+                        (rgba.into_raw(), w as i32, h as i32)
+                    })
+                    .await
+                })
+                .await;
+
+            let Some(panel) = weak.upgrade() else { return };
+            let current_gen = panel.imp().session.borrow().as_ref().map(|s| s.render_gen);
+            if current_gen != Some(gen) {
+                return;
+            }
+
+            if let Ok(Ok((raw, w, h))) = result {
+                let gbytes = glib::Bytes::from_owned(raw);
+                let texture = gdk::MemoryTexture::new(
+                    w,
+                    h,
+                    gdk::MemoryFormat::R8g8b8a8,
+                    &gbytes,
+                    (w as usize) * 4,
+                );
+                pic.set_paintable(Some(texture.upcast_ref::<gdk::Paintable>()));
+            }
+        });
+    }
+
+    /// Sync UI widgets (filter buttons, sliders) to match the current EditState.
+    fn sync_ui_from_state(&self) {
+        let imp = self.imp();
+        let filter_name = {
+            let session = imp.session.borrow();
+            session.as_ref().and_then(|s| s.state.filter.clone())
+        };
+
+        // Sync filter buttons.
+        for (name, btn) in imp.filter_buttons.borrow().iter() {
+            let should_be_active = match &filter_name {
+                Some(f) => *name == *f,
+                None => *name == "original",
+            };
+            btn.set_active(should_be_active);
+        }
+
+        // Sync filter subtitle.
+        let display = match &filter_name {
+            Some(f) => filter_display_name(f),
+            None => "None",
+        };
+        imp.filter_subtitle.set_label(display);
+    }
+
+    // ── Signal wiring ────────────────────────────────────────────────────────
+
+    fn wire_revert_button(&self) {
+        let weak = self.downgrade();
+        self.imp().revert_btn.connect_clicked(move |_| {
+            let Some(panel) = weak.upgrade() else { return };
+            let imp = panel.imp();
+
             // Cancel any pending auto-save.
-            if let Some(id) = save_debounce.take() {
+            if let Some(id) = imp.save_debounce.take() {
                 id.remove();
             }
 
             // Reset state.
             {
-                let mut session = session.borrow_mut();
+                let mut session = imp.session.borrow_mut();
                 if let Some(s) = session.as_mut() {
                     s.state = EditState::default();
                 }
             }
 
             // Reset filter buttons and subtitle.
-            for (_, btn) in filter_buttons.borrow().iter() {
+            for (_, btn) in imp.filter_buttons.borrow().iter() {
                 btn.set_active(false);
             }
-            if let Some(ref lbl) = *filter_subtitle.borrow() {
-                lbl.set_label("None");
-            }
+            imp.filter_subtitle.set_label("None");
 
             // Reset all adjust sliders to 0.
-            for scale in adjust_scales.borrow().iter() {
+            for scale in imp.adjust_scales.borrow().iter() {
                 scale.set_value(0.0);
             }
-            if let Some(ref lbl) = *adjust_subtitle.borrow() {
-                lbl.set_label("No changes");
-            }
+            imp.adjust_subtitle.set_label("No changes");
 
             // Re-render original.
             let preview = {
-                let session = session.borrow();
+                let session = imp.session.borrow();
                 session.as_ref().map(|s| Arc::clone(&s.preview_image))
             };
             if let Some(preview) = preview {
-                let pic = picture.clone();
-                let tk = tokio.clone();
+                let pic = imp.picture.get().unwrap().clone();
+                let tk = imp.tokio.get().unwrap().clone();
                 glib::MainContext::default().spawn_local(async move {
                     let state = EditState::default();
                     let result = tk
@@ -441,12 +495,12 @@ impl EditPanel {
             }
 
             // Delete from DB.
-            let id = media_id.borrow().clone();
+            let id = imp.media_id.borrow().clone();
             if let Some(id) = id {
-                let lib = Arc::clone(&library);
-                let tk = tokio.clone();
+                let lib = Arc::clone(imp.library.get().unwrap());
+                let tk = imp.tokio.get().unwrap().clone();
                 let id_log = id.clone();
-                let tx = tx.clone();
+                let tx = imp.bus_sender.get().unwrap().clone();
                 glib::MainContext::default().spawn_local(async move {
                     let start = Instant::now();
                     let result =
@@ -475,193 +529,4 @@ impl EditPanel {
             }
         });
     }
-
-    /// Create a closure that schedules a debounced auto-save.
-    fn auto_save_closure(&self) -> impl Fn() {
-        let save_debounce = Rc::clone(&self.save_debounce);
-        let session = Rc::clone(&self.session);
-        let media_id = Rc::clone(&self.media_id);
-        let library = Arc::clone(&self.library);
-        let tokio = self.tokio.clone();
-        let save_in_flight = Rc::clone(&self.save_in_flight);
-        let bus_sender = self.bus_sender.clone();
-
-        move || {
-            // Cancel any pending save timer.
-            if let Some(id) = save_debounce.take() {
-                id.remove();
-            }
-
-            let session = Rc::clone(&session);
-            let media_id = Rc::clone(&media_id);
-            let library = Arc::clone(&library);
-            let tokio = tokio.clone();
-            let save_in_flight = Rc::clone(&save_in_flight);
-            let save_debounce_inner = Rc::clone(&save_debounce);
-            let tx = bus_sender.clone();
-
-            let source_id = glib::timeout_add_local_once(
-                std::time::Duration::from_millis(SAVE_DEBOUNCE_MS as u64),
-                move || {
-                    save_debounce_inner.set(None);
-                    schedule_save(&session, &media_id, &library, &tokio, &save_in_flight, &tx);
-                },
-            );
-            save_debounce.set(Some(source_id));
-        }
-    }
-
-    /// Render the current edit state as a preview.
-    fn render_preview(&self) {
-        let preview = {
-            let session = self.session.borrow();
-            let Some(s) = session.as_ref() else { return };
-            (Arc::clone(&s.preview_image), s.state.clone(), s.render_gen)
-        };
-        render_to_picture(&self.picture, &self.tokio, &self.session, preview);
-    }
-
-    /// Sync UI widgets (filter buttons, sliders) to match the current EditState.
-    fn sync_ui_from_state(&self) {
-        let filter_name = {
-            let session = self.session.borrow();
-            session.as_ref().and_then(|s| s.state.filter.clone())
-        };
-
-        // Sync filter buttons.
-        for (name, btn) in self.filter_buttons.borrow().iter() {
-            let should_be_active = match &filter_name {
-                Some(f) => *name == *f,
-                None => *name == "original",
-            };
-            btn.set_active(should_be_active);
-        }
-
-        // Sync filter subtitle.
-        let display = match &filter_name {
-            Some(f) => filter_display_name(f),
-            None => "None",
-        };
-        if let Some(ref lbl) = *self.filter_subtitle.borrow() {
-            lbl.set_label(display);
-        }
-    }
-}
-
-// ── Free functions ────────────────────────────────��──────────────────────────
-
-/// Perform a debounced DB save.
-#[allow(clippy::too_many_arguments)]
-fn schedule_save(
-    session: &Rc<RefCell<Option<EditSession>>>,
-    media_id: &Rc<RefCell<Option<MediaId>>>,
-    library: &Arc<dyn Library>,
-    tokio: &tokio::runtime::Handle,
-    save_in_flight: &Rc<Cell<bool>>,
-    bus_sender: &crate::event_bus::EventSender,
-) {
-    let (id, state) = {
-        let session = session.borrow();
-        let Some(session) = session.as_ref() else { return };
-        let Some(id) = media_id.borrow().clone() else { return };
-        if session.state.is_identity() {
-            return;
-        }
-        (id, session.state.clone())
-    };
-
-    if save_in_flight.get() {
-        debug!(media_id = %id, "auto-save skipped — write already in-flight");
-        return;
-    }
-
-    save_in_flight.set(true);
-    let in_flight = Rc::clone(save_in_flight);
-    let lib = Arc::clone(library);
-    let tk = tokio.clone();
-    let id_log = id.clone();
-    let tx = bus_sender.clone();
-
-    glib::MainContext::default().spawn_local(async move {
-        let start = Instant::now();
-        let result = tk
-            .spawn(async move { lib.save_edit_state(&id, &state).await })
-            .await;
-        let elapsed = start.elapsed();
-        in_flight.set(false);
-
-        match result {
-            Ok(Ok(())) => {
-                if elapsed.as_millis() > 20 {
-                    warn!(
-                        media_id = %id_log,
-                        elapsed_ms = elapsed.as_millis(),
-                        "auto-save slow"
-                    );
-                } else {
-                    debug!(
-                        media_id = %id_log,
-                        elapsed_ms = elapsed.as_millis(),
-                        "auto-save"
-                    );
-                }
-            }
-            Ok(Err(e)) => {
-                error!("auto-save failed: {e}");
-                tx.send(crate::app_event::AppEvent::Error(
-                    "Could not save edits".into(),
-                ));
-            }
-            Err(e) => {
-                error!("auto-save join failed: {e}");
-                tx.send(crate::app_event::AppEvent::Error(
-                    "Could not save edits".into(),
-                ));
-            }
-        }
-    });
-}
-
-/// Render an edit state preview and display it on the picture widget.
-fn render_to_picture(
-    picture: &gtk::Picture,
-    tokio: &tokio::runtime::Handle,
-    session: &Rc<RefCell<Option<EditSession>>>,
-    preview: (Arc<DynamicImage>, EditState, u64),
-) {
-    let pic = picture.clone();
-    let tk = tokio.clone();
-    let session_ref = Rc::clone(session);
-    let (preview_img, state, gen) = preview;
-
-    glib::MainContext::default().spawn_local(async move {
-        let result = tk
-            .spawn(async move {
-                tokio::task::spawn_blocking(move || {
-                    let edited = apply_edits(&preview_img, &state);
-                    let rgba = edited.into_rgba8();
-                    let (w, h) = image::GenericImageView::dimensions(&rgba);
-                    (rgba.into_raw(), w as i32, h as i32)
-                })
-                .await
-            })
-            .await;
-
-        let current_gen = session_ref.borrow().as_ref().map(|s| s.render_gen);
-        if current_gen != Some(gen) {
-            return;
-        }
-
-        if let Ok(Ok((raw, w, h))) = result {
-            let gbytes = glib::Bytes::from_owned(raw);
-            let texture = gdk::MemoryTexture::new(
-                w,
-                h,
-                gdk::MemoryFormat::R8g8b8a8,
-                &gbytes,
-                (w as usize) * 4,
-            );
-            pic.set_paintable(Some(texture.upcast_ref::<gdk::Paintable>()));
-        }
-    });
 }

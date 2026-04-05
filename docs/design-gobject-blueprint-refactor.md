@@ -51,7 +51,7 @@ A full audit of `src/ui/` found:
 | # | Struct | File | Service deps | Blueprint | Priority | Status |
 |---|--------|------|-------------|-----------|----------|--------|
 | 1 | `PhotoViewer` | `viewer.rs` | library, tokio, bus_sender | Yes — static headerbar + overlay + split | First (fewest deps, most static) | **Done** (#433) |
-| 2 | `VideoViewer` | `video_viewer.rs` | library, tokio, bus_sender | Yes — similar to PhotoViewer | First (same shape) | Pending |
+| 2 | `VideoViewer` | `video_viewer.rs` | library, tokio, bus_sender | Yes — similar to PhotoViewer | First (same shape) | **Done** (#435) |
 | 3 | `EditPanel` | `viewer/edit_panel.rs` | tokio, library, bus_sender | Partial — section skeleton yes, dynamic sliders no | Second | Pending |
 | 4 | `AlbumGridView` | `album_grid.rs` | library, tokio, texture_cache, bus_sender | Partial — headerbar/empty state yes, grid no | Third | Pending |
 | 5 | `PhotoGridView` | `photo_grid.rs` | library, tokio, bus_sender, texture_cache | Partial — headerbar/action bar yes, grid no | Third | Pending |
@@ -145,7 +145,11 @@ mod imp {
         }
     }
 
-    impl ObjectImpl for FooView {}
+    impl ObjectImpl for FooView {
+        fn dispose(&self) {
+            self.dispose_template();
+        }
+    }
     impl WidgetImpl for FooView {}
 }
 
@@ -284,6 +288,7 @@ Each conversion is one PR. Every PR must:
 - [ ] Add `.blp` to `src/meson.build` blueprint input list
 - [ ] Add `.ui` to `src/moments.gresource.xml`
 - [ ] Add translatable strings to `po/POTFILES.in` (if Blueprint has i18n strings)
+- [ ] Add `dispose_template()` override in `ObjectImpl::dispose()`
 - [ ] Remove `#[allow(clippy::too_many_arguments)]` if present
 - [ ] Remove `Rc<>` wrappers from callers — GObject ref-counting replaces `Rc`
 - [ ] Verify: `make lint`, `make test`, `make test-integration`
@@ -438,7 +443,23 @@ The compiler sees the `Ref<'_>` destructor running after the GObject drops.
 Fix: explicitly `drop(borrow)` before the block ends, or extract into a
 tighter scope.
 
-### 5. Clippy requires `Default` impl
+### 5. `dispose_template()` required for composite templates
+
+Composite template widgets must call `self.dispose_template()` in their
+`ObjectImpl::dispose()` override. Without it, `TemplateChild` fields are
+never released — `bind_template()` places strong refs that can cause
+refcount cycles. Even when widgets live for the process lifetime, include
+it for correctness:
+
+```rust
+impl ObjectImpl for FooView {
+    fn dispose(&self) {
+        self.dispose_template();
+    }
+}
+```
+
+### 6. Clippy requires `Default` impl
 
 When `new()` takes no arguments, clippy fires `new_without_default`. Add
 `impl Default for FooView { fn default() -> Self { Self::new() } }`.
