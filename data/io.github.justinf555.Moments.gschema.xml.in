@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <schemalist gettext-domain="moments">
-	<schema id="io.github.justinf555.Moments" path="/io/github/justinf555/Moments/">
+	<schema id="@APP_ID@" path="/@APP_PATH@/">
 		<key name="library-path" type="s">
 			<default>''</default>
 			<summary>Path to the Moments library bundle</summary>

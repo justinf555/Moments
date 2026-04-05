@@ -1,5 +1,3 @@
-application_id = 'io.github.justinf555.Moments'
-
 scalable_dir = 'hicolor' / 'scalable' / 'apps'
 install_data(
   scalable_dir / ('@0@.svg').format(application_id),

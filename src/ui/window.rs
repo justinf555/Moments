@@ -148,6 +148,13 @@ impl MomentsWindow {
             .property("application", application)
             .build();
         win.restore_window_state(settings);
+
+        // Development builds get the GNOME "devel" style (striped headerbar)
+        // and a title suffix so the user can tell them apart from production.
+        if crate::config::PROFILE == "development" {
+            win.add_css_class("devel");
+        }
+
         win
     }
 

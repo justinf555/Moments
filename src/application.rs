@@ -29,7 +29,7 @@ use gtk::{gio, glib};
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::app_event::AppEvent;
-use crate::config::VERSION;
+use crate::config::{APP_ID, PROFILE, VERSION};
 use crate::event_bus::EventBus;
 use crate::library::bundle::Bundle;
 use crate::library::config::LibraryConfig;
@@ -126,7 +126,7 @@ mod imp {
             // Apply saved color scheme preference.
             let settings = self
                 .settings
-                .get_or_init(|| gio::Settings::new("io.github.justinf555.Moments"));
+                .get_or_init(|| gio::Settings::new(APP_ID));
             let color_scheme = match settings.uint("color-scheme") {
                 1 => adw::ColorScheme::ForceLight,
                 4 => adw::ColorScheme::ForceDark,
@@ -142,7 +142,7 @@ mod imp {
 
             let settings = self
                 .settings
-                .get_or_init(|| gio::Settings::new("io.github.justinf555.Moments"));
+                .get_or_init(|| gio::Settings::new(APP_ID));
 
             let library_path = settings.string("library-path");
 
@@ -229,9 +229,10 @@ impl MomentsApplication {
 
     fn show_about(&self) {
         let Some(window) = self.active_window() else { return };
+        let app_name = if PROFILE == "development" { "Moments (Development)" } else { "Moments" };
         let about = adw::AboutDialog::builder()
-            .application_name("moments")
-            .application_icon("io.github.justinf555.Moments")
+            .application_name(app_name)
+            .application_icon(APP_ID)
             .developer_name("Unknown")
             .version(VERSION)
             .developers(vec!["Unknown"])

@@ -187,9 +187,9 @@ impl PhotoGridCell {
         let trashed_at = item.trashed_at();
         if trashed_at > 0 {
             let retention_days = gtk::gio::SettingsSchemaSource::default()
-                .and_then(|src| src.lookup("io.github.justinf555.Moments", true))
+                .and_then(|src| src.lookup(crate::config::APP_ID, true))
                 .map(|_| {
-                    gtk::gio::Settings::new("io.github.justinf555.Moments")
+                    gtk::gio::Settings::new(crate::config::APP_ID)
                         .uint("trash-retention-days") as i64
                 })
                 .unwrap_or(30);

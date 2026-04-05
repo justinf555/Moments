@@ -42,6 +42,8 @@ conf.set_quoted('VERSION', meson.project_version())
 conf.set_quoted('GETTEXT_PACKAGE', 'moments')
 conf.set_quoted('LOCALEDIR', get_option('prefix') / get_option('localedir'))
 conf.set_quoted('PKGDATADIR', pkgdatadir)
+conf.set_quoted('APP_ID', application_id)
+conf.set_quoted('PROFILE', profile)
 
 configure_file(
     input: 'config.rs.in',

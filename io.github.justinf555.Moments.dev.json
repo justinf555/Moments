@@ -1,5 +1,5 @@
 {
-    "id" : "io.github.justinf555.Moments",
+    "id" : "io.github.justinf555.Moments.Devel",
     "runtime" : "org.gnome.Platform",
     "runtime-version" : "50",
     "sdk" : "org.gnome.Sdk",
@@ -9,8 +9,6 @@
     "command" : "moments",
     "finish-args" : [
         "--share=network",
-        "--share=ipc",
-        "--socket=fallback-x11",
         "--device=dri",
         "--socket=wayland",
         "--socket=pulseaudio",
@@ -44,7 +42,8 @@
             "builddir" : true,
             "buildsystem" : "meson",
             "config-opts" : [
-                "--libdir=lib"
+                "--libdir=lib",
+                "-Dprofile=development"
             ],
             "sources" : [
                 {

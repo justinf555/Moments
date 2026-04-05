@@ -6,7 +6,7 @@ run-dev:
 	flatpak-builder --user --install --force-clean \
 		--state-dir=.flatpak-builder-dev \
 		flatpak-build-dev io.github.justinf555.Moments.dev.json && \
-	flatpak run --env=RUST_LOG=moments=debug io.github.justinf555.Moments
+	flatpak run --env=RUST_LOG=moments=debug io.github.justinf555.Moments.Devel
 
 clean:
 	rm -rf flatpak-build-dir flatpak-build-dev

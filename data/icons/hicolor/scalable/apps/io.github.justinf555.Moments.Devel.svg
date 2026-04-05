@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3584e4"/>
+      <stop offset="1" stop-color="#1a5fb4"/>
+    </linearGradient>
+    <linearGradient id="photoGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#deddda"/>
+    </linearGradient>
+    <linearGradient id="skyGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#99c1f1"/>
+      <stop offset="1" stop-color="#62a0ea"/>
+    </linearGradient>
+    <clipPath id="photoClip">
+      <rect x="30" y="28" width="68" height="52" rx="2"/>
+    </clipPath>
+  </defs>
+
+  <!-- App base: rounded square -->
+  <rect x="4" y="4" width="120" height="120" rx="28" ry="28" fill="url(#bgGrad)"/>
+
+  <!-- Subtle highlight on top edge -->
+  <rect x="4" y="4" width="120" height="60" rx="28" ry="28" fill="#ffffff" opacity="0.08"/>
+
+  <!-- Photo card (tilted slightly) -->
+  <g transform="rotate(-3, 64, 58)">
+    <!-- Photo border / card -->
+    <rect x="24" y="22" width="80" height="78" rx="4" ry="4" fill="url(#photoGrad)"/>
+
+    <!-- Photo image area -->
+    <g clip-path="url(#photoClip)">
+      <!-- Sky -->
+      <rect x="30" y="28" width="68" height="52" fill="url(#skyGrad)"/>
+
+      <!-- Sun -->
+      <circle cx="80" cy="40" r="8" fill="#f6d32d" opacity="0.9"/>
+
+      <!-- Far mountain -->
+      <polygon points="30,72 55,45 80,72" fill="#77767b" opacity="0.5"/>
+
+      <!-- Near mountain -->
+      <polygon points="50,80 75,48 98,80" fill="#5e5c64"/>
+
+      <!-- Snow cap on near mountain -->
+      <polygon points="75,48 70,56 80,56" fill="#ffffff" opacity="0.7"/>
+
+      <!-- Green hill -->
+      <ellipse cx="64" cy="84" rx="45" ry="12" fill="#26a269"/>
+    </g>
+  </g>
+
+  <!-- Second photo card peeking behind (offset) -->
+  <g transform="rotate(6, 64, 58)" opacity="0.3">
+    <rect x="24" y="22" width="80" height="78" rx="4" ry="4" fill="#ffffff" stroke="#ffffff" stroke-width="0.5"/>
+  </g>
+
+  <!-- Redraw main photo card on top -->
+  <g transform="rotate(-3, 64, 58)">
+    <rect x="24" y="22" width="80" height="78" rx="4" ry="4" fill="url(#photoGrad)"/>
+    <g clip-path="url(#photoClip)">
+      <rect x="30" y="28" width="68" height="52" fill="url(#skyGrad)"/>
+      <circle cx="80" cy="40" r="8" fill="#f6d32d" opacity="0.9"/>
+      <polygon points="30,72 55,45 80,72" fill="#77767b" opacity="0.5"/>
+      <polygon points="50,80 75,48 98,80" fill="#5e5c64"/>
+      <polygon points="75,48 70,56 80,56" fill="#ffffff" opacity="0.7"/>
+      <ellipse cx="64" cy="84" rx="45" ry="12" fill="#26a269"/>
+    </g>
+  </g>
+
+  <!-- Bottom shadow for depth -->
+  <rect x="4" y="100" width="120" height="24" rx="0" ry="0" fill="#000000" opacity="0.05"
+        clip-path="inset(0 0 0 0 round 0 0 28px 28px)"/>
+</svg>

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.justinf555.Moments</id>
+  <id>@APP_ID@</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
 
@@ -22,7 +22,7 @@
   <url type="contribute">https://github.com/justinf555/Moments/blob/main/CONTRIBUTING.md</url>
 
   <translation type="gettext">moments</translation>
-  <launchable type="desktop-id">io.github.justinf555.Moments.desktop</launchable>
+  <launchable type="desktop-id">@APP_ID@.desktop</launchable>
 
   <keywords>
     <keyword>photo</keyword>

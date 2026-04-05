@@ -65,7 +65,7 @@ impl ImmichLibrary {
         // Periodic cache evictor — delayed startup, runs every 10 minutes.
         let cache_limit_tx = {
             use gtk::prelude::SettingsExt;
-            let settings = gtk::gio::Settings::new("io.github.justinf555.Moments");
+            let settings = gtk::gio::Settings::new(crate::config::APP_ID);
             let max_mb = settings.uint("originals-cache-max-mb");
             let (tx, rx) = tokio::sync::watch::channel(max_mb);
             let originals_dir = bundle.originals.clone();
@@ -78,7 +78,7 @@ impl ImmichLibrary {
         // Read sync interval from GSettings (must be on GTK thread).
         let sync_interval_secs = {
             use gtk::prelude::SettingsExt;
-            let settings = gtk::gio::Settings::new("io.github.justinf555.Moments");
+            let settings = gtk::gio::Settings::new(crate::config::APP_ID);
             settings.uint("sync-interval-seconds") as u64
         };
 

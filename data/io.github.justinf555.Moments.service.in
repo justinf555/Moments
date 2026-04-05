@@ -1,3 +1,3 @@
 [D-BUS Service]
-Name=io.github.justinf555.Moments
+Name=@APP_ID@
 Exec=@bindir@/moments --gapplication-service

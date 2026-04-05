@@ -7,7 +7,14 @@ project('moments', 'rust',
 i18n = import('i18n')
 gnome = import('gnome')
 
-
+base_id = 'io.github.justinf555.Moments'
+if get_option('profile') == 'development'
+  application_id = base_id + '.Devel'
+  profile = 'development'
+else
+  application_id = base_id
+  profile = 'default'
+endif
 
 
 subdir('data')
