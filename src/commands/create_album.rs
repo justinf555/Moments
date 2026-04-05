@@ -115,4 +115,33 @@ mod tests {
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, AppEvent::Error(msg) if msg.contains("create album")));
     }
+
+    #[tokio::test]
+    async fn create_succeeds_but_add_fails_emits_created_then_error() {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        use crate::commands::test_helpers::MockLibrary;
+        use crate::library::album::AlbumId;
+
+        let mock = Arc::new(MockLibrary {
+            fail_with: Mutex::new(None),
+            fail_add_to_album: Mutex::new(true),
+            next_album_id: Mutex::new(AlbumId::new()),
+        });
+        let lib: Arc<dyn crate::library::Library> = mock;
+        let (bus, rx) = crate::event_bus::EventSender::test_channel();
+        CreateAlbumCommand.execute(
+            AppEvent::CreateAlbumRequested {
+                name: "Trip".into(),
+                ids: vec![MediaId::new("photo1".into())],
+            },
+            &lib, &bus,
+        ).await;
+        // Album is created first — exists even if add fails.
+        let event1 = rx.try_recv().unwrap();
+        assert!(matches!(event1, AppEvent::AlbumCreated { ref name, .. } if name == "Trip"));
+        // Then the add failure is reported.
+        let event2 = rx.try_recv().unwrap();
+        assert!(matches!(event2, AppEvent::Error(ref msg) if msg.contains("add to album")));
+    }
 }

@@ -30,6 +30,8 @@ use crate::library::viewer::LibraryViewer;
 pub struct MockLibrary {
     /// If `Some`, all mutable operations return this error.
     pub fail_with: Mutex<Option<String>>,
+    /// If true, `add_to_album` fails independently of `fail_with`.
+    pub fail_add_to_album: Mutex<bool>,
     /// Album ID returned by `create_album`.
     pub next_album_id: Mutex<AlbumId>,
 }
@@ -38,6 +40,7 @@ impl MockLibrary {
     pub fn mock() -> Arc<dyn crate::library::Library> {
         Arc::new(Self {
             fail_with: Mutex::new(None),
+            fail_add_to_album: Mutex::new(false),
             next_album_id: Mutex::new(AlbumId::new()),
         })
     }
@@ -45,6 +48,7 @@ impl MockLibrary {
     pub fn mock_failing(msg: &str) -> Arc<dyn crate::library::Library> {
         Arc::new(Self {
             fail_with: Mutex::new(Some(msg.to_string())),
+            fail_add_to_album: Mutex::new(false),
             next_album_id: Mutex::new(AlbumId::new()),
         })
     }
@@ -187,7 +191,11 @@ impl LibraryAlbums for MockLibrary {
         _album_id: &AlbumId,
         _media_ids: &[MediaId],
     ) -> Result<(), LibraryError> {
-        self.check_fail().await
+        self.check_fail().await?;
+        if *self.fail_add_to_album.lock().await {
+            return Err(LibraryError::Runtime("add_to_album failed".into()));
+        }
+        Ok(())
     }
     async fn remove_from_album(
         &self,
