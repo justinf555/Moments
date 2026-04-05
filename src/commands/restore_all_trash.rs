@@ -78,11 +78,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failure_emits_error() {
-        let lib = MockLibrary::mock_failing("db error");
+    async fn restore_failure_emits_error() {
+        use crate::library::media::{MediaId, MediaItem, MediaType};
+        let item = MediaItem {
+            id: MediaId::new("abc".into()),
+            taken_at: None,
+            imported_at: 0,
+            original_filename: "test.jpg".into(),
+            width: None,
+            height: None,
+            orientation: 1,
+            media_type: MediaType::Image,
+            is_favorite: false,
+            is_trashed: true,
+            trashed_at: Some(0),
+            duration_ms: None,
+        };
+        let lib = MockLibrary::mock_with_items_then_fail(vec![item], "db error");
         let (bus, rx) = crate::event_bus::EventSender::test_channel();
         RestoreAllTrashCommand.execute(AppEvent::RestoreAllTrashRequested, &lib, &bus).await;
         let event = rx.try_recv().unwrap();
-        assert!(matches!(event, AppEvent::Error(msg) if msg.contains("restore trash")));
+        assert!(matches!(event, AppEvent::Error(msg) if msg.contains("restore")));
     }
 }

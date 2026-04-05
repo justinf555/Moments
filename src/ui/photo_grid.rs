@@ -710,9 +710,7 @@ impl PhotoGridView {
                             bs.send(AppEvent::RestoreAllTrashRequested);
                         }
                     });
-                    if let Some(ref w) = win {
-                        dialog.present(Some(w));
-                    }
+                    dialog.present(win.as_ref());
                 });
             }
 
@@ -738,9 +736,7 @@ impl PhotoGridView {
                             bs.send(AppEvent::EmptyTrashRequested);
                         }
                     });
-                    if let Some(ref w) = win {
-                        dialog.present(Some(w));
-                    }
+                    dialog.present(win.as_ref());
                 });
             }
         }
