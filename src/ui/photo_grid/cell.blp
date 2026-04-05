@@ -1,0 +1,65 @@
+using Gtk 4.0;
+
+template $MomentsPhotoGridCell : Gtk.Widget {
+  accessible-role: img;
+  width-request: 160;
+  height-request: 160;
+
+  Gtk.Overlay overlay {
+    child: Gtk.Picture picture {
+      content-fit: cover;
+      can-shrink: true;
+      visible: false;
+    };
+
+    [overlay]
+    Gtk.Image placeholder {
+      icon-name: "image-x-generic-symbolic";
+      pixel-size: 48;
+      halign: center;
+      valign: center;
+      styles ["dim-label"]
+    }
+
+    [overlay]
+    Gtk.Button star_btn {
+      icon-name: "non-starred-symbolic";
+      halign: start;
+      valign: end;
+      margin-start: 4;
+      margin-bottom: 4;
+      visible: false;
+      styles ["circular", "osd"]
+    }
+
+    [overlay]
+    Gtk.CheckButton checkbox {
+      halign: start;
+      valign: start;
+      margin-start: 6;
+      margin-top: 6;
+      visible: false;
+      styles ["selection-mode", "osd"]
+    }
+
+    [overlay]
+    Gtk.Label days_label {
+      halign: end;
+      valign: end;
+      margin-end: 4;
+      margin-bottom: 4;
+      visible: false;
+      styles ["osd", "caption", "pill"]
+    }
+
+    [overlay]
+    Gtk.Label duration_label {
+      halign: end;
+      valign: end;
+      margin-end: 4;
+      margin-bottom: 4;
+      visible: false;
+      styles ["osd", "caption", "pill"]
+    }
+  }
+}

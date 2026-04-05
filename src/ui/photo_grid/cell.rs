@@ -17,16 +17,26 @@ pub struct CellBindings {
 
 mod imp {
     use super::*;
+    use gtk::CompositeTemplate;
 
-    #[derive(Default)]
+    #[derive(Default, CompositeTemplate)]
+    #[template(resource = "/io/github/justinf555/Moments/ui/photo_grid/cell.ui")]
     pub struct PhotoGridCell {
-        pub picture: gtk::Picture,
-        pub placeholder: gtk::Image,
-        pub star_btn: gtk::Button,
-        pub checkbox: gtk::CheckButton,
-        pub days_label: gtk::Label,
-        pub duration_label: gtk::Label,
-        pub overlay: gtk::Overlay,
+        #[template_child]
+        pub overlay: TemplateChild<gtk::Overlay>,
+        #[template_child]
+        pub picture: TemplateChild<gtk::Picture>,
+        #[template_child]
+        pub placeholder: TemplateChild<gtk::Image>,
+        #[template_child]
+        pub star_btn: TemplateChild<gtk::Button>,
+        #[template_child]
+        pub checkbox: TemplateChild<gtk::CheckButton>,
+        #[template_child]
+        pub days_label: TemplateChild<gtk::Label>,
+        #[template_child]
+        pub duration_label: TemplateChild<gtk::Label>,
+
         pub bindings: RefCell<Option<CellBindings>>,
         /// Whether to show the star button (false in Trash view).
         pub show_star: Cell<bool>,
@@ -51,80 +61,22 @@ mod imp {
         type ParentType = gtk::Widget;
 
         fn class_init(klass: &mut Self::Class) {
+            klass.bind_template();
             klass.set_layout_manager_type::<gtk::BinLayout>();
             klass.set_css_name("photo-grid-cell");
+        }
+
+        fn instance_init(obj: &glib::subclass::InitializingObject<Self>) {
+            obj.init_template();
         }
     }
 
     impl ObjectImpl for PhotoGridCell {
         fn constructed(&self) {
             self.parent_constructed();
-            let obj = self.obj();
-            obj.set_accessible_role(gtk::AccessibleRole::Img);
-            // Default cell size — overridden by the factory based on zoom level.
-            obj.set_size_request(160, 160);
-
-            self.picture.set_content_fit(gtk::ContentFit::Cover);
-            self.picture.set_can_shrink(true);
-            self.picture.set_visible(false);
-
-            // Static placeholder shown while thumbnail loads — no animation,
-            // zero CPU cost (replaces GtkSpinner which caused scroll jank).
-            self.placeholder.set_icon_name(Some("image-x-generic-symbolic"));
-            self.placeholder.set_pixel_size(48);
-            self.placeholder.set_halign(gtk::Align::Center);
-            self.placeholder.set_valign(gtk::Align::Center);
-            self.placeholder.add_css_class("dim-label");
-
-            // Star button — bottom-left, only shown when favourited (no hover).
-            self.star_btn.set_icon_name("non-starred-symbolic");
-            self.star_btn.set_halign(gtk::Align::Start);
-            self.star_btn.set_valign(gtk::Align::End);
-            self.star_btn.set_margin_start(4);
-            self.star_btn.set_margin_bottom(4);
-            self.star_btn.add_css_class("circular");
-            self.star_btn.add_css_class("osd");
-            self.star_btn.set_visible(false);
-
-            // Checkbox — top-left, shown on hover or always in selection mode.
-            self.checkbox.set_halign(gtk::Align::Start);
-            self.checkbox.set_valign(gtk::Align::Start);
-            self.checkbox.set_margin_start(6);
-            self.checkbox.set_margin_top(6);
-            self.checkbox.add_css_class("selection-mode");
-            self.checkbox.add_css_class("osd");
-            self.checkbox.set_visible(false);
-
-            // Trash days-remaining — bottom-right (Trash view only).
-            self.days_label.set_halign(gtk::Align::End);
-            self.days_label.set_valign(gtk::Align::End);
-            self.days_label.set_margin_end(4);
-            self.days_label.set_margin_bottom(4);
-            self.days_label.add_css_class("osd");
-            self.days_label.add_css_class("caption");
-            self.days_label.add_css_class("pill");
-            self.days_label.set_visible(false);
-
-            // Video duration — bottom-right, always visible for videos.
-            self.duration_label.set_halign(gtk::Align::End);
-            self.duration_label.set_valign(gtk::Align::End);
-            self.duration_label.set_margin_end(4);
-            self.duration_label.set_margin_bottom(4);
-            self.duration_label.add_css_class("osd");
-            self.duration_label.add_css_class("caption");
-            self.duration_label.add_css_class("pill");
-            self.duration_label.set_visible(false);
-
-            self.overlay.set_child(Some(&self.picture));
-            self.overlay.add_overlay(&self.placeholder);
-            self.overlay.add_overlay(&self.star_btn);
-            self.overlay.add_overlay(&self.checkbox);
-            self.overlay.add_overlay(&self.days_label);
-            self.overlay.add_overlay(&self.duration_label);
-
-            self.overlay.set_parent(&*obj);
 
             // Hover controller — show checkbox on mouse enter/leave.
+            let obj = self.obj();
             let motion = gtk::EventControllerMotion::new();
             motion.set_propagation_phase(gtk::PropagationPhase::Capture);
             let cell_weak = obj.downgrade();
@@ -148,9 +100,7 @@ mod imp {
         }
 
         fn dispose(&self) {
-            if let Some(child) = self.obj().first_child() {
-                child.unparent();
-            }
+            self.dispose_template();
         }
     }
 

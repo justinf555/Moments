@@ -11,30 +11,25 @@ pub(super) struct CellBindings {
     texture_handler: glib::SignalHandlerId,
 }
 
-#[allow(private_interfaces)]
 mod imp {
     use super::*;
+    use gtk::CompositeTemplate;
 
+    #[derive(Default, CompositeTemplate)]
+    #[template(resource = "/io/github/justinf555/Moments/ui/collection_grid/cell.ui")]
     pub struct CollectionGridCell {
-        pub picture: gtk::Picture,
-        pub placeholder: gtk::Image,
-        pub hidden_icon: gtk::Image,
-        pub name_label: gtk::Label,
-        pub subtitle_label: gtk::Label,
-        pub bindings: RefCell<Option<CellBindings>>,
-    }
+        #[template_child]
+        pub picture: TemplateChild<gtk::Picture>,
+        #[template_child]
+        pub placeholder: TemplateChild<gtk::Image>,
+        #[template_child]
+        pub hidden_icon: TemplateChild<gtk::Image>,
+        #[template_child]
+        pub name_label: TemplateChild<gtk::Label>,
+        #[template_child]
+        pub subtitle_label: TemplateChild<gtk::Label>,
 
-    impl Default for CollectionGridCell {
-        fn default() -> Self {
-            Self {
-                picture: gtk::Picture::new(),
-                placeholder: gtk::Image::from_icon_name("avatar-default-symbolic"),
-                hidden_icon: gtk::Image::from_icon_name("view-conceal-symbolic"),
-                name_label: gtk::Label::new(None),
-                subtitle_label: gtk::Label::new(None),
-                bindings: RefCell::default(),
-            }
-        }
+        pub bindings: RefCell<Option<CellBindings>>,
     }
 
     #[glib::object_subclass]
@@ -44,75 +39,32 @@ mod imp {
         type ParentType = gtk::Widget;
 
         fn class_init(klass: &mut Self::Class) {
+            klass.bind_template();
             klass.set_layout_manager_type::<gtk::BoxLayout>();
             klass.set_css_name("collection-grid-cell");
+        }
+
+        fn instance_init(obj: &glib::subclass::InitializingObject<Self>) {
+            obj.init_template();
         }
     }
 
     impl ObjectImpl for CollectionGridCell {
         fn constructed(&self) {
             self.parent_constructed();
-            let obj = self.obj();
-            obj.set_accessible_role(gtk::AccessibleRole::Button);
 
-            // Use BoxLayout vertical orientation.
+            // Configure BoxLayout orientation and spacing.
+            let obj = self.obj();
             let layout = obj
                 .layout_manager()
                 .and_downcast::<gtk::BoxLayout>()
                 .unwrap();
             layout.set_orientation(gtk::Orientation::Vertical);
             layout.set_spacing(4);
-
-            // Thumbnail frame — a fixed-size box that clips its child.
-            let frame = gtk::Frame::new(None);
-            frame.set_halign(gtk::Align::Center);
-            frame.set_size_request(96, 96);
-            frame.set_overflow(gtk::Overflow::Hidden);
-            frame.add_css_class("collection-thumbnail-frame");
-
-            // Overlay: placeholder behind picture.
-            let overlay = gtk::Overlay::new();
-
-            self.placeholder.set_pixel_size(96);
-            self.placeholder.add_css_class("dim-label");
-            overlay.set_child(Some(&self.placeholder));
-
-            self.picture.set_size_request(96, 96);
-            self.picture.set_content_fit(gtk::ContentFit::Cover);
-            self.picture.set_visible(false);
-            overlay.add_overlay(&self.picture);
-
-            // Hidden indicator icon — shown over the thumbnail when person is hidden.
-            self.hidden_icon.set_pixel_size(32);
-            self.hidden_icon.set_halign(gtk::Align::Center);
-            self.hidden_icon.set_valign(gtk::Align::Center);
-            self.hidden_icon.set_visible(false);
-            self.hidden_icon.add_css_class("hidden-icon");
-            overlay.add_overlay(&self.hidden_icon);
-
-            frame.set_child(Some(&overlay));
-            frame.set_parent(&*obj);
-
-            // Name label.
-            self.name_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            self.name_label.set_max_width_chars(14);
-            self.name_label.set_halign(gtk::Align::Center);
-            self.name_label.add_css_class("caption-heading");
-            self.name_label.set_parent(&*obj);
-
-            // Subtitle label.
-            self.subtitle_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            self.subtitle_label.set_max_width_chars(14);
-            self.subtitle_label.set_halign(gtk::Align::Center);
-            self.subtitle_label.add_css_class("dim-label");
-            self.subtitle_label.add_css_class("caption");
-            self.subtitle_label.set_parent(&*obj);
         }
 
         fn dispose(&self) {
-            while let Some(child) = self.obj().first_child() {
-                child.unparent();
-            }
+            self.dispose_template();
         }
     }
 
