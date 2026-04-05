@@ -1,0 +1,2 @@
+option('profile', type: 'combo', choices: ['default', 'development'], value: 'default',
+       description: 'Build profile: "default" for production, "development" for Devel app ID')

@@ -21,7 +21,11 @@ The Flatpak manifest is `io.github.justinf555.Moments.json` (local dev) and `io.
 
 ### Dev build
 
-The dev manifest (`io.github.justinf555.Moments.dev.json`) uses `type: "dir"` — picks up working tree changes without committing. It uses a **separate state dir** (`.flatpak-builder-dev/`) so switching between `make run` and `make run-dev` doesn't invalidate the cargo cache. It installs under the **same app ID** as production (`io.github.justinf555.Moments`) so Flatpak portals work correctly.
+The dev manifest (`io.github.justinf555.Moments.dev.json`) uses `type: "dir"` — picks up working tree changes without committing. It uses a **separate state dir** (`.flatpak-builder-dev/`) so switching between `make run` and `make run-dev` doesn't invalidate the cargo cache. It installs under a **separate app ID** (`io.github.justinf555.Moments.Devel`) so dev and production can run side-by-side with separate GSettings, data dirs, and keyring entries.
+
+### Build profiles
+
+The Meson option `-Dprofile=development` (set automatically by the dev manifest) switches the app ID to `io.github.justinf555.Moments.Devel` and enables the GNOME "devel" visual style (striped headerbar). The `config::APP_ID` and `config::PROFILE` constants in `config.rs.in` are set at build time — **never hardcode the app ID string in Rust code**; always use `config::APP_ID`.
 
 ```bash
 # Release: creates PR with version bump, merging triggers tag + GitHub Release

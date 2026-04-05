@@ -71,7 +71,7 @@ pub fn delete_access_token(server_url: &str) -> Result<(), LibraryError> {
 /// Build the libsecret schema for Moments credentials.
 fn schema() -> libsecret::Schema {
     libsecret::Schema::new(
-        "io.github.justinf555.Moments",
+        crate::config::APP_ID,
         libsecret::SchemaFlags::NONE,
         std::collections::HashMap::from([("server_url", libsecret::SchemaAttributeType::String)]),
     )

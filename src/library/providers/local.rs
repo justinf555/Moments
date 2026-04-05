@@ -75,9 +75,9 @@ impl LibraryStorage for LocalLibrary {
             let retention_days = {
                 use gtk::prelude::SettingsExt;
                 gtk::gio::SettingsSchemaSource::default()
-                    .and_then(|src| src.lookup("io.github.justinf555.Moments", true))
+                    .and_then(|src| src.lookup(crate::config::APP_ID, true))
                     .map(|_| {
-                        gtk::gio::Settings::new("io.github.justinf555.Moments")
+                        gtk::gio::Settings::new(crate::config::APP_ID)
                             .uint("trash-retention-days") as i64
                     })
                     .unwrap_or(30)

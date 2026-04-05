@@ -1,7 +1,7 @@
 [Desktop Entry]
 Name=Moments
 Exec=moments
-Icon=io.github.justinf555.Moments
+Icon=@APP_ID@
 Terminal=false
 Type=Application
 Categories=Graphics;Photography;

@@ -69,7 +69,7 @@ fn main() -> glib::ExitCode {
         .expect("failed to build Tokio runtime");
 
     let app = MomentsApplication::new(
-        "io.github.justinf555.Moments",
+        config::APP_ID,
         &gio::ApplicationFlags::empty(),
         tokio.handle().clone(),
     );
