@@ -539,7 +539,7 @@ impl SyncManager {
 
     /// Upsert a person from the sync stream and download their face thumbnail.
     #[instrument(skip(self, person), fields(person_id = %person.id, name = %person.name))]
-    async fn handle_person(&self, person: SyncPersonV1) -> Result<(), LibraryError> {
+    pub(crate) async fn handle_person(&self, person: SyncPersonV1) -> Result<(), LibraryError> {
         self.db
             .upsert_person(
                 &person.id,
@@ -601,7 +601,7 @@ impl SyncManager {
     }
 
     /// Remove an asset from an album from the sync stream.
-    async fn handle_album_asset_delete(
+    pub(crate) async fn handle_album_asset_delete(
         &self,
         assoc: SyncAlbumToAssetDeleteV1,
     ) -> Result<(), LibraryError> {
