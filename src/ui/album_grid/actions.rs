@@ -168,7 +168,7 @@ pub(crate) fn show_context_menu(
 
     // Wire Delete.
     wire_delete_button(
-        &delete_btn, &popover, library, tokio, bus_sender,
+        &delete_btn, &popover, bus_sender,
         grid_view, &album_id_str, &album_name,
     );
 
@@ -321,20 +321,15 @@ fn wire_rename_button(
 }
 
 /// Wire the Delete button to show a confirmation dialog.
-#[allow(clippy::too_many_arguments)]
 fn wire_delete_button(
     delete_btn: &gtk::Button,
     popover: &gtk::Popover,
-    library: &Arc<dyn Library>,
-    tokio: &tokio::runtime::Handle,
     bus_sender: &crate::event_bus::EventSender,
     grid_view: &gtk::GridView,
     album_id_str: &str,
     album_name: &str,
 ) {
     let pop = popover.downgrade();
-    let lib = Arc::clone(library);
-    let tk = tokio.clone();
     let bs = bus_sender.clone();
     let aid = album_id_str.to_owned();
     let aname = album_name.to_owned();
@@ -343,38 +338,12 @@ fn wire_delete_button(
         if let Some(p) = pop.upgrade() {
             p.popdown();
         }
-        let lib = Arc::clone(&lib);
-        let tk = tk.clone();
         let bs = bs.clone();
         let aid = aid.clone();
         if let Some(win) = gv_ref.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
             album_dialogs::show_delete_album_dialog(&win, &aname, move || {
-                let lib = Arc::clone(&lib);
-                let tk = tk.clone();
-                let bs = bs.clone();
-                let aid = aid.clone();
-                glib::MainContext::default().spawn_local(async move {
-                    let id = AlbumId::from_raw(aid.clone());
-                    match tk.spawn(async move { lib.delete_album(&id).await }).await {
-                        Ok(Ok(())) => {
-                            debug!(album_id = %aid, "album deleted");
-                            bs.send(crate::app_event::AppEvent::AlbumDeleted {
-                                id: AlbumId::from_raw(aid),
-                            });
-                        }
-                        Ok(Err(e)) => {
-                            tracing::error!("failed to delete album: {e}");
-                            bs.send(crate::app_event::AppEvent::Error(
-                                format!("Failed to delete album: {e}"),
-                            ));
-                        }
-                        Err(e) => {
-                            tracing::error!("tokio join error: {e}");
-                            bs.send(crate::app_event::AppEvent::Error(
-                                format!("Failed to delete album: {e}"),
-                            ));
-                        }
-                    }
+                bs.send(crate::app_event::AppEvent::DeleteAlbumRequested {
+                    ids: vec![AlbumId::from_raw(aid.clone())],
                 });
             });
         }

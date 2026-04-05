@@ -74,6 +74,9 @@ pub enum AppEvent {
         name: String,
         ids: Vec<MediaId>,
     },
+    DeleteAlbumRequested {
+        ids: Vec<AlbumId>,
+    },
 
     // ── Results (CommandDispatcher → subscribers) ────────────────────────────
     FavoriteChanged {

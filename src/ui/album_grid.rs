@@ -175,8 +175,6 @@ impl AlbumGridView {
             &multi_selection,
             &store,
             &selection_mode,
-            &library,
-            &tokio,
             &bus_sender,
         );
         action_group.add_action(&enter_selection);
