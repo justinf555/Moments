@@ -9,8 +9,6 @@
     "command" : "moments",
     "finish-args" : [
         "--share=network",
-        "--share=ipc",
-        "--socket=fallback-x11",
         "--device=dri",
         "--socket=wayland",
         "--socket=pipewire"

@@ -174,7 +174,7 @@ impl ImmichClient {
     ///
     /// Intended for the setup wizard to test that the server URL and API
     /// key are correct before creating the library bundle. Not yet called.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Will be called by setup wizard validation (not yet wired)
     #[instrument(skip(self), fields(url = %self.base_url))]
     pub async fn validate(&self) -> Result<ServerAbout, LibraryError> {
         self.ping().await?;

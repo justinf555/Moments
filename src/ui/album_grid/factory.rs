@@ -2,6 +2,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use gettextrs::gettext;
 use gtk::{prelude::*, subclass::prelude::*};
 use tracing::warn;
 
@@ -43,6 +44,19 @@ pub fn build_factory(
         card.set_selection_mode(selection_mode.get());
         card.set_checked(list_item.is_selected());
         card.bind(&item);
+
+        // Accessibility: label the card and its checkbox.
+        let album = item.album();
+        let card_label = if album.media_count == 1 {
+            format!("{}, 1 photo", album.name)
+        } else {
+            format!("{}, {} photos", album.name, album.media_count)
+        };
+        card.update_property(&[gtk::accessible::Property::Label(&card_label)]);
+        let checkbox_label = format!("{} {}", gettext("Select"), album.name);
+        card.imp()
+            .checkbox
+            .update_property(&[gtk::accessible::Property::Label(&checkbox_label)]);
 
         // Wire checkbox → enter selection mode + select/deselect.
         {
