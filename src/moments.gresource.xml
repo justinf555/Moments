@@ -11,6 +11,7 @@
     <file preprocess="xml-stripblanks">ui/video_viewer.ui</file>
     <file preprocess="xml-stripblanks">ui/viewer/edit_panel.ui</file>
     <file preprocess="xml-stripblanks">ui/collection_grid.ui</file>
+    <file preprocess="xml-stripblanks">ui/album_grid.ui</file>
     <file preprocess="xml-stripblanks">shortcuts-dialog.ui</file>
     <file>style.css</file>
   </gresource>

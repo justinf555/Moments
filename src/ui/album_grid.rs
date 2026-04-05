@@ -3,6 +3,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use adw::prelude::*;
+use adw::subclass::prelude::*;
 use gettextrs::gettext;
 use gtk::{gio, glib};
 use tracing::debug;
@@ -25,48 +26,109 @@ use item::AlbumItemObject;
 const SORT_NAME: u32 = 1;
 const SORT_CREATED: u32 = 2;
 
-/// Grid view displaying all user albums as cards.
-pub struct AlbumGridView {
-    widget: gtk::Widget,
-    store: gio::ListStore,
-    library: Arc<dyn Library>,
-    tokio: tokio::runtime::Handle,
-    sort_order: Rc<Cell<u32>>,
+// ── GObject subclass ─────────────────────────────────────────────────────────
+
+mod imp {
+    use super::*;
+    use std::cell::OnceCell;
+
+    use gtk::CompositeTemplate;
+
+    #[derive(Default, CompositeTemplate)]
+    #[template(resource = "/io/github/justinf555/Moments/ui/album_grid.ui")]
+    pub struct AlbumGridView {
+        #[template_child]
+        pub nav_view: TemplateChild<adw::NavigationView>,
+        #[template_child]
+        pub toolbar_view: TemplateChild<adw::ToolbarView>,
+        #[template_child]
+        pub header: TemplateChild<adw::HeaderBar>,
+        #[template_child]
+        pub new_album_btn: TemplateChild<gtk::Button>,
+        #[template_child]
+        pub cancel_btn: TemplateChild<gtk::Button>,
+        #[template_child]
+        pub menu_btn: TemplateChild<gtk::MenuButton>,
+        #[template_child]
+        pub content_stack: TemplateChild<gtk::Stack>,
+        #[template_child]
+        pub grid_view: TemplateChild<gtk::GridView>,
+        #[template_child]
+        pub empty_new_btn: TemplateChild<gtk::Button>,
+        #[template_child]
+        pub action_bar: TemplateChild<gtk::ActionBar>,
+
+        // Service dependencies
+        pub library: OnceCell<Arc<dyn Library>>,
+        pub tokio: OnceCell<tokio::runtime::Handle>,
+
+        // State
+        pub(super) store: OnceCell<gio::ListStore>,
+        pub(super) sort_order: OnceCell<Rc<Cell<u32>>>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for AlbumGridView {
+        const NAME: &'static str = "MomentsAlbumGridView";
+        type Type = super::AlbumGridView;
+        type ParentType = gtk::Widget;
+
+        fn class_init(klass: &mut Self::Class) {
+            klass.bind_template();
+            klass.set_layout_manager_type::<gtk::BinLayout>();
+        }
+
+        fn instance_init(obj: &glib::subclass::InitializingObject<Self>) {
+            obj.init_template();
+        }
+    }
+
+    impl ObjectImpl for AlbumGridView {
+        fn dispose(&self) {
+            self.dispose_template();
+            while let Some(child) = self.obj().first_child() {
+                child.unparent();
+            }
+        }
+    }
+    impl WidgetImpl for AlbumGridView {}
 }
 
-impl std::fmt::Debug for AlbumGridView {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AlbumGridView").finish_non_exhaustive()
+glib::wrapper! {
+    pub struct AlbumGridView(ObjectSubclass<imp::AlbumGridView>)
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+
+impl Default for AlbumGridView {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 impl AlbumGridView {
-    pub fn new(
+    pub fn new() -> Self {
+        glib::Object::new()
+    }
+
+    pub fn setup(
+        &self,
         library: Arc<dyn Library>,
         tokio: tokio::runtime::Handle,
         settings: gio::Settings,
         texture_cache: Rc<TextureCache>,
         bus_sender: crate::event_bus::EventSender,
-    ) -> Self {
+    ) {
+        let imp = self.imp();
+        assert!(imp.library.set(Arc::clone(&library)).is_ok(), "setup called twice");
+        assert!(imp.tokio.set(tokio.clone()).is_ok(), "setup called twice");
+
         // ── Sort state ──────────────────────────────────────────────────
         let sort_order = Rc::new(Cell::new(settings.uint("album-sort-order")));
 
-        // ── Headerbar ───────────────────────────────────────────────────
-        let header = adw::HeaderBar::new();
-
-        let new_album_btn = gtk::Button::with_label(&gettext("New Album"));
-        new_album_btn.add_css_class("outlined");
-        header.pack_start(&new_album_btn);
-
-        // Overflow menu (⋮) with sort options.
+        // Sort menu.
         let sort_menu = build_sort_menu();
-        let menu_btn = gtk::MenuButton::builder()
-            .icon_name("view-more-symbolic")
-            .tooltip_text(gettext("Menu"))
-            .menu_model(&sort_menu)
-            .build();
-        menu_btn.add_css_class("flat");
-        header.pack_end(&menu_btn);
+        imp.menu_btn.set_menu_model(Some(&sort_menu));
 
         // Sort action group — radio action with u32 state.
         let sort_action = gio::SimpleAction::new_stateful(
@@ -81,12 +143,6 @@ impl AlbumGridView {
         // ── Selection mode state ────────────────────────────────────────
         let selection_mode = Rc::new(Cell::new(false));
 
-        // ── Selection mode header widgets (hidden by default) ───────────
-        let cancel_btn = gtk::Button::with_label(&gettext("Cancel"));
-        cancel_btn.add_css_class("outlined");
-        cancel_btn.set_visible(false);
-        header.pack_start(&cancel_btn);
-
         let selection_title = gtk::Label::new(Some("0 selected"));
         selection_title.add_css_class("heading");
 
@@ -97,38 +153,25 @@ impl AlbumGridView {
         let store = gio::ListStore::new::<AlbumItemObject>();
         let multi_selection = gtk::MultiSelection::new(Some(store.clone()));
 
-        let grid_view = gtk::GridView::new(
-            Some(multi_selection.clone()),
-            Some(factory::build_factory(
-                Arc::clone(&library),
-                tokio.clone(),
-                Rc::clone(&selection_mode),
-                multi_selection.clone(),
-                enter_selection.clone(),
-            )),
-        );
-        grid_view.set_min_columns(2);
-        grid_view.set_max_columns(8);
-
-        let scrolled = gtk::ScrolledWindow::new();
-        scrolled.set_hscrollbar_policy(gtk::PolicyType::Never);
-        scrolled.set_vexpand(true);
-        scrolled.set_child(Some(&grid_view));
-
-        // ── Action bar (bottom, selection mode only) ────────────────────
-        let action_bar = gtk::ActionBar::new();
-        action_bar.set_revealed(false);
+        imp.grid_view.set_model(Some(&multi_selection));
+        imp.grid_view.set_factory(Some(&factory::build_factory(
+            Arc::clone(&library),
+            tokio.clone(),
+            Rc::clone(&selection_mode),
+            multi_selection.clone(),
+            enter_selection.clone(),
+        )));
 
         // ── Wire selection mode with the real widgets ────────────────────
         selection::wire_selection_mode(
             &enter_selection,
-            &header,
-            &new_album_btn,
-            &menu_btn,
-            &cancel_btn,
+            &imp.header,
+            &imp.new_album_btn,
+            &imp.menu_btn,
+            &imp.cancel_btn,
             &selection_title,
-            &action_bar,
-            &grid_view,
+            &imp.action_bar,
+            &imp.grid_view,
             &multi_selection,
             &store,
             &selection_mode,
@@ -138,55 +181,9 @@ impl AlbumGridView {
         );
         action_group.add_action(&enter_selection);
 
-        // ── Empty state ─────────────────────────────────────────────────
-        let empty_page = adw::StatusPage::builder()
-            .icon_name("folder-symbolic")
-            .title(gettext("No Albums Yet"))
-            .description(gettext(
-                "Create an album to start organising your photos into collections.",
-            ))
-            .vexpand(true)
-            .build();
-
-        let empty_new_btn = gtk::Button::builder()
-            .label(gettext("New Album"))
-            .halign(gtk::Align::Center)
-            .build();
-        empty_new_btn.add_css_class("pill");
-        empty_new_btn.add_css_class("suggested-action");
-        empty_page.set_child(Some(&empty_new_btn));
-
-        // Stack to switch between grid and empty state.
-        let content_stack = gtk::Stack::new();
-        content_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
-        content_stack.add_named(&scrolled, Some("grid"));
-        content_stack.add_named(&empty_page, Some("empty"));
-        content_stack.set_visible_child_name("empty");
-
-        // Wrap grid + action bar in a vertical box.
-        let grid_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        grid_box.append(&content_stack);
-        grid_box.append(&action_bar);
-
-        let toolbar_view = adw::ToolbarView::new();
-        toolbar_view.add_top_bar(&header);
-        toolbar_view.set_content(Some(&grid_box));
-        toolbar_view.insert_action_group("album", Some(&action_group));
-
-        let grid_page = adw::NavigationPage::builder()
-            .tag("albums")
-            .title(gettext("Albums"))
-            .child(&toolbar_view)
-            .build();
-
-        let nav_view = adw::NavigationView::new();
-        nav_view.push(&grid_page);
-
-        let widget = nav_view.clone().upcast::<gtk::Widget>();
-
         // ── Toggle empty ↔ grid based on store count ────────────────────
         {
-            let stack = content_stack.clone();
+            let stack = imp.content_stack.clone();
             store.connect_items_changed(move |store, _, _, _| {
                 let target = if store.n_items() > 0 { "grid" } else { "empty" };
                 stack.set_visible_child_name(target);
@@ -244,8 +241,8 @@ impl AlbumGridView {
             };
 
             let cb = connect_create.clone();
-            new_album_btn.connect_clicked(move |btn| cb(btn));
-            empty_new_btn.connect_clicked(move |btn| connect_create(btn));
+            imp.new_album_btn.connect_clicked(move |btn| cb(btn));
+            imp.empty_new_btn.connect_clicked(move |btn| connect_create(btn));
         }
 
         // ── Wire item activation (click → open album photo grid) ────────
@@ -256,9 +253,9 @@ impl AlbumGridView {
             let tc = Rc::clone(&texture_cache);
             let bs = bus_sender.clone();
             let st = store.clone();
-            let nav = nav_view.clone();
+            let nav = imp.nav_view.clone();
 
-            grid_view.connect_activate(move |_, position| {
+            imp.grid_view.connect_activate(move |_, position| {
                 let Some(obj) = st.item(position) else { return };
                 let Some(item) = obj.downcast_ref::<AlbumItemObject>() else { return };
                 let album = item.album();
@@ -278,10 +275,10 @@ impl AlbumGridView {
             let gesture = gtk::GestureClick::new();
             gesture.set_button(3);
 
-            let gv = grid_view.clone();
+            let gv = imp.grid_view.clone();
             let lib_ctx = Arc::clone(&library);
             let tk_ctx = tokio.clone();
-            let nav_ctx = nav_view.clone();
+            let nav_ctx = imp.nav_view.clone();
             let s_ctx = settings.clone();
             let tc_ctx = Rc::clone(&texture_cache);
             let bs_ctx = bus_sender.clone();
@@ -294,23 +291,13 @@ impl AlbumGridView {
                 gesture.set_state(gtk::EventSequenceState::Claimed);
             });
 
-            grid_view.add_controller(gesture);
+            imp.grid_view.add_controller(gesture);
         }
+
+        imp.toolbar_view.insert_action_group("album", Some(&action_group));
 
         // ── Load albums asynchronously ──────────────────────────────────
-        let view = Self {
-            widget,
-            store: store.clone(),
-            library: Arc::clone(&library),
-            tokio: tokio.clone(),
-            sort_order: Rc::clone(&sort_order),
-        };
-
-        {
-            let st = store.clone();
-            let so = Rc::clone(&sort_order);
-            reload_albums(&st, &library, &tokio, so);
-        }
+        reload_albums(&store, &library, &tokio, Rc::clone(&sort_order));
 
         // ── Subscribe to bus for album changes ──────────────────────────
         {
@@ -330,19 +317,21 @@ impl AlbumGridView {
             });
         }
 
-        view
+        assert!(imp.store.set(store).is_ok());
+        assert!(imp.sort_order.set(sort_order).is_ok());
     }
 
     pub fn reload(&self) {
-        reload_albums(&self.store, &self.library, &self.tokio, Rc::clone(&self.sort_order));
+        let imp = self.imp();
+        if let (Some(store), Some(library), Some(tokio), Some(sort_order)) =
+            (imp.store.get(), imp.library.get(), imp.tokio.get(), imp.sort_order.get())
+        {
+            reload_albums(store, library, tokio, Rc::clone(sort_order));
+        }
     }
 }
 
-impl AlbumGridView {
-    pub fn widget(&self) -> &gtk::Widget {
-        &self.widget
-    }
-}
+// ── Free functions ───────────────────────────────────────────────────────────
 
 /// Build the overflow menu model with sort radio actions.
 fn build_sort_menu() -> gio::Menu {

@@ -1,0 +1,79 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $MomentsAlbumGridView : Gtk.Widget {
+  Adw.NavigationView nav_view {
+    Adw.NavigationPage grid_page {
+      tag: "albums";
+      title: _("Albums");
+
+      child: Adw.ToolbarView toolbar_view {
+        [top]
+        Adw.HeaderBar header {
+          [start]
+          Gtk.Button new_album_btn {
+            label: _("New Album");
+            styles ["outlined"]
+          }
+
+          [start]
+          Gtk.Button cancel_btn {
+            label: _("Cancel");
+            visible: false;
+            styles ["outlined"]
+          }
+
+          [end]
+          Gtk.MenuButton menu_btn {
+            icon-name: "view-more-symbolic";
+            tooltip-text: _("Menu");
+            styles ["flat"]
+          }
+        }
+
+        content: Gtk.Box {
+          orientation: vertical;
+
+          Gtk.Stack content_stack {
+            transition-type: crossfade;
+
+            Gtk.StackPage {
+              name: "grid";
+
+              child: Gtk.ScrolledWindow {
+                hscrollbar-policy: never;
+                vexpand: true;
+
+                child: Gtk.GridView grid_view {
+                  min-columns: 2;
+                  max-columns: 8;
+                };
+              };
+            }
+
+            Gtk.StackPage {
+              name: "empty";
+
+              child: Adw.StatusPage {
+                icon-name: "folder-symbolic";
+                title: _("No Albums Yet");
+                description: _("Create an album to start organising your photos into collections.");
+                vexpand: true;
+
+                Gtk.Button empty_new_btn {
+                  label: _("New Album");
+                  halign: center;
+                  styles ["pill", "suggested-action"]
+                }
+              };
+            }
+          }
+
+          Gtk.ActionBar action_bar {
+            revealed: false;
+          }
+        };
+      };
+    }
+  }
+}
