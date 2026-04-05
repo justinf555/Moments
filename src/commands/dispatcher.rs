@@ -8,9 +8,11 @@ use super::add_to_album::AddToAlbumCommand;
 use super::create_album::CreateAlbumCommand;
 use super::delete::DeleteCommand;
 use super::delete_album::DeleteAlbumCommand;
+use super::empty_trash::EmptyTrashCommand;
 use super::favorite::FavoriteCommand;
 use super::remove_from_album::RemoveFromAlbumCommand;
 use super::restore::RestoreCommand;
+use super::restore_all_trash::RestoreAllTrashCommand;
 use super::trash::TrashCommand;
 
 /// Routes command events to their handlers on the Tokio runtime.
@@ -38,6 +40,8 @@ impl CommandDispatcher {
             Arc::new(AddToAlbumCommand),
             Arc::new(CreateAlbumCommand),
             Arc::new(DeleteAlbumCommand),
+            Arc::new(EmptyTrashCommand),
+            Arc::new(RestoreAllTrashCommand),
         ];
 
         let tx = bus.sender();

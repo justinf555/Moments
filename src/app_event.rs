@@ -77,6 +77,8 @@ pub enum AppEvent {
     DeleteAlbumRequested {
         ids: Vec<AlbumId>,
     },
+    EmptyTrashRequested,
+    RestoreAllTrashRequested,
 
     // ── Results (CommandDispatcher → subscribers) ────────────────────────────
     FavoriteChanged {

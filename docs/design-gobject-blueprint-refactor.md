@@ -443,21 +443,32 @@ The compiler sees the `Ref<'_>` destructor running after the GObject drops.
 Fix: explicitly `drop(borrow)` before the block ends, or extract into a
 tighter scope.
 
-### 5. `dispose_template()` required — no unparent loop
+### 5. `dispose_template()` + manual unparent for unnamed children
 
 Composite template widgets must call `self.dispose_template()` in their
-`ObjectImpl::dispose()` override. This is sufficient — do NOT add a
-`while let Some(child) = self.obj().first_child() { child.unparent(); }`
-loop. GTK4 handles widget hierarchy teardown during disposal, and the
-loop is redundant with `dispose_template()`:
+`ObjectImpl::dispose()` override. This handles all `#[template_child]`
+fields.
+
+**However**, if the template has direct children of the widget that are
+NOT declared as `#[template_child]` fields (e.g. an unnamed container
+like `Gtk.Overlay` or `Gtk.Box` wrapping the named children),
+`dispose_template()` does not know about them. You must unparent these
+manually after calling `dispose_template()`:
 
 ```rust
-impl ObjectImpl for FooView {
+impl ObjectImpl for FooCell {
     fn dispose(&self) {
         self.dispose_template();
+        // Unnamed root container not tracked as a TemplateChild.
+        if let Some(child) = self.obj().first_child() {
+            child.unparent();
+        }
     }
 }
 ```
+
+For widgets where ALL direct children are `#[template_child]` fields,
+`dispose_template()` alone is sufficient — no manual unparent needed.
 
 ### 6. `Cell<Option<SourceId>>` can't be cloned into closures
 

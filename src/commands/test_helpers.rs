@@ -30,6 +30,8 @@ use crate::library::viewer::LibraryViewer;
 pub struct MockLibrary {
     /// If `Some`, all mutable operations return this error.
     pub fail_with: Mutex<Option<String>>,
+    /// Items returned by `list_media`. Defaults to empty.
+    pub items: Mutex<Vec<MediaItem>>,
     /// If true, `add_to_album` fails independently of `fail_with`.
     pub fail_add_to_album: Mutex<bool>,
     /// Album ID returned by `create_album`.
@@ -40,6 +42,7 @@ impl MockLibrary {
     pub fn mock() -> Arc<dyn crate::library::Library> {
         Arc::new(Self {
             fail_with: Mutex::new(None),
+            items: Mutex::new(Vec::new()),
             fail_add_to_album: Mutex::new(false),
             next_album_id: Mutex::new(AlbumId::new()),
         })
@@ -48,6 +51,17 @@ impl MockLibrary {
     pub fn mock_failing(msg: &str) -> Arc<dyn crate::library::Library> {
         Arc::new(Self {
             fail_with: Mutex::new(Some(msg.to_string())),
+            items: Mutex::new(Vec::new()),
+            fail_add_to_album: Mutex::new(false),
+            next_album_id: Mutex::new(AlbumId::new()),
+        })
+    }
+
+    /// Mock that returns items from `list_media` but fails on write ops.
+    pub fn mock_with_items_then_fail(items: Vec<MediaItem>, msg: &str) -> Arc<dyn crate::library::Library> {
+        Arc::new(Self {
+            fail_with: Mutex::new(Some(msg.to_string())),
+            items: Mutex::new(items),
             fail_add_to_album: Mutex::new(false),
             next_album_id: Mutex::new(AlbumId::new()),
         })
@@ -109,7 +123,9 @@ impl LibraryMedia for MockLibrary {
         _cursor: Option<&MediaCursor>,
         _limit: u32,
     ) -> Result<Vec<MediaItem>, LibraryError> {
-        unimplemented!()
+        // list_media always succeeds — mock_with_items_then_fail returns
+        // items here so the write op (delete/restore) is what fails.
+        Ok(self.items.lock().await.clone())
     }
     async fn media_metadata(
         &self,

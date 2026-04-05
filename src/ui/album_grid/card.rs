@@ -93,6 +93,9 @@ mod imp {
 
         fn dispose(&self) {
             self.dispose_template();
+            if let Some(child) = self.obj().first_child() {
+                child.unparent();
+            }
         }
     }
 

@@ -99,6 +99,11 @@ mod imp {
 
         fn dispose(&self) {
             self.dispose_template();
+            // The Overlay is an unnamed direct child not tracked by
+            // dispose_template — unparent it manually.
+            if let Some(child) = self.obj().first_child() {
+                child.unparent();
+            }
         }
     }
 

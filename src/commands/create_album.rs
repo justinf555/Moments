@@ -125,6 +125,7 @@ mod tests {
 
         let mock = Arc::new(MockLibrary {
             fail_with: Mutex::new(None),
+            items: Mutex::new(Vec::new()),
             fail_add_to_album: Mutex::new(true),
             next_album_id: Mutex::new(AlbumId::new()),
         });

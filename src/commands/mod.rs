@@ -3,9 +3,11 @@ pub mod create_album;
 pub mod delete;
 pub mod delete_album;
 pub mod dispatcher;
+pub mod empty_trash;
 pub mod favorite;
 pub mod remove_from_album;
 pub mod restore;
+pub mod restore_all_trash;
 #[cfg(test)]
 mod test_helpers;
 pub mod trash;
