@@ -425,8 +425,9 @@ impl MomentsWindow {
             let tc = Rc::clone(texture_cache);
             let bs = bus_sender.clone();
             coordinator.register_lazy("albums", move || {
-                let view = super::album_grid::AlbumGridView::new(lib, tk, s, tc, bs);
-                view.widget().clone()
+                let view = super::album_grid::AlbumGridView::new();
+                view.setup(lib, tk, s, tc, bs);
+                view.upcast()
             });
         }
     }
