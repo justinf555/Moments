@@ -288,6 +288,3 @@ Design docs live in `docs/` and follow a consistent format with issue links, sta
 
 Some widgets use Blueprint (`.blp`) declarative templates compiled to GTK XML: `window.blp`, `setup_window.blp` + pages, `import_dialog.blp`, `shortcuts-dialog.blp`. New widgets should evaluate whether their layout is static enough to benefit from Blueprint (see #417 for the decision framework).
 
-### Feature flags
-
-The `editing` Cargo feature gates the edit button in the viewer. It is disabled by default but will be enabled for the next Flathub release (v0.2.0). Enable with `cargo run --features editing` for development.

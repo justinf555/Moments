@@ -61,9 +61,6 @@ else
   rust_target = 'debug'
 endif
 
-if get_option('editing')
-  cargo_opt += [ '--features', 'editing' ]
-endif
 
 cargo_build = custom_target(
   'cargo-build',

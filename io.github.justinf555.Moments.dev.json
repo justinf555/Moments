@@ -44,7 +44,6 @@
             "builddir" : true,
             "buildsystem" : "meson",
             "config-opts" : [
-                "-Dediting=true",
                 "--libdir=lib"
             ],
             "sources" : [
