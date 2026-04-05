@@ -644,7 +644,6 @@ impl PhotoGridView {
             {
                 let nav_view = self.nav_view.clone();
                 let photo_viewer = self.photo_viewer.clone();
-                let photo_nav_page = self.photo_viewer.clone().upcast::<adw::NavigationPage>();
                 let video_viewer = Rc::clone(&self.video_viewer);
                 let video_nav_page = self.video_viewer.nav_page().clone();
                 move |items, index| {
@@ -660,12 +659,12 @@ impl PhotoGridView {
 
                     tracing::debug!(index, ?media_type, %filename, "grid item activated");
 
-                    let (tag, nav_page) = if media_type == MediaType::Video {
+                    let (tag, nav_page): (&str, adw::NavigationPage) = if media_type == MediaType::Video {
                         video_viewer.show(items, index);
-                        ("video-viewer", &video_nav_page)
+                        ("video-viewer", video_nav_page.clone())
                     } else {
                         photo_viewer.show(items, index);
-                        ("viewer", &photo_nav_page)
+                        ("viewer", photo_viewer.clone().upcast())
                     };
 
                     let visible_tag = nav_view
@@ -674,7 +673,7 @@ impl PhotoGridView {
                         .unwrap_or_default();
                     tracing::debug!(target_tag = tag, %visible_tag, "pushing viewer page");
                     if visible_tag != tag {
-                        nav_view.push(nav_page);
+                        nav_view.push(&nav_page);
                     }
                 }
             },

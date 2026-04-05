@@ -182,21 +182,19 @@ impl PhotoViewer {
             let lib = Arc::clone(&library);
             let tk = tokio.clone();
 
-            let state_result = tk
-                .spawn({
-                    let lib = Arc::clone(&lib);
-                    let id = id_for_state.clone();
-                    async move { lib.get_edit_state(&id).await }
-                })
-                .await;
+            let state_handle = tk.spawn({
+                let lib = Arc::clone(&lib);
+                let id = id_for_state.clone();
+                async move { lib.get_edit_state(&id).await }
+            });
+            let path_handle = tk.spawn({
+                let lib = Arc::clone(&lib);
+                let id = id.clone();
+                async move { lib.original_path(&id).await }
+            });
+            let (state_result, path_result) = tokio::join!(state_handle, path_handle);
 
-            let path = tk
-                .spawn({
-                    let lib = Arc::clone(&lib);
-                    let id = id.clone();
-                    async move { lib.original_path(&id).await }
-                })
-                .await
+            let path = path_result
                 .ok()
                 .and_then(|r| r.ok())
                 .flatten();
