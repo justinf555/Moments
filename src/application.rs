@@ -518,8 +518,12 @@ impl MomentsApplication {
                         // The dispatcher is a unit struct; the real work is the
                         // subscriber closure registered in new(), which lives in
                         // the bus's thread-local SUBSCRIBERS for the app lifetime.
+                        let Some(lib) = app.imp().library.borrow().as_ref().map(Arc::clone) else {
+                            tracing::error!("library not initialised when creating dispatcher");
+                            return;
+                        };
                         let _dispatcher = crate::commands::dispatcher::CommandDispatcher::new(
-                            Arc::clone(app.imp().library.borrow().as_ref().unwrap()),
+                            lib,
                             tokio.clone(),
                             &bus,
                         );
