@@ -117,34 +117,34 @@ src/
     sidebar.rs         — MomentsSidebar (AdwSidebar) with pinned albums + persistent status bar
     sidebar/
       route.rs         — ROUTES definitions (Photos, Favorites, Recent, People, Albums, Trash)
-    coordinator.rs     — ContentCoordinator (stack-based view routing, returns view_actions)
-    collection_grid.rs — CollectionGridView (reusable grid for People, future Memories/Places)
+    coordinator.rs     — ContentCoordinator (stack-based view routing)
+    collection_grid.rs — CollectionGridView (GObject + Blueprint, reusable grid for People)
     collection_grid/
       actions.rs       — Drill-down, context menu (rename, hide/unhide)
       cell.rs          — CollectionGridCell widget (thumbnail + name + subtitle)
       factory.rs       — Cell factory with ThumbnailStyle (Circular/Square)
       item.rs          — CollectionItemObject (GObject wrapper for collection items)
-    photo_grid.rs      — PhotoGridView (zoom, selection, empty states, viewer integration)
+    photo_grid.rs      — PhotoGrid (inner GObject) + PhotoGridView (GObject + Blueprint, zoom, selection, viewer integration)
     photo_grid/
       actions.rs       — Context menu (per-action handlers), album controls
       action_bar.rs    — Selection mode action bar (favourite, album, trash/restore/delete)
-      model.rs         — PhotoGridModel (pagination, filtering, incremental updates, bus errors)
+      model.rs         — PhotoGridModel (GObject, pagination, filtering, incremental updates, bus events)
       factory.rs       — Cell factory (bind/unbind with texture management + decode semaphore)
       cell.rs          — PhotoGridCell widget (placeholder → thumbnail → star + checkbox)
       item.rs          — MediaItemObject (GObject wrapper for grid items)
       texture_cache.rs — LRU cache for decoded RGBA thumbnail pixels
-    viewer.rs          — PhotoViewer (navigation, signal handlers, star toggle)
+    viewer.rs          — PhotoViewer (GObject + Blueprint, adw::NavigationPage subclass)
     viewer/
       loading.rs       — Full-res decode, edit session setup, metadata fetching
       menu.rs          — Shared overflow menu builder + photo viewer menu wiring
       info_panel.rs    — EXIF metadata display panel
-      edit_panel.rs    — Edit panel coordinator (session mgmt, save/revert, render)
+      edit_panel.rs    — EditPanel (GObject + Blueprint, session mgmt, save/revert, render)
       edit_panel/
         transforms.rs  — Rotate/flip buttons
         filters.rs     — Filter preset grid + strength slider
         sliders.rs     — Adjust sliders (exposure, colour)
-    video_viewer.rs    — VideoViewer (GStreamer playback, spinner, overflow menu)
-    album_grid.rs      — AlbumGridView (sort, empty state, bus subscription)
+    video_viewer.rs    — VideoViewer (GObject + Blueprint, adw::NavigationPage subclass)
+    album_grid.rs      — AlbumGridView (GObject + Blueprint, sort, empty state, bus subscription)
     album_grid/
       actions.rs       — Context menu (open, rename, pin, delete) + drill-down helper
       selection.rs     — Enter/exit selection mode, batch delete
@@ -229,9 +229,9 @@ Settings that affect background tasks (sync interval, cache limit) use `tokio::s
 4. `tokio::select!` on sleep + `changed()` wakes the task immediately on value change
 5. `LibraryStorage` trait has default no-op methods — only Immich backend implements them
 
-### ContentView trait and view actions
+### View routing and action groups
 
-All content views implement `ContentView` (widget + optional view_actions). When the coordinator navigates to a view, its action group is installed on the window under the `"view"` prefix. This is critical for zoom buttons to work across different views (Photos, Favorites, Albums, People drill-down). When a `CollectionGridView` pushes a `PhotoGridView` onto its internal NavigationView, it must also install that view's actions on the window.
+All content views are GObject widget subclasses registered directly with the `ContentCoordinator` (a thin `GtkStack` wrapper). Views self-install their action groups via `widget.insert_action_group("view", ...)` — GTK's action resolution walks up the widget tree to find them. No trait abstraction needed; this follows the standard GNOME pattern (Fractal, GNOME Settings).
 
 ### Event bus and command dispatch
 
@@ -286,5 +286,5 @@ Design docs live in `docs/` and follow a consistent format with issue links, sta
 
 ### Blueprint templates
 
-Some widgets use Blueprint (`.blp`) declarative templates compiled to GTK XML: `window.blp`, `setup_window.blp` + pages, `import_dialog.blp`, `shortcuts-dialog.blp`. New widgets should evaluate whether their layout is static enough to benefit from Blueprint (see #417 for the decision framework).
+Most widgets use Blueprint (`.blp`) declarative templates compiled to GTK XML. Existing templates: `window.blp`, `setup_window.blp` + pages, `import_dialog.blp`, `shortcuts-dialog.blp`, `viewer.blp`, `video_viewer.blp`, `edit_panel.blp`, `photo_grid.blp`, `collection_grid.blp`, `album_grid.blp`. New widgets should use Blueprint for static layout and keep dynamic construction in Rust. See `docs/design-gobject-blueprint-refactor.md` for the full pattern and lessons learned.
 
