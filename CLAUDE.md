@@ -91,7 +91,12 @@ src/
     immich_importer.rs — ImmichImportJob (upload to Immich server)
     importer.rs        — Local import job (walk_dir, collect_candidates)
     keyring.rs         — GNOME Keyring integration (session token storage)
-    sync.rs            — SyncManager + ThumbnailDownloader + CacheEvictor (Immich background tasks)
+    sync.rs            — SyncHandle (public API: start, shutdown, set_interval)
+    sync/
+      manager.rs       — SyncManager (sync loop, entity handlers, ack flushing)
+      downloader.rs    — ThumbnailDownloader worker pool
+      types.rs         — Immich sync protocol DTOs and parse helpers
+      tests.rs         — Unit tests for sync manager and handlers
     format/            — Format detection (magic bytes, standard/raw/video handlers)
     providers/
       local.rs         — LocalLibrary (local filesystem backend)
