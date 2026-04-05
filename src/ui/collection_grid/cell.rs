@@ -11,6 +11,7 @@ pub(super) struct CellBindings {
     texture_handler: glib::SignalHandlerId,
 }
 
+#[allow(private_interfaces)]
 mod imp {
     use super::*;
     use gtk::CompositeTemplate;
