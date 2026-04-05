@@ -406,14 +406,15 @@ impl MomentsWindow {
             let bs = bus_sender.clone();
             let win_weak = self.downgrade();
             coordinator.register_lazy("people", move || {
-                let view = Rc::new(CollectionGridView::new_people(lib, tk, s, tc, bs));
+                let view = CollectionGridView::new();
+                view.setup_people(lib, tk, s, tc, bs);
                 if let Some(win) = win_weak.upgrade() {
-                    let view_ref = Rc::clone(&view);
+                    let view_clone = view.clone();
                     *win.imp().people_reload.borrow_mut() = Some(ReloadCallback::new(move || {
-                        view_ref.reload();
+                        view_clone.reload();
                     }));
                 }
-                view.widget().clone()
+                view.upcast()
             });
         }
 

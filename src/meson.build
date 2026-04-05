@@ -13,6 +13,7 @@ blueprints = custom_target(
     'ui/setup_window/immich_setup_page.blp',
     'ui/viewer.blp',
     'ui/video_viewer.blp',
+    'ui/collection_grid.blp',
     'ui/viewer/edit_panel.blp',
   ),
   output: '.',
