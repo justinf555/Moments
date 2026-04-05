@@ -54,6 +54,8 @@ jobs:
           pub static GETTEXT_PACKAGE: &str = "moments";
           pub static LOCALEDIR: &str = "/usr/share/locale";
           pub static PKGDATADIR: &str = "/usr/share/moments";
+          pub static APP_ID: &str = "io.github.justinf555.Moments";
+          pub static PROFILE: &str = "default";
           EOF
 
       - name: Run clippy
@@ -112,6 +114,8 @@ jobs:
           pub static GETTEXT_PACKAGE: &str = "moments";
           pub static LOCALEDIR: &str = "/usr/share/locale";
           pub static PKGDATADIR: &str = "/usr/share/moments";
+          pub static APP_ID: &str = "io.github.justinf555.Moments";
+          pub static PROFILE: &str = "default";
           EOF
 
       - name: Run tests
@@ -179,6 +183,8 @@ jobs:
           pub static GETTEXT_PACKAGE: &str = "moments";
           pub static LOCALEDIR: &str = "/usr/share/locale";
           pub static PKGDATADIR: &str = "/usr/share/moments";
+          pub static APP_ID: &str = "io.github.justinf555.Moments";
+          pub static PROFILE: &str = "default";
           EOF
 
       - name: Generate coverage
@@ -246,6 +252,8 @@ jobs:
           pub static GETTEXT_PACKAGE: &str = "moments";
           pub static LOCALEDIR: &str = "/usr/share/locale";
           pub static PKGDATADIR: &str = "/usr/share/moments";
+          pub static APP_ID: &str = "io.github.justinf555.Moments";
+          pub static PROFILE: &str = "default";
           EOF
 
       - name: Run integration tests
