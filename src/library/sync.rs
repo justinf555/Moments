@@ -91,6 +91,7 @@ impl SyncHandle {
         tokio.spawn(async move {
             if let Err(e) = manager.run().await {
                 error!("sync manager error: {e}");
+                // Receiver may be dropped during shutdown.
                 let _ = manager.events.send(LibraryEvent::Error(e));
             }
         });
@@ -100,12 +101,14 @@ impl SyncHandle {
 
     /// Signal the sync manager to stop.
     pub fn shutdown(&self) {
+        // Receiver may already be gone if sync finished naturally.
         let _ = self.shutdown_tx.send(true);
     }
 
     /// Update the polling interval (seconds). Takes effect on the next cycle.
     /// Set to 0 to disable polling (sync on open only).
     pub fn set_interval(&self, secs: u64) {
+        // Receiver may be gone during shutdown.
         let _ = self.interval_tx.send(secs);
     }
 }

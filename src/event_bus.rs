@@ -153,7 +153,9 @@ impl EventSender {
     /// Create a sender + receiver pair for unit tests.
     ///
     /// Unlike [`no_op`](Self::no_op), the receiver is returned so tests can
-    /// assert on emitted events.
+    /// assert on emitted events. The `glib::idle_add_once` call in `send()`
+    /// still fires but is harmless in `#[tokio::test]` (no GTK main loop to
+    /// wake — the idle source is simply never dispatched).
     #[cfg(test)]
     pub fn test_channel() -> (Self, mpsc::Receiver<AppEvent>) {
         let (tx, rx) = mpsc::channel();

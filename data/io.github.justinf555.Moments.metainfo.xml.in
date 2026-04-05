@@ -23,7 +23,21 @@
 
   <translation type="gettext">moments</translation>
   <launchable type="desktop-id">io.github.justinf555.Moments.desktop</launchable>
-  <content_rating type="oars-1.1" />
+
+  <keywords>
+    <keyword>photo</keyword>
+    <keyword>gallery</keyword>
+    <keyword>library</keyword>
+    <keyword>immich</keyword>
+    <keyword>organize</keyword>
+    <keyword>pictures</keyword>
+    <keyword>album</keyword>
+  </keywords>
+
+  <!-- No restricted content — app manages user's own photos. -->
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-info">none</content_attribute>
+  </content_rating>
 
   <branding>
     <color type="primary" scheme_preference="light">#99c1f1</color>

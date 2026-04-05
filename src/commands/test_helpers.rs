@@ -32,6 +32,8 @@ pub struct MockLibrary {
     pub fail_with: Mutex<Option<String>>,
     /// Items returned by `list_media`. Defaults to empty.
     pub items: Mutex<Vec<MediaItem>>,
+    /// If true, `add_to_album` fails independently of `fail_with`.
+    pub fail_add_to_album: Mutex<bool>,
     /// Album ID returned by `create_album`.
     pub next_album_id: Mutex<AlbumId>,
 }
@@ -41,15 +43,16 @@ impl MockLibrary {
         Arc::new(Self {
             fail_with: Mutex::new(None),
             items: Mutex::new(Vec::new()),
+            fail_add_to_album: Mutex::new(false),
             next_album_id: Mutex::new(AlbumId::new()),
         })
     }
 
-    #[allow(dead_code)] // Used by command handler tests added in PR #448.
     pub fn mock_failing(msg: &str) -> Arc<dyn crate::library::Library> {
         Arc::new(Self {
             fail_with: Mutex::new(Some(msg.to_string())),
             items: Mutex::new(Vec::new()),
+            fail_add_to_album: Mutex::new(false),
             next_album_id: Mutex::new(AlbumId::new()),
         })
     }
@@ -59,6 +62,7 @@ impl MockLibrary {
         Arc::new(Self {
             fail_with: Mutex::new(Some(msg.to_string())),
             items: Mutex::new(items),
+            fail_add_to_album: Mutex::new(false),
             next_album_id: Mutex::new(AlbumId::new()),
         })
     }
@@ -119,8 +123,8 @@ impl LibraryMedia for MockLibrary {
         _cursor: Option<&MediaCursor>,
         _limit: u32,
     ) -> Result<Vec<MediaItem>, LibraryError> {
-        // list_media always succeeds — even mock_with_items_then_fail
-        // returns items here so the write op (delete/restore) is what fails.
+        // list_media always succeeds — mock_with_items_then_fail returns
+        // items here so the write op (delete/restore) is what fails.
         Ok(self.items.lock().await.clone())
     }
     async fn media_metadata(
@@ -203,7 +207,11 @@ impl LibraryAlbums for MockLibrary {
         _album_id: &AlbumId,
         _media_ids: &[MediaId],
     ) -> Result<(), LibraryError> {
-        self.check_fail().await
+        self.check_fail().await?;
+        if *self.fail_add_to_album.lock().await {
+            return Err(LibraryError::Runtime("add_to_album failed".into()));
+        }
+        Ok(())
     }
     async fn remove_from_album(
         &self,

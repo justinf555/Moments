@@ -82,6 +82,7 @@ impl ImportJob {
 
         for (idx, path) in candidates.into_iter().enumerate() {
             let current = idx + 1;
+            // Receiver may be dropped during shutdown.
             self.events
                 .send(LibraryEvent::ImportProgress {
                     current,
@@ -106,7 +107,7 @@ impl ImportJob {
                 Err(e) => {
                     warn!(?path, error = %e, "failed to import file");
                     summary.failed += 1;
-                    self.events.send(LibraryEvent::Error(e)).ok();
+                    self.events.send(LibraryEvent::Error(e)).ok(); // receiver may be dropped
                 }
             }
         }
@@ -121,6 +122,7 @@ impl ImportJob {
             "import complete"
         );
 
+        // Receiver may be dropped during shutdown.
         self.events
             .send(LibraryEvent::ImportComplete(summary))
             .ok();
