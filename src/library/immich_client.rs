@@ -4,6 +4,14 @@ use tracing::{debug, instrument};
 
 use super::error::LibraryError;
 
+/// Truncate an API error body to avoid leaking server internals in toasts.
+fn truncate_error_body(body: &str, max_len: usize) -> &str {
+    match body.char_indices().nth(max_len) {
+        Some((idx, _)) => &body[..idx],
+        None => body,
+    }
+}
+
 /// HTTP client for the Immich server API.
 ///
 /// Uses session-based authentication (`Authorization: Bearer {token}`).
@@ -80,7 +88,8 @@ impl ImmichClient {
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
             return Err(LibraryError::Immich(format!(
-                "login failed with status {status}: {body}"
+                "login failed with status {status}: {}",
+                truncate_error_body(&body, 200),
             )));
         }
 
@@ -199,7 +208,8 @@ impl ImmichClient {
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
             return Err(LibraryError::Immich(format!(
-                "{method} {path} returned {status}: {body}"
+                "{method} {path} returned {status}: {}",
+                truncate_error_body(&body, 200),
             )));
         }
 
@@ -334,7 +344,8 @@ impl ImmichClient {
         if !status_code.is_success() {
             let body = resp.text().await.unwrap_or_default();
             return Err(LibraryError::Immich(format!(
-                "upload returned {status_code}: {body}"
+                "upload returned {status_code}: {}",
+                truncate_error_body(&body, 200),
             )));
         }
 
