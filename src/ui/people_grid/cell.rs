@@ -87,14 +87,14 @@ impl PeopleGridCell {
         let data = item.data();
 
         let display_name = if data.name.is_empty() {
-            "Unnamed"
+            gettext("Unnamed")
         } else {
-            &data.name
+            data.name.clone()
         };
-        imp.name_label.set_text(display_name);
+        imp.name_label.set_text(&display_name);
 
         // AdwAvatar uses the text to generate consistent colour + initials.
-        imp.avatar.set_text(Some(display_name));
+        imp.avatar.set_text(Some(&display_name));
 
         // Set face thumbnail as custom image if available.
         if let Some(texture) = item.texture() {

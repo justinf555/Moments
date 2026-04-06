@@ -1,4 +1,6 @@
-use gtk::prelude::*;
+use gtk::{glib, prelude::*};
+
+use crate::application::MomentsApplication;
 
 use super::cell::PeopleGridCell;
 use super::item::PersonItemObject;
@@ -27,14 +29,27 @@ pub fn build_factory(cell_size: i32) -> gtk::SignalListItemFactory {
 
         cell.bind(&item);
 
-        // Load thumbnail from disk if not yet decoded.
-        // Person thumbnails are small (250x250 JPEG) so loading on the
-        // main thread is fine — no need for a blocking task.
+        // Decode thumbnail off the main thread to avoid scroll jank.
         if item.texture().is_none() {
-            if let Some(path) = &item.data().thumbnail_path {
-                if let Ok(texture) = gtk::gdk::Texture::from_filename(path) {
-                    item.set_texture(Some(&texture));
-                }
+            if let Some(path) = item.data().thumbnail_path.clone() {
+                let item_weak = item.downgrade();
+                let tokio = MomentsApplication::default().tokio_handle();
+                glib::MainContext::default().spawn_local(async move {
+                    let result = tokio
+                        .spawn_blocking(move || {
+                            let data = std::fs::read(&path).ok()?;
+                            let bytes = glib::Bytes::from_owned(data);
+                            gtk::gdk::Texture::from_bytes(&bytes).ok()
+                        })
+                        .await
+                        .ok()
+                        .flatten();
+                    if let Some(texture) = result {
+                        if let Some(item) = item_weak.upgrade() {
+                            item.set_texture(Some(&texture));
+                        }
+                    }
+                });
             }
         }
     });

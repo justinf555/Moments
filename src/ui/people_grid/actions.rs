@@ -64,7 +64,7 @@ pub(super) fn wire_activation(
         model.subscribe_to_bus();
 
         let display_name = if data.name.is_empty() {
-            "Unnamed".to_string()
+            gettext("Unnamed")
         } else {
             data.name.clone()
         };
@@ -288,7 +288,7 @@ fn wire_rename_button(
                         tracing::error!("rename_person failed: {e}");
                         let _ = gv_toast.activate_action(
                             "win.show-toast",
-                            Some(&"Failed to rename person".to_variant()),
+                            Some(&gettext("Failed to rename person").to_variant()),
                         );
                     }
                     Err(e) => tracing::error!("rename_person join failed: {e}"),
