@@ -43,19 +43,22 @@ jobs:
 
       - name: Generate config.rs and run coverage
         run: |
+          # Copy source to a writable location for the Flatpak sandbox
+          cp -a . /tmp/moments-src
           flatpak run --share=network \
-            --filesystem="$(pwd)" \
+            --filesystem=/tmp/moments-src \
             --env=SQLX_OFFLINE=true \
             --env=CARGO_HOME=/tmp/flatpak-cargo \
             --command=bash org.gnome.Sdk//50 -c '
               source /usr/lib/sdk/rust-stable/enable.sh
               mkdir -p /tmp/flatpak-cargo/bin
               export PATH=/tmp/flatpak-cargo/bin:$PATH
-              cd '"$(pwd)"'
+              cd /tmp/moments-src
               meson setup _build -Dprofile=development
               cargo install cargo-llvm-cov --locked 2>/dev/null || true
-              cargo llvm-cov --lcov --output-path lcov.info
+              cargo llvm-cov --lcov --output-path /tmp/moments-src/lcov.info
             '
+          cp /tmp/moments-src/lcov.info lcov.info
 
       - name: Upload to Codecov
         if: hashFiles('lcov.info') != ''
