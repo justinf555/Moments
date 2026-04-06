@@ -1,5 +1,6 @@
 use std::cell::{Cell, RefCell};
 
+use gettextrs::ngettext;
 use gtk::{glib, prelude::*, subclass::prelude::*};
 
 use super::item::AlbumItemObject;
@@ -140,11 +141,8 @@ impl AlbumCard {
         let album = item.album();
 
         imp.name_label.set_text(&album.name);
-        let count_text = if album.media_count == 1 {
-            "1 photo".to_string()
-        } else {
-            format!("{} photos", album.media_count)
-        };
+        let count_text = ngettext("{} photo", "{} photos", album.media_count as u32)
+            .replace("{}", &album.media_count.to_string());
         imp.count_label.set_text(&count_text);
 
         // Apply any already-decoded mosaic textures.

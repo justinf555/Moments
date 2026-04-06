@@ -3,7 +3,7 @@ pub mod route;
 use std::cell::Cell;
 use std::cell::RefCell;
 
-use gettextrs::gettext;
+use gettextrs::{gettext, ngettext};
 use gtk::{gio, glib, prelude::*, subclass::prelude::*};
 use adw::prelude::*;
 use tracing::debug;
@@ -613,7 +613,9 @@ impl MomentsSidebar {
         if let Some(badge) = imp.trash_badge.get() {
             let count = imp.trash_count.get();
             if count > 0 {
-                badge.set_label(&count.to_string());
+                let label = ngettext("{} item", "{} items", count)
+                    .replace("{}", &count.to_string());
+                badge.set_label(&label);
                 badge.set_visible(true);
             } else {
                 badge.set_visible(false);
