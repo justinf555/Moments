@@ -46,7 +46,8 @@ jobs:
           # Copy source to a writable location for the Flatpak sandbox
           cp -a . /tmp/moments-src
           flatpak run --share=network \
-            --filesystem=/tmp/moments-src \
+            --nofilesystem=host \
+            --filesystem=/tmp/moments-src:rw \
             --env=SQLX_OFFLINE=true \
             --env=CARGO_HOME=/tmp/flatpak-cargo \
             --command=bash org.gnome.Sdk//50 -c '
