@@ -1,6 +1,7 @@
 //! Shared reusable UI components used across the info and edit panels.
 
 use adw::prelude::*;
+use gettextrs::gettext;
 use gtk::glib::object::IsA;
 
 /// Create an expander row with an optional icon prefix, title left,
@@ -95,6 +96,30 @@ pub fn wrap_in_row(widget: &impl IsA<gtk::Widget>) -> gtk::ListBoxRow {
         .selectable(false)
         .child(widget)
         .build()
+}
+
+/// Update a star (favourite) button's icon, CSS class, and accessible label.
+///
+/// Used by photo viewer, video viewer, and anywhere an icon-only favourite
+/// toggle button is needed. Sets `starred-symbolic` / `non-starred-symbolic`
+/// icon and toggles the `warning` CSS class for the gold star colour.
+pub fn update_star_button(btn: &gtk::Button, is_favourite: bool) {
+    btn.set_icon_name(if is_favourite {
+        "starred-symbolic"
+    } else {
+        "non-starred-symbolic"
+    });
+    if is_favourite {
+        btn.add_css_class("warning");
+    } else {
+        btn.remove_css_class("warning");
+    }
+    let label = if is_favourite {
+        gettext("Remove from favourites")
+    } else {
+        gettext("Add to favourites")
+    };
+    btn.update_property(&[gtk::accessible::Property::Label(&label)]);
 }
 
 /// Wire a group of expander rows so that only one can be expanded at a time.

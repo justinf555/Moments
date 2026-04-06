@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
-use gettextrs::gettext;
 use gtk::{gdk, glib};
 
 use crate::app_event::AppEvent;
@@ -209,24 +208,7 @@ impl PhotoViewer {
         {
             let items = imp.items.borrow();
             if let Some(obj) = items.get(index) {
-                let is_fav = obj.is_favorite();
-                imp.star_btn.set_icon_name(if is_fav {
-                    "starred-symbolic"
-                } else {
-                    "non-starred-symbolic"
-                });
-                if is_fav {
-                    imp.star_btn.add_css_class("warning");
-                } else {
-                    imp.star_btn.remove_css_class("warning");
-                }
-                let fav_label = if is_fav {
-                    gettext("Remove from favourites")
-                } else {
-                    gettext("Add to favourites")
-                };
-                imp.star_btn
-                    .update_property(&[gtk::accessible::Property::Label(&fav_label)]);
+                crate::ui::widgets::update_star_button(&imp.star_btn, obj.is_favorite());
             }
         }
 
@@ -342,22 +324,7 @@ impl PhotoViewer {
                 let new_fav = !was_fav;
 
                 // Optimistic: update icon and current item immediately.
-                btn.set_icon_name(if new_fav {
-                    "starred-symbolic"
-                } else {
-                    "non-starred-symbolic"
-                });
-                if new_fav {
-                    btn.add_css_class("warning");
-                } else {
-                    btn.remove_css_class("warning");
-                }
-                let fav_label = if new_fav {
-                    gettext("Remove from favourites")
-                } else {
-                    gettext("Add to favourites")
-                };
-                btn.update_property(&[gtk::accessible::Property::Label(&fav_label)]);
+                crate::ui::widgets::update_star_button(btn, new_fav);
                 obj.set_is_favorite(new_fav);
 
                 let id = obj.item().id.clone();
