@@ -72,6 +72,15 @@ test-all: test test-integration
 lint:
 	$(FLATPAK_RUN) -c '$(SDK_INIT) && cargo clippy --all-targets -- -D warnings'
 
+fmt:
+	$(FLATPAK_RUN) -c '$(SDK_INIT) && cargo fmt'
+
+fmt-check:
+	$(FLATPAK_RUN) -c '$(SDK_INIT) && cargo fmt -- --check'
+
+typos:
+	typos
+
 audit:
 	cargo audit --ignore RUSTSEC-2023-0071
 	cargo deny check
