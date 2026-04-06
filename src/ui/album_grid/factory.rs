@@ -133,7 +133,9 @@ pub fn build_factory(
                 let results = futures_util::future::join_all(futures).await;
 
                 // Apply all textures in a single pass — no flicker.
+                // freeze/thaw batches all property notifications into one emission.
                 if let Some(item) = item_weak.upgrade() {
+                    item.freeze_notify();
                     for (i, result) in results.into_iter().enumerate() {
                         if let Some((pixels, width, height)) = result {
                             let gbytes = gtk::glib::Bytes::from_owned(pixels);
@@ -147,6 +149,7 @@ pub fn build_factory(
                             item.set_mosaic_texture(i, texture.upcast());
                         }
                     }
+                    item.thaw_notify();
                 }
             });
         }
