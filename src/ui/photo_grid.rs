@@ -117,7 +117,7 @@ mod photo_grid_imp {
             stack.set_transition_type(gtk::StackTransitionType::Crossfade);
             stack.add_named(&scrolled, Some("grid"));
             stack.add_named(&empty_page, Some("empty"));
-            stack.set_visible_child_name("grid");
+            stack.set_visible_child_name("empty");
             stack.set_parent(&*obj);
 
             self.grid_view.set(grid_view).unwrap();
