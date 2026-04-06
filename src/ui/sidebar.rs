@@ -5,7 +5,7 @@ use std::cell::RefCell;
 
 use adw::prelude::*;
 use gettextrs::{gettext, ngettext};
-use gtk::{gio, glib, prelude::*, subclass::prelude::*};
+use gtk::{gio, glib, subclass::prelude::*};
 use tracing::debug;
 
 use route::ROUTES;
