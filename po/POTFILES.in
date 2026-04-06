@@ -10,10 +10,10 @@ src/ui/album_grid/actions.rs
 src/ui/album_grid/card.rs
 src/ui/album_grid/factory.rs
 src/ui/album_grid/selection.rs
-src/ui/collection_grid.blp
-src/ui/collection_grid.rs
-src/ui/collection_grid/actions.rs
-src/ui/collection_grid/cell.rs
+src/ui/people_grid.blp
+src/ui/people_grid.rs
+src/ui/people_grid/actions.rs
+src/ui/people_grid/cell.rs
 src/ui/import_dialog.blp
 src/ui/photo_grid.blp
 src/ui/photo_grid.rs

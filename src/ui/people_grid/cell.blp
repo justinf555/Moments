@@ -1,0 +1,30 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $MomentsPeopleGridCell : Gtk.Widget {
+  accessible-role: grid_cell;
+
+  Gtk.Overlay {
+    child: Adw.Avatar avatar {
+      size: 144;
+      show-initials: true;
+    };
+
+    [overlay]
+    Gtk.Image hidden_icon {
+      icon-name: "view-conceal-symbolic";
+      pixel-size: 32;
+      halign: center;
+      valign: center;
+      visible: false;
+      styles ["hidden-icon"]
+    }
+  }
+
+  Gtk.Label name_label {
+    ellipsize: end;
+    max-width-chars: 14;
+    halign: center;
+    styles ["caption-heading"]
+  }
+}

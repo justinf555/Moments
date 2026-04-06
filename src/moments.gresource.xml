@@ -10,12 +10,12 @@
     <file preprocess="xml-stripblanks">ui/viewer.ui</file>
     <file preprocess="xml-stripblanks">ui/video_viewer.ui</file>
     <file preprocess="xml-stripblanks">ui/viewer/edit_panel.ui</file>
-    <file preprocess="xml-stripblanks">ui/collection_grid.ui</file>
+    <file preprocess="xml-stripblanks">ui/people_grid.ui</file>
     <file preprocess="xml-stripblanks">ui/album_grid.ui</file>
     <file preprocess="xml-stripblanks">ui/photo_grid.ui</file>
     <file preprocess="xml-stripblanks">ui/photo_grid/cell.ui</file>
     <file preprocess="xml-stripblanks">ui/album_grid/card.ui</file>
-    <file preprocess="xml-stripblanks">ui/collection_grid/cell.ui</file>
+    <file preprocess="xml-stripblanks">ui/people_grid/cell.ui</file>
     <file preprocess="xml-stripblanks">shortcuts-dialog.ui</file>
     <file>style.css</file>
   </gresource>

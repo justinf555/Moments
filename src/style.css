@@ -43,36 +43,24 @@ photo-grid-cell checkbutton {
     padding-right: 16px;
 }
 
-/* Custom rule: Adwaita has no built-in "circular clipped image" class.
- * The People view needs circular face thumbnails, while other collection
- * grids (albums, places) use rounded rectangles.  The .circular class
- * toggles between the two shapes via border-radius. */
-collection-grid-cell.circular .collection-thumbnail-frame {
-    border-radius: 50%;
-}
-
-collection-grid-cell .collection-thumbnail-frame {
-    border-radius: 8px;
-}
-
-/* Custom rule: Adwaita has .dim-label but no whole-widget dimming class.
- * Hidden people need to be visually de-emphasised while remaining
- * recognisable, so we reduce opacity on the thumbnail only (not the
- * whole cell) so the overlay icon remains fully visible.
+/* Hidden people: dim the avatar so the overlay icon stands out.
  * 0.5 balances de-emphasis with WCAG contrast accessibility. */
-collection-grid-cell.hidden-person .collection-thumbnail-frame {
+people-grid-cell.hidden-person avatar {
     opacity: 0.5;
 }
 
-/* Custom rule: the eye-slash overlay icon on hidden-person thumbnails
- * must be visible on top of arbitrary photo content.  We use a text
- * shadow for contrast against both light and dark images.  The white
- * colour and dark shadow are intentional — this renders on top of photo
- * pixels, not on a theme-controlled background, so Adwaita colour
- * variables would not guarantee legibility. */
-collection-grid-cell .hidden-icon {
+/* Eye-slash overlay icon on hidden-person avatars.
+ * Renders on top of photo/colour content, so we use a fixed white
+ * colour with dark shadow for contrast in both themes. */
+people-grid-cell .hidden-icon {
     color: white;
     -gtk-icon-shadow: 0 1px 3px rgba(0,0,0,0.6);
+}
+
+/* Subtle hover state for people cards. */
+people-grid-cell:hover {
+    background: alpha(@card_bg_color, 0.5);
+    border-radius: 12px;
 }
 
 /* Sidebar trash count badge — subtle pill matching GNOME's dim badge

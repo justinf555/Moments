@@ -15,8 +15,7 @@ pub mod cell;
 pub mod factory;
 pub mod item;
 
-use factory::ThumbnailStyle;
-use item::{CollectionItemData, CollectionItemObject};
+use item::{PersonItemData, PersonItemObject};
 
 /// Shared filter state for the people grid.
 struct PeopleFilter {
@@ -33,8 +32,8 @@ mod imp {
     use gtk::CompositeTemplate;
 
     #[derive(Default, CompositeTemplate)]
-    #[template(resource = "/io/github/justinf555/Moments/ui/collection_grid.ui")]
-    pub struct CollectionGridView {
+    #[template(resource = "/io/github/justinf555/Moments/ui/people_grid.ui")]
+    pub struct PeopleGridView {
         #[template_child]
         pub nav_view: TemplateChild<adw::NavigationView>,
         #[template_child]
@@ -53,9 +52,9 @@ mod imp {
     }
 
     #[glib::object_subclass]
-    impl ObjectSubclass for CollectionGridView {
-        const NAME: &'static str = "MomentsCollectionGridView";
-        type Type = super::CollectionGridView;
+    impl ObjectSubclass for PeopleGridView {
+        const NAME: &'static str = "MomentsPeopleGridView";
+        type Type = super::PeopleGridView;
         type ParentType = gtk::Widget;
 
         fn class_init(klass: &mut Self::Class) {
@@ -68,7 +67,7 @@ mod imp {
         }
     }
 
-    impl ObjectImpl for CollectionGridView {
+    impl ObjectImpl for PeopleGridView {
         fn dispose(&self) {
             self.dispose_template();
             while let Some(child) = self.obj().first_child() {
@@ -76,22 +75,22 @@ mod imp {
             }
         }
     }
-    impl WidgetImpl for CollectionGridView {}
+    impl WidgetImpl for PeopleGridView {}
 }
 
 glib::wrapper! {
-    pub struct CollectionGridView(ObjectSubclass<imp::CollectionGridView>)
+    pub struct PeopleGridView(ObjectSubclass<imp::PeopleGridView>)
         @extends gtk::Widget,
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
-impl Default for CollectionGridView {
+impl Default for PeopleGridView {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl CollectionGridView {
+impl PeopleGridView {
     pub fn new() -> Self {
         glib::Object::new()
     }
@@ -115,10 +114,10 @@ impl CollectionGridView {
             include_hidden: Cell::new(false),
             include_unnamed: Cell::new(false),
         });
-        let store = gio::ListStore::new::<CollectionItemObject>();
+        let store = gio::ListStore::new::<PersonItemObject>();
 
         let cell_size = 140;
-        let factory = factory::build_factory(cell_size, ThumbnailStyle::Circular);
+        let factory = factory::build_factory(cell_size);
         let selection = gtk::NoSelection::new(Some(store.clone()));
         imp.grid_view.set_model(Some(&selection));
         imp.grid_view.set_factory(Some(&factory));
@@ -196,25 +195,14 @@ fn load_people(store: &gio::ListStore, library: &Arc<dyn Library>, filter: &Rc<P
             Ok(Ok(people)) => {
                 info!(
                     count = people.len(),
-                    include_hidden, include_unnamed, "loaded people for collection grid"
+                    include_hidden, include_unnamed, "loaded people for people grid"
                 );
                 for person in &people {
                     let thumbnail_path = lib_thumb.person_thumbnail_path(&person.id);
 
-                    let subtitle = format!(
-                        "{} {}",
-                        person.face_count,
-                        if person.face_count == 1 {
-                            "photo"
-                        } else {
-                            "photos"
-                        }
-                    );
-
-                    let item = CollectionItemObject::new(CollectionItemData {
+                    let item = PersonItemObject::new(PersonItemData {
                         id: person.id.as_str().to_string(),
                         name: person.name.clone(),
-                        subtitle,
                         thumbnail_path,
                         is_hidden: person.is_hidden,
                     });
@@ -232,7 +220,7 @@ fn remove_by_id(store: &gio::ListStore, person_id: &str) {
     for i in 0..store.n_items() {
         if let Some(obj) = store
             .item(i)
-            .and_then(|o| o.downcast::<CollectionItemObject>().ok())
+            .and_then(|o| o.downcast::<PersonItemObject>().ok())
         {
             if obj.data().id == person_id {
                 store.remove(i);
@@ -243,15 +231,15 @@ fn remove_by_id(store: &gio::ListStore, person_id: &str) {
 }
 
 /// Replace an item in the store with updated data, preserving its position.
-fn replace_item(store: &gio::ListStore, person_id: &str, data: CollectionItemData) {
+fn replace_item(store: &gio::ListStore, person_id: &str, data: PersonItemData) {
     for i in 0..store.n_items() {
         if let Some(obj) = store
             .item(i)
-            .and_then(|o| o.downcast::<CollectionItemObject>().ok())
+            .and_then(|o| o.downcast::<PersonItemObject>().ok())
         {
             if obj.data().id == person_id {
                 store.remove(i);
-                let new_item = CollectionItemObject::new(data);
+                let new_item = PersonItemObject::new(data);
                 store.insert(i, &new_item);
                 return;
             }
@@ -306,7 +294,7 @@ fn incremental_reload(
         for i in 0..store.n_items() {
             if let Some(obj) = store
                 .item(i)
-                .and_then(|o| o.downcast::<CollectionItemObject>().ok())
+                .and_then(|o| o.downcast::<PersonItemObject>().ok())
             {
                 existing.insert(obj.data().id.clone(), i);
             }
@@ -332,20 +320,10 @@ fn incremental_reload(
             }
 
             let thumbnail_path = lib_thumb.person_thumbnail_path(&person.id);
-            let subtitle = format!(
-                "{} {}",
-                person.face_count,
-                if person.face_count == 1 {
-                    "photo"
-                } else {
-                    "photos"
-                }
-            );
 
-            let item = CollectionItemObject::new(CollectionItemData {
+            let item = PersonItemObject::new(PersonItemData {
                 id: pid,
                 name: person.name.clone(),
-                subtitle,
                 thumbnail_path,
                 is_hidden: person.is_hidden,
             });

@@ -3,12 +3,11 @@ use std::path::PathBuf;
 
 use gtk::{gdk, glib, prelude::*, subclass::prelude::*};
 
-/// Data for a single collection grid item (person, memory, etc.).
+/// Data for a single person in the people grid.
 #[derive(Debug, Clone)]
-pub struct CollectionItemData {
+pub struct PersonItemData {
     pub id: String,
     pub name: String,
-    pub subtitle: String,
     pub thumbnail_path: Option<PathBuf>,
     pub is_hidden: bool,
 }
@@ -17,9 +16,9 @@ mod imp {
     use super::*;
 
     #[derive(Default, glib::Properties)]
-    #[properties(wrapper_type = super::CollectionItemObject)]
-    pub struct CollectionItemObject {
-        pub data: OnceCell<CollectionItemData>,
+    #[properties(wrapper_type = super::PersonItemObject)]
+    pub struct PersonItemObject {
+        pub data: OnceCell<PersonItemData>,
 
         /// The decoded thumbnail texture, `None` until ready.
         #[property(get, set, nullable)]
@@ -27,27 +26,27 @@ mod imp {
     }
 
     #[glib::object_subclass]
-    impl ObjectSubclass for CollectionItemObject {
-        const NAME: &'static str = "MomentsCollectionItemObject";
-        type Type = super::CollectionItemObject;
+    impl ObjectSubclass for PersonItemObject {
+        const NAME: &'static str = "MomentsPersonItemObject";
+        type Type = super::PersonItemObject;
     }
 
     #[glib::derived_properties]
-    impl ObjectImpl for CollectionItemObject {}
+    impl ObjectImpl for PersonItemObject {}
 }
 
 glib::wrapper! {
-    pub struct CollectionItemObject(ObjectSubclass<imp::CollectionItemObject>);
+    pub struct PersonItemObject(ObjectSubclass<imp::PersonItemObject>);
 }
 
-impl CollectionItemObject {
-    pub fn new(data: CollectionItemData) -> Self {
+impl PersonItemObject {
+    pub fn new(data: PersonItemData) -> Self {
         let obj: Self = glib::Object::new();
         obj.imp().data.set(data).expect("data set once");
         obj
     }
 
-    pub fn data(&self) -> &CollectionItemData {
+    pub fn data(&self) -> &PersonItemData {
         self.imp().data.get().expect("data initialised")
     }
 }
