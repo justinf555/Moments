@@ -19,7 +19,7 @@ use edit_panel::EditPanel;
 use info_panel::InfoPanel;
 
 // Re-export shared menu utilities used by video_viewer.
-pub use menu::{build_viewer_menu_popover, find_menu_button};
+pub use menu::{build_viewer_menu_popover, ViewerMenuButtons};
 
 // ── GObject subclass ─────────────────────────────────────────────────────────
 
@@ -166,11 +166,11 @@ impl PhotoViewer {
         *imp.edit_panel.borrow_mut() = Some(edit_panel);
 
         // Build and attach overflow menu.
-        let menu_popover = menu::build_viewer_menu_popover(true, "Delete photo");
+        let (menu_popover, menu_buttons) = menu::build_viewer_menu_popover(true, "Delete photo");
         imp.menu_btn.set_popover(Some(&menu_popover));
 
         // Wire all signal handlers.
-        self.setup_signals(&menu_popover);
+        self.setup_signals(&menu_popover, &menu_buttons);
     }
 
     /// Load `items` and navigate to `index`.
@@ -278,7 +278,7 @@ impl PhotoViewer {
         }
     }
 
-    fn setup_signals(&self, menu_popover: &gtk::Popover) {
+    fn setup_signals(&self, menu_popover: &gtk::Popover, menu_buttons: &menu::ViewerMenuButtons) {
         let imp = self.imp();
 
         // Start deferred full-res load after the slide-in animation completes,
@@ -467,7 +467,7 @@ impl PhotoViewer {
         }
 
         // Wire overflow menu buttons.
-        menu::wire_overflow_menu(menu_popover, self);
+        menu::wire_overflow_menu(menu_popover, menu_buttons, self);
 
         // Subscribe to bus: clear pending favourite state on confirmation.
         {
