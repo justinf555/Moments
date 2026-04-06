@@ -91,6 +91,7 @@ impl Database {
             return Ok(());
         }
         let placeholders = id_placeholders(ids.len());
+        let mut tx = self.pool.begin().await.map_err(LibraryError::Db)?;
         for (table, col) in [
             ("media_metadata", "media_id"),
             ("thumbnails", "media_id"),
@@ -102,8 +103,9 @@ impl Database {
             for id in ids {
                 query = query.bind(id.as_str());
             }
-            query.execute(&self.pool).await.map_err(LibraryError::Db)?;
+            query.execute(&mut *tx).await.map_err(LibraryError::Db)?;
         }
+        tx.commit().await.map_err(LibraryError::Db)?;
         Ok(())
     }
 }
