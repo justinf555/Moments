@@ -58,9 +58,10 @@ collection-grid-cell .collection-thumbnail-frame {
 /* Custom rule: Adwaita has .dim-label but no whole-widget dimming class.
  * Hidden people need to be visually de-emphasised while remaining
  * recognisable, so we reduce opacity on the thumbnail only (not the
- * whole cell) so the overlay icon remains fully visible. */
+ * whole cell) so the overlay icon remains fully visible.
+ * 0.5 balances de-emphasis with WCAG contrast accessibility. */
 collection-grid-cell.hidden-person .collection-thumbnail-frame {
-    opacity: 0.4;
+    opacity: 0.5;
 }
 
 /* Custom rule: the eye-slash overlay icon on hidden-person thumbnails
@@ -113,7 +114,7 @@ collection-grid-cell .hidden-icon {
     padding: 2px;
 }
 
-.filter-none   { background: linear-gradient(135deg, #e8e8e8, #c0c0c0); }
+.filter-none   { background: linear-gradient(135deg, @window_bg_color, @borders); }
 .filter-bw     { background: linear-gradient(135deg, #666666, #333333); }
 .filter-vivid  { background: linear-gradient(135deg, #e07020, #3080d0); }
 .filter-cool   { background: linear-gradient(135deg, #6090c0, #90b8e0); }
