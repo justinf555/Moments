@@ -36,17 +36,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Generate config.rs via Meson
+      - name: Generate config.rs and run coverage
         run: |
-          source /usr/lib/sdk/rust-stable/enable.sh
-          meson setup _build -Dprofile=development
-
-      - name: Run coverage
-        run: |
-          source /usr/lib/sdk/rust-stable/enable.sh
-          export SQLX_OFFLINE=true
-          cargo install cargo-llvm-cov --locked 2>/dev/null || true
-          cargo llvm-cov --lcov --output-path lcov.info
+          flatpak run --share=network \
+            --filesystem="$(pwd)" \
+            --env=SQLX_OFFLINE=true \
+            --env=CARGO_HOME=/tmp/flatpak-cargo \
+            --command=bash org.gnome.Sdk//50 -c '
+              source /usr/lib/sdk/rust-stable/enable.sh
+              mkdir -p /tmp/flatpak-cargo/bin
+              export PATH=/tmp/flatpak-cargo/bin:$PATH
+              cd '"$(pwd)"'
+              meson setup _build -Dprofile=development
+              cargo install cargo-llvm-cov --locked 2>/dev/null || true
+              cargo llvm-cov --lcov --output-path lcov.info
+            '
 
       - name: Upload to Codecov
         uses: codecov/codecov-action@v5
