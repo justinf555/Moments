@@ -76,7 +76,14 @@ impl TextureCache {
 
         // Update existing entry.
         if inner.map.contains_key(&id) {
-            inner.map.insert(id.clone(), CachedTexture { pixels, width, height });
+            inner.map.insert(
+                id.clone(),
+                CachedTexture {
+                    pixels,
+                    width,
+                    height,
+                },
+            );
             if let Some(pos) = inner.order.iter().position(|k| k == &id) {
                 inner.order.remove(pos);
             }
@@ -92,7 +99,14 @@ impl TextureCache {
             }
         }
 
-        inner.map.insert(id.clone(), CachedTexture { pixels, width, height });
+        inner.map.insert(
+            id.clone(),
+            CachedTexture {
+                pixels,
+                width,
+                height,
+            },
+        );
         inner.order.push(id);
     }
 }

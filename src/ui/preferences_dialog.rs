@@ -137,12 +137,10 @@ fn build_library_page(
     page.set_title("Library");
     page.set_icon_name(Some("folder-symbolic"));
 
-    let (overview_group, photos_row, videos_row, albums_row, people_row) =
-        build_overview_group();
+    let (overview_group, photos_row, videos_row, albums_row, people_row) = build_overview_group();
     page.add(&overview_group);
 
-    let (storage_group, cache_usage_row) =
-        build_storage_group(settings, is_immich, library);
+    let (storage_group, cache_usage_row) = build_storage_group(settings, is_immich, library);
     page.add(&storage_group);
 
     let stats_rows = LibraryStatsRows {
@@ -238,9 +236,7 @@ fn spawn_library_stats(library: Option<Arc<dyn Library>>, rows: LibraryStatsRows
     let people_weak = rows.people.downgrade();
     let cache_weak = rows.cache_used.as_ref().map(|r| r.downgrade());
     glib::MainContext::default().spawn_local(async move {
-        let result = tokio
-            .spawn(async move { lib.library_stats().await })
-            .await;
+        let result = tokio.spawn(async move { lib.library_stats().await }).await;
         match result {
             Ok(Ok(stats)) => {
                 if let Some(r) = photos_weak.upgrade() {
@@ -261,11 +257,21 @@ fn spawn_library_stats(library: Option<Arc<dyn Library>>, rows: LibraryStatsRows
             }
             Ok(Err(e)) => {
                 tracing::error!("library_stats failed: {e}");
-                if let Some(r) = photos_weak.upgrade() { r.set_subtitle("—"); }
-                if let Some(r) = videos_weak.upgrade() { r.set_subtitle("—"); }
-                if let Some(r) = albums_weak.upgrade() { r.set_subtitle("—"); }
-                if let Some(r) = people_weak.upgrade() { r.set_subtitle("—"); }
-                if let Some(Some(r)) = cache_weak.as_ref().map(|w| w.upgrade()) { r.set_subtitle("—"); }
+                if let Some(r) = photos_weak.upgrade() {
+                    r.set_subtitle("—");
+                }
+                if let Some(r) = videos_weak.upgrade() {
+                    r.set_subtitle("—");
+                }
+                if let Some(r) = albums_weak.upgrade() {
+                    r.set_subtitle("—");
+                }
+                if let Some(r) = people_weak.upgrade() {
+                    r.set_subtitle("—");
+                }
+                if let Some(Some(r)) = cache_weak.as_ref().map(|w| w.upgrade()) {
+                    r.set_subtitle("—");
+                }
             }
             Err(e) => {
                 tracing::error!("library_stats join failed: {e}");
@@ -387,9 +393,7 @@ fn spawn_server_stats(library: Option<Arc<dyn Library>>, rows: ServerStatsRows) 
     let sv_weak = rows.videos.downgrade();
     let sd_weak = rows.disk.downgrade();
     glib::MainContext::default().spawn_local(async move {
-        let result = tokio
-            .spawn(async move { lib.library_stats().await })
-            .await;
+        let result = tokio.spawn(async move { lib.library_stats().await }).await;
         if let Ok(Ok(stats)) = result {
             if let Some(server) = stats.server {
                 if let Some(r) = sp_weak.upgrade() {

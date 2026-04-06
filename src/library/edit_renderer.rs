@@ -70,11 +70,7 @@ fn apply_transforms(img: &DynamicImage, t: &TransformState) -> DynamicImage {
 // Merged pixel adjustments (exposure + color in a single pass)
 // ---------------------------------------------------------------------------
 
-fn apply_pixel_adjustments(
-    img: DynamicImage,
-    e: &ExposureState,
-    c: &ColorState,
-) -> DynamicImage {
+fn apply_pixel_adjustments(img: DynamicImage, e: &ExposureState, c: &ColorState) -> DynamicImage {
     let skip_exposure = *e == ExposureState::default();
     let skip_color = *c == ColorState::default();
 
@@ -160,12 +156,7 @@ fn apply_pixel_adjustments(
                 bf -= c.tint * 0.05;
             }
 
-            rgba.put_pixel(x, y, Rgba([
-                clamp_u8(rf),
-                clamp_u8(gf),
-                clamp_u8(bf),
-                a,
-            ]));
+            rgba.put_pixel(x, y, Rgba([clamp_u8(rf), clamp_u8(gf), clamp_u8(bf), a]));
         }
     }
 
@@ -342,7 +333,10 @@ mod tests {
         let img = test_image();
         let result = apply_edits(&img, &EditState::default());
         assert_eq!(img.dimensions(), result.dimensions());
-        assert_eq!(img.as_rgba8().unwrap().as_raw(), result.as_rgba8().unwrap().as_raw());
+        assert_eq!(
+            img.as_rgba8().unwrap().as_raw(),
+            result.as_rgba8().unwrap().as_raw()
+        );
     }
 
     #[test]
@@ -443,7 +437,10 @@ mod tests {
         for name in FILTER_NAMES {
             let preset = filter_preset(name);
             assert!(preset.is_some(), "filter '{name}' should exist");
-            assert!(!preset.unwrap().is_identity(), "filter '{name}' should not be identity");
+            assert!(
+                !preset.unwrap().is_identity(),
+                "filter '{name}' should not be identity"
+            );
         }
     }
 

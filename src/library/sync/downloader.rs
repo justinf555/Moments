@@ -46,9 +46,9 @@ impl ThumbnailDownloader {
             let thumbnails_dir = self.thumbnails_dir.clone();
 
             tokio::spawn(async move {
-                if let Err(e) = download_thumbnail(
-                    &client, &db, &events, &thumbnails_dir, &media_id,
-                ).await {
+                if let Err(e) =
+                    download_thumbnail(&client, &db, &events, &thumbnails_dir, &media_id).await
+                {
                     debug!(id = %media_id, "thumbnail download failed: {e}");
                 }
                 drop(permit);
@@ -58,7 +58,8 @@ impl ThumbnailDownloader {
 
             // Emit progress every 10 thumbnails to update the status bar.
             if download_count.is_multiple_of(10) {
-                let _ = self.events.send(LibraryEvent::ThumbnailDownloadProgress { // receiver may be dropped during shutdown
+                let _ = self.events.send(LibraryEvent::ThumbnailDownloadProgress {
+                    // receiver may be dropped during shutdown
                     completed: download_count,
                     total: download_count, // Total not known upfront; shows running count.
                 });
@@ -72,7 +73,8 @@ impl ThumbnailDownloader {
             tokio::time::sleep(super::THUMBNAIL_THROTTLE).await;
         }
 
-        let _ = self.events.send(LibraryEvent::ThumbnailDownloadsComplete { // receiver may be dropped during shutdown
+        let _ = self.events.send(LibraryEvent::ThumbnailDownloadsComplete {
+            // receiver may be dropped during shutdown
             total: download_count,
         });
         info!(total = download_count, "thumbnail downloader finished");
@@ -94,8 +96,10 @@ async fn download_thumbnail(
     if path.exists() {
         debug!("thumbnail already cached, skipping download");
         let now = chrono::Utc::now().timestamp();
-        db.set_thumbnail_ready(media_id, &path.to_string_lossy(), now).await?;
-        let _ = events.send(LibraryEvent::ThumbnailReady { // receiver may be dropped during shutdown
+        db.set_thumbnail_ready(media_id, &path.to_string_lossy(), now)
+            .await?;
+        let _ = events.send(LibraryEvent::ThumbnailReady {
+            // receiver may be dropped during shutdown
             media_id: media_id.clone(),
         });
         return Ok(());
@@ -117,8 +121,10 @@ async fn download_thumbnail(
 
     // Update DB status and emit event.
     let now = chrono::Utc::now().timestamp();
-    db.set_thumbnail_ready(media_id, &path.to_string_lossy(), now).await?;
-    let _ = events.send(LibraryEvent::ThumbnailReady { // receiver may be dropped during shutdown
+    db.set_thumbnail_ready(media_id, &path.to_string_lossy(), now)
+        .await?;
+    let _ = events.send(LibraryEvent::ThumbnailReady {
+        // receiver may be dropped during shutdown
         media_id: media_id.clone(),
     });
 

@@ -79,7 +79,9 @@ mod imp {
             motion.set_propagation_phase(gtk::PropagationPhase::Capture);
             let cell_weak = obj.downgrade();
             motion.connect_enter(move |_, _x, _y| {
-                let Some(cell) = cell_weak.upgrade() else { return };
+                let Some(cell) = cell_weak.upgrade() else {
+                    return;
+                };
                 let imp = cell.imp();
                 if imp.has_texture.get() {
                     imp.checkbox.set_visible(true);
@@ -87,7 +89,9 @@ mod imp {
             });
             let cell_weak = obj.downgrade();
             motion.connect_leave(move |_| {
-                let Some(cell) = cell_weak.upgrade() else { return };
+                let Some(cell) = cell_weak.upgrade() else {
+                    return;
+                };
                 let imp = cell.imp();
                 // Only hide checkbox if NOT in selection mode.
                 if !imp.in_selection_mode.get() {
@@ -175,7 +179,8 @@ impl PhotoGridCell {
         let imp = self.imp();
         let ms = item.duration_ms();
         if ms > 0 {
-            imp.duration_label.set_text(&format!(" {} ", format_duration(ms)));
+            imp.duration_label
+                .set_text(&format!(" {} ", format_duration(ms)));
             imp.duration_label.set_visible(true);
         } else {
             imp.duration_label.set_visible(false);
@@ -189,8 +194,8 @@ impl PhotoGridCell {
             let retention_days = gtk::gio::SettingsSchemaSource::default()
                 .and_then(|src| src.lookup(crate::config::APP_ID, true))
                 .map(|_| {
-                    gtk::gio::Settings::new(crate::config::APP_ID)
-                        .uint("trash-retention-days") as i64
+                    gtk::gio::Settings::new(crate::config::APP_ID).uint("trash-retention-days")
+                        as i64
                 })
                 .unwrap_or(30);
             let now = chrono::Utc::now().timestamp();

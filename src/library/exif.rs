@@ -146,9 +146,10 @@ fn rational_or_short_u32(exif: &exif::Exif, tag: exif::Tag) -> Option<u32> {
     match &field.value {
         exif::Value::Long(v) => v.first().copied(),
         exif::Value::Short(v) => v.first().map(|&x| x as u32),
-        exif::Value::Rational(v) => v.first().map(|r| {
-            if r.denom != 0 { r.num / r.denom } else { 0 }
-        }),
+        exif::Value::Rational(v) => {
+            v.first()
+                .map(|r| if r.denom != 0 { r.num / r.denom } else { 0 })
+        }
         _ => None,
     }
 }
@@ -190,7 +191,11 @@ fn ascii_string(exif: &exif::Exif, tag: exif::Tag) -> Option<String> {
         exif::Value::Ascii(vecs) => {
             let s: String = vecs.first()?.iter().map(|&b| b as char).collect();
             let s = s.trim_end_matches('\0').trim().to_string();
-            if s.is_empty() { None } else { Some(s) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
         }
         _ => None,
     }
@@ -229,7 +234,11 @@ fn shutter_string(exif: &exif::Exif) -> Option<String> {
 }
 
 fn gcd(a: u32, b: u32) -> u32 {
-    if b == 0 { a } else { gcd(b, a % b) }
+    if b == 0 {
+        a
+    } else {
+        gcd(b, a % b)
+    }
 }
 
 /// Convert GPS DMS rational triplet + reference tag to decimal degrees.

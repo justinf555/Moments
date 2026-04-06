@@ -123,9 +123,7 @@ impl ImportJob {
         );
 
         // Receiver may be dropped during shutdown.
-        self.events
-            .send(LibraryEvent::ImportComplete(summary))
-            .ok();
+        self.events.send(LibraryEvent::ImportComplete(summary)).ok();
     }
 
     /// Import a single file.
@@ -423,7 +421,9 @@ mod tests {
         let photo = make_file(src_dir.path(), "photo.jpg", b"fake jpeg");
 
         let (tx, rx) = mpsc::channel();
-        ImportJob::new(originals, thumbnails, db, tx, test_registry()).run(vec![photo]).await;
+        ImportJob::new(originals, thumbnails, db, tx, test_registry())
+            .run(vec![photo])
+            .await;
 
         let events: Vec<_> = rx.try_iter().collect();
         assert!(events
@@ -454,7 +454,9 @@ mod tests {
         let file = make_file(src_dir.path(), "document.pdf", b"not a photo");
 
         let (tx, rx) = mpsc::channel();
-        ImportJob::new(originals, thumbnails, db, tx, test_registry()).run(vec![file]).await;
+        ImportJob::new(originals, thumbnails, db, tx, test_registry())
+            .run(vec![file])
+            .await;
 
         let events: Vec<_> = rx.try_iter().collect();
         let summary = events
@@ -483,13 +485,21 @@ mod tests {
         // First import
         let thumbnails = bundle_dir.path().join("thumbnails");
         let (tx, rx) = mpsc::channel();
-        ImportJob::new(originals.clone(), thumbnails.clone(), db.clone(), tx.clone(), test_registry())
-            .run(vec![photo.clone()])
-            .await;
+        ImportJob::new(
+            originals.clone(),
+            thumbnails.clone(),
+            db.clone(),
+            tx.clone(),
+            test_registry(),
+        )
+        .run(vec![photo.clone()])
+        .await;
 
         // Second import — same content, even if renamed
         let photo2 = make_file(src_dir.path(), "dup_renamed.jpg", b"fake jpeg content");
-        ImportJob::new(originals, thumbnails, db, tx, test_registry()).run(vec![photo2]).await;
+        ImportJob::new(originals, thumbnails, db, tx, test_registry())
+            .run(vec![photo2])
+            .await;
 
         let events: Vec<_> = rx.try_iter().collect();
         let summaries: Vec<_> = events

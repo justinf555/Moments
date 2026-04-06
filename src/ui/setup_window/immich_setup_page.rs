@@ -136,12 +136,12 @@ impl MomentsImmichSetupPage {
         glib::MainContext::default().spawn_local(async move {
             // Step 1: Login to get a session token.
             let login_result = tokio
-                .spawn(async move {
-                    ImmichClient::login(&server_url, &email, &password).await
-                })
+                .spawn(async move { ImmichClient::login(&server_url, &email, &password).await })
                 .await;
 
-            let Some(obj) = obj_weak.upgrade() else { return };
+            let Some(obj) = obj_weak.upgrade() else {
+                return;
+            };
             let imp = obj.imp();
 
             let login = match login_result {
@@ -186,9 +186,8 @@ impl MomentsImmichSetupPage {
             match validate_result {
                 Ok(Ok(about)) => {
                     debug!(version = %about.version, user = %user_name, "connection successful");
-                    imp.status_label.set_text(&format!(
-                        "Connected as {user_name} — {about}"
-                    ));
+                    imp.status_label
+                        .set_text(&format!("Connected as {user_name} — {about}"));
                     imp.status_label.remove_css_class("error");
                     imp.status_label.add_css_class("success");
                     imp.connect_btn.set_sensitive(true);
@@ -216,7 +215,8 @@ impl MomentsImmichSetupPage {
         let access_token = imp.access_token.borrow().clone().unwrap_or_default();
 
         if access_token.is_empty() {
-            imp.status_label.set_text("Please test the connection first.");
+            imp.status_label
+                .set_text("Please test the connection first.");
             imp.status_label.add_css_class("error");
             return;
         }
@@ -224,7 +224,8 @@ impl MomentsImmichSetupPage {
         // Store session token in GNOME Keyring.
         if let Err(e) = keyring::store_access_token(&server_url, &access_token) {
             error!("failed to store access token: {e}");
-            imp.status_label.set_text(&format!("Failed to store credentials: {e}"));
+            imp.status_label
+                .set_text(&format!("Failed to store credentials: {e}"));
             imp.status_label.add_css_class("error");
             return;
         }
@@ -237,7 +238,8 @@ impl MomentsImmichSetupPage {
         };
         if let Err(e) = Bundle::create(&bundle_path, &config) {
             error!("failed to create Immich bundle: {e}");
-            imp.status_label.set_text(&format!("Failed to create library: {e}"));
+            imp.status_label
+                .set_text(&format!("Failed to create library: {e}"));
             imp.status_label.add_css_class("error");
             return;
         }

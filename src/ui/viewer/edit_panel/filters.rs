@@ -200,7 +200,9 @@ impl EditPanel {
                 let source_id = glib::timeout_add_local_once(
                     std::time::Duration::from_millis(RENDER_DEBOUNCE_MS as u64),
                     move || {
-                        let Some(panel) = weak_inner.upgrade() else { return };
+                        let Some(panel) = weak_inner.upgrade() else {
+                            return;
+                        };
                         panel.imp().render_debounce.set(None);
                         panel.render_preview();
                     },

@@ -4,7 +4,10 @@ use crate::library::media::{MediaId, MediaRecord};
 use super::{id_placeholders, Database};
 
 impl Database {
-    pub(crate) async fn insert_media_record(&self, record: &MediaRecord) -> Result<(), LibraryError> {
+    pub(crate) async fn insert_media_record(
+        &self,
+        record: &MediaRecord,
+    ) -> Result<(), LibraryError> {
         sqlx::query(
             "INSERT INTO media (id, relative_path, original_filename, file_size,
                                 imported_at, media_type, taken_at, width, height,
@@ -58,9 +61,8 @@ impl Database {
         }
         let now = chrono::Utc::now().timestamp();
         let placeholders = id_placeholders(ids.len());
-        let sql = format!(
-            "UPDATE media SET is_trashed = 1, trashed_at = ? WHERE id IN ({placeholders})"
-        );
+        let sql =
+            format!("UPDATE media SET is_trashed = 1, trashed_at = ? WHERE id IN ({placeholders})");
         let mut query = sqlx::query(&sql);
         query = query.bind(now);
         for id in ids {

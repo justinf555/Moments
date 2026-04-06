@@ -20,9 +20,17 @@ pub fn build_viewer_menu_popover(include_wallpaper: bool, delete_label: &str) ->
     vbox.set_margin_end(6);
 
     // Section 1: actions
-    vbox.append(&overflow_btn("Add to album", "folder-new-symbolic", "add-to-album"));
+    vbox.append(&overflow_btn(
+        "Add to album",
+        "folder-new-symbolic",
+        "add-to-album",
+    ));
     vbox.append(&overflow_btn("Share", "send-to-symbolic", "share"));
-    vbox.append(&overflow_btn("Export original", "document-save-symbolic", "export-original"));
+    vbox.append(&overflow_btn(
+        "Export original",
+        "document-save-symbolic",
+        "export-original",
+    ));
     if include_wallpaper {
         vbox.append(&overflow_btn(
             "Set as wallpaper",
@@ -94,10 +102,7 @@ pub fn find_menu_button(popover: &gtk::Popover, name: &str) -> Option<gtk::Butto
 /// Wire overflow menu button handlers for the photo viewer.
 ///
 /// Connects: Add to album, Share/Export/Wallpaper/Files stubs, Delete (trash + pop).
-pub(super) fn wire_overflow_menu(
-    popover: &gtk::Popover,
-    viewer: &PhotoViewer,
-) {
+pub(super) fn wire_overflow_menu(popover: &gtk::Popover, viewer: &PhotoViewer) {
     // Add to album
     if let Some(btn) = find_menu_button(popover, "add-to-album") {
         let v = viewer.downgrade();
@@ -152,7 +157,10 @@ pub(super) fn wire_overflow_menu(
                 items.get(idx).map(|obj| obj.item().id.clone())
             };
             let Some(id) = id else { return };
-            imp.bus_sender.get().unwrap().send(AppEvent::TrashRequested { ids: vec![id] });
+            imp.bus_sender
+                .get()
+                .unwrap()
+                .send(AppEvent::TrashRequested { ids: vec![id] });
             if let Some(nav_view) = viewer
                 .parent()
                 .and_then(|p| p.downcast::<adw::NavigationView>().ok())

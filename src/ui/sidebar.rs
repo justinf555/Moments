@@ -3,9 +3,9 @@ pub mod route;
 use std::cell::Cell;
 use std::cell::RefCell;
 
+use adw::prelude::*;
 use gettextrs::{gettext, ngettext};
 use gtk::{gio, glib, prelude::*, subclass::prelude::*};
-use adw::prelude::*;
 use tracing::debug;
 
 use route::ROUTES;
@@ -109,25 +109,55 @@ mod imp {
             self.build_pinned_section(&obj, &sidebar, &toolbar_view);
             toolbar_view.set_content(Some(&sidebar));
 
-            let StatusBarWidgets { bar_stack, idle_label, sync_label, thumb_label, upload_label, complete_label } =
-                build_status_bar_stack();
-            let UploadDetailWidgets { sheet_box, progress_label, progress_bar, detail_label } =
-                build_upload_detail_sheet();
+            let StatusBarWidgets {
+                bar_stack,
+                idle_label,
+                sync_label,
+                thumb_label,
+                upload_label,
+                complete_label,
+            } = build_status_bar_stack();
+            let UploadDetailWidgets {
+                sheet_box,
+                progress_label,
+                progress_bar,
+                detail_label,
+            } = build_upload_detail_sheet();
 
             let bottom_sheet = build_bottom_sheet(&toolbar_view, &sheet_box, &bar_stack);
             obj.set_child(Some(&bottom_sheet));
 
             self.sidebar.set(sidebar).expect("set once in constructed");
-            self.bottom_sheet.set(bottom_sheet).expect("set once in constructed");
-            self.progress_label.set(progress_label).expect("set once in constructed");
-            self.progress_bar.set(progress_bar).expect("set once in constructed");
-            self.detail_label.set(detail_label).expect("set once in constructed");
-            self.bar_stack.set(bar_stack).expect("set once in constructed");
-            self.idle_label.set(idle_label).expect("set once in constructed");
-            self.sync_label.set(sync_label).expect("set once in constructed");
-            self.thumb_label.set(thumb_label).expect("set once in constructed");
-            self.upload_label.set(upload_label).expect("set once in constructed");
-            self.complete_label.set(complete_label).expect("set once in constructed");
+            self.bottom_sheet
+                .set(bottom_sheet)
+                .expect("set once in constructed");
+            self.progress_label
+                .set(progress_label)
+                .expect("set once in constructed");
+            self.progress_bar
+                .set(progress_bar)
+                .expect("set once in constructed");
+            self.detail_label
+                .set(detail_label)
+                .expect("set once in constructed");
+            self.bar_stack
+                .set(bar_stack)
+                .expect("set once in constructed");
+            self.idle_label
+                .set(idle_label)
+                .expect("set once in constructed");
+            self.sync_label
+                .set(sync_label)
+                .expect("set once in constructed");
+            self.thumb_label
+                .set(thumb_label)
+                .expect("set once in constructed");
+            self.upload_label
+                .set(upload_label)
+                .expect("set once in constructed");
+            self.complete_label
+                .set(complete_label)
+                .expect("set once in constructed");
         }
     }
 
@@ -207,7 +237,9 @@ mod imp {
                 let obj_weak = obj.downgrade();
                 unpin_action.connect_activate(move |_, _| {
                     let Some(index) = mti.get() else { return };
-                    let Some(sidebar) = obj_weak.upgrade() else { return };
+                    let Some(sidebar) = obj_weak.upgrade() else {
+                        return;
+                    };
                     let ids = sidebar.imp().pinned_ids.borrow();
                     if let Some(album_id) = ids.get(index as usize).cloned() {
                         drop(ids);
@@ -268,36 +300,48 @@ mod imp {
         bar_stack.set_transition_duration(200);
 
         let (idle_box, idle_label) = build_status_bar_page(
-            "object-select-symbolic", "Waiting for sync...",
-            &["dim-label"], &["dim-label"], (8, 8),
+            "object-select-symbolic",
+            "Waiting for sync...",
+            &["dim-label"],
+            &["dim-label"],
+            (8, 8),
         );
         bar_stack.add_named(&idle_box, Some("idle"));
 
-        let (sync_box, sync_label) = build_status_bar_page(
-            "view-refresh-symbolic", "Syncing...",
-            &[], &[], (8, 8),
-        );
+        let (sync_box, sync_label) =
+            build_status_bar_page("view-refresh-symbolic", "Syncing...", &[], &[], (8, 8));
         bar_stack.add_named(&sync_box, Some("sync"));
 
         let (thumb_box, thumb_label) = build_status_bar_page(
-            "folder-download-symbolic", "Downloading thumbnails...",
-            &[], &[], (8, 8),
+            "folder-download-symbolic",
+            "Downloading thumbnails...",
+            &[],
+            &[],
+            (8, 8),
         );
         bar_stack.add_named(&thumb_box, Some("thumbnails"));
 
-        let (upload_box, upload_label) = build_status_bar_page(
-            "go-up-symbolic", "Uploading...",
-            &[], &[], (12, 16),
-        );
+        let (upload_box, upload_label) =
+            build_status_bar_page("go-up-symbolic", "Uploading...", &[], &[], (12, 16));
         bar_stack.add_named(&upload_box, Some("upload"));
 
         let (complete_box, complete_label) = build_status_bar_page(
-            "object-select-symbolic", "Import complete",
-            &[], &[], (8, 8),
+            "object-select-symbolic",
+            "Import complete",
+            &[],
+            &[],
+            (8, 8),
         );
         bar_stack.add_named(&complete_box, Some("complete"));
 
-        StatusBarWidgets { bar_stack, idle_label, sync_label, thumb_label, upload_label, complete_label }
+        StatusBarWidgets {
+            bar_stack,
+            idle_label,
+            sync_label,
+            thumb_label,
+            upload_label,
+            complete_label,
+        }
     }
 
     struct UploadDetailWidgets {
@@ -329,7 +373,12 @@ mod imp {
         detail_label.add_css_class("caption");
         sheet_box.append(&detail_label);
 
-        UploadDetailWidgets { sheet_box, progress_label, progress_bar, detail_label }
+        UploadDetailWidgets {
+            sheet_box,
+            progress_label,
+            progress_bar,
+            detail_label,
+        }
     }
 
     fn build_header_bar() -> adw::HeaderBar {
@@ -398,12 +447,18 @@ impl MomentsSidebar {
     pub fn subscribe_to_bus(&self) {
         let weak = self.downgrade();
         crate::event_bus::subscribe(move |event| {
-            let Some(sidebar) = weak.upgrade() else { return };
+            let Some(sidebar) = weak.upgrade() else {
+                return;
+            };
             match event {
                 crate::app_event::AppEvent::SyncStarted => {
                     sidebar.show_sync_started();
                 }
-                crate::app_event::AppEvent::SyncProgress { assets, people, faces } => {
+                crate::app_event::AppEvent::SyncProgress {
+                    assets,
+                    people,
+                    faces,
+                } => {
                     sidebar.show_sync_progress(*assets, *people, *faces);
                 }
                 crate::app_event::AppEvent::SyncComplete { assets, .. } => {
@@ -415,7 +470,13 @@ impl MomentsSidebar {
                 crate::app_event::AppEvent::ThumbnailDownloadsComplete { total } => {
                     sidebar.show_thumbnails_complete(*total);
                 }
-                crate::app_event::AppEvent::ImportProgress { current, total, imported, skipped, failed } => {
+                crate::app_event::AppEvent::ImportProgress {
+                    current,
+                    total,
+                    imported,
+                    skipped,
+                    failed,
+                } => {
                     sidebar.show_upload_progress(*current, *total, *imported, *skipped, *failed);
                 }
                 crate::app_event::AppEvent::ImportComplete { summary } => {
@@ -543,7 +604,12 @@ impl MomentsSidebar {
     }
 
     /// Pin an album to the sidebar. Returns false if already pinned or at limit.
-    pub fn pin_album(&self, album_id: &str, album_name: &str, settings: &gtk::gio::Settings) -> bool {
+    pub fn pin_album(
+        &self,
+        album_id: &str,
+        album_name: &str,
+        settings: &gtk::gio::Settings,
+    ) -> bool {
         let imp = self.imp();
 
         // Scope the borrow — must drop before GTK/GSettings calls.
@@ -579,7 +645,10 @@ impl MomentsSidebar {
         let pos = {
             let mut ids = imp.pinned_ids.borrow_mut();
             match ids.iter().position(|id| id == album_id) {
-                Some(pos) => { ids.remove(pos); pos }
+                Some(pos) => {
+                    ids.remove(pos);
+                    pos
+                }
                 None => return,
             }
         };
@@ -604,7 +673,11 @@ impl MomentsSidebar {
 
     /// Whether the given album is currently pinned.
     pub fn is_pinned(&self, album_id: &str) -> bool {
-        self.imp().pinned_ids.borrow().iter().any(|id| id == album_id)
+        self.imp()
+            .pinned_ids
+            .borrow()
+            .iter()
+            .any(|id| id == album_id)
     }
 
     /// Update the Trash badge with the current count.
@@ -613,8 +686,8 @@ impl MomentsSidebar {
         if let Some(badge) = imp.trash_badge.get() {
             let count = imp.trash_count.get();
             if count > 0 {
-                let label = ngettext("{} item", "{} items", count)
-                    .replace("{}", &count.to_string());
+                let label =
+                    ngettext("{} item", "{} items", count).replace("{}", &count.to_string());
                 badge.set_label(&label);
                 badge.set_visible(true);
             } else {
@@ -701,7 +774,14 @@ impl MomentsSidebar {
         self.set_idle();
     }
 
-    pub fn show_upload_progress(&self, current: usize, total: usize, imported: usize, skipped: usize, failed: usize) {
+    pub fn show_upload_progress(
+        &self,
+        current: usize,
+        total: usize,
+        imported: usize,
+        skipped: usize,
+        failed: usize,
+    ) {
         let imp = self.imp();
         if let Some(label) = imp.upload_label.get() {
             label.set_text(&format!("Uploading {current}/{total}"));
@@ -779,7 +859,9 @@ impl MomentsSidebar {
 
     fn update_idle_label(&self) {
         let imp = self.imp();
-        let Some(label) = imp.idle_label.get() else { return };
+        let Some(label) = imp.idle_label.get() else {
+            return;
+        };
 
         let Some(synced_at) = imp.last_synced_at.get() else {
             label.set_text("Waiting for sync...");

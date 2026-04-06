@@ -216,11 +216,7 @@ impl LibraryFaces for StubLibrary {
     ) -> Result<Vec<MediaId>, LibraryError> {
         unimplemented!()
     }
-    async fn rename_person(
-        &self,
-        _person_id: &PersonId,
-        _name: &str,
-    ) -> Result<(), LibraryError> {
+    async fn rename_person(&self, _person_id: &PersonId, _name: &str) -> Result<(), LibraryError> {
         unimplemented!()
     }
     async fn set_person_hidden(
@@ -244,17 +240,10 @@ impl LibraryFaces for StubLibrary {
 
 #[async_trait]
 impl LibraryEditing for StubLibrary {
-    async fn get_edit_state(
-        &self,
-        _id: &MediaId,
-    ) -> Result<Option<EditState>, LibraryError> {
+    async fn get_edit_state(&self, _id: &MediaId) -> Result<Option<EditState>, LibraryError> {
         unimplemented!()
     }
-    async fn save_edit_state(
-        &self,
-        _id: &MediaId,
-        _state: &EditState,
-    ) -> Result<(), LibraryError> {
+    async fn save_edit_state(&self, _id: &MediaId, _state: &EditState) -> Result<(), LibraryError> {
         unimplemented!()
     }
     async fn revert_edits(&self, _id: &MediaId) -> Result<(), LibraryError> {

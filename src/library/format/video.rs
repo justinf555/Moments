@@ -33,9 +33,7 @@ impl FormatHandler for VideoHandler {
 fn extract_poster_frame(path: &Path) -> Result<image::DynamicImage, LibraryError> {
     let uri = format!(
         "file://{}",
-        path.canonicalize()
-            .map_err(LibraryError::Io)?
-            .display()
+        path.canonicalize().map_err(LibraryError::Io)?.display()
     );
 
     let pipeline = gst::parse::launch(&format!(
@@ -155,10 +153,10 @@ fn read_rotation_tag(appsink: &gst_app::AppSink) -> i32 {
 /// Map video rotation degrees to EXIF orientation values.
 fn rotation_to_exif_orientation(degrees: i32) -> u8 {
     match degrees {
-        90 => 6,   // Rotated 90° CW
-        180 => 3,  // Rotated 180°
-        270 => 8,  // Rotated 90° CCW (270° CW)
-        _ => 1,    // Normal
+        90 => 6,  // Rotated 90° CW
+        180 => 3, // Rotated 180°
+        270 => 8, // Rotated 90° CCW (270° CW)
+        _ => 1,   // Normal
     }
 }
 

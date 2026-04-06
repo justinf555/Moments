@@ -96,7 +96,10 @@ impl SyncHandle {
             }
         });
 
-        Self { shutdown_tx, interval_tx }
+        Self {
+            shutdown_tx,
+            interval_tx,
+        }
     }
 
     /// Signal the sync manager to stop.

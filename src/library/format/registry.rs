@@ -17,9 +17,9 @@ pub(crate) const VIDEO_EXTENSIONS: &[&str] = &[
 /// RAW formats that require `rawler` for decode. The `image` crate cannot
 /// decode these — the viewer and thumbnailer use `RawHandler` instead.
 pub(crate) const RAW_EXTENSIONS: &[&str] = &[
-    "ari", "arw", "cr2", "cr3", "crm", "crw", "dcr", "dcs", "dng", "erf", "iiq", "kdc",
-    "mef", "mos", "mrw", "nef", "nrw", "orf", "ori", "pef", "raf", "raw", "rw2", "rwl",
-    "srw", "3fr", "fff", "x3f", "qtk",
+    "ari", "arw", "cr2", "cr3", "crm", "crw", "dcr", "dcs", "dng", "erf", "iiq", "kdc", "mef",
+    "mos", "mrw", "nef", "nrw", "orf", "ori", "pef", "raf", "raw", "rw2", "rwl", "srw", "3fr",
+    "fff", "x3f", "qtk",
 ];
 
 /// Decodes image files of a specific set of formats into a [`image::DynamicImage`].
@@ -79,9 +79,10 @@ impl FormatRegistry {
             .map(|e| e.to_lowercase())
             .unwrap_or_default();
 
-        let handler = self.handlers.get(&ext).ok_or_else(|| {
-            LibraryError::Thumbnail(format!("no handler registered for .{ext}"))
-        })?;
+        let handler = self
+            .handlers
+            .get(&ext)
+            .ok_or_else(|| LibraryError::Thumbnail(format!("no handler registered for .{ext}")))?;
 
         handler.decode(path)
     }

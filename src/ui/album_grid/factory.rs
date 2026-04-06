@@ -74,10 +74,7 @@ pub fn build_factory(
                     sel.unselect_item(position);
                 }
             });
-            card.imp()
-                .checkbox_handler
-                .borrow_mut()
-                .replace(handler_id);
+            card.imp().checkbox_handler.borrow_mut().replace(handler_id);
         }
 
         // Load mosaic thumbnails.

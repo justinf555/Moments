@@ -58,7 +58,10 @@ impl MediaItemObject {
         obj.imp().is_favorite.set(item.is_favorite);
         obj.imp().trashed_at.set(item.trashed_at.unwrap_or(0));
         obj.imp().duration_ms.set(item.duration_ms.unwrap_or(0));
-        obj.imp().item.set(item).expect("item set once at construction");
+        obj.imp()
+            .item
+            .set(item)
+            .expect("item set once at construction");
         obj
     }
 

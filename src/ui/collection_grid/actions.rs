@@ -51,12 +51,7 @@ pub(super) fn wire_activation(
         let filter = MediaFilter::Person {
             person_id: person_id.clone(),
         };
-        let model = PhotoGridModel::new(
-            Arc::clone(&lib),
-            tk.clone(),
-            filter,
-            bs.clone(),
-        );
+        let model = PhotoGridModel::new(Arc::clone(&lib), tk.clone(), filter, bs.clone());
         let view = PhotoGridView::new();
         view.setup(
             Arc::clone(&lib),
@@ -132,21 +127,17 @@ pub(super) fn wire_context_menu(
         vbox.append(&rename_btn);
 
         // ── Hide/Unhide button ──
-        let hide_label = if is_hidden { gettext("Unhide") } else { gettext("Hide") };
+        let hide_label = if is_hidden {
+            gettext("Unhide")
+        } else {
+            gettext("Hide")
+        };
         let hide_btn = gtk::Button::with_label(&hide_label);
         hide_btn.add_css_class("flat");
         vbox.append(&hide_btn);
 
         // Wire rename.
-        wire_rename_button(
-            &rename_btn,
-            &popover,
-            &gv,
-            &lib,
-            &tk,
-            &store_ctx,
-            data,
-        );
+        wire_rename_button(&rename_btn, &popover, &gv, &lib, &tk, &store_ctx, data);
 
         // Wire hide/unhide.
         wire_hide_button(
@@ -163,9 +154,7 @@ pub(super) fn wire_context_menu(
 
         popover.set_child(Some(&vbox));
         popover.set_parent(&gv);
-        popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
-            x as i32, y as i32, 1, 1,
-        )));
+        popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
         popover.set_has_arrow(true);
 
         popover.connect_closed(move |p| {

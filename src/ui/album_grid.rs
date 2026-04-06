@@ -120,7 +120,10 @@ impl AlbumGridView {
         bus_sender: crate::event_bus::EventSender,
     ) {
         let imp = self.imp();
-        assert!(imp.library.set(Arc::clone(&library)).is_ok(), "setup called twice");
+        assert!(
+            imp.library.set(Arc::clone(&library)).is_ok(),
+            "setup called twice"
+        );
         assert!(imp.tokio.set(tokio.clone()).is_ok(), "setup called twice");
 
         // ── Sort state ──────────────────────────────────────────────────
@@ -194,7 +197,9 @@ impl AlbumGridView {
             let s = settings.clone();
             let st = store.clone();
             sort_action.connect_activate(move |action, param| {
-                let Some(value) = param.and_then(|v| v.get::<u32>()) else { return };
+                let Some(value) = param.and_then(|v| v.get::<u32>()) else {
+                    return;
+                };
                 action.set_state(&value.to_variant());
                 so.set(value);
                 s.set_uint("album-sort-order", value).ok();
@@ -212,13 +217,11 @@ impl AlbumGridView {
                 let lib = Arc::clone(&lib);
                 let tk = tk.clone();
                 let bs = bs.clone();
-                album_dialogs::show_create_album_dialog(
-                    btn,
-                    move |name| {
-                        let lib = Arc::clone(&lib);
-                        let tk = tk.clone();
-                        let bs = bs.clone();
-                        glib::MainContext::default().spawn_local(async move {
+                album_dialogs::show_create_album_dialog(btn, move |name| {
+                    let lib = Arc::clone(&lib);
+                    let tk = tk.clone();
+                    let bs = bs.clone();
+                    glib::MainContext::default().spawn_local(async move {
                             let n = name.clone();
                             match tk.spawn(async move { lib.create_album(&n).await }).await {
                                 Ok(Ok(id)) => {
@@ -234,13 +237,13 @@ impl AlbumGridView {
                                 Err(e) => tracing::error!("tokio join error: {e}"),
                             }
                         });
-                    },
-                );
+                });
             };
 
             let cb = connect_create.clone();
             imp.new_album_btn.connect_clicked(move |btn| cb(btn));
-            imp.empty_new_btn.connect_clicked(move |btn| connect_create(btn));
+            imp.empty_new_btn
+                .connect_clicked(move |btn| connect_create(btn));
         }
 
         // ── Wire item activation (click → open album photo grid) ────────
@@ -255,16 +258,16 @@ impl AlbumGridView {
 
             imp.grid_view.connect_activate(move |_, position| {
                 let Some(obj) = st.item(position) else { return };
-                let Some(item) = obj.downcast_ref::<AlbumItemObject>() else { return };
+                let Some(item) = obj.downcast_ref::<AlbumItemObject>() else {
+                    return;
+                };
                 let album = item.album();
                 let album_id = AlbumId::from_raw(album.id.as_str().to_owned());
                 let album_name = album.name.clone();
 
                 debug!(album_id = %album.id, name = %album_name, "album activated");
 
-                actions::open_album_drilldown(
-                    &lib, &tk, &s, &tc, &bs, &nav, album_id, &album_name,
-                );
+                actions::open_album_drilldown(&lib, &tk, &s, &tc, &bs, &nav, album_id, &album_name);
             });
         }
 
@@ -283,8 +286,7 @@ impl AlbumGridView {
 
             gesture.connect_pressed(move |gesture, _, x, y| {
                 actions::show_context_menu(
-                    &gv, &lib_ctx, &tk_ctx, &s_ctx,
-                    &tc_ctx, &bs_ctx, &nav_ctx, x, y,
+                    &gv, &lib_ctx, &tk_ctx, &s_ctx, &tc_ctx, &bs_ctx, &nav_ctx, x, y,
                 );
                 gesture.set_state(gtk::EventSequenceState::Claimed);
             });
@@ -292,7 +294,8 @@ impl AlbumGridView {
             imp.grid_view.add_controller(gesture);
         }
 
-        imp.toolbar_view.insert_action_group("album", Some(&action_group));
+        imp.toolbar_view
+            .insert_action_group("album", Some(&action_group));
 
         // ── Load albums asynchronously ──────────────────────────────────
         reload_albums(&store, &library, &tokio, Rc::clone(&sort_order));
@@ -303,15 +306,13 @@ impl AlbumGridView {
             let lib = Arc::clone(&library);
             let tk = tokio.clone();
             let so = Rc::clone(&sort_order);
-            crate::event_bus::subscribe(move |event| {
-                match event {
-                    crate::app_event::AppEvent::AlbumCreated { .. }
-                    | crate::app_event::AppEvent::AlbumRenamed { .. }
-                    | crate::app_event::AppEvent::AlbumDeleted { .. } => {
-                        reload_albums(&st, &lib, &tk, Rc::clone(&so));
-                    }
-                    _ => {}
+            crate::event_bus::subscribe(move |event| match event {
+                crate::app_event::AppEvent::AlbumCreated { .. }
+                | crate::app_event::AppEvent::AlbumRenamed { .. }
+                | crate::app_event::AppEvent::AlbumDeleted { .. } => {
+                    reload_albums(&st, &lib, &tk, Rc::clone(&so));
                 }
+                _ => {}
             });
         }
 
@@ -321,9 +322,12 @@ impl AlbumGridView {
 
     pub fn reload(&self) {
         let imp = self.imp();
-        if let (Some(store), Some(library), Some(tokio), Some(sort_order)) =
-            (imp.store.get(), imp.library.get(), imp.tokio.get(), imp.sort_order.get())
-        {
+        if let (Some(store), Some(library), Some(tokio), Some(sort_order)) = (
+            imp.store.get(),
+            imp.library.get(),
+            imp.tokio.get(),
+            imp.sort_order.get(),
+        ) {
             reload_albums(store, library, tokio, Rc::clone(sort_order));
         }
     }
@@ -336,7 +340,10 @@ fn build_sort_menu() -> gio::Menu {
     let menu = gio::Menu::new();
 
     let sort_section = gio::Menu::new();
-    sort_section.append(Some(&gettext("Most Recent Photo")), Some("album.sort(uint32 0)"));
+    sort_section.append(
+        Some(&gettext("Most Recent Photo")),
+        Some("album.sort(uint32 0)"),
+    );
     sort_section.append(Some(&gettext("Name (A–Z)")), Some("album.sort(uint32 1)"));
     sort_section.append(Some(&gettext("Date Created")), Some("album.sort(uint32 2)"));
     menu.append_section(Some(&gettext("Sort by")), &sort_section);
@@ -351,8 +358,14 @@ fn build_sort_menu() -> gio::Menu {
 /// Sort the store in-place by the given sort order.
 fn sort_store(store: &gio::ListStore, order: u32) {
     store.sort(|a, b| {
-        let a = a.downcast_ref::<AlbumItemObject>().expect("store holds AlbumItemObject").album();
-        let b = b.downcast_ref::<AlbumItemObject>().expect("store holds AlbumItemObject").album();
+        let a = a
+            .downcast_ref::<AlbumItemObject>()
+            .expect("store holds AlbumItemObject")
+            .album();
+        let b = b
+            .downcast_ref::<AlbumItemObject>()
+            .expect("store holds AlbumItemObject")
+            .album();
         sort_albums(a, b, order)
     });
 }

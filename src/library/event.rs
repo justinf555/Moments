@@ -26,7 +26,6 @@ pub enum LibraryEvent {
     Error(LibraryError),
 
     // ── Import events ─────────────────────────────────────────────────────────
-
     /// One asset was successfully copied into the library.
     AssetImported { media_id: MediaId, path: PathBuf },
 
@@ -43,7 +42,6 @@ pub enum LibraryEvent {
     ImportComplete(ImportSummary),
 
     // ── Thumbnail events ───────────────────────────────────────────────────────
-
     /// The grid thumbnail for an asset has been generated and written to disk.
     ThumbnailReady { media_id: MediaId },
 
@@ -54,7 +52,6 @@ pub enum LibraryEvent {
     ThumbnailDownloadsComplete { total: usize },
 
     // ── Album events ────────────────────────────────────────────────────────
-
     /// A new album was created.
     AlbumCreated { id: AlbumId, name: String },
 
@@ -70,15 +67,23 @@ pub enum LibraryEvent {
     // ── Sync events ─────────────────────────────────────────────────────────
 
     // ── Sync lifecycle events ────────────────────────────────────────────
-
     /// The sync stream has connected and is processing records.
     SyncStarted,
 
     /// Periodic sync progress (emitted every ack flush).
-    SyncProgress { assets: usize, people: usize, faces: usize },
+    SyncProgress {
+        assets: usize,
+        people: usize,
+        faces: usize,
+    },
 
     /// The sync stream has finished processing.
-    SyncComplete { assets: usize, people: usize, faces: usize, errors: usize },
+    SyncComplete {
+        assets: usize,
+        people: usize,
+        faces: usize,
+        errors: usize,
+    },
 
     /// A single asset was synced from the server. Used for incremental
     /// grid updates without full reload.
