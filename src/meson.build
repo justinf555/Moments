@@ -87,3 +87,50 @@ cargo_build = custom_target(
     cargo_opt, '&&', 'cp', 'src' / rust_target / meson.project_name(), '@OUTPUT@',
   ]
 )
+
+# ── Test targets (used by CI via flatpak-builder --run-tests) ──────────
+
+cargo_test_env = [
+  'CARGO_HOME=' + meson.project_build_root() / 'cargo-home',
+  'SQLX_OFFLINE=true',
+]
+
+test('clippy',
+  find_program('env'),
+  args: [
+    cargo_test_env,
+    'cargo', 'clippy',
+    cargo_opt,
+    '--all-targets',
+    '--', '-D', 'warnings',
+  ],
+  depends: cargo_build,
+  timeout: 600,
+  suite: 'lint',
+)
+
+test('unit-tests',
+  find_program('env'),
+  args: [
+    cargo_test_env,
+    'cargo', 'test',
+    cargo_opt,
+  ],
+  depends: cargo_build,
+  timeout: 600,
+  suite: 'unit',
+)
+
+test('integration-tests',
+  find_program('env'),
+  args: [
+    cargo_test_env,
+    'cargo', 'test',
+    cargo_opt,
+    '--features', 'integration-tests',
+    '--', '--test-threads=1',
+  ],
+  depends: cargo_build,
+  timeout: 900,
+  suite: 'integration',
+)
