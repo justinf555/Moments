@@ -94,7 +94,7 @@ impl Database {
         let mut tx = self.pool.begin().await.map_err(LibraryError::Db)?;
         for (table, col) in [
             ("edits", "media_id"),
-            ("asset_faces", "media_id"),
+            ("asset_faces", "asset_id"),
             ("media_metadata", "media_id"),
             ("thumbnails", "media_id"),
             ("album_media", "media_id"),
