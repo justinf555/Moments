@@ -36,23 +36,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Generate config.rs and run coverage
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: build-aux/io.github.justinf555.Moments.ci.json
+          run-tests: false
+          build-bundle: false
+          upload-artifact: false
+          keep-build-dirs: true
+          cache-key: flatpak-builder-${{ hashFiles('build-aux/io.github.justinf555.Moments.ci.json', 'Cargo.lock') }}
+
+      - name: Run coverage inside build sandbox
         run: |
-          flatpak run --share=network \
-            --filesystem="$(pwd)" \
-            --env=SQLX_OFFLINE=true \
-            --env=CARGO_HOME=/tmp/flatpak-cargo \
-            --command=bash org.gnome.Sdk//50 -c '
-              source /usr/lib/sdk/rust-stable/enable.sh
-              mkdir -p /tmp/flatpak-cargo/bin
-              export PATH=/tmp/flatpak-cargo/bin:$PATH
-              cd '"$(pwd)"'
-              meson setup _build -Dprofile=development
+          xvfb-run flatpak-builder --run flatpak_app \
+            build-aux/io.github.justinf555.Moments.ci.json \
+            bash -c '
+              export SQLX_OFFLINE=true
+              export PATH=/usr/lib/sdk/rust-stable/bin:$PATH
               cargo install cargo-llvm-cov --locked 2>/dev/null || true
-              cargo llvm-cov --lcov --output-path lcov.info
+              export PATH=$CARGO_HOME/bin:$PATH
+              cargo llvm-cov \
+                --manifest-path /run/build/moments/Cargo.toml \
+                --target-dir /run/build/moments/_flatpak_build/src \
+                --lcov --output-path /run/build/moments/lcov.info
             '
+          # Extract lcov.info from the build directory
+          find .flatpak-builder -name "lcov.info" -exec cp {} lcov.info \; 2>/dev/null || \
+            find flatpak_app -name "lcov.info" -exec cp {} lcov.info \; 2>/dev/null || true
 
       - name: Upload to Codecov
+        if: hashFiles('lcov.info') != ''
         uses: codecov/codecov-action@v5
         with:
           files: lcov.info
