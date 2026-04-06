@@ -1,10 +1,10 @@
 pub mod album_dialogs;
 pub mod album_grid;
 pub mod album_picker_dialog;
-pub mod collection_grid;
 pub mod coordinator;
 pub mod empty_library;
 pub mod import_dialog;
+pub mod people_grid;
 pub mod photo_grid;
 pub mod preferences_dialog;
 pub mod setup_window;

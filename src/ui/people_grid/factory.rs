@@ -1,26 +1,16 @@
 use gtk::prelude::*;
 
-use super::cell::CollectionGridCell;
-use super::item::CollectionItemObject;
+use super::cell::PeopleGridCell;
+use super::item::PersonItemObject;
 
-/// Whether collection thumbnails are displayed as circles or squares.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ThumbnailStyle {
-    /// Circular clipping (used for People).
-    Circular,
-}
-
-/// Build a `SignalListItemFactory` for the collection grid.
-pub fn build_factory(cell_size: i32, style: ThumbnailStyle) -> gtk::SignalListItemFactory {
+/// Build a `SignalListItemFactory` for the people grid.
+pub fn build_factory(cell_size: i32) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
 
     factory.connect_setup(move |_, obj| {
         let list_item = obj.downcast_ref::<gtk::ListItem>().expect("is ListItem");
-        let cell = CollectionGridCell::new();
-        cell.set_size_request(cell_size, cell_size + 48); // Extra height for labels.
-        if style == ThumbnailStyle::Circular {
-            cell.add_css_class("circular");
-        }
+        let cell = PeopleGridCell::new();
+        cell.set_size_request(cell_size, cell_size + 32); // Extra height for name label.
         list_item.set_child(Some(&cell));
     });
 
@@ -28,12 +18,12 @@ pub fn build_factory(cell_size: i32, style: ThumbnailStyle) -> gtk::SignalListIt
         let list_item = obj.downcast_ref::<gtk::ListItem>().expect("is ListItem");
         let cell = list_item
             .child()
-            .and_downcast::<CollectionGridCell>()
-            .expect("child is CollectionGridCell");
+            .and_downcast::<PeopleGridCell>()
+            .expect("child is PeopleGridCell");
         let item = list_item
             .item()
-            .and_downcast::<CollectionItemObject>()
-            .expect("item is CollectionItemObject");
+            .and_downcast::<PersonItemObject>()
+            .expect("item is PersonItemObject");
 
         cell.bind(&item);
 
@@ -53,14 +43,14 @@ pub fn build_factory(cell_size: i32, style: ThumbnailStyle) -> gtk::SignalListIt
         let list_item = obj.downcast_ref::<gtk::ListItem>().expect("is ListItem");
         let cell = list_item
             .child()
-            .and_downcast::<CollectionGridCell>()
-            .expect("child is CollectionGridCell");
+            .and_downcast::<PeopleGridCell>()
+            .expect("child is PeopleGridCell");
         cell.unbind();
 
         // Release texture.
         if let Some(item) = list_item
             .item()
-            .and_then(|o| o.downcast::<CollectionItemObject>().ok())
+            .and_then(|o| o.downcast::<PersonItemObject>().ok())
         {
             item.set_texture(None::<gtk::gdk::Texture>);
         }

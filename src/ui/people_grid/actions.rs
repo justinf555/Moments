@@ -13,7 +13,7 @@ use crate::ui::photo_grid::model::PhotoGridModel;
 use crate::ui::photo_grid::texture_cache::TextureCache;
 use crate::ui::photo_grid::PhotoGridView;
 
-use super::item::{CollectionItemData, CollectionItemObject};
+use super::item::{PersonItemData, PersonItemObject};
 use super::PeopleFilter;
 
 /// Wire item activation — clicking a person pushes a filtered PhotoGridView.
@@ -39,7 +39,7 @@ pub(super) fn wire_activation(
     grid_view.connect_activate(move |_, position| {
         let Some(obj) = store_ref
             .item(position)
-            .and_then(|o| o.downcast::<CollectionItemObject>().ok())
+            .and_then(|o| o.downcast::<PersonItemObject>().ok())
         else {
             return;
         };
@@ -104,7 +104,7 @@ pub(super) fn wire_context_menu(
 
         let Some(obj) = store_ctx
             .item(pos)
-            .and_then(|o| o.downcast::<CollectionItemObject>().ok())
+            .and_then(|o| o.downcast::<PersonItemObject>().ok())
         else {
             return;
         };
@@ -179,17 +179,17 @@ fn find_clicked_position(
 ) -> Option<u32> {
     let picked = grid_view.pick(x, y, gtk::PickFlags::DEFAULT)?;
 
-    // Walk up from the picked widget to find the CollectionGridCell.
+    // Walk up from the picked widget to find the PeopleGridCell.
     let mut widget = Some(picked);
     while let Some(ref w) = widget {
-        if let Some(cell) = w.downcast_ref::<super::cell::CollectionGridCell>() {
+        if let Some(cell) = w.downcast_ref::<super::cell::PeopleGridCell>() {
             let item = cell.bound_item()?;
             let target_id = item.data().id.clone();
             // Search the store for the matching item.
             for i in 0..store.n_items() {
                 if let Some(obj) = store
                     .item(i)
-                    .and_then(|o| o.downcast::<CollectionItemObject>().ok())
+                    .and_then(|o| o.downcast::<PersonItemObject>().ok())
                 {
                     if obj.data().id == target_id {
                         return Some(i);
@@ -212,7 +212,7 @@ fn wire_rename_button(
     library: &Arc<dyn Library>,
     tokio: &tokio::runtime::Handle,
     store: &gio::ListStore,
-    data: &CollectionItemData,
+    data: &PersonItemData,
 ) {
     let pop_weak = popover.downgrade();
     let lib = Arc::clone(library);
@@ -220,7 +220,6 @@ fn wire_rename_button(
     let store = store.clone();
     let person_id = data.id.clone();
     let current_name = data.name.clone();
-    let subtitle = data.subtitle.clone();
     let thumb = data.thumbnail_path.clone();
     let hidden = data.is_hidden;
     let gv_ref = grid_view.clone();
@@ -248,7 +247,6 @@ fn wire_rename_button(
         let tk = tk.clone();
         let store = store.clone();
         let pid = person_id.clone();
-        let subtitle = subtitle.clone();
         let thumb = thumb.clone();
         let gv_toast = gv_ref.clone();
         dialog.connect_response(None, move |_, response| {
@@ -264,7 +262,6 @@ fn wire_rename_button(
             let lib = Arc::clone(&lib);
             let tk = tk.clone();
             let store = store.clone();
-            let subtitle = subtitle.clone();
             let thumb = thumb.clone();
             let gv_toast = gv_toast.clone();
             debug!(person_id = %pid, name = %new_name, "renaming person");
@@ -279,10 +276,9 @@ fn wire_rename_button(
                         super::replace_item(
                             &store,
                             &pid_str,
-                            CollectionItemData {
+                            PersonItemData {
                                 id: pid_str.clone(),
                                 name: new_name,
-                                subtitle,
                                 thumbnail_path: thumb,
                                 is_hidden: hidden,
                             },

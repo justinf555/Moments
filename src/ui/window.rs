@@ -53,9 +53,9 @@ impl Default for ReloadCallback {
 }
 use crate::library::Library;
 
-use crate::ui::collection_grid::CollectionGridView;
 use crate::ui::coordinator::ContentCoordinator;
 use crate::ui::empty_library::EmptyLibraryView;
+use crate::ui::people_grid::PeopleGridView;
 use crate::ui::photo_grid::texture_cache::TextureCache;
 use crate::ui::photo_grid::{PhotoGridModel, PhotoGridView};
 use crate::ui::sidebar::MomentsSidebar;
@@ -439,7 +439,7 @@ impl MomentsWindow {
             let bs = bus_sender.clone();
             let win_weak = self.downgrade();
             coordinator.register_lazy("people", move || {
-                let view = CollectionGridView::new();
+                let view = PeopleGridView::new();
                 view.setup_people(lib, tk, s, tc, bs);
                 if let Some(win) = win_weak.upgrade() {
                     let view_clone = view.clone();
