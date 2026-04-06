@@ -141,7 +141,7 @@ impl AlbumCard {
         let album = item.album();
 
         imp.name_label.set_text(&album.name);
-        let count_text = ngettext("{} photo", "{} photos", album.media_count as u32)
+        let count_text = ngettext("{} photo", "{} photos", album.media_count)
             .replace("{}", &album.media_count.to_string());
         imp.count_label.set_text(&count_text);
 
