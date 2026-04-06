@@ -46,7 +46,9 @@ mod imp {
             self.action_button.connect_clicked(glib::clone!(
                 #[weak]
                 obj,
-                move |_| { obj.close(); }
+                move |_| {
+                    obj.close();
+                }
             ));
         }
     }
@@ -74,8 +76,7 @@ impl ImportDialog {
         imp.phase_label.set_label("Importing…");
         if total > 0 {
             imp.progress_bar.set_fraction(current as f64 / total as f64);
-            imp.counts_label
-                .set_label(&format!("{current} of {total}"));
+            imp.counts_label.set_label(&format!("{current} of {total}"));
         } else {
             imp.progress_bar.pulse();
         }

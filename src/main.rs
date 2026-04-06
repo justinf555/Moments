@@ -23,8 +23,8 @@ use moments::config;
 
 use config::{GETTEXT_PACKAGE, LOCALEDIR, PKGDATADIR};
 use gettextrs::{bind_textdomain_codeset, bindtextdomain, textdomain};
-use gtk::{gio, glib};
 use gtk::prelude::*;
+use gtk::{gio, glib};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -39,8 +39,7 @@ fn main() -> glib::ExitCode {
     // Initialise tracing — RUST_LOG controls verbosity (e.g. RUST_LOG=moments=debug)
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("moments=info")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("moments=info")),
         )
         .init();
 

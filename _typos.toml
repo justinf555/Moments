@@ -1,0 +1,7 @@
+[files]
+extend-exclude = [
+    "*.svg",
+    "Cargo.lock",
+    ".sqlx/",
+    "po/",
+]

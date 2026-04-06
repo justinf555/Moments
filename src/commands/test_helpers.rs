@@ -58,7 +58,10 @@ impl MockLibrary {
     }
 
     /// Mock that returns items from `list_media` but fails on write ops.
-    pub fn mock_with_items_then_fail(items: Vec<MediaItem>, msg: &str) -> Arc<dyn crate::library::Library> {
+    pub fn mock_with_items_then_fail(
+        items: Vec<MediaItem>,
+        msg: &str,
+    ) -> Arc<dyn crate::library::Library> {
         Arc::new(Self {
             fail_with: Mutex::new(Some(msg.to_string())),
             items: Mutex::new(items),
@@ -258,11 +261,7 @@ impl LibraryFaces for MockLibrary {
     ) -> Result<Vec<MediaId>, LibraryError> {
         unimplemented!()
     }
-    async fn rename_person(
-        &self,
-        _person_id: &PersonId,
-        _name: &str,
-    ) -> Result<(), LibraryError> {
+    async fn rename_person(&self, _person_id: &PersonId, _name: &str) -> Result<(), LibraryError> {
         unimplemented!()
     }
     async fn set_person_hidden(
@@ -286,17 +285,10 @@ impl LibraryFaces for MockLibrary {
 
 #[async_trait]
 impl LibraryEditing for MockLibrary {
-    async fn get_edit_state(
-        &self,
-        _id: &MediaId,
-    ) -> Result<Option<EditState>, LibraryError> {
+    async fn get_edit_state(&self, _id: &MediaId) -> Result<Option<EditState>, LibraryError> {
         unimplemented!()
     }
-    async fn save_edit_state(
-        &self,
-        _id: &MediaId,
-        _state: &EditState,
-    ) -> Result<(), LibraryError> {
+    async fn save_edit_state(&self, _id: &MediaId, _state: &EditState) -> Result<(), LibraryError> {
         unimplemented!()
     }
     async fn revert_edits(&self, _id: &MediaId) -> Result<(), LibraryError> {

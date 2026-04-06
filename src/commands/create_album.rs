@@ -17,13 +17,10 @@ impl CommandHandler for CreateAlbumCommand {
         matches!(event, AppEvent::CreateAlbumRequested { .. })
     }
 
-    async fn execute(
-        &self,
-        event: AppEvent,
-        library: &Arc<dyn Library>,
-        bus: &EventSender,
-    ) {
-        let AppEvent::CreateAlbumRequested { name, ids } = event else { return };
+    async fn execute(&self, event: AppEvent, library: &Arc<dyn Library>, bus: &EventSender) {
+        let AppEvent::CreateAlbumRequested { name, ids } = event else {
+            return;
+        };
         match library.create_album(&name).await {
             Ok(album_id) => {
                 debug!(album_id = %album_id, %name, "album created");
@@ -64,7 +61,10 @@ mod tests {
 
     #[tokio::test]
     async fn handles_create_album_requested() {
-        let event = AppEvent::CreateAlbumRequested { name: "Test".into(), ids: vec![] };
+        let event = AppEvent::CreateAlbumRequested {
+            name: "Test".into(),
+            ids: vec![],
+        };
         assert!(CreateAlbumCommand.handles(&event));
     }
 
@@ -77,10 +77,16 @@ mod tests {
     async fn success_without_ids_emits_album_created() {
         let lib = MockLibrary::mock();
         let (bus, rx) = crate::event_bus::EventSender::test_channel();
-        CreateAlbumCommand.execute(
-            AppEvent::CreateAlbumRequested { name: "Vacation".into(), ids: vec![] },
-            &lib, &bus,
-        ).await;
+        CreateAlbumCommand
+            .execute(
+                AppEvent::CreateAlbumRequested {
+                    name: "Vacation".into(),
+                    ids: vec![],
+                },
+                &lib,
+                &bus,
+            )
+            .await;
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, AppEvent::AlbumCreated { ref name, .. } if name == "Vacation"));
         // No AlbumMediaChanged since ids was empty.
@@ -91,13 +97,16 @@ mod tests {
     async fn success_with_ids_emits_created_and_media_changed() {
         let lib = MockLibrary::mock();
         let (bus, rx) = crate::event_bus::EventSender::test_channel();
-        CreateAlbumCommand.execute(
-            AppEvent::CreateAlbumRequested {
-                name: "Trip".into(),
-                ids: vec![MediaId::new("photo1".into())],
-            },
-            &lib, &bus,
-        ).await;
+        CreateAlbumCommand
+            .execute(
+                AppEvent::CreateAlbumRequested {
+                    name: "Trip".into(),
+                    ids: vec![MediaId::new("photo1".into())],
+                },
+                &lib,
+                &bus,
+            )
+            .await;
         let event1 = rx.try_recv().unwrap();
         assert!(matches!(event1, AppEvent::AlbumCreated { ref name, .. } if name == "Trip"));
         let event2 = rx.try_recv().unwrap();
@@ -108,20 +117,26 @@ mod tests {
     async fn failure_emits_error() {
         let lib = MockLibrary::mock_failing("db error");
         let (bus, rx) = crate::event_bus::EventSender::test_channel();
-        CreateAlbumCommand.execute(
-            AppEvent::CreateAlbumRequested { name: "Fail".into(), ids: vec![] },
-            &lib, &bus,
-        ).await;
+        CreateAlbumCommand
+            .execute(
+                AppEvent::CreateAlbumRequested {
+                    name: "Fail".into(),
+                    ids: vec![],
+                },
+                &lib,
+                &bus,
+            )
+            .await;
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, AppEvent::Error(msg) if msg.contains("create album")));
     }
 
     #[tokio::test]
     async fn create_succeeds_but_add_fails_emits_created_then_error() {
-        use std::sync::Arc;
-        use tokio::sync::Mutex;
         use crate::commands::test_helpers::MockLibrary;
         use crate::library::album::AlbumId;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
 
         let mock = Arc::new(MockLibrary {
             fail_with: Mutex::new(None),
@@ -131,13 +146,16 @@ mod tests {
         });
         let lib: Arc<dyn crate::library::Library> = mock;
         let (bus, rx) = crate::event_bus::EventSender::test_channel();
-        CreateAlbumCommand.execute(
-            AppEvent::CreateAlbumRequested {
-                name: "Trip".into(),
-                ids: vec![MediaId::new("photo1".into())],
-            },
-            &lib, &bus,
-        ).await;
+        CreateAlbumCommand
+            .execute(
+                AppEvent::CreateAlbumRequested {
+                    name: "Trip".into(),
+                    ids: vec![MediaId::new("photo1".into())],
+                },
+                &lib,
+                &bus,
+            )
+            .await;
         // Album is created first — exists even if add fails.
         let event1 = rx.try_recv().unwrap();
         assert!(matches!(event1, AppEvent::AlbumCreated { ref name, .. } if name == "Trip"));

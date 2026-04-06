@@ -132,9 +132,8 @@ impl LibraryAlbums for Database {
             return Ok(());
         }
         let placeholders = id_placeholders(media_ids.len());
-        let sql = format!(
-            "DELETE FROM album_media WHERE album_id = ? AND media_id IN ({placeholders})"
-        );
+        let sql =
+            format!("DELETE FROM album_media WHERE album_id = ? AND media_id IN ({placeholders})");
         let mut query = sqlx::query(&sql);
         query = query.bind(album_id.as_str());
         for media_id in media_ids {
@@ -158,9 +157,8 @@ impl LibraryAlbums for Database {
         limit: u32,
     ) -> Result<Vec<MediaItem>, LibraryError> {
         let rows = match cursor {
-            None => {
-                sqlx::query_as::<_, MediaRow>(
-                    "SELECT m.id, m.taken_at, m.imported_at, m.original_filename,
+            None => sqlx::query_as::<_, MediaRow>(
+                "SELECT m.id, m.taken_at, m.imported_at, m.original_filename,
                             m.width, m.height, m.orientation, m.media_type, m.is_favorite,
                             m.is_trashed, m.trashed_at, m.duration_ms
                      FROM media m
@@ -168,16 +166,14 @@ impl LibraryAlbums for Database {
                      WHERE am.album_id = ? AND m.is_trashed = 0
                      ORDER BY COALESCE(m.taken_at, 0) DESC, m.id DESC
                      LIMIT ?",
-                )
-                .bind(album_id.as_str())
-                .bind(limit as i64)
-                .fetch_all(&self.pool)
-                .await
-                .map_err(LibraryError::Db)?
-            }
-            Some(cur) => {
-                sqlx::query_as::<_, MediaRow>(
-                    "SELECT m.id, m.taken_at, m.imported_at, m.original_filename,
+            )
+            .bind(album_id.as_str())
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(LibraryError::Db)?,
+            Some(cur) => sqlx::query_as::<_, MediaRow>(
+                "SELECT m.id, m.taken_at, m.imported_at, m.original_filename,
                             m.width, m.height, m.orientation, m.media_type, m.is_favorite,
                             m.is_trashed, m.trashed_at, m.duration_ms
                      FROM media m
@@ -188,16 +184,15 @@ impl LibraryAlbums for Database {
                        AND m.is_trashed = 0
                      ORDER BY COALESCE(m.taken_at, 0) DESC, m.id DESC
                      LIMIT ?",
-                )
-                .bind(album_id.as_str())
-                .bind(cur.sort_key)
-                .bind(cur.sort_key)
-                .bind(cur.id.as_str())
-                .bind(limit as i64)
-                .fetch_all(&self.pool)
-                .await
-                .map_err(LibraryError::Db)?
-            }
+            )
+            .bind(album_id.as_str())
+            .bind(cur.sort_key)
+            .bind(cur.sort_key)
+            .bind(cur.id.as_str())
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(LibraryError::Db)?,
         };
 
         Ok(rows.into_iter().map(MediaRow::into_item).collect())
@@ -223,7 +218,10 @@ impl LibraryAlbums for Database {
         for id in media_ids {
             query = query.bind(id.as_str());
         }
-        let rows = query.fetch_all(&self.pool).await.map_err(LibraryError::Db)?;
+        let rows = query
+            .fetch_all(&self.pool)
+            .await
+            .map_err(LibraryError::Db)?;
         Ok(rows
             .into_iter()
             .map(|(aid, cnt)| (AlbumId::from_raw(aid), cnt as usize))
@@ -295,8 +293,12 @@ mod tests {
         let db = open_test_db(dir.path()).await;
         let album_id = db.create_album("To Delete").await.unwrap();
         let media_id = MediaId::new("d".repeat(64));
-        db.insert_media(&test_record(media_id.clone())).await.unwrap();
-        db.add_to_album(&album_id, std::slice::from_ref(&media_id)).await.unwrap();
+        db.insert_media(&test_record(media_id.clone()))
+            .await
+            .unwrap();
+        db.add_to_album(&album_id, std::slice::from_ref(&media_id))
+            .await
+            .unwrap();
         db.delete_album(&album_id).await.unwrap();
         assert!(db.list_albums().await.unwrap().is_empty());
         assert!(db.media_exists(&media_id).await.unwrap());
@@ -309,9 +311,15 @@ mod tests {
         let album_id = db.create_album("My Album").await.unwrap();
         let id_a = MediaId::new("a".repeat(64));
         let id_b = MediaId::new("b".repeat(64));
-        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000))).await.unwrap();
-        db.insert_media(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000))).await.unwrap();
-        db.add_to_album(&album_id, &[id_a.clone(), id_b.clone()]).await.unwrap();
+        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000)))
+            .await
+            .unwrap();
+        db.insert_media(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000)))
+            .await
+            .unwrap();
+        db.add_to_album(&album_id, &[id_a.clone(), id_b.clone()])
+            .await
+            .unwrap();
         let items = db.list_album_media(&album_id, None, 50).await.unwrap();
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].id, id_b);
@@ -324,10 +332,22 @@ mod tests {
         let db = open_test_db(dir.path()).await;
         let album_id = db.create_album("Dupes").await.unwrap();
         let media_id = MediaId::new("e".repeat(64));
-        db.insert_media(&test_record(media_id.clone())).await.unwrap();
-        db.add_to_album(&album_id, std::slice::from_ref(&media_id)).await.unwrap();
-        db.add_to_album(&album_id, std::slice::from_ref(&media_id)).await.unwrap();
-        assert_eq!(db.list_album_media(&album_id, None, 50).await.unwrap().len(), 1);
+        db.insert_media(&test_record(media_id.clone()))
+            .await
+            .unwrap();
+        db.add_to_album(&album_id, std::slice::from_ref(&media_id))
+            .await
+            .unwrap();
+        db.add_to_album(&album_id, std::slice::from_ref(&media_id))
+            .await
+            .unwrap();
+        assert_eq!(
+            db.list_album_media(&album_id, None, 50)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -337,9 +357,15 @@ mod tests {
         let album_id = db.create_album("Remove Test").await.unwrap();
         let id_a = MediaId::new("a".repeat(64));
         let id_b = MediaId::new("b".repeat(64));
-        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000))).await.unwrap();
-        db.insert_media(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000))).await.unwrap();
-        db.add_to_album(&album_id, &[id_a.clone(), id_b.clone()]).await.unwrap();
+        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000)))
+            .await
+            .unwrap();
+        db.insert_media(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000)))
+            .await
+            .unwrap();
+        db.add_to_album(&album_id, &[id_a.clone(), id_b.clone()])
+            .await
+            .unwrap();
         db.remove_from_album(&album_id, &[id_a]).await.unwrap();
         let items = db.list_album_media(&album_id, None, 50).await.unwrap();
         assert_eq!(items.len(), 1);
@@ -353,8 +379,12 @@ mod tests {
         let album_id = db.create_album("Counting").await.unwrap();
         let id_a = MediaId::new("a".repeat(64));
         let id_b = MediaId::new("b".repeat(64));
-        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000))).await.unwrap();
-        db.insert_media(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000))).await.unwrap();
+        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000)))
+            .await
+            .unwrap();
+        db.insert_media(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000)))
+            .await
+            .unwrap();
         db.add_to_album(&album_id, &[id_a, id_b]).await.unwrap();
         assert_eq!(db.list_albums().await.unwrap()[0].media_count, 2);
     }
@@ -365,9 +395,16 @@ mod tests {
         let db = open_test_db(dir.path()).await;
         let album_id = db.create_album("Cover").await.unwrap();
         let id_a = MediaId::new("a".repeat(64));
-        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000))).await.unwrap();
-        db.add_to_album(&album_id, std::slice::from_ref(&id_a)).await.unwrap();
-        assert_eq!(db.list_albums().await.unwrap()[0].cover_media_id, Some(id_a));
+        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000)))
+            .await
+            .unwrap();
+        db.add_to_album(&album_id, std::slice::from_ref(&id_a))
+            .await
+            .unwrap();
+        assert_eq!(
+            db.list_albums().await.unwrap()[0].cover_media_id,
+            Some(id_a)
+        );
     }
 
     #[tokio::test]
@@ -376,10 +413,18 @@ mod tests {
         let db = open_test_db(dir.path()).await;
         let album_id = db.create_album("Trash Test").await.unwrap();
         let media_id = MediaId::new("t".repeat(64));
-        db.insert_media(&test_record(media_id.clone())).await.unwrap();
-        db.add_to_album(&album_id, std::slice::from_ref(&media_id)).await.unwrap();
+        db.insert_media(&test_record(media_id.clone()))
+            .await
+            .unwrap();
+        db.add_to_album(&album_id, std::slice::from_ref(&media_id))
+            .await
+            .unwrap();
         db.trash(&[media_id]).await.unwrap();
-        assert!(db.list_album_media(&album_id, None, 50).await.unwrap().is_empty());
+        assert!(db
+            .list_album_media(&album_id, None, 50)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
@@ -387,17 +432,31 @@ mod tests {
         let dir = tempdir().unwrap();
         let db = open_test_db(dir.path()).await;
         let album_id = db.create_album("Paging").await.unwrap();
-        let ids: Vec<MediaId> = (1..=5).map(|i| MediaId::new(format!("{:0>64}", i))).collect();
+        let ids: Vec<MediaId> = (1..=5)
+            .map(|i| MediaId::new(format!("{:0>64}", i)))
+            .collect();
         for (i, id) in ids.iter().enumerate() {
             let ts = (5 - i as i64) * 1000;
-            db.insert_media(&record_with_taken_at(id.clone(), &format!("{i}.jpg"), Some(ts))).await.unwrap();
+            db.insert_media(&record_with_taken_at(
+                id.clone(),
+                &format!("{i}.jpg"),
+                Some(ts),
+            ))
+            .await
+            .unwrap();
         }
         db.add_to_album(&album_id, &ids).await.unwrap();
         let page1 = db.list_album_media(&album_id, None, 3).await.unwrap();
         assert_eq!(page1.len(), 3);
         let last = &page1[2];
-        let cursor = MediaCursor { sort_key: last.taken_at.unwrap_or(0), id: last.id.clone() };
-        let page2 = db.list_album_media(&album_id, Some(&cursor), 3).await.unwrap();
+        let cursor = MediaCursor {
+            sort_key: last.taken_at.unwrap_or(0),
+            id: last.id.clone(),
+        };
+        let page2 = db
+            .list_album_media(&album_id, Some(&cursor), 3)
+            .await
+            .unwrap();
         assert_eq!(page2.len(), 2);
     }
 
@@ -416,9 +475,15 @@ mod tests {
         let album_id = db.create_album("Test").await.unwrap();
         let id_a = MediaId::new("a".repeat(64));
         let id_b = MediaId::new("b".repeat(64));
-        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000))).await.unwrap();
-        db.insert_media(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000))).await.unwrap();
-        db.add_to_album(&album_id, &[id_a.clone(), id_b.clone()]).await.unwrap();
+        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000)))
+            .await
+            .unwrap();
+        db.insert_media(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000)))
+            .await
+            .unwrap();
+        db.add_to_album(&album_id, &[id_a.clone(), id_b.clone()])
+            .await
+            .unwrap();
 
         let result = db.albums_containing_media(&[id_a, id_b]).await.unwrap();
         assert_eq!(result.len(), 1);
@@ -433,10 +498,18 @@ mod tests {
         let album2 = db.create_album("Album 2").await.unwrap();
         let id_a = MediaId::new("a".repeat(64));
         let id_b = MediaId::new("b".repeat(64));
-        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000))).await.unwrap();
-        db.insert_media(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000))).await.unwrap();
-        db.add_to_album(&album1, std::slice::from_ref(&id_a)).await.unwrap();
-        db.add_to_album(&album2, &[id_a.clone(), id_b.clone()]).await.unwrap();
+        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000)))
+            .await
+            .unwrap();
+        db.insert_media(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000)))
+            .await
+            .unwrap();
+        db.add_to_album(&album1, std::slice::from_ref(&id_a))
+            .await
+            .unwrap();
+        db.add_to_album(&album2, &[id_a.clone(), id_b.clone()])
+            .await
+            .unwrap();
 
         let result = db.albums_containing_media(&[id_a, id_b]).await.unwrap();
         assert_eq!(result.len(), 2);
@@ -451,9 +524,15 @@ mod tests {
         let album_id = db.create_album("Partial").await.unwrap();
         let id_a = MediaId::new("a".repeat(64));
         let id_b = MediaId::new("b".repeat(64));
-        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000))).await.unwrap();
-        db.insert_media(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000))).await.unwrap();
-        db.add_to_album(&album_id, std::slice::from_ref(&id_a)).await.unwrap();
+        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000)))
+            .await
+            .unwrap();
+        db.insert_media(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000)))
+            .await
+            .unwrap();
+        db.add_to_album(&album_id, std::slice::from_ref(&id_a))
+            .await
+            .unwrap();
 
         let result = db.albums_containing_media(&[id_a, id_b]).await.unwrap();
         assert_eq!(result.len(), 1);
@@ -466,7 +545,9 @@ mod tests {
         let db = open_test_db(dir.path()).await;
         db.create_album("Empty Album").await.unwrap();
         let id_a = MediaId::new("a".repeat(64));
-        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000))).await.unwrap();
+        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000)))
+            .await
+            .unwrap();
 
         let result = db.albums_containing_media(&[id_a]).await.unwrap();
         assert!(result.is_empty());
@@ -478,9 +559,17 @@ mod tests {
         let db = open_test_db(dir.path()).await;
         let album_id = db.create_album("Cascade").await.unwrap();
         let media_id = MediaId::new("c".repeat(64));
-        db.insert_media(&test_record(media_id.clone())).await.unwrap();
-        db.add_to_album(&album_id, std::slice::from_ref(&media_id)).await.unwrap();
+        db.insert_media(&test_record(media_id.clone()))
+            .await
+            .unwrap();
+        db.add_to_album(&album_id, std::slice::from_ref(&media_id))
+            .await
+            .unwrap();
         db.delete_permanently(&[media_id]).await.unwrap();
-        assert!(db.list_album_media(&album_id, None, 50).await.unwrap().is_empty());
+        assert!(db
+            .list_album_media(&album_id, None, 50)
+            .await
+            .unwrap()
+            .is_empty());
     }
 }

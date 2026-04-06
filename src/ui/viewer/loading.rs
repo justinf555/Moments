@@ -19,11 +19,7 @@ impl PhotoViewer {
     /// 3. EXIF orientation is always applied before display.
     ///
     /// Falls back silently to the cached thumbnail on any error.
-    pub(super) fn start_full_res_load(
-        &self,
-        gen: u64,
-        id: crate::library::media::MediaId,
-    ) {
+    pub(super) fn start_full_res_load(&self, gen: u64, id: crate::library::media::MediaId) {
         let imp = self.imp();
         let library = Arc::clone(imp.library.get().unwrap());
         let tokio = imp.tokio.get().unwrap().clone();
@@ -49,9 +45,7 @@ impl PhotoViewer {
                         imp.spinner.set_spinning(false);
                         imp.spinner.set_visible(false);
                     }
-                    bus_sender.send(AppEvent::Error(
-                        "Could not find original photo".into(),
-                    ));
+                    bus_sender.send(AppEvent::Error("Could not find original photo".into()));
                     return;
                 }
             };
@@ -79,8 +73,7 @@ impl PhotoViewer {
 
             // Decode full-res image on a blocking thread.
             // RAW formats use rawler; standard formats use the image crate.
-            let is_raw = crate::library::format::registry::RAW_EXTENSIONS
-                .contains(&ext.as_str());
+            let is_raw = crate::library::format::registry::RAW_EXTENSIONS.contains(&ext.as_str());
             let tokio = imp.tokio.get().unwrap().clone();
             drop(viewer); // Release ref before long-running decode.
             let pixels: Option<(Vec<u8>, i32, i32)> = tokio
@@ -194,10 +187,7 @@ impl PhotoViewer {
             });
             let (state_result, path_result) = tokio::join!(state_handle, path_handle);
 
-            let path = path_result
-                .ok()
-                .and_then(|r| r.ok())
-                .flatten();
+            let path = path_result.ok().and_then(|r| r.ok()).flatten();
 
             let Some(path) = path else {
                 error!("could not resolve original path for edit session");
@@ -279,11 +269,7 @@ impl PhotoViewer {
     }
 
     /// Asynchronously fetch EXIF metadata and cache it for the info panel.
-    pub(super) fn load_metadata_async(
-        &self,
-        gen: u64,
-        id: crate::library::media::MediaId,
-    ) {
+    pub(super) fn load_metadata_async(&self, gen: u64, id: crate::library::media::MediaId) {
         let imp = self.imp();
         let library = Arc::clone(imp.library.get().unwrap());
         let tokio = imp.tokio.get().unwrap().clone();

@@ -17,13 +17,10 @@ impl CommandHandler for TrashCommand {
         matches!(event, AppEvent::TrashRequested { .. })
     }
 
-    async fn execute(
-        &self,
-        event: AppEvent,
-        library: &Arc<dyn Library>,
-        bus: &EventSender,
-    ) {
-        let AppEvent::TrashRequested { ids } = event else { return };
+    async fn execute(&self, event: AppEvent, library: &Arc<dyn Library>, bus: &EventSender) {
+        let AppEvent::TrashRequested { ids } = event else {
+            return;
+        };
         match library.trash(&ids).await {
             Ok(()) => {
                 bus.send(AppEvent::Trashed { ids });
@@ -61,7 +58,8 @@ mod tests {
         let lib = MockLibrary::mock();
         let (bus, rx) = crate::event_bus::EventSender::test_channel();
         let ids = vec![MediaId::new("abc".into())];
-        cmd.execute(AppEvent::TrashRequested { ids: ids.clone() }, &lib, &bus).await;
+        cmd.execute(AppEvent::TrashRequested { ids: ids.clone() }, &lib, &bus)
+            .await;
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, AppEvent::Trashed { ids: ref got } if got == &ids));
     }
@@ -71,7 +69,14 @@ mod tests {
         let cmd = TrashCommand;
         let lib = MockLibrary::mock_failing("db error");
         let (bus, rx) = crate::event_bus::EventSender::test_channel();
-        cmd.execute(AppEvent::TrashRequested { ids: vec![MediaId::new("x".into())] }, &lib, &bus).await;
+        cmd.execute(
+            AppEvent::TrashRequested {
+                ids: vec![MediaId::new("x".into())],
+            },
+            &lib,
+            &bus,
+        )
+        .await;
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, AppEvent::Error(msg) if msg.contains("trash")));
     }

@@ -106,7 +106,10 @@ impl CollectionGridView {
         bus_sender: crate::event_bus::EventSender,
     ) {
         let imp = self.imp();
-        assert!(imp.library.set(Arc::clone(&library)).is_ok(), "setup called twice");
+        assert!(
+            imp.library.set(Arc::clone(&library)).is_ok(),
+            "setup called twice"
+        );
 
         let filter = Rc::new(PeopleFilter {
             include_hidden: Cell::new(false),
@@ -144,12 +147,16 @@ impl CollectionGridView {
 
         // Wire item activation and context menu.
         actions::wire_activation(
-            &imp.grid_view, &store, &imp.nav_view, &library,
-            &tokio, &settings, &texture_cache, &bus_sender,
+            &imp.grid_view,
+            &store,
+            &imp.nav_view,
+            &library,
+            &tokio,
+            &settings,
+            &texture_cache,
+            &bus_sender,
         );
-        actions::wire_context_menu(
-            &imp.grid_view, &store, &library, &tokio, &filter,
-        );
+        actions::wire_context_menu(&imp.grid_view, &store, &library, &tokio, &filter);
 
         // Load people asynchronously.
         load_people(&store, &library, &filter);
@@ -187,14 +194,21 @@ fn load_people(store: &gio::ListStore, library: &Arc<dyn Library>, filter: &Rc<P
 
         match result {
             Ok(Ok(people)) => {
-                info!(count = people.len(), include_hidden, include_unnamed, "loaded people for collection grid");
+                info!(
+                    count = people.len(),
+                    include_hidden, include_unnamed, "loaded people for collection grid"
+                );
                 for person in &people {
                     let thumbnail_path = lib_thumb.person_thumbnail_path(&person.id);
 
                     let subtitle = format!(
                         "{} {}",
                         person.face_count,
-                        if person.face_count == 1 { "photo" } else { "photos" }
+                        if person.face_count == 1 {
+                            "photo"
+                        } else {
+                            "photos"
+                        }
                     );
 
                     let item = CollectionItemObject::new(CollectionItemData {
@@ -321,7 +335,11 @@ fn incremental_reload(
             let subtitle = format!(
                 "{} {}",
                 person.face_count,
-                if person.face_count == 1 { "photo" } else { "photos" }
+                if person.face_count == 1 {
+                    "photo"
+                } else {
+                    "photos"
+                }
             );
 
             let item = CollectionItemObject::new(CollectionItemData {

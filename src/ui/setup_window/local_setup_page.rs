@@ -52,8 +52,7 @@ mod imp {
 
             // Set default path subtitle
             let default = super::default_library_path();
-            self.path_row
-                .set_subtitle(&default.to_string_lossy());
+            self.path_row.set_subtitle(&default.to_string_lossy());
             *self.chosen_path.borrow_mut() = Some(default);
             self.create_button.set_sensitive(true);
 
@@ -121,12 +120,8 @@ impl MomentsLocalSetupPage {
             #[weak(rename_to = page)]
             self,
             async move {
-                let window = page
-                    .root()
-                    .and_then(|r| r.downcast::<gtk::Window>().ok());
-                let result = dialog
-                    .select_folder_future(window.as_ref())
-                    .await;
+                let window = page.root().and_then(|r| r.downcast::<gtk::Window>().ok());
+                let result = dialog.select_folder_future(window.as_ref()).await;
 
                 if let Ok(file) = result {
                     if let Some(mut path) = file.path() {

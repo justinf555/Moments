@@ -68,9 +68,7 @@ impl LibraryConfig {
             "local" => Ok(LibraryConfig::Local),
             "immich" => {
                 let immich = manifest.immich.as_ref().ok_or_else(|| {
-                    LibraryError::Bundle(
-                        "[immich] section missing from library.toml".to_string(),
-                    )
+                    LibraryError::Bundle("[immich] section missing from library.toml".to_string())
                 })?;
                 Ok(LibraryConfig::Immich {
                     server_url: immich.server_url.clone(),

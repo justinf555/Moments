@@ -9,8 +9,8 @@ use super::error::LibraryError;
 use super::event::LibraryEvent;
 use super::format::{FormatRegistry, RawHandler, StandardHandler, VideoHandler};
 use super::immich_client::ImmichClient;
-use super::importer::collect_candidates;
 use super::import::ImportSummary;
+use super::importer::collect_candidates;
 use super::media::{MediaId, MediaItem, MediaRecord, MediaType};
 
 /// Upload job for importing local files to the Immich server.
@@ -60,7 +60,10 @@ impl ImmichImportJob {
                     let path_str = path.to_string_lossy();
                     tracing::warn!(path = %path_str, "upload failed: {e}");
                     // Best-effort: status tracking is advisory.
-                    let _ = self.db.set_upload_status(&path_str, 2, Some(&e.to_string())).await;
+                    let _ = self
+                        .db
+                        .set_upload_status(&path_str, 2, Some(&e.to_string()))
+                        .await;
                     summary.failed += 1;
                 }
             }
@@ -138,7 +141,13 @@ impl ImmichImportJob {
         // Upload to Immich.
         let resp = self
             .client
-            .upload_asset(source, &device_asset_id, &file_created_at, &file_modified_at, Some(&sha1_hex))
+            .upload_asset(
+                source,
+                &device_asset_id,
+                &file_created_at,
+                &file_modified_at,
+                Some(&sha1_hex),
+            )
             .await?;
 
         if resp.status == "duplicate" {
@@ -159,7 +168,9 @@ impl ImmichImportJob {
             id: MediaId::new(resp.id.clone()),
             relative_path: format!("immich/{}", resp.id),
             original_filename: filename.to_string(),
-            file_size: std::fs::metadata(source).map(|m| m.len() as i64).unwrap_or(0),
+            file_size: std::fs::metadata(source)
+                .map(|m| m.len() as i64)
+                .unwrap_or(0),
             imported_at: now,
             media_type,
             taken_at: None, // Server extracts EXIF

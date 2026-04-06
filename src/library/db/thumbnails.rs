@@ -8,13 +8,11 @@ impl Database {
     /// Insert a `Pending` thumbnail row. No-op if a row already exists.
     pub async fn insert_thumbnail_pending(&self, id: &MediaId) -> Result<(), LibraryError> {
         let id_str = id.as_str();
-        sqlx::query(
-            "INSERT OR IGNORE INTO thumbnails (media_id, status) VALUES (?, 0)",
-        )
-        .bind(id_str)
-        .execute(&self.pool)
-        .await
-        .map_err(LibraryError::Db)?;
+        sqlx::query("INSERT OR IGNORE INTO thumbnails (media_id, status) VALUES (?, 0)")
+            .bind(id_str)
+            .execute(&self.pool)
+            .await
+            .map_err(LibraryError::Db)?;
         Ok(())
     }
 

@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use tokio::runtime::Handle;
 use tracing::{debug, info, instrument};
 
+use crate::library::album::{Album, AlbumId, LibraryAlbums};
 use crate::library::bundle::Bundle;
 use crate::library::db::Database;
 use crate::library::editing::{EditState, LibraryEditing};
@@ -15,7 +16,6 @@ use crate::library::faces::{LibraryFaces, Person, PersonId};
 use crate::library::format::{FormatRegistry, RawHandler, StandardHandler, VideoHandler};
 use crate::library::import::LibraryImport;
 use crate::library::importer::ImportJob;
-use crate::library::album::{Album, AlbumId, LibraryAlbums};
 use crate::library::media::{
     LibraryMedia, MediaCursor, MediaFilter, MediaId, MediaItem, MediaMetadataRecord, MediaRecord,
 };
@@ -77,8 +77,8 @@ impl LibraryStorage for LocalLibrary {
                 gtk::gio::SettingsSchemaSource::default()
                     .and_then(|src| src.lookup(crate::config::APP_ID, true))
                     .map(|_| {
-                        gtk::gio::Settings::new(crate::config::APP_ID)
-                            .uint("trash-retention-days") as i64
+                        gtk::gio::Settings::new(crate::config::APP_ID).uint("trash-retention-days")
+                            as i64
                     })
                     .unwrap_or(30)
             };
@@ -98,7 +98,8 @@ impl LibraryStorage for LocalLibrary {
                                 let _ = tokio::fs::remove_file(&path).await;
                             }
                             // Remove thumbnail file.
-                            let thumb = crate::library::thumbnail::sharded_thumbnail_path(&thumbnails, id);
+                            let thumb =
+                                crate::library::thumbnail::sharded_thumbnail_path(&thumbnails, id);
                             // Best-effort: thumbnail may already be gone.
                             let _ = tokio::fs::remove_file(&thumb).await;
                         }
@@ -184,11 +185,7 @@ impl LibraryMedia for LocalLibrary {
         self.db.media_metadata(id).await
     }
 
-    async fn set_favorite(
-        &self,
-        ids: &[MediaId],
-        favorite: bool,
-    ) -> Result<(), LibraryError> {
+    async fn set_favorite(&self, ids: &[MediaId], favorite: bool) -> Result<(), LibraryError> {
         self.db.set_favorite(ids, favorite).await
     }
 
@@ -230,7 +227,10 @@ impl LibraryMedia for LocalLibrary {
 
 #[async_trait]
 impl LibraryViewer for LocalLibrary {
-    async fn original_path(&self, id: &MediaId) -> Result<Option<std::path::PathBuf>, LibraryError> {
+    async fn original_path(
+        &self,
+        id: &MediaId,
+    ) -> Result<Option<std::path::PathBuf>, LibraryError> {
         let relative = self.db.media_relative_path(id).await?;
         Ok(relative.map(|rel| self.bundle.originals.join(rel)))
     }
@@ -252,7 +252,9 @@ impl LibraryThumbnail for LocalLibrary {
         file_path: &str,
         generated_at: i64,
     ) -> Result<(), LibraryError> {
-        self.db.set_thumbnail_ready(id, file_path, generated_at).await
+        self.db
+            .set_thumbnail_ready(id, file_path, generated_at)
+            .await
     }
 
     async fn set_thumbnail_failed(&self, id: &MediaId) -> Result<(), LibraryError> {
@@ -343,11 +345,7 @@ impl LibraryFaces for LocalLibrary {
         Ok(Vec::new())
     }
 
-    async fn rename_person(
-        &self,
-        _person_id: &PersonId,
-        _name: &str,
-    ) -> Result<(), LibraryError> {
+    async fn rename_person(&self, _person_id: &PersonId, _name: &str) -> Result<(), LibraryError> {
         Ok(())
     }
 

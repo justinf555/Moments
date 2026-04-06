@@ -145,8 +145,7 @@ fn generate_thumbnail(
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
         .unwrap_or_default();
-    let skip_orientation = formats.is_video(&ext)
-        || matches!(ext.as_str(), "heic" | "heif");
+    let skip_orientation = formats.is_video(&ext) || matches!(ext.as_str(), "heic" | "heif");
     let img = if skip_orientation {
         img
     } else {
@@ -251,7 +250,10 @@ mod tests {
 
         // Thumbnail file exists.
         let thumb_path = sharded_thumbnail_path(&thumbnails_dir, &id);
-        assert!(thumb_path.exists(), "thumbnail file not found at {thumb_path:?}");
+        assert!(
+            thumb_path.exists(),
+            "thumbnail file not found at {thumb_path:?}"
+        );
 
         // Event was emitted.
         let events: Vec<_> = rx.try_iter().collect();
@@ -312,6 +314,9 @@ mod tests {
 
         // DB row should be marked Failed.
         let status = db.thumbnail_status(&id).await.unwrap();
-        assert_eq!(status, Some(crate::library::thumbnail::ThumbnailStatus::Failed));
+        assert_eq!(
+            status,
+            Some(crate::library::thumbnail::ThumbnailStatus::Failed)
+        );
     }
 }

@@ -5,9 +5,9 @@ use adw::subclass::prelude::*;
 use gtk::{gdk, gio, glib};
 use tracing::debug;
 
-use crate::library::media::{MediaId, MediaMetadataRecord};
 use crate::app_event::AppEvent;
 use crate::event_bus::EventSender;
+use crate::library::media::{MediaId, MediaMetadataRecord};
 use crate::library::Library;
 use crate::ui::photo_grid::item::MediaItemObject;
 use crate::ui::viewer::info_panel::InfoPanel;
@@ -272,7 +272,11 @@ impl VideoViewer {
         // Skip image items — they belong in PhotoViewer.
         while idx > 0 {
             idx -= 1;
-            if items.get(idx).map(|o| o.item().media_type == crate::library::media::MediaType::Video).unwrap_or(false) {
+            if items
+                .get(idx)
+                .map(|o| o.item().media_type == crate::library::media::MediaType::Video)
+                .unwrap_or(false)
+            {
                 drop(items);
                 self.show_at(idx);
                 return;
@@ -288,7 +292,11 @@ impl VideoViewer {
         // Skip image items — they belong in PhotoViewer.
         while idx + 1 < len {
             idx += 1;
-            if items.get(idx).map(|o| o.item().media_type == crate::library::media::MediaType::Video).unwrap_or(false) {
+            if items
+                .get(idx)
+                .map(|o| o.item().media_type == crate::library::media::MediaType::Video)
+                .unwrap_or(false)
+            {
                 drop(items);
                 self.show_at(idx);
                 return;
@@ -337,10 +345,13 @@ impl VideoViewer {
                 let id = obj.item().id.clone();
                 *imp.pending_fav.borrow_mut() = Some((id.clone(), was_fav));
 
-                imp.bus_sender.get().unwrap().send(AppEvent::FavoriteRequested {
-                    ids: vec![id],
-                    state: new_fav,
-                });
+                imp.bus_sender
+                    .get()
+                    .unwrap()
+                    .send(AppEvent::FavoriteRequested {
+                        ids: vec![id],
+                        state: new_fav,
+                    });
             });
         }
 
@@ -445,7 +456,9 @@ fn wire_overflow_menu(popover: &gtk::Popover, viewer: &VideoViewer) {
         let weak = viewer.downgrade();
         let pop = popover.downgrade();
         btn.connect_clicked(move |_| {
-            if let Some(p) = pop.upgrade() { p.popdown(); }
+            if let Some(p) = pop.upgrade() {
+                p.popdown();
+            }
             let Some(viewer) = weak.upgrade() else { return };
             let imp = viewer.imp();
             let id = {
@@ -469,7 +482,9 @@ fn wire_overflow_menu(popover: &gtk::Popover, viewer: &VideoViewer) {
         if let Some(btn) = crate::ui::viewer::find_menu_button(popover, name) {
             let pop = popover.downgrade();
             btn.connect_clicked(move |_| {
-                if let Some(p) = pop.upgrade() { p.popdown(); }
+                if let Some(p) = pop.upgrade() {
+                    p.popdown();
+                }
             });
         }
     }
@@ -479,7 +494,9 @@ fn wire_overflow_menu(popover: &gtk::Popover, viewer: &VideoViewer) {
         let weak = viewer.downgrade();
         let pop = popover.downgrade();
         btn.connect_clicked(move |_| {
-            if let Some(p) = pop.upgrade() { p.popdown(); }
+            if let Some(p) = pop.upgrade() {
+                p.popdown();
+            }
             let Some(viewer) = weak.upgrade() else { return };
             let imp = viewer.imp();
             let id = {
@@ -488,7 +505,10 @@ fn wire_overflow_menu(popover: &gtk::Popover, viewer: &VideoViewer) {
                 items.get(idx).map(|obj| obj.item().id.clone())
             };
             let Some(id) = id else { return };
-            imp.bus_sender.get().unwrap().send(AppEvent::TrashRequested { ids: vec![id] });
+            imp.bus_sender
+                .get()
+                .unwrap()
+                .send(AppEvent::TrashRequested { ids: vec![id] });
             if let Some(nav_view) = viewer
                 .parent()
                 .and_then(|p| p.downcast::<adw::NavigationView>().ok())

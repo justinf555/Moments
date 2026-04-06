@@ -3,7 +3,6 @@ use std::sync::Arc;
 use crate::event_bus::EventBus;
 use crate::library::Library;
 
-use super::CommandHandler;
 use super::add_to_album::AddToAlbumCommand;
 use super::create_album::CreateAlbumCommand;
 use super::delete::DeleteCommand;
@@ -14,6 +13,7 @@ use super::remove_from_album::RemoveFromAlbumCommand;
 use super::restore::RestoreCommand;
 use super::restore_all_trash::RestoreAllTrashCommand;
 use super::trash::TrashCommand;
+use super::CommandHandler;
 
 /// Routes command events to their handlers on the Tokio runtime.
 ///
@@ -26,11 +26,7 @@ use super::trash::TrashCommand;
 pub struct CommandDispatcher;
 
 impl CommandDispatcher {
-    pub fn new(
-        library: Arc<dyn Library>,
-        tokio: tokio::runtime::Handle,
-        bus: &EventBus,
-    ) -> Self {
+    pub fn new(library: Arc<dyn Library>, tokio: tokio::runtime::Handle, bus: &EventBus) -> Self {
         let handlers: Vec<Arc<dyn CommandHandler>> = vec![
             Arc::new(TrashCommand),
             Arc::new(RestoreCommand),

@@ -13,8 +13,8 @@ pub mod format;
 pub mod immich_client;
 pub mod immich_importer;
 pub mod import;
-pub mod keyring;
 pub mod importer;
+pub mod keyring;
 pub mod media;
 pub mod providers;
 pub mod storage;
@@ -65,16 +65,16 @@ pub trait Library:
 }
 
 impl<
-    T: LibraryStorage
-        + LibraryImport
-        + LibraryMedia
-        + LibraryThumbnail
-        + LibraryViewer
-        + LibraryAlbums
-        + LibraryFaces
-        + LibraryEditing
-        + Send
-        + Sync,
-> Library for T
+        T: LibraryStorage
+            + LibraryImport
+            + LibraryMedia
+            + LibraryThumbnail
+            + LibraryViewer
+            + LibraryAlbums
+            + LibraryFaces
+            + LibraryEditing
+            + Send
+            + Sync,
+    > Library for T
 {
 }

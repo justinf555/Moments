@@ -58,9 +58,7 @@ pub fn build_factory(
     let decode_semaphore = Arc::new(Semaphore::new(max_decode_workers()));
 
     factory.connect_setup(move |_, obj| {
-        let list_item = obj
-            .downcast_ref::<gtk::ListItem>()
-            .expect("is ListItem");
+        let list_item = obj.downcast_ref::<gtk::ListItem>().expect("is ListItem");
         let cell = PhotoGridCell::new();
         cell.set_size_request(cell_size, cell_size);
         list_item.set_child(Some(&cell));
@@ -84,9 +82,7 @@ pub fn build_factory(
         #[strong]
         enter_selection,
         move |_, obj| {
-            let list_item = obj
-                .downcast_ref::<gtk::ListItem>()
-                .expect("is ListItem");
+            let list_item = obj.downcast_ref::<gtk::ListItem>().expect("is ListItem");
             let cell = list_item
                 .child()
                 .and_downcast::<PhotoGridCell>()
@@ -149,13 +145,15 @@ pub fn build_factory(
                         let result = tk
                             .spawn(async move {
                                 let _permit = sem.acquire().await.ok()?;
-                                tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, u32, u32)> {
-                                    let data = std::fs::read(&path).ok()?;
-                                    let img = image::load_from_memory(&data).ok()?;
-                                    let rgba = img.to_rgba8();
-                                    let (w, h) = rgba.dimensions();
-                                    Some((rgba.into_raw(), w, h))
-                                })
+                                tokio::task::spawn_blocking(
+                                    move || -> Option<(Vec<u8>, u32, u32)> {
+                                        let data = std::fs::read(&path).ok()?;
+                                        let img = image::load_from_memory(&data).ok()?;
+                                        let rgba = img.to_rgba8();
+                                        let (w, h) = rgba.dimensions();
+                                        Some((rgba.into_raw(), w, h))
+                                    },
+                                )
                                 .await
                                 .ok()?
                             })
@@ -197,7 +195,9 @@ pub fn build_factory(
                 let item_weak = item.downgrade();
                 let tx = bus_sender.clone();
                 let handler_id = star_btn.connect_clicked(move |_| {
-                    let Some(item) = item_weak.upgrade() else { return };
+                    let Some(item) = item_weak.upgrade() else {
+                        return;
+                    };
                     let new_fav = !item.is_favorite();
                     // Optimistic: update the current item immediately.
                     item.set_is_favorite(new_fav);
@@ -230,18 +230,13 @@ pub fn build_factory(
                         sel.unselect_item(position);
                     }
                 });
-                cell.imp()
-                    .checkbox_handler
-                    .borrow_mut()
-                    .replace(handler_id);
+                cell.imp().checkbox_handler.borrow_mut().replace(handler_id);
             }
         }
     ));
 
     factory.connect_unbind(|_, obj| {
-        let list_item = obj
-            .downcast_ref::<gtk::ListItem>()
-            .expect("is ListItem");
+        let list_item = obj.downcast_ref::<gtk::ListItem>().expect("is ListItem");
         let cell = list_item
             .child()
             .and_downcast::<PhotoGridCell>()
@@ -267,9 +262,7 @@ pub fn build_factory(
     });
 
     factory.connect_teardown(|_, obj| {
-        let list_item = obj
-            .downcast_ref::<gtk::ListItem>()
-            .expect("is ListItem");
+        let list_item = obj.downcast_ref::<gtk::ListItem>().expect("is ListItem");
         list_item.set_child(None::<&gtk::Widget>);
     });
 

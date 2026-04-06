@@ -120,7 +120,11 @@ mod tests {
     #[test]
     fn extensions_are_lowercase() {
         for ext in RawHandler.extensions() {
-            assert_eq!(*ext, ext.to_lowercase(), "extension {ext:?} is not lowercase");
+            assert_eq!(
+                *ext,
+                ext.to_lowercase(),
+                "extension {ext:?} is not lowercase"
+            );
         }
     }
 

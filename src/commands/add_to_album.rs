@@ -17,13 +17,10 @@ impl CommandHandler for AddToAlbumCommand {
         matches!(event, AppEvent::AddToAlbumRequested { .. })
     }
 
-    async fn execute(
-        &self,
-        event: AppEvent,
-        library: &Arc<dyn Library>,
-        bus: &EventSender,
-    ) {
-        let AppEvent::AddToAlbumRequested { album_id, ids } = event else { return };
+    async fn execute(&self, event: AppEvent, library: &Arc<dyn Library>, bus: &EventSender) {
+        let AppEvent::AddToAlbumRequested { album_id, ids } = event else {
+            return;
+        };
         match library.add_to_album(&album_id, &ids).await {
             Ok(()) => {
                 bus.send(AppEvent::AlbumMediaChanged { album_id });
@@ -62,22 +59,36 @@ mod tests {
         let lib = MockLibrary::mock();
         let (bus, rx) = crate::event_bus::EventSender::test_channel();
         let album_id = AlbumId::new();
-        AddToAlbumCommand.execute(
-            AppEvent::AddToAlbumRequested { album_id: album_id.clone(), ids: vec![MediaId::new("a".into())] },
-            &lib, &bus,
-        ).await;
+        AddToAlbumCommand
+            .execute(
+                AppEvent::AddToAlbumRequested {
+                    album_id: album_id.clone(),
+                    ids: vec![MediaId::new("a".into())],
+                },
+                &lib,
+                &bus,
+            )
+            .await;
         let event = rx.try_recv().unwrap();
-        assert!(matches!(event, AppEvent::AlbumMediaChanged { album_id: ref got } if got == &album_id));
+        assert!(
+            matches!(event, AppEvent::AlbumMediaChanged { album_id: ref got } if got == &album_id)
+        );
     }
 
     #[tokio::test]
     async fn failure_emits_error() {
         let lib = MockLibrary::mock_failing("db error");
         let (bus, rx) = crate::event_bus::EventSender::test_channel();
-        AddToAlbumCommand.execute(
-            AppEvent::AddToAlbumRequested { album_id: AlbumId::new(), ids: vec![] },
-            &lib, &bus,
-        ).await;
+        AddToAlbumCommand
+            .execute(
+                AppEvent::AddToAlbumRequested {
+                    album_id: AlbumId::new(),
+                    ids: vec![],
+                },
+                &lib,
+                &bus,
+            )
+            .await;
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, AppEvent::Error(msg) if msg.contains("add to album")));
     }

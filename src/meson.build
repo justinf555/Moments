@@ -95,6 +95,18 @@ cargo_test_env = [
   'SQLX_OFFLINE=true',
 ]
 
+test('fmt',
+  find_program('env'),
+  args: [
+    cargo_test_env,
+    'cargo', 'fmt',
+    '--manifest-path', meson.project_source_root() / 'Cargo.toml',
+    '--', '--check',
+  ],
+  timeout: 60,
+  suite: 'lint',
+)
+
 test('clippy',
   find_program('env'),
   args: [

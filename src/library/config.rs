@@ -47,7 +47,11 @@ mod tests {
             server_url: "http://immich.local:2283".to_string(),
             access_token: "test-token".to_string(),
         };
-        if let LibraryConfig::Immich { server_url, access_token } = config {
+        if let LibraryConfig::Immich {
+            server_url,
+            access_token,
+        } = config
+        {
             assert_eq!(server_url, "http://immich.local:2283");
             assert_eq!(access_token, "test-token");
         } else {

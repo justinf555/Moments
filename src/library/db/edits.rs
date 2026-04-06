@@ -8,18 +8,17 @@ impl Database {
     /// Get the current edit state for a media item.
     pub async fn get_edit_state(&self, id: &MediaId) -> Result<Option<EditState>, LibraryError> {
         let id_str = id.as_str();
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT edit_json FROM edits WHERE media_id = ?",
-        )
-        .bind(id_str)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(LibraryError::Db)?;
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT edit_json FROM edits WHERE media_id = ?")
+                .bind(id_str)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(LibraryError::Db)?;
 
         match row {
             Some((json,)) => {
-                let state: EditState =
-                    serde_json::from_str(&json).map_err(|e| LibraryError::Runtime(e.to_string()))?;
+                let state: EditState = serde_json::from_str(&json)
+                    .map_err(|e| LibraryError::Runtime(e.to_string()))?;
                 Ok(Some(state))
             }
             None => Ok(None),

@@ -32,11 +32,7 @@ struct NewAlbumWidgets {
     create_button: gtk::Button,
 }
 
-pub fn present(
-    data: AlbumPickerData,
-    bus_sender: EventSender,
-    parent: &gtk::Widget,
-) {
+pub fn present(data: AlbumPickerData, bus_sender: EventSender, parent: &gtk::Widget) {
     let total_selected = data.media_ids.len();
     let is_empty = data.albums.is_empty();
 
@@ -216,7 +212,9 @@ fn connect_signals(
     let create_add_btn = &new_album.create_button;
     {
         let d = dialog.clone();
-        cancel_btn.connect_clicked(move |_| { d.close(); });
+        cancel_btn.connect_clicked(move |_| {
+            d.close();
+        });
     }
 
     {
@@ -268,8 +266,8 @@ fn connect_signals(
 
             for r in &i.rows {
                 r.update_search_highlight(&query);
-                let matches = lower_query.is_empty()
-                    || r.album_name.to_lowercase().contains(&lower_query);
+                let matches =
+                    lower_query.is_empty() || r.album_name.to_lowercase().contains(&lower_query);
                 r.row.set_visible(matches);
             }
         });
@@ -329,9 +327,7 @@ fn connect_signals(
         let d = dialog.clone();
         let i = Rc::clone(inner);
         empty_create_btn.connect_clicked(move |_| {
-            let alert = adw::AlertDialog::builder()
-                .heading("New Album")
-                .build();
+            let alert = adw::AlertDialog::builder().heading("New Album").build();
             alert.add_response("cancel", "Cancel");
             alert.add_response("create", "Create & add");
             alert.set_response_appearance("create", adw::ResponseAppearance::Suggested);

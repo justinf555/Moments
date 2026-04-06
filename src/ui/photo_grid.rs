@@ -94,10 +94,8 @@ mod photo_grid_imp {
             self.parent_constructed();
             let obj = self.obj();
 
-            let grid_view = gtk::GridView::new(
-                None::<gtk::NoSelection>,
-                None::<gtk::SignalListItemFactory>,
-            );
+            let grid_view =
+                gtk::GridView::new(None::<gtk::NoSelection>, None::<gtk::SignalListItemFactory>);
             grid_view.set_min_columns(2);
             grid_view.set_max_columns(20);
 
@@ -260,13 +258,19 @@ impl PhotoGrid {
             let stack = stack.clone();
             let store = model.store().clone();
             Rc::new(move || {
-                let name = if store.n_items() == 0 { "empty" } else { "grid" };
+                let name = if store.n_items() == 0 {
+                    "empty"
+                } else {
+                    "grid"
+                };
                 stack.set_visible_child_name(name);
             })
         };
         {
             let update = Rc::clone(&update_empty);
-            model.store().connect_items_changed(move |_, _, _, _| update());
+            model
+                .store()
+                .connect_items_changed(move |_, _, _, _| update());
         }
 
         model.load_more();
@@ -418,10 +422,19 @@ impl PhotoGridView {
         bus_sender: crate::event_bus::EventSender,
     ) {
         let imp = self.imp();
-        assert!(imp.library.set(Arc::clone(&library)).is_ok(), "setup called twice");
+        assert!(
+            imp.library.set(Arc::clone(&library)).is_ok(),
+            "setup called twice"
+        );
         assert!(imp.tokio.set(tokio.clone()).is_ok(), "setup called twice");
-        assert!(imp.bus_sender.set(bus_sender.clone()).is_ok(), "setup called twice");
-        assert!(imp.texture_cache.set(Rc::clone(&texture_cache)).is_ok(), "setup called twice");
+        assert!(
+            imp.bus_sender.set(bus_sender.clone()).is_ok(),
+            "setup called twice"
+        );
+        assert!(
+            imp.texture_cache.set(Rc::clone(&texture_cache)).is_ok(),
+            "setup called twice"
+        );
 
         // Viewers.
         let photo_viewer = PhotoViewer::new();
@@ -432,7 +445,8 @@ impl PhotoGridView {
         assert!(imp.video_viewer.set(video_viewer).is_ok());
 
         // Zoom level from settings.
-        imp.photo_grid.set_zoom_level(settings.uint("zoom-level") as usize);
+        imp.photo_grid
+            .set_zoom_level(settings.uint("zoom-level") as usize);
 
         // Stop zoom button clicks from propagating to HeaderBar drag gesture.
         let controller = gtk::EventControllerLegacy::new();
@@ -470,9 +484,7 @@ impl PhotoGridView {
         let zoom_in_action = gio::SimpleAction::new("zoom-in", None);
         let zoom_out_action = gio::SimpleAction::new("zoom-out", None);
 
-        zoom_in_action.set_enabled(
-            imp.photo_grid.imp().zoom_level.get() + 1 < ZOOM_SIZES.len(),
-        );
+        zoom_in_action.set_enabled(imp.photo_grid.imp().zoom_level.get() + 1 < ZOOM_SIZES.len());
         zoom_out_action.set_enabled(imp.photo_grid.imp().zoom_level.get() > 0);
 
         {
@@ -525,7 +537,8 @@ impl PhotoGridView {
                 grid_view.add_css_class("selection-active");
                 let mut child = grid_view.first_child();
                 while let Some(c) = child {
-                    if let Some(cell) = c.first_child()
+                    if let Some(cell) = c
+                        .first_child()
                         .and_then(|w| w.downcast::<cell::PhotoGridCell>().ok())
                     {
                         cell.set_selection_mode(true);
@@ -558,7 +571,8 @@ impl PhotoGridView {
                 grid_view.remove_css_class("selection-active");
                 let mut child = grid_view.first_child();
                 while let Some(c) = child {
-                    if let Some(cell) = c.first_child()
+                    if let Some(cell) = c
+                        .first_child()
                         .and_then(|w| w.downcast::<cell::PhotoGridCell>().ok())
                     {
                         cell.set_selection_mode(false);
@@ -600,7 +614,8 @@ impl PhotoGridView {
         assert!(imp.exit_selection.set(exit_selection).is_ok());
 
         // Install view actions on the nav_view.
-        imp.nav_view.insert_action_group("view", Some(&action_group));
+        imp.nav_view
+            .insert_action_group("view", Some(&action_group));
     }
 
     pub fn set_model(&self, model: PhotoGridModel) {
@@ -635,13 +650,14 @@ impl PhotoGridView {
 
                     tracing::debug!(index, ?media_type, %filename, "grid item activated");
 
-                    let (tag, nav_page): (&str, adw::NavigationPage) = if media_type == MediaType::Video {
-                        video_viewer.show(items, index);
-                        ("video-viewer", video_viewer.clone().upcast())
-                    } else {
-                        photo_viewer.show(items, index);
-                        ("viewer", photo_viewer.clone().upcast())
-                    };
+                    let (tag, nav_page): (&str, adw::NavigationPage) =
+                        if media_type == MediaType::Video {
+                            video_viewer.show(items, index);
+                            ("video-viewer", video_viewer.clone().upcast())
+                        } else {
+                            photo_viewer.show(items, index);
+                            ("viewer", photo_viewer.clone().upcast())
+                        };
 
                     let visible_tag = nav_view
                         .visible_page()
@@ -675,11 +691,7 @@ impl PhotoGridView {
             bar_box.remove(&child);
         }
 
-        let bar_buttons = action_bar::build_for_filter(
-            &filter,
-            &ctx.selection,
-            &bus_sender,
-        );
+        let bar_buttons = action_bar::build_for_filter(&filter, &ctx.selection, &bus_sender);
         bar_box.append(&bar_buttons.container);
         *imp.fav_btn.borrow_mut() = bar_buttons.fav_btn;
 
@@ -703,7 +715,9 @@ impl PhotoGridView {
             update_trash_buttons();
             {
                 let update = Rc::clone(&update_trash_buttons);
-                model.store().connect_items_changed(move |_, _, _, _| update());
+                model
+                    .store()
+                    .connect_items_changed(move |_, _, _, _| update());
             }
 
             {
@@ -713,7 +727,9 @@ impl PhotoGridView {
                     let win = b.root().and_then(|r| r.downcast::<gtk::Window>().ok());
                     let dialog = adw::AlertDialog::new(
                         Some(&gettext("Restore all photos?")),
-                        Some(&gettext("All trashed photos will be moved back to the library.")),
+                        Some(&gettext(
+                            "All trashed photos will be moved back to the library.",
+                        )),
                     );
                     dialog.add_response("cancel", &gettext("Cancel"));
                     dialog.add_response("restore", &gettext("Restore All"));
@@ -758,17 +774,15 @@ impl PhotoGridView {
         // Subscribe for exit-selection on result events.
         {
             let exit = imp.exit_selection.get().unwrap().clone();
-            crate::event_bus::subscribe(move |event| {
-                match event {
-                    AppEvent::Trashed { .. }
-                    | AppEvent::Deleted { .. }
-                    | AppEvent::Restored { .. }
-                    | AppEvent::AlbumMediaChanged { .. }
-                    | AppEvent::FavoriteChanged { .. } => {
-                        exit.activate(None);
-                    }
-                    _ => {}
+            crate::event_bus::subscribe(move |event| match event {
+                AppEvent::Trashed { .. }
+                | AppEvent::Deleted { .. }
+                | AppEvent::Restored { .. }
+                | AppEvent::AlbumMediaChanged { .. }
+                | AppEvent::FavoriteChanged { .. } => {
+                    exit.activate(None);
                 }
+                _ => {}
             });
         }
 
@@ -809,7 +823,9 @@ impl PhotoGridView {
 }
 
 /// Collect media IDs from the current selection.
-pub(super) fn collect_selected_ids(selection: &gtk::MultiSelection) -> Vec<crate::library::media::MediaId> {
+pub(super) fn collect_selected_ids(
+    selection: &gtk::MultiSelection,
+) -> Vec<crate::library::media::MediaId> {
     let bitset = selection.selection();
     let n = bitset.size();
     let mut ids = Vec::with_capacity(n as usize);
@@ -826,10 +842,7 @@ pub(super) fn collect_selected_ids(selection: &gtk::MultiSelection) -> Vec<crate
 }
 
 /// Configure the empty state status page for the given filter.
-fn set_empty_state_for_filter(
-    page: &adw::StatusPage,
-    filter: &crate::library::media::MediaFilter,
-) {
+fn set_empty_state_for_filter(page: &adw::StatusPage, filter: &crate::library::media::MediaFilter) {
     use crate::library::media::MediaFilter;
     let (icon, title, description) = match filter {
         MediaFilter::All => (

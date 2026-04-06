@@ -184,30 +184,20 @@ impl Database {
     }
 
     /// Mark a sync audit record as completed (just before acking).
-    pub async fn complete_sync_audit(
-        &self,
-        row_id: i64,
-        action: &str,
-    ) -> Result<(), LibraryError> {
+    pub async fn complete_sync_audit(&self, row_id: i64, action: &str) -> Result<(), LibraryError> {
         let now = chrono::Utc::now().to_rfc3339();
-        sqlx::query(
-            "UPDATE sync_audit SET completed_at = ?, action = ? WHERE id = ?",
-        )
-        .bind(&now)
-        .bind(action)
-        .bind(row_id)
-        .execute(&self.pool)
-        .await
-        .map_err(LibraryError::Db)?;
+        sqlx::query("UPDATE sync_audit SET completed_at = ?, action = ? WHERE id = ?")
+            .bind(&now)
+            .bind(action)
+            .bind(row_id)
+            .execute(&self.pool)
+            .await
+            .map_err(LibraryError::Db)?;
         Ok(())
     }
 
     /// Mark a sync audit record as failed with an error message.
-    pub async fn fail_sync_audit(
-        &self,
-        row_id: i64,
-        error_msg: &str,
-    ) -> Result<(), LibraryError> {
+    pub async fn fail_sync_audit(&self, row_id: i64, error_msg: &str) -> Result<(), LibraryError> {
         let now = chrono::Utc::now().to_rfc3339();
         sqlx::query(
             "UPDATE sync_audit SET completed_at = ?, action = 'error', error_msg = ? WHERE id = ?",

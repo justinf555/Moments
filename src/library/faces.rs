@@ -56,11 +56,7 @@ pub trait LibraryFaces: Send + Sync {
     ) -> Result<Vec<MediaId>, LibraryError>;
 
     /// Rename a person.
-    async fn rename_person(
-        &self,
-        person_id: &PersonId,
-        name: &str,
-    ) -> Result<(), LibraryError>;
+    async fn rename_person(&self, person_id: &PersonId, name: &str) -> Result<(), LibraryError>;
 
     /// Hide or unhide a person.
     async fn set_person_hidden(

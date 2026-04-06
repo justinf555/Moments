@@ -102,9 +102,7 @@ pub(super) fn wire_context_menu(ctx: &ActionContext) {
 
         popover.set_child(Some(&vbox));
         popover.set_parent(&grid_view);
-        popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
-            x as i32, y as i32, 1, 1,
-        )));
+        popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
         popover.set_has_arrow(true);
 
         popover.connect_closed(move |p| {
@@ -183,7 +181,11 @@ fn build_standard_menu(
     filter: &MediaFilter,
     is_favorite: bool,
 ) {
-    let fav_label = if is_favorite { "Unfavourite" } else { "Favourite" };
+    let fav_label = if is_favorite {
+        "Unfavourite"
+    } else {
+        "Favourite"
+    };
     let fav_btn = gtk::Button::with_label(fav_label);
     fav_btn.add_css_class("flat");
     vbox.append(&fav_btn);
@@ -339,9 +341,15 @@ fn wire_trash_button(
 /// Update the favourite button's icon and label to reflect the current state.
 /// `all_fav = true` means all selected items are favourited → show "Unfavourite".
 pub(super) fn update_fav_button(btn: &gtk::Button, all_fav: bool) {
-    let Some(content) = btn.child().and_downcast::<gtk::Box>() else { return };
-    let Some(icon) = content.first_child().and_downcast::<gtk::Image>() else { return };
-    let Some(label) = icon.next_sibling().and_downcast::<gtk::Label>() else { return };
+    let Some(content) = btn.child().and_downcast::<gtk::Box>() else {
+        return;
+    };
+    let Some(icon) = content.first_child().and_downcast::<gtk::Image>() else {
+        return;
+    };
+    let Some(label) = icon.next_sibling().and_downcast::<gtk::Label>() else {
+        return;
+    };
 
     if all_fav {
         icon.set_icon_name(Some("non-starred-symbolic"));

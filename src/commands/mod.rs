@@ -39,10 +39,5 @@ pub trait CommandHandler: Send + Sync {
     ///
     /// On success, sends the result event via the bus sender.
     /// On failure, sends `AppEvent::Error` with a user-facing message.
-    async fn execute(
-        &self,
-        event: AppEvent,
-        library: &Arc<dyn Library>,
-        bus: &EventSender,
-    );
+    async fn execute(&self, event: AppEvent, library: &Arc<dyn Library>, bus: &EventSender);
 }

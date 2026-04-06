@@ -17,13 +17,10 @@ impl CommandHandler for DeleteAlbumCommand {
         matches!(event, AppEvent::DeleteAlbumRequested { .. })
     }
 
-    async fn execute(
-        &self,
-        event: AppEvent,
-        library: &Arc<dyn Library>,
-        bus: &EventSender,
-    ) {
-        let AppEvent::DeleteAlbumRequested { ids } = event else { return };
+    async fn execute(&self, event: AppEvent, library: &Arc<dyn Library>, bus: &EventSender) {
+        let AppEvent::DeleteAlbumRequested { ids } = event else {
+            return;
+        };
         for id in ids {
             match library.delete_album(&id).await {
                 Ok(()) => {

@@ -4,10 +4,10 @@ use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gdk, glib};
 
-use crate::library::media::{MediaId, MediaMetadataRecord};
-use crate::library::Library;
 use crate::app_event::AppEvent;
 use crate::event_bus::EventSender;
+use crate::library::media::{MediaId, MediaMetadataRecord};
+use crate::library::Library;
 use crate::ui::photo_grid::item::MediaItemObject;
 
 pub mod edit_panel;
@@ -133,20 +133,22 @@ impl PhotoViewer {
         let imp = self.imp();
 
         // Store service deps.
-        assert!(imp.library.set(library.clone()).is_ok(), "setup called twice");
+        assert!(
+            imp.library.set(library.clone()).is_ok(),
+            "setup called twice"
+        );
         assert!(imp.tokio.set(tokio.clone()).is_ok(), "setup called twice");
-        assert!(imp.bus_sender.set(bus_sender.clone()).is_ok(), "setup called twice");
+        assert!(
+            imp.bus_sender.set(bus_sender.clone()).is_ok(),
+            "setup called twice"
+        );
 
         // Build sub-panels and add to sidebar stack.
         let info_panel = InfoPanel::new();
         let edit_panel = EditPanel::new();
-        edit_panel.setup(
-            imp.picture.clone(),
-            library,
-            tokio,
-            bus_sender,
-        );
-        imp.sidebar_stack.add_named(info_panel.widget(), Some("info"));
+        edit_panel.setup(imp.picture.clone(), library, tokio, bus_sender);
+        imp.sidebar_stack
+            .add_named(info_panel.widget(), Some("info"));
         imp.sidebar_stack.add_named(&edit_panel, Some("edit"));
         *imp.info_panel.borrow_mut() = Some(info_panel);
         *imp.edit_panel.borrow_mut() = Some(edit_panel);
@@ -232,7 +234,11 @@ impl PhotoViewer {
         // Skip video items — they belong in VideoViewer.
         while idx > 0 {
             idx -= 1;
-            if items.get(idx).map(|o| o.item().media_type != crate::library::media::MediaType::Video).unwrap_or(false) {
+            if items
+                .get(idx)
+                .map(|o| o.item().media_type != crate::library::media::MediaType::Video)
+                .unwrap_or(false)
+            {
                 drop(items);
                 self.show_at(idx);
                 return;
@@ -248,7 +254,11 @@ impl PhotoViewer {
         // Skip video items — they belong in VideoViewer.
         while idx + 1 < len {
             idx += 1;
-            if items.get(idx).map(|o| o.item().media_type != crate::library::media::MediaType::Video).unwrap_or(false) {
+            if items
+                .get(idx)
+                .map(|o| o.item().media_type != crate::library::media::MediaType::Video)
+                .unwrap_or(false)
+            {
                 drop(items);
                 self.show_at(idx);
                 return;
@@ -264,7 +274,9 @@ impl PhotoViewer {
         {
             let viewer = self.downgrade();
             self.connect_shown(move |_| {
-                let Some(viewer) = viewer.upgrade() else { return };
+                let Some(viewer) = viewer.upgrade() else {
+                    return;
+                };
                 let imp = viewer.imp();
                 imp.toolbar_view.grab_focus();
                 let pending = imp.pending_load.borrow_mut().take();
@@ -300,7 +312,9 @@ impl PhotoViewer {
         {
             let viewer = self.downgrade();
             imp.star_btn.connect_clicked(move |btn| {
-                let Some(viewer) = viewer.upgrade() else { return };
+                let Some(viewer) = viewer.upgrade() else {
+                    return;
+                };
                 let imp = viewer.imp();
                 let items = imp.items.borrow();
                 let idx = imp.current_index.get();
@@ -316,10 +330,13 @@ impl PhotoViewer {
                 let id = obj.item().id.clone();
                 *imp.pending_fav.borrow_mut() = Some((id.clone(), was_fav));
 
-                imp.bus_sender.get().unwrap().send(AppEvent::FavoriteRequested {
-                    ids: vec![id],
-                    state: new_fav,
-                });
+                imp.bus_sender
+                    .get()
+                    .unwrap()
+                    .send(AppEvent::FavoriteRequested {
+                        ids: vec![id],
+                        state: new_fav,
+                    });
             });
         }
 
@@ -327,7 +344,9 @@ impl PhotoViewer {
         {
             let viewer = self.downgrade();
             imp.info_toggle.connect_toggled(move |btn| {
-                let Some(viewer) = viewer.upgrade() else { return };
+                let Some(viewer) = viewer.upgrade() else {
+                    return;
+                };
                 let imp = viewer.imp();
                 if btn.is_active() {
                     // Deactivate edit toggle (mutually exclusive).
@@ -355,7 +374,9 @@ impl PhotoViewer {
         {
             let viewer = self.downgrade();
             imp.edit_toggle.connect_toggled(move |btn| {
-                let Some(viewer) = viewer.upgrade() else { return };
+                let Some(viewer) = viewer.upgrade() else {
+                    return;
+                };
                 let imp = viewer.imp();
                 if btn.is_active() {
                     // Deactivate info toggle (mutually exclusive).
@@ -381,7 +402,9 @@ impl PhotoViewer {
             let viewer = self.downgrade();
             imp.info_split.connect_show_sidebar_notify(move |split| {
                 if !split.shows_sidebar() {
-                    let Some(viewer) = viewer.upgrade() else { return };
+                    let Some(viewer) = viewer.upgrade() else {
+                        return;
+                    };
                     let imp = viewer.imp();
                     imp.info_toggle.set_active(false);
                     if imp.edit_toggle.is_active() {
@@ -442,7 +465,9 @@ impl PhotoViewer {
             let viewer = self.downgrade();
             crate::event_bus::subscribe(move |event| {
                 if let AppEvent::FavoriteChanged { ids, .. } = event {
-                    let Some(viewer) = viewer.upgrade() else { return };
+                    let Some(viewer) = viewer.upgrade() else {
+                        return;
+                    };
                     let imp = viewer.imp();
                     let mut pf = imp.pending_fav.borrow_mut();
                     if let Some((ref pending_id, _)) = *pf {

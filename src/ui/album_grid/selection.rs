@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
-use gettextrs::gettext;
 use adw::prelude::*;
+use gettextrs::gettext;
 use gtk::gio;
 
 use crate::library::album::AlbumId;
@@ -99,7 +99,6 @@ pub(crate) fn wire_selection_mode(
         bus_sender,
         &exit_selection,
     );
-
 }
 
 /// Walk the grid view's children and toggle selection checkboxes on all cards.
@@ -146,7 +145,10 @@ fn wire_batch_delete(
         let mut ids = Vec::new();
         for i in 0..st.n_items() {
             if sel.is_selected(i) {
-                if let Some(obj) = st.item(i).and_then(|o| o.downcast::<AlbumItemObject>().ok()) {
+                if let Some(obj) = st
+                    .item(i)
+                    .and_then(|o| o.downcast::<AlbumItemObject>().ok())
+                {
                     ids.push(AlbumId::from_raw(obj.album().id.as_str().to_owned()));
                 }
             }
@@ -176,9 +178,7 @@ fn wire_batch_delete(
             if response != "delete" {
                 return;
             }
-            bs.send(crate::app_event::AppEvent::DeleteAlbumRequested {
-                ids: ids.clone(),
-            });
+            bs.send(crate::app_event::AppEvent::DeleteAlbumRequested { ids: ids.clone() });
             exit.activate(None);
         });
 

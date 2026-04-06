@@ -18,13 +18,11 @@ impl CommandHandler for EmptyTrashCommand {
         matches!(event, AppEvent::EmptyTrashRequested)
     }
 
-    async fn execute(
-        &self,
-        _event: AppEvent,
-        library: &Arc<dyn Library>,
-        bus: &EventSender,
-    ) {
-        let items = match library.list_media(MediaFilter::Trashed, None, u32::MAX).await {
+    async fn execute(&self, _event: AppEvent, library: &Arc<dyn Library>, bus: &EventSender) {
+        let items = match library
+            .list_media(MediaFilter::Trashed, None, u32::MAX)
+            .await
+        {
             Ok(items) => items,
             Err(e) => {
                 error!("failed to list trashed items: {e}");
@@ -72,7 +70,9 @@ mod tests {
     async fn empty_trash_with_no_items_is_noop() {
         let lib = MockLibrary::mock();
         let (bus, rx) = crate::event_bus::EventSender::test_channel();
-        EmptyTrashCommand.execute(AppEvent::EmptyTrashRequested, &lib, &bus).await;
+        EmptyTrashCommand
+            .execute(AppEvent::EmptyTrashRequested, &lib, &bus)
+            .await;
         // No items in trash → no events emitted.
         assert!(rx.try_recv().is_err());
     }
@@ -96,7 +96,9 @@ mod tests {
         };
         let lib = MockLibrary::mock_with_items_then_fail(vec![item], "db error");
         let (bus, rx) = crate::event_bus::EventSender::test_channel();
-        EmptyTrashCommand.execute(AppEvent::EmptyTrashRequested, &lib, &bus).await;
+        EmptyTrashCommand
+            .execute(AppEvent::EmptyTrashRequested, &lib, &bus)
+            .await;
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, AppEvent::Error(msg) if msg.contains("empty trash")));
     }

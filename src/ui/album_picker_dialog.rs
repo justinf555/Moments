@@ -52,12 +52,16 @@ pub fn show_album_picker_dialog(
             Ok(Ok(pair)) => pair,
             Ok(Err(e)) => {
                 tracing::error!("album picker data load failed: {e}");
-                bus_sender.send(crate::app_event::AppEvent::Error("Could not load albums".into()));
+                bus_sender.send(crate::app_event::AppEvent::Error(
+                    "Could not load albums".into(),
+                ));
                 return;
             }
             Err(e) => {
                 tracing::error!("album picker join failed: {e}");
-                bus_sender.send(crate::app_event::AppEvent::Error("Could not load albums".into()));
+                bus_sender.send(crate::app_event::AppEvent::Error(
+                    "Could not load albums".into(),
+                ));
                 return;
             }
         };
@@ -95,8 +99,7 @@ pub fn show_album_picker_dialog(
             .await
             .unwrap_or_default();
 
-        let decoded_map: std::collections::HashMap<_, _> =
-            decoded.into_iter().collect();
+        let decoded_map: std::collections::HashMap<_, _> = decoded.into_iter().collect();
 
         let Some(parent) = parent_weak.upgrade() else {
             return;
@@ -106,9 +109,7 @@ pub fn show_album_picker_dialog(
             .into_iter()
             .map(|a| {
                 let already = containing.get(&a.id).copied().unwrap_or(0);
-                let thumbnail_rgba = decoded_map
-                    .get(&a.id)
-                    .and_then(|opt| opt.clone());
+                let thumbnail_rgba = decoded_map.get(&a.id).and_then(|opt| opt.clone());
                 AlbumEntry {
                     id: a.id,
                     name: a.name,
@@ -119,7 +120,10 @@ pub fn show_album_picker_dialog(
             })
             .collect();
 
-        debug!(album_count = entries.len(), "album picker: presenting dialog");
+        debug!(
+            album_count = entries.len(),
+            "album picker: presenting dialog"
+        );
 
         let data = AlbumPickerData {
             albums: entries,

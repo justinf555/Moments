@@ -9,6 +9,13 @@ permissions:
   pull-requests: write
 
 jobs:
+  typos:
+    name: Typo check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: crate-ci/typos@v1
+
   build-and-test:
     name: Build & test
     runs-on: ubuntu-latest
@@ -29,7 +36,7 @@ jobs:
   summary:
     name: CI summary
     runs-on: ubuntu-latest
-    needs: [build-and-test]
+    needs: [typos, build-and-test]
     if: github.event_name == 'pull_request' && always()
 
     steps:
@@ -42,6 +49,7 @@ jobs:
 
             | Check | Status |
             |-------|--------|
-            | Build & test (clippy + unit + integration) | ${{ needs.build-and-test.result == 'success' && '✅ Pass' || '❌ Fail' }} |
+            | Typo check | ${{ needs.typos.result == 'success' && '✅ Pass' || '❌ Fail' }} |
+            | Build & test (fmt + clippy + unit + integration) | ${{ needs.build-and-test.result == 'success' && '✅ Pass' || '❌ Fail' }} |
 
             <sub>[full run log](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})</sub>

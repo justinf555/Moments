@@ -217,8 +217,12 @@ impl EditPanel {
         let imp = self.imp();
         let (id, state) = {
             let session = imp.session.borrow();
-            let Some(session) = session.as_ref() else { return };
-            let Some(id) = imp.media_id.borrow().clone() else { return };
+            let Some(session) = session.as_ref() else {
+                return;
+            };
+            let Some(id) = imp.media_id.borrow().clone() else {
+                return;
+            };
 
             // Don't persist identity state — delete instead if it exists.
             if session.state.is_identity() {
@@ -228,9 +232,7 @@ impl EditPanel {
                 let tx = imp.bus_sender.get().unwrap().clone();
                 glib::MainContext::default().spawn_local(async move {
                     let start = Instant::now();
-                    let result = tk
-                        .spawn(async move { lib.revert_edits(&id).await })
-                        .await;
+                    let result = tk.spawn(async move { lib.revert_edits(&id).await }).await;
                     let elapsed = start.elapsed();
                     match result {
                         Ok(Ok(())) => debug!(
@@ -333,7 +335,9 @@ impl EditPanel {
             let source_id = glib::timeout_add_local_once(
                 std::time::Duration::from_millis(SAVE_DEBOUNCE_MS as u64),
                 move || {
-                    let Some(panel) = weak_inner.upgrade() else { return };
+                    let Some(panel) = weak_inner.upgrade() else {
+                        return;
+                    };
                     panel.imp().save_debounce.set(None);
                     panel.save_to_db("auto-save");
                 },
@@ -354,10 +358,7 @@ impl EditPanel {
     }
 
     /// Render an edit state preview and display it on the picture widget.
-    pub(super) fn render_to_picture(
-        &self,
-        preview: (Arc<DynamicImage>, EditState, u64),
-    ) {
+    pub(super) fn render_to_picture(&self, preview: (Arc<DynamicImage>, EditState, u64)) {
         let imp = self.imp();
         let pic = imp.picture.get().unwrap().clone();
         let tk = imp.tokio.get().unwrap().clone();
@@ -459,7 +460,11 @@ impl EditPanel {
             let preview = {
                 let session = imp.session.borrow();
                 session.as_ref().map(|s| {
-                    (Arc::clone(&s.preview_image), EditState::default(), s.render_gen)
+                    (
+                        Arc::clone(&s.preview_image),
+                        EditState::default(),
+                        s.render_gen,
+                    )
                 })
             };
             if let Some(preview) = preview {
@@ -475,8 +480,7 @@ impl EditPanel {
                 let tx = imp.bus_sender.get().unwrap().clone();
                 glib::MainContext::default().spawn_local(async move {
                     let start = Instant::now();
-                    let result =
-                        tk.spawn(async move { lib.revert_edits(&id).await }).await;
+                    let result = tk.spawn(async move { lib.revert_edits(&id).await }).await;
                     let elapsed = start.elapsed();
                     match result {
                         Ok(Ok(())) => debug!(

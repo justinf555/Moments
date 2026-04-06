@@ -104,12 +104,8 @@ mod media_item_object {
         });
 
         let bytes = gtk::glib::Bytes::from_owned(vec![255u8, 0, 0, 255]);
-        let texture = gtk::gdk::MemoryTexture::new(
-            1, 1,
-            gtk::gdk::MemoryFormat::R8g8b8a8,
-            &bytes,
-            4,
-        );
+        let texture =
+            gtk::gdk::MemoryTexture::new(1, 1, gtk::gdk::MemoryFormat::R8g8b8a8, &bytes, 4);
         obj.set_texture(Some(texture.upcast::<gtk::gdk::Texture>()));
         assert!(obj.texture().is_some());
         assert!(notified.get(), "notify::texture should have fired");
@@ -156,9 +152,24 @@ mod photo_grid_model {
         model.insert_item_sorted(test_item_at("new", 3000));
         model.insert_item_sorted(test_item_at("mid", 2000));
 
-        let first = model.store().item(0).unwrap().downcast::<MediaItemObject>().unwrap();
-        let second = model.store().item(1).unwrap().downcast::<MediaItemObject>().unwrap();
-        let third = model.store().item(2).unwrap().downcast::<MediaItemObject>().unwrap();
+        let first = model
+            .store()
+            .item(0)
+            .unwrap()
+            .downcast::<MediaItemObject>()
+            .unwrap();
+        let second = model
+            .store()
+            .item(1)
+            .unwrap()
+            .downcast::<MediaItemObject>()
+            .unwrap();
+        let third = model
+            .store()
+            .item(2)
+            .unwrap()
+            .downcast::<MediaItemObject>()
+            .unwrap();
 
         assert_eq!(first.item().id.as_str(), "new");
         assert_eq!(second.item().id.as_str(), "mid");
@@ -175,7 +186,12 @@ mod photo_grid_model {
         model.on_deleted(&MediaId::new("delete-me".to_string()));
         assert_eq!(model.store().n_items(), 1);
 
-        let remaining = model.store().item(0).unwrap().downcast::<MediaItemObject>().unwrap();
+        let remaining = model
+            .store()
+            .item(0)
+            .unwrap()
+            .downcast::<MediaItemObject>()
+            .unwrap();
         assert_eq!(remaining.item().id.as_str(), "keep");
     }
 
@@ -196,11 +212,21 @@ mod photo_grid_model {
         let id = MediaId::new("fav-test".to_string());
         model.on_favorite_changed(&id, true);
 
-        let obj = model.store().item(0).unwrap().downcast::<MediaItemObject>().unwrap();
+        let obj = model
+            .store()
+            .item(0)
+            .unwrap()
+            .downcast::<MediaItemObject>()
+            .unwrap();
         assert!(obj.is_favorite(), "should be marked as favorite");
 
         model.on_favorite_changed(&id, false);
-        let obj = model.store().item(0).unwrap().downcast::<MediaItemObject>().unwrap();
+        let obj = model
+            .store()
+            .item(0)
+            .unwrap()
+            .downcast::<MediaItemObject>()
+            .unwrap();
         assert!(!obj.is_favorite(), "should be unmarked");
     }
 
@@ -214,7 +240,11 @@ mod photo_grid_model {
         assert_eq!(model.store().n_items(), 1);
 
         model.on_favorite_changed(&MediaId::new("fav-item".to_string()), false);
-        assert_eq!(model.store().n_items(), 0, "unfavorited item should be removed");
+        assert_eq!(
+            model.store().n_items(),
+            0,
+            "unfavorited item should be removed"
+        );
     }
 
     #[gtk::test]
@@ -237,7 +267,11 @@ mod photo_grid_model {
         assert_eq!(model.store().n_items(), 1);
 
         model.on_trashed(&MediaId::new("in-trash".to_string()), false);
-        assert_eq!(model.store().n_items(), 0, "restored item removed from Trash");
+        assert_eq!(
+            model.store().n_items(),
+            0,
+            "restored item removed from Trash"
+        );
     }
 
     #[gtk::test]
@@ -250,8 +284,14 @@ mod photo_grid_model {
 
     #[gtk::test]
     fn filter_returns_construction_filter() {
-        assert_eq!(make_model(MediaFilter::Favorites).filter(), MediaFilter::Favorites);
-        assert_eq!(make_model(MediaFilter::Trashed).filter(), MediaFilter::Trashed);
+        assert_eq!(
+            make_model(MediaFilter::Favorites).filter(),
+            MediaFilter::Favorites
+        );
+        assert_eq!(
+            make_model(MediaFilter::Trashed).filter(),
+            MediaFilter::Trashed
+        );
         assert_eq!(make_model(MediaFilter::All).filter(), MediaFilter::All);
     }
 }
@@ -301,8 +341,18 @@ mod bus_broadcast {
         });
         flush_events();
 
-        let obj_a = model_a.store().item(0).unwrap().downcast::<MediaItemObject>().unwrap();
-        let obj_b = model_b.store().item(0).unwrap().downcast::<MediaItemObject>().unwrap();
+        let obj_a = model_a
+            .store()
+            .item(0)
+            .unwrap()
+            .downcast::<MediaItemObject>()
+            .unwrap();
+        let obj_b = model_b
+            .store()
+            .item(0)
+            .unwrap()
+            .downcast::<MediaItemObject>()
+            .unwrap();
         assert!(obj_a.is_favorite());
         assert!(obj_b.is_favorite());
     }
