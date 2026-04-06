@@ -89,6 +89,37 @@ mod photo_grid_imp {
         }
     }
 
+    impl PhotoGrid {
+        pub fn grid_view(&self) -> &gtk::GridView {
+            self.grid_view.get().expect("grid_view not initialized")
+        }
+        pub fn scrolled(&self) -> &gtk::ScrolledWindow {
+            self.scrolled.get().expect("scrolled not initialized")
+        }
+        pub fn empty_page(&self) -> &adw::StatusPage {
+            self.empty_page.get().expect("empty_page not initialized")
+        }
+        pub fn content_stack(&self) -> &gtk::Stack {
+            self.content_stack
+                .get()
+                .expect("content_stack not initialized")
+        }
+        pub fn library(&self) -> &Arc<dyn Library> {
+            self.library.get().expect("library not initialized")
+        }
+        pub fn tokio(&self) -> &tokio::runtime::Handle {
+            self.tokio.get().expect("tokio not initialized")
+        }
+        pub fn bus_sender(&self) -> &crate::event_bus::EventSender {
+            self.bus_sender.get().expect("bus_sender not initialized")
+        }
+        pub fn texture_cache(&self) -> &Rc<super::texture_cache::TextureCache> {
+            self.texture_cache
+                .get()
+                .expect("texture_cache not initialized")
+        }
+    }
+
     impl ObjectImpl for PhotoGrid {
         fn constructed(&self) {
             self.parent_constructed();
@@ -186,12 +217,12 @@ impl PhotoGrid {
     /// Rebuild the cell factory with the current zoom size.
     fn apply_zoom(&self) {
         let imp = self.imp();
-        let grid_view = imp.grid_view.get().unwrap();
-        let library = imp.library.get().unwrap().clone();
-        let tokio = imp.tokio.get().unwrap().clone();
-        let bus_sender = imp.bus_sender.get().unwrap().clone();
+        let grid_view = imp.grid_view();
+        let library = imp.library().clone();
+        let tokio = imp.tokio().clone();
+        let bus_sender = imp.bus_sender().clone();
         let filter = imp.filter.borrow().clone();
-        let cache = imp.texture_cache.get().unwrap().clone();
+        let cache = imp.texture_cache().clone();
         let sm = Rc::clone(&imp.selection_mode);
         let selection = imp.selection.borrow().clone().unwrap();
         let enter = imp.enter_selection.borrow().clone().unwrap();
@@ -228,8 +259,8 @@ impl PhotoGrid {
         let _ = imp.texture_cache.set(Rc::clone(&cache));
         *imp.filter.borrow_mut() = filter.clone();
 
-        let grid_view = imp.grid_view.get().unwrap();
-        let scrolled = imp.scrolled.get().unwrap();
+        let grid_view = imp.grid_view();
+        let scrolled = imp.scrolled();
 
         let selection = gtk::MultiSelection::new(Some(model.store().clone()));
         grid_view.set_model(Some(&selection));
@@ -250,8 +281,8 @@ impl PhotoGrid {
         )));
 
         // Configure empty state message based on filter.
-        let empty_page = imp.empty_page.get().unwrap();
-        let stack = imp.content_stack.get().unwrap();
+        let empty_page = imp.empty_page();
+        let stack = imp.content_stack();
         set_empty_state_for_filter(empty_page, &filter);
 
         let update_empty: Rc<dyn Fn()> = {
@@ -368,6 +399,46 @@ mod view_imp {
         pub selection_title: OnceCell<gtk::Label>,
         pub bar_box: OnceCell<gtk::Box>,
         pub fav_btn: RefCell<Option<gtk::Button>>,
+    }
+
+    impl PhotoGridView {
+        pub fn library(&self) -> &Arc<dyn Library> {
+            self.library.get().expect("library not initialized")
+        }
+        pub fn tokio(&self) -> &tokio::runtime::Handle {
+            self.tokio.get().expect("tokio not initialized")
+        }
+        pub fn bus_sender(&self) -> &crate::event_bus::EventSender {
+            self.bus_sender.get().expect("bus_sender not initialized")
+        }
+        pub fn texture_cache(&self) -> &Rc<texture_cache::TextureCache> {
+            self.texture_cache
+                .get()
+                .expect("texture_cache not initialized")
+        }
+        pub fn photo_viewer(&self) -> &PhotoViewer {
+            self.photo_viewer
+                .get()
+                .expect("photo_viewer not initialized")
+        }
+        pub fn video_viewer(&self) -> &VideoViewer {
+            self.video_viewer
+                .get()
+                .expect("video_viewer not initialized")
+        }
+        pub fn exit_selection(&self) -> &gio::SimpleAction {
+            self.exit_selection
+                .get()
+                .expect("exit_selection not initialized")
+        }
+        pub fn selection_title(&self) -> &gtk::Label {
+            self.selection_title
+                .get()
+                .expect("selection_title not initialized")
+        }
+        pub fn bar_box(&self) -> &gtk::Box {
+            self.bar_box.get().expect("bar_box not initialized")
+        }
     }
 
     #[glib::object_subclass]
@@ -528,12 +599,12 @@ impl PhotoGridView {
                 imp.zoom_box.set_visible(false);
                 imp.content_menu_btn.set_visible(false);
                 imp.cancel_btn.set_visible(true);
-                let title = imp.selection_title.get().unwrap();
+                let title = imp.selection_title();
                 title.set_visible(true);
                 imp.header.set_title_widget(Some(title));
                 imp.action_bar.set_revealed(true);
 
-                let grid_view = imp.photo_grid.imp().grid_view.get().unwrap();
+                let grid_view = imp.photo_grid.imp().grid_view();
                 grid_view.add_css_class("selection-active");
                 let mut child = grid_view.first_child();
                 while let Some(c) = child {
@@ -559,7 +630,7 @@ impl PhotoGridView {
                 imp.zoom_box.set_visible(true);
                 imp.content_menu_btn.set_visible(true);
                 imp.cancel_btn.set_visible(false);
-                imp.selection_title.get().unwrap().set_visible(false);
+                imp.selection_title().set_visible(false);
                 imp.header.set_title_widget(None::<&gtk::Widget>);
                 imp.action_bar.set_revealed(false);
 
@@ -567,7 +638,7 @@ impl PhotoGridView {
                     sel.unselect_all();
                 }
 
-                let grid_view = imp.photo_grid.imp().grid_view.get().unwrap();
+                let grid_view = imp.photo_grid.imp().grid_view();
                 grid_view.remove_css_class("selection-active");
                 let mut child = grid_view.first_child();
                 while let Some(c) = child {
@@ -592,7 +663,7 @@ impl PhotoGridView {
 
         // Escape key exits selection mode.
         {
-            let grid_view = imp.photo_grid.imp().grid_view.get().unwrap();
+            let grid_view = imp.photo_grid.imp().grid_view();
             let exit = exit_selection.clone();
             let sm = Rc::clone(&selection_mode);
             let key_ctrl = gtk::EventControllerKey::new();
@@ -620,10 +691,10 @@ impl PhotoGridView {
 
     pub fn set_model(&self, model: PhotoGridModel) {
         let imp = self.imp();
-        let library = Arc::clone(imp.library.get().unwrap());
-        let tokio = imp.tokio.get().unwrap().clone();
-        let bus_sender = imp.bus_sender.get().unwrap().clone();
-        let texture_cache = Rc::clone(imp.texture_cache.get().unwrap());
+        let library = Arc::clone(imp.library());
+        let tokio = imp.tokio().clone();
+        let bus_sender = imp.bus_sender().clone();
+        let texture_cache = Rc::clone(imp.texture_cache());
         let filter = model.filter();
 
         imp.photo_grid.set_model(
@@ -635,8 +706,8 @@ impl PhotoGridView {
             Rc::clone(&texture_cache),
             {
                 let nav_view = imp.nav_view.clone();
-                let photo_viewer = imp.photo_viewer.get().unwrap().clone();
-                let video_viewer = imp.video_viewer.get().unwrap().clone();
+                let photo_viewer = imp.photo_viewer().clone();
+                let video_viewer = imp.video_viewer().clone();
                 move |items, index| {
                     let media_type = items
                         .get(index)
@@ -672,7 +743,7 @@ impl PhotoGridView {
         );
 
         let selection = imp.photo_grid.imp().selection.borrow().clone().unwrap();
-        let grid_view = imp.photo_grid.imp().grid_view.get().unwrap().clone();
+        let grid_view = imp.photo_grid.imp().grid_view().clone();
 
         let ctx = actions::ActionContext {
             selection: selection.clone(),
@@ -686,7 +757,7 @@ impl PhotoGridView {
         actions::wire_context_menu(&ctx);
 
         // ── Build action bar buttons for this filter ────────────────────
-        let bar_box = imp.bar_box.get().unwrap();
+        let bar_box = imp.bar_box();
         while let Some(child) = bar_box.first_child() {
             bar_box.remove(&child);
         }
@@ -773,7 +844,7 @@ impl PhotoGridView {
 
         // Subscribe for exit-selection on result events.
         {
-            let exit = imp.exit_selection.get().unwrap().clone();
+            let exit = imp.exit_selection().clone();
             crate::event_bus::subscribe(move |event| match event {
                 AppEvent::Trashed { .. }
                 | AppEvent::Deleted { .. }
@@ -789,8 +860,8 @@ impl PhotoGridView {
         // ── Selection changed → update count, auto-exit ─────────────────
         {
             let sm = Rc::clone(&imp.selection_mode);
-            let exit = imp.exit_selection.get().unwrap().clone();
-            let title = imp.selection_title.get().unwrap().clone();
+            let exit = imp.exit_selection().clone();
+            let title = imp.selection_title().clone();
             let fav_btn = imp.fav_btn.borrow().clone();
             selection.connect_selection_changed(move |sel, _, _| {
                 let count = sel.selection().size();

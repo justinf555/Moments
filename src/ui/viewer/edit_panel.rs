@@ -86,6 +86,21 @@ mod imp {
         pub adjust_scales: RefCell<Vec<gtk::Scale>>,
     }
 
+    impl EditPanel {
+        pub fn picture(&self) -> &gtk::Picture {
+            self.picture.get().expect("picture not initialized")
+        }
+        pub fn library(&self) -> &Arc<dyn Library> {
+            self.library.get().expect("library not initialized")
+        }
+        pub fn tokio(&self) -> &tokio::runtime::Handle {
+            self.tokio.get().expect("tokio not initialized")
+        }
+        pub fn bus_sender(&self) -> &crate::event_bus::EventSender {
+            self.bus_sender.get().expect("bus_sender not initialized")
+        }
+    }
+
     #[glib::object_subclass]
     impl ObjectSubclass for EditPanel {
         const NAME: &'static str = "MomentsEditPanel";
@@ -226,10 +241,10 @@ impl EditPanel {
 
             // Don't persist identity state — delete instead if it exists.
             if session.state.is_identity() {
-                let lib = Arc::clone(imp.library.get().unwrap());
-                let tk = imp.tokio.get().unwrap().clone();
+                let lib = Arc::clone(imp.library());
+                let tk = imp.tokio().clone();
                 let id_log = id.clone();
-                let tx = imp.bus_sender.get().unwrap().clone();
+                let tx = imp.bus_sender().clone();
                 glib::MainContext::default().spawn_local(async move {
                     let start = Instant::now();
                     let result = tk.spawn(async move { lib.revert_edits(&id).await }).await;
@@ -267,10 +282,10 @@ impl EditPanel {
         }
 
         imp.save_in_flight.set(true);
-        let lib = Arc::clone(imp.library.get().unwrap());
-        let tk = imp.tokio.get().unwrap().clone();
+        let lib = Arc::clone(imp.library());
+        let tk = imp.tokio().clone();
         let id_log = id.clone();
-        let tx = imp.bus_sender.get().unwrap().clone();
+        let tx = imp.bus_sender().clone();
 
         let weak = self.downgrade();
         glib::MainContext::default().spawn_local(async move {
@@ -360,8 +375,8 @@ impl EditPanel {
     /// Render an edit state preview and display it on the picture widget.
     pub(super) fn render_to_picture(&self, preview: (Arc<DynamicImage>, EditState, u64)) {
         let imp = self.imp();
-        let pic = imp.picture.get().unwrap().clone();
-        let tk = imp.tokio.get().unwrap().clone();
+        let pic = imp.picture().clone();
+        let tk = imp.tokio().clone();
         let (preview_img, state, gen) = preview;
 
         let weak = self.downgrade();
@@ -474,10 +489,10 @@ impl EditPanel {
             // Delete from DB.
             let id = imp.media_id.borrow().clone();
             if let Some(id) = id {
-                let lib = Arc::clone(imp.library.get().unwrap());
-                let tk = imp.tokio.get().unwrap().clone();
+                let lib = Arc::clone(imp.library());
+                let tk = imp.tokio().clone();
                 let id_log = id.clone();
-                let tx = imp.bus_sender.get().unwrap().clone();
+                let tx = imp.bus_sender().clone();
                 glib::MainContext::default().spawn_local(async move {
                     let start = Instant::now();
                     let result = tk.spawn(async move { lib.revert_edits(&id).await }).await;

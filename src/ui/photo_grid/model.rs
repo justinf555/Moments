@@ -52,6 +52,18 @@ mod imp {
         }
     }
 
+    impl PhotoGridModel {
+        pub fn library(&self) -> &Arc<dyn Library> {
+            self.library.get().expect("library not initialized")
+        }
+        pub fn tokio(&self) -> &tokio::runtime::Handle {
+            self.tokio.get().expect("tokio not initialized")
+        }
+        pub fn bus_sender(&self) -> &EventSender {
+            self.bus_sender.get().expect("bus_sender not initialized")
+        }
+    }
+
     #[glib::object_subclass]
     impl ObjectSubclass for PhotoGridModel {
         const NAME: &'static str = "MomentsPhotoGridModel";
@@ -197,8 +209,8 @@ impl PhotoGridModel {
 
         let filter = imp.filter.borrow().clone();
         let cursor = imp.cursor.borrow().clone();
-        let library = Arc::clone(imp.library.get().unwrap());
-        let tokio = imp.tokio.get().unwrap().clone();
+        let library = Arc::clone(imp.library());
+        let tokio = imp.tokio().clone();
         let weak = self.downgrade();
 
         glib::MainContext::default().spawn_local(async move {
@@ -222,9 +234,7 @@ impl PhotoGridModel {
                     error!(elapsed_ms = elapsed.as_millis(), "list_media failed: {e}");
                     model
                         .imp()
-                        .bus_sender
-                        .get()
-                        .unwrap()
+                        .bus_sender()
                         .send(AppEvent::Error("Could not load photos".into()));
                     model.imp().loading.set(false);
                 }
@@ -232,9 +242,7 @@ impl PhotoGridModel {
                     error!(elapsed_ms = elapsed.as_millis(), "tokio join failed: {e}");
                     model
                         .imp()
-                        .bus_sender
-                        .get()
-                        .unwrap()
+                        .bus_sender()
                         .send(AppEvent::Error("Could not load photos".into()));
                     model.imp().loading.set(false);
                 }
@@ -250,8 +258,8 @@ impl PhotoGridModel {
             Some(o) => o,
             None => return,
         };
-        let path = imp.library.get().unwrap().thumbnail_path(id);
-        let tokio = imp.tokio.get().unwrap().clone();
+        let path = imp.library().thumbnail_path(id);
+        let tokio = imp.tokio().clone();
         let id = id.clone();
 
         glib::MainContext::default().spawn_local(async move {
@@ -314,8 +322,8 @@ impl PhotoGridModel {
     /// Fetch a single item from the DB and insert at sorted position.
     pub fn fetch_and_insert_sorted(&self, id: &MediaId) {
         let imp = self.imp();
-        let library = Arc::clone(imp.library.get().unwrap());
-        let tokio = imp.tokio.get().unwrap().clone();
+        let library = Arc::clone(imp.library());
+        let tokio = imp.tokio().clone();
         let weak = self.downgrade();
         let id = id.clone();
 

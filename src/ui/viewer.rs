@@ -82,6 +82,18 @@ mod imp {
         pub pending_fav: RefCell<Option<(MediaId, bool)>>,
     }
 
+    impl PhotoViewer {
+        pub fn library(&self) -> &Arc<dyn Library> {
+            self.library.get().expect("library not initialized")
+        }
+        pub fn tokio(&self) -> &tokio::runtime::Handle {
+            self.tokio.get().expect("tokio not initialized")
+        }
+        pub fn bus_sender(&self) -> &EventSender {
+            self.bus_sender.get().expect("bus_sender not initialized")
+        }
+    }
+
     #[glib::object_subclass]
     impl ObjectSubclass for PhotoViewer {
         const NAME: &'static str = "MomentsPhotoViewer";
@@ -330,13 +342,10 @@ impl PhotoViewer {
                 let id = obj.item().id.clone();
                 *imp.pending_fav.borrow_mut() = Some((id.clone(), was_fav));
 
-                imp.bus_sender
-                    .get()
-                    .unwrap()
-                    .send(AppEvent::FavoriteRequested {
-                        ids: vec![id],
-                        state: new_fav,
-                    });
+                imp.bus_sender().send(AppEvent::FavoriteRequested {
+                    ids: vec![id],
+                    state: new_fav,
+                });
             });
         }
 

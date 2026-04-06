@@ -21,9 +21,9 @@ impl PhotoViewer {
     /// Falls back silently to the cached thumbnail on any error.
     pub(super) fn start_full_res_load(&self, gen: u64, id: crate::library::media::MediaId) {
         let imp = self.imp();
-        let library = Arc::clone(imp.library.get().unwrap());
-        let tokio = imp.tokio.get().unwrap().clone();
-        let bus_sender = imp.bus_sender.get().unwrap().clone();
+        let library = Arc::clone(imp.library());
+        let tokio = imp.tokio().clone();
+        let bus_sender = imp.bus_sender().clone();
 
         imp.spinner.set_spinning(true);
         imp.spinner.set_visible(true);
@@ -74,7 +74,7 @@ impl PhotoViewer {
             // Decode full-res image on a blocking thread.
             // RAW formats use rawler; standard formats use the image crate.
             let is_raw = crate::library::format::registry::RAW_EXTENSIONS.contains(&ext.as_str());
-            let tokio = imp.tokio.get().unwrap().clone();
+            let tokio = imp.tokio().clone();
             drop(viewer); // Release ref before long-running decode.
             let pixels: Option<(Vec<u8>, i32, i32)> = tokio
                 .spawn(async move {
@@ -146,7 +146,7 @@ impl PhotoViewer {
                 }
                 None => {
                     debug!("full-res decode failed, keeping thumbnail");
-                    imp.bus_sender.get().unwrap().send(AppEvent::Error(
+                    imp.bus_sender().send(AppEvent::Error(
                         "Could not display full-resolution image".into(),
                     ));
                 }
@@ -165,8 +165,8 @@ impl PhotoViewer {
         let Some(id) = id else { return };
 
         let gen = imp.load_gen.get();
-        let library = Arc::clone(imp.library.get().unwrap());
-        let tokio = imp.tokio.get().unwrap().clone();
+        let library = Arc::clone(imp.library());
+        let tokio = imp.tokio().clone();
         let id_for_state = id.clone();
 
         let weak = self.downgrade();
@@ -271,8 +271,8 @@ impl PhotoViewer {
     /// Asynchronously fetch EXIF metadata and cache it for the info panel.
     pub(super) fn load_metadata_async(&self, gen: u64, id: crate::library::media::MediaId) {
         let imp = self.imp();
-        let library = Arc::clone(imp.library.get().unwrap());
-        let tokio = imp.tokio.get().unwrap().clone();
+        let library = Arc::clone(imp.library());
+        let tokio = imp.tokio().clone();
 
         let weak = self.downgrade();
         glib::MainContext::default().spawn_local(async move {

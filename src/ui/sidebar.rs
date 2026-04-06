@@ -94,6 +94,59 @@ mod imp {
         type ParentType = adw::NavigationPage;
     }
 
+    impl MomentsSidebar {
+        pub fn sidebar(&self) -> &adw::Sidebar {
+            self.sidebar.get().expect("sidebar not initialized")
+        }
+        pub fn pinned_section(&self) -> &adw::SidebarSection {
+            self.pinned_section
+                .get()
+                .expect("pinned_section not initialized")
+        }
+        pub fn bar_stack(&self) -> &gtk::Stack {
+            self.bar_stack.get().expect("bar_stack not initialized")
+        }
+        pub fn bottom_sheet(&self) -> &adw::BottomSheet {
+            self.bottom_sheet
+                .get()
+                .expect("bottom_sheet not initialized")
+        }
+        pub fn idle_label(&self) -> &gtk::Label {
+            self.idle_label.get().expect("idle_label not initialized")
+        }
+        pub fn sync_label(&self) -> &gtk::Label {
+            self.sync_label.get().expect("sync_label not initialized")
+        }
+        pub fn thumb_label(&self) -> &gtk::Label {
+            self.thumb_label.get().expect("thumb_label not initialized")
+        }
+        pub fn upload_label(&self) -> &gtk::Label {
+            self.upload_label
+                .get()
+                .expect("upload_label not initialized")
+        }
+        pub fn complete_label(&self) -> &gtk::Label {
+            self.complete_label
+                .get()
+                .expect("complete_label not initialized")
+        }
+        pub fn progress_label(&self) -> &gtk::Label {
+            self.progress_label
+                .get()
+                .expect("progress_label not initialized")
+        }
+        pub fn progress_bar(&self) -> &gtk::ProgressBar {
+            self.progress_bar
+                .get()
+                .expect("progress_bar not initialized")
+        }
+        pub fn detail_label(&self) -> &gtk::Label {
+            self.detail_label
+                .get()
+                .expect("detail_label not initialized")
+        }
+    }
+
     impl ObjectImpl for MomentsSidebar {
         fn constructed(&self) {
             self.parent_constructed();
@@ -502,7 +555,7 @@ impl MomentsSidebar {
     /// System routes (index 0–5) map to `ROUTES[index].id`.
     /// Pinned album items (index 6+) map to `"album:{album_id}"`.
     pub fn connect_route_selected<F: Fn(&str) + 'static>(&self, f: F) {
-        let sidebar = self.imp().sidebar.get().unwrap().clone();
+        let sidebar = self.imp().sidebar().clone();
         let weak = self.downgrade();
         sidebar.connect_activated(move |_, index| {
             let Some(sb) = weak.upgrade() else { return };
@@ -540,7 +593,7 @@ impl MomentsSidebar {
 
     /// Pre-select the first item (Photos) so the shell always has an active route.
     pub fn select_first(&self) {
-        self.imp().sidebar.get().unwrap().set_selected(0);
+        self.imp().sidebar().set_selected(0);
     }
 
     /// Set the initial trash count (called once at startup after querying the library).
@@ -580,7 +633,7 @@ impl MomentsSidebar {
             .map(|s| s.to_string())
             .collect();
 
-        let section = imp.pinned_section.get().unwrap();
+        let section = imp.pinned_section();
         section.remove_all();
 
         let mut valid_ids = Vec::new();
@@ -621,7 +674,7 @@ impl MomentsSidebar {
             ids.push(album_id.to_string());
         }
 
-        let section = imp.pinned_section.get().unwrap();
+        let section = imp.pinned_section();
         let item = adw::SidebarItem::builder()
             .title(album_name)
             .icon_name("folder-symbolic")
@@ -653,7 +706,7 @@ impl MomentsSidebar {
             }
         };
 
-        let section = imp.pinned_section.get().unwrap();
+        let section = imp.pinned_section();
         if let Some(item) = section.item(pos as u32) {
             section.remove(&item);
         }
@@ -704,14 +757,11 @@ impl MomentsSidebar {
 
         if state >= current || state == imp::StatusState::Idle {
             imp.current_state.set(state);
-            if let Some(stack) = imp.bar_stack.get() {
-                stack.set_visible_child_name(page);
-            }
+            imp.bar_stack().set_visible_child_name(page);
             if state != imp::StatusState::Upload {
-                if let Some(sheet) = imp.bottom_sheet.get() {
-                    sheet.set_can_open(false);
-                    sheet.set_open(false);
-                }
+                let sheet = imp.bottom_sheet();
+                sheet.set_can_open(false);
+                sheet.set_open(false);
             }
         }
     }
@@ -724,18 +774,15 @@ impl MomentsSidebar {
 
     pub fn show_sync_started(&self) {
         let imp = self.imp();
-        if let Some(label) = imp.sync_label.get() {
-            label.set_text("Syncing...");
-        }
+        imp.sync_label().set_text("Syncing...");
         self.set_status(imp::StatusState::Sync, "sync");
     }
 
     pub fn show_sync_progress(&self, assets: usize, people: usize, faces: usize) {
         let imp = self.imp();
         let total = assets + people + faces;
-        if let Some(label) = imp.sync_label.get() {
-            label.set_text(&format!("Syncing... {total} items"));
-        }
+        imp.sync_label()
+            .set_text(&format!("Syncing... {total} items"));
         self.set_status(imp::StatusState::Sync, "sync");
     }
 
@@ -764,9 +811,8 @@ impl MomentsSidebar {
         if imp.current_state.get() == imp::StatusState::Idle {
             return;
         }
-        if let Some(label) = imp.thumb_label.get() {
-            label.set_text(&format!("Thumbnails {completed}/{total}"));
-        }
+        imp.thumb_label()
+            .set_text(&format!("Thumbnails {completed}/{total}"));
         self.set_status(imp::StatusState::Thumbnails, "thumbnails");
     }
 
@@ -783,16 +829,13 @@ impl MomentsSidebar {
         failed: usize,
     ) {
         let imp = self.imp();
-        if let Some(label) = imp.upload_label.get() {
-            label.set_text(&format!("Uploading {current}/{total}"));
-        }
-        if let Some(label) = imp.progress_label.get() {
-            label.set_text(&format!("Uploading {current} of {total}"));
-        }
-        if let Some(bar) = imp.progress_bar.get() {
-            if total > 0 {
-                bar.set_fraction(current as f64 / total as f64);
-            }
+        imp.upload_label()
+            .set_text(&format!("Uploading {current}/{total}"));
+        imp.progress_label()
+            .set_text(&format!("Uploading {current} of {total}"));
+        if total > 0 {
+            imp.progress_bar()
+                .set_fraction(current as f64 / total as f64);
         }
         let mut detail = format!("{imported} imported");
         if skipped > 0 {
@@ -801,14 +844,11 @@ impl MomentsSidebar {
         if failed > 0 {
             detail.push_str(&format!(", {failed} failed"));
         }
-        if let Some(label) = imp.detail_label.get() {
-            label.set_text(&detail);
-        }
-        if let Some(sheet) = imp.bottom_sheet.get() {
-            if !sheet.is_open() {
-                sheet.set_can_open(true);
-                sheet.set_open(true);
-            }
+        imp.detail_label().set_text(&detail);
+        let sheet = imp.bottom_sheet();
+        if !sheet.is_open() {
+            sheet.set_can_open(true);
+            sheet.set_open(true);
         }
         self.set_status(imp::StatusState::Upload, "upload");
     }
@@ -824,22 +864,12 @@ impl MomentsSidebar {
             bar_text.push_str(&format!(", {} failed", summary.failed));
         }
 
-        if let Some(label) = imp.complete_label.get() {
-            label.set_text("Upload Complete");
-        }
-        if let Some(label) = imp.progress_label.get() {
-            label.set_text(&bar_text);
-        }
-        if let Some(bar) = imp.progress_bar.get() {
-            bar.set_fraction(1.0);
-        }
-        if let Some(label) = imp.detail_label.get() {
-            label.set_text(&bar_text);
-        }
+        imp.complete_label().set_text("Upload Complete");
+        imp.progress_label().set_text(&bar_text);
+        imp.progress_bar().set_fraction(1.0);
+        imp.detail_label().set_text(&bar_text);
 
-        if let Some(sheet) = imp.bottom_sheet.get() {
-            sheet.set_open(false);
-        }
+        imp.bottom_sheet().set_open(false);
 
         self.set_status(imp::StatusState::Complete, "complete");
 
@@ -859,9 +889,7 @@ impl MomentsSidebar {
 
     fn update_idle_label(&self) {
         let imp = self.imp();
-        let Some(label) = imp.idle_label.get() else {
-            return;
-        };
+        let label = imp.idle_label();
 
         let Some(synced_at) = imp.last_synced_at.get() else {
             label.set_text("Waiting for sync...");
