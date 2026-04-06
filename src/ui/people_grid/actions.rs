@@ -354,7 +354,7 @@ fn wire_hide_button(
                     tracing::error!("set_person_hidden failed: {e}");
                     let _ = gv_hide.activate_action(
                         "win.show-toast",
-                        Some(&"Failed to update person visibility".to_variant()),
+                        Some(&gettext("Failed to update person visibility").to_variant()),
                     );
                 }
                 Err(e) => tracing::error!("set_person_hidden join failed: {e}"),
