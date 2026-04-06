@@ -692,9 +692,8 @@ impl PhotoGridView {
             // Show buttons only when there are trashed items (GNOME HIG).
             let restore_btn = imp.restore_all_btn.clone();
             let empty_btn = imp.empty_trash_btn.clone();
-            let store = model.store().clone();
             let update_trash_buttons: Rc<dyn Fn()> = {
-                let store = store.clone();
+                let store = model.store().clone();
                 Rc::new(move || {
                     let has_items = store.n_items() > 0;
                     restore_btn.set_visible(has_items);
