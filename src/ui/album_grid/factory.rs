@@ -106,13 +106,14 @@ pub fn build_factory(
                     return;
                 }
 
-                for (i, media_id) in cover_ids.into_iter().enumerate() {
-                    let path = lib.thumbnail_path(&media_id);
+                // Decode all cover thumbnails in parallel to avoid
+                // visible flicker as each one loads sequentially.
+                let mut futures = Vec::new();
+                for media_id in &cover_ids {
+                    let path = lib.thumbnail_path(media_id);
                     let tk2 = tk.clone();
-                    let item_weak2 = item_weak.clone();
-
-                    let result = tk2
-                        .spawn(async move {
+                    futures.push(async move {
+                        tk2.spawn(async move {
                             tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, u32, u32)> {
                                 let data = std::fs::read(&path).ok()?;
                                 let img = image::load_from_memory(&data).ok()?;
@@ -125,10 +126,16 @@ pub fn build_factory(
                         })
                         .await
                         .ok()
-                        .flatten();
+                        .flatten()
+                    });
+                }
 
-                    if let Some((pixels, width, height)) = result {
-                        if let Some(item) = item_weak2.upgrade() {
+                let results = futures_util::future::join_all(futures).await;
+
+                // Apply all textures in a single pass — no flicker.
+                if let Some(item) = item_weak.upgrade() {
+                    for (i, result) in results.into_iter().enumerate() {
+                        if let Some((pixels, width, height)) = result {
                             let gbytes = gtk::glib::Bytes::from_owned(pixels);
                             let texture = gtk::gdk::MemoryTexture::new(
                                 width as i32,
