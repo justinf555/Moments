@@ -26,53 +26,10 @@ jobs:
           bundle: moments-devel.flatpak
           cache-key: flatpak-builder-${{ hashFiles('build-aux/io.github.justinf555.Moments.ci.json', 'Cargo.lock') }}
 
-  coverage:
-    name: Coverage
-    runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
-      options: --privileged
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Flatpak SDK and Rust extension
-        run: |
-          flatpak install -y --noninteractive flathub \
-            org.freedesktop.Sdk.Extension.rust-stable//25.08
-
-      - name: Generate config.rs and run coverage
-        run: |
-          # Copy source to a writable location for the Flatpak sandbox
-          cp -a . /tmp/moments-src
-          flatpak run --share=network \
-            --nofilesystem=host \
-            --filesystem=/tmp/moments-src:rw \
-            --env=SQLX_OFFLINE=true \
-            --env=CARGO_HOME=/tmp/flatpak-cargo \
-            --command=bash org.gnome.Sdk//50 -c '
-              source /usr/lib/sdk/rust-stable/enable.sh
-              mkdir -p /tmp/flatpak-cargo/bin
-              export PATH=/tmp/flatpak-cargo/bin:$PATH
-              cd /tmp/moments-src
-              meson setup _build -Dprofile=development
-              cargo install cargo-llvm-cov --locked 2>/dev/null || true
-              cargo llvm-cov --lcov --output-path /tmp/moments-src/lcov.info
-            '
-          cp /tmp/moments-src/lcov.info lcov.info
-
-      - name: Upload to Codecov
-        if: hashFiles('lcov.info') != ''
-        uses: codecov/codecov-action@v5
-        with:
-          files: lcov.info
-          fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
-
   summary:
     name: CI summary
     runs-on: ubuntu-latest
-    needs: [build-and-test, coverage]
+    needs: [build-and-test]
     if: github.event_name == 'pull_request' && always()
 
     steps:
@@ -86,6 +43,5 @@ jobs:
             | Check | Status |
             |-------|--------|
             | Build & test (clippy + unit + integration) | ${{ needs.build-and-test.result == 'success' && '✅ Pass' || '❌ Fail' }} |
-            | Coverage | ${{ needs.coverage.result == 'success' && '✅ Pass' || '❌ Fail' }} |
 
             <sub>[full run log](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})</sub>
