@@ -689,8 +689,23 @@ impl PhotoGridView {
 
         // ── Trash header buttons (Restore All / Empty Trash) ───────────
         if filter == MediaFilter::Trashed {
-            imp.restore_all_btn.set_visible(true);
-            imp.empty_trash_btn.set_visible(true);
+            // Show buttons only when there are trashed items (GNOME HIG).
+            let restore_btn = imp.restore_all_btn.clone();
+            let empty_btn = imp.empty_trash_btn.clone();
+            let store = model.store().clone();
+            let update_trash_buttons: Rc<dyn Fn()> = {
+                let store = store.clone();
+                Rc::new(move || {
+                    let has_items = store.n_items() > 0;
+                    restore_btn.set_visible(has_items);
+                    empty_btn.set_visible(has_items);
+                })
+            };
+            update_trash_buttons();
+            {
+                let update = Rc::clone(&update_trash_buttons);
+                model.store().connect_items_changed(move |_, _, _, _| update());
+            }
 
             {
                 let bs = bus_sender.clone();
