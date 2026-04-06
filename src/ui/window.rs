@@ -25,7 +25,7 @@ use std::sync::Arc;
 use gtk::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gio, glib};
-use tracing::{debug, instrument};
+use tracing::{debug, error, instrument, warn};
 
 /// Wrapper for a reload callback that implements `Debug` and `Default`.
 pub struct ReloadCallback(Box<dyn Fn()>);
@@ -267,8 +267,10 @@ impl MomentsWindow {
                 let result = tk
                     .spawn(async move { lib.library_stats().await })
                     .await;
-                if let Ok(Ok(stats)) = result {
-                    sb.set_trash_count(stats.trashed_count as u32);
+                match result {
+                    Ok(Ok(stats)) => sb.set_trash_count(stats.trashed_count as u32),
+                    Ok(Err(e)) => warn!("failed to load library stats: {e}"),
+                    Err(e) => error!("library stats task panicked: {e}"),
                 }
             });
         }
@@ -279,13 +281,16 @@ impl MomentsWindow {
             let sb = sidebar.clone();
             let s = settings.clone();
             glib::MainContext::default().spawn_local(async move {
-                let result = tk.spawn(async move { lib.list_albums().await }).await;
-                if let Ok(Ok(albums)) = result {
-                    let pairs: Vec<(String, String)> = albums
-                        .into_iter()
-                        .map(|a| (a.id.as_str().to_owned(), a.name))
-                        .collect();
-                    sb.load_pinned_albums(&s, &pairs);
+                match tk.spawn(async move { lib.list_albums().await }).await {
+                    Ok(Ok(albums)) => {
+                        let pairs: Vec<(String, String)> = albums
+                            .into_iter()
+                            .map(|a| (a.id.as_str().to_owned(), a.name))
+                            .collect();
+                        sb.load_pinned_albums(&s, &pairs);
+                    }
+                    Ok(Err(e)) => warn!("failed to load albums for sidebar: {e}"),
+                    Err(e) => error!("album load task panicked: {e}"),
                 }
             });
         }
