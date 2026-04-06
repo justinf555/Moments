@@ -23,12 +23,6 @@
         "env": {
             "SQLX_OFFLINE": "true",
             "RUST_BACKTRACE": "1"
-        },
-        "test-env": {
-            "GSK_RENDERER": "cairo",
-            "GTK_A11Y": "none",
-            "GIO_USE_VFS": "local",
-            "SQLX_OFFLINE": "true"
         }
     },
     "cleanup": [
