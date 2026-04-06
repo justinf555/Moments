@@ -267,8 +267,10 @@ impl MomentsWindow {
                 let result = tk
                     .spawn(async move { lib.library_stats().await })
                     .await;
-                if let Ok(Ok(stats)) = result {
-                    sb.set_trash_count(stats.trashed_count as u32);
+                match result {
+                    Ok(Ok(stats)) => sb.set_trash_count(stats.trashed_count as u32),
+                    Ok(Err(e)) => warn!("failed to load library stats: {e}"),
+                    Err(e) => error!("library stats task panicked: {e}"),
                 }
             });
         }
