@@ -59,6 +59,18 @@ mod imp {
         pub pending_fav: RefCell<Option<(MediaId, bool)>>,
     }
 
+    impl VideoViewer {
+        pub fn library(&self) -> &Arc<dyn Library> {
+            self.library.get().expect("library not initialized")
+        }
+        pub fn tokio(&self) -> &tokio::runtime::Handle {
+            self.tokio.get().expect("tokio not initialized")
+        }
+        pub fn bus_sender(&self) -> &EventSender {
+            self.bus_sender.get().expect("bus_sender not initialized")
+        }
+    }
+
     #[glib::object_subclass]
     impl ObjectSubclass for VideoViewer {
         const NAME: &'static str = "MomentsVideoViewer";
@@ -184,9 +196,9 @@ impl VideoViewer {
 
     fn load_video(&self, id: MediaId) {
         let imp = self.imp();
-        let library = Arc::clone(imp.library.get().unwrap());
-        let tokio = imp.tokio.get().unwrap().clone();
-        let bus_sender = imp.bus_sender.get().unwrap().clone();
+        let library = Arc::clone(imp.library());
+        let tokio = imp.tokio().clone();
+        let bus_sender = imp.bus_sender().clone();
 
         debug!(%id, "load_video: resolving path");
 
@@ -233,8 +245,8 @@ impl VideoViewer {
 
     fn load_metadata_async(&self, id: MediaId) {
         let imp = self.imp();
-        let library = Arc::clone(imp.library.get().unwrap());
-        let tokio = imp.tokio.get().unwrap().clone();
+        let library = Arc::clone(imp.library());
+        let tokio = imp.tokio().clone();
 
         let weak = self.downgrade();
         glib::MainContext::default().spawn_local(async move {
@@ -345,13 +357,10 @@ impl VideoViewer {
                 let id = obj.item().id.clone();
                 *imp.pending_fav.borrow_mut() = Some((id.clone(), was_fav));
 
-                imp.bus_sender
-                    .get()
-                    .unwrap()
-                    .send(AppEvent::FavoriteRequested {
-                        ids: vec![id],
-                        state: new_fav,
-                    });
+                imp.bus_sender().send(AppEvent::FavoriteRequested {
+                    ids: vec![id],
+                    state: new_fav,
+                });
             });
         }
 
@@ -470,9 +479,9 @@ fn wire_overflow_menu(popover: &gtk::Popover, viewer: &VideoViewer) {
             crate::ui::album_picker_dialog::show_album_picker_dialog(
                 viewer.upcast_ref::<gtk::Widget>(),
                 vec![id],
-                Arc::clone(imp.library.get().unwrap()),
-                imp.tokio.get().unwrap().clone(),
-                imp.bus_sender.get().unwrap().clone(),
+                Arc::clone(imp.library()),
+                imp.tokio().clone(),
+                imp.bus_sender().clone(),
             );
         });
     }
@@ -505,9 +514,7 @@ fn wire_overflow_menu(popover: &gtk::Popover, viewer: &VideoViewer) {
                 items.get(idx).map(|obj| obj.item().id.clone())
             };
             let Some(id) = id else { return };
-            imp.bus_sender
-                .get()
-                .unwrap()
+            imp.bus_sender()
                 .send(AppEvent::TrashRequested { ids: vec![id] });
             if let Some(nav_view) = viewer
                 .parent()

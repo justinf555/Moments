@@ -122,9 +122,9 @@ pub(super) fn wire_overflow_menu(popover: &gtk::Popover, viewer: &PhotoViewer) {
             crate::ui::album_picker_dialog::show_album_picker_dialog(
                 viewer.upcast_ref::<gtk::Widget>(),
                 vec![id],
-                Arc::clone(imp.library.get().unwrap()),
-                imp.tokio.get().unwrap().clone(),
-                imp.bus_sender.get().unwrap().clone(),
+                Arc::clone(imp.library()),
+                imp.tokio().clone(),
+                imp.bus_sender().clone(),
             );
         });
     }
@@ -157,9 +157,7 @@ pub(super) fn wire_overflow_menu(popover: &gtk::Popover, viewer: &PhotoViewer) {
                 items.get(idx).map(|obj| obj.item().id.clone())
             };
             let Some(id) = id else { return };
-            imp.bus_sender
-                .get()
-                .unwrap()
+            imp.bus_sender()
                 .send(AppEvent::TrashRequested { ids: vec![id] });
             if let Some(nav_view) = viewer
                 .parent()
