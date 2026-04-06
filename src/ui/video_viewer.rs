@@ -132,11 +132,12 @@ impl VideoViewer {
         *imp.info_panel.borrow_mut() = Some(info_panel);
 
         // Build and attach overflow menu.
-        let menu_popover = crate::ui::viewer::build_viewer_menu_popover(false, "Delete video");
+        let (menu_popover, menu_buttons) =
+            crate::ui::viewer::build_viewer_menu_popover(false, "Delete video");
         imp.menu_btn.set_popover(Some(&menu_popover));
 
         // Wire all signal handlers.
-        self.setup_signals(&menu_popover);
+        self.setup_signals(&menu_popover, &menu_buttons);
     }
 
     /// Load `items` and navigate to `index`.
@@ -316,7 +317,11 @@ impl VideoViewer {
         }
     }
 
-    fn setup_signals(&self, menu_popover: &gtk::Popover) {
+    fn setup_signals(
+        &self,
+        menu_popover: &gtk::Popover,
+        menu_buttons: &crate::ui::viewer::ViewerMenuButtons,
+    ) {
         let imp = self.imp();
 
         // Prev button
@@ -437,7 +442,7 @@ impl VideoViewer {
         }
 
         // ── Wire overflow menu buttons ──────────────────────────────────────
-        wire_overflow_menu(menu_popover, self);
+        wire_overflow_menu(menu_popover, menu_buttons, self);
 
         // Subscribe to bus: clear pending favourite state on confirmation.
         {
@@ -459,12 +464,16 @@ impl VideoViewer {
 }
 
 /// Wire overflow menu button handlers for the video viewer.
-fn wire_overflow_menu(popover: &gtk::Popover, viewer: &VideoViewer) {
+fn wire_overflow_menu(
+    popover: &gtk::Popover,
+    buttons: &crate::ui::viewer::ViewerMenuButtons,
+    viewer: &VideoViewer,
+) {
     // Add to album
-    if let Some(btn) = crate::ui::viewer::find_menu_button(popover, "add-to-album") {
+    {
         let weak = viewer.downgrade();
         let pop = popover.downgrade();
-        btn.connect_clicked(move |_| {
+        buttons.add_to_album.connect_clicked(move |_| {
             if let Some(p) = pop.upgrade() {
                 p.popdown();
             }
@@ -487,22 +496,24 @@ fn wire_overflow_menu(popover: &gtk::Popover, viewer: &VideoViewer) {
     }
 
     // Stub items — just close the popover on click.
-    for name in &["share", "export-original", "show-in-files"] {
-        if let Some(btn) = crate::ui::viewer::find_menu_button(popover, name) {
-            let pop = popover.downgrade();
-            btn.connect_clicked(move |_| {
-                if let Some(p) = pop.upgrade() {
-                    p.popdown();
-                }
-            });
-        }
+    for btn in [
+        &buttons.share,
+        &buttons.export_original,
+        &buttons.show_in_files,
+    ] {
+        let pop = popover.downgrade();
+        btn.connect_clicked(move |_| {
+            if let Some(p) = pop.upgrade() {
+                p.popdown();
+            }
+        });
     }
 
     // Delete video — trash + pop back to grid.
-    if let Some(btn) = crate::ui::viewer::find_menu_button(popover, "delete") {
+    {
         let weak = viewer.downgrade();
         let pop = popover.downgrade();
-        btn.connect_clicked(move |_| {
+        buttons.delete.connect_clicked(move |_| {
             if let Some(p) = pop.upgrade() {
                 p.popdown();
             }
