@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Pre-commit Checks
+
+Always run `make lint` before committing or creating PRs. If a Makefile exists, check available targets with `make help` or inspect the Makefile first.
+
 ## Build & Run
 
 This project uses **Meson** as its build system and is packaged as a **Flatpak**. It must be built and run through Flatpak — do not attempt to run the binary directly.
@@ -45,6 +49,15 @@ make audit             # cargo audit + cargo deny
 GNOME Builder can also use the dev manifest — configure it in the project build settings.
 
 Instruct the user to test via GNOME Builder or `make run-dev` — do not attempt to run the app binary directly.
+
+## Architecture & Platform Constraints
+
+This is a Rust/GTK4 GNOME application using Flatpak. Key constraints:
+- GObject subclassing requires careful handling of Cell/RefCell, Debug traits, and WeakRef lifetimes
+- Always register new source files in meson.build
+- Use `WidgetExt` not `ActionGroupExt` for toast/action patterns
+- GTK cell virtualization means widget positions aren't stable — never assume fixed grid positions
+- Avoid nested Flatpak sandbox operations (flatpak-builder --run inside Flatpak won't work)
 
 ## Architecture
 
@@ -258,6 +271,10 @@ Photo and video viewers use a clean headerbar: `[★] [ℹ] [✏] [⋮]`. The ov
 ### Icons
 
 Use only icons confirmed to exist in the Adwaita icon theme. Common ones: `object-select-symbolic` (checkmark), `view-refresh-symbolic` (sync), `view-conceal-symbolic` (eye-slash/hidden), `folder-download-symbolic`, `go-up-symbolic`, `document-send-symbolic`. Check with `find /usr/share/icons/Adwaita -name "icon-name.svg"` before using.
+
+## Development Workflow
+
+When fixing compilation errors, always run a full build (`cargo build` or `make build`) to verify the fix compiles before moving on. Do not assume a fix works without compiling.
 
 ## Tracing / logging
 
