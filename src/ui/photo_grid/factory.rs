@@ -119,9 +119,8 @@ pub fn build_factory(
                 let id = item.item().id.clone();
 
                 // Fast path: cache hit — create GdkTexture from cached RGBA bytes.
-                // No debounce needed since this is sub-millisecond.
-                if let Some((pixels, width, height)) = cache.get(&id) {
-                    let gbytes = glib::Bytes::from_owned(pixels);
+                // glib::Bytes clone is a refcount bump — zero data copy.
+                if let Some((gbytes, width, height)) = cache.get(&id) {
                     let texture = gtk::gdk::MemoryTexture::new(
                         width as i32,
                         height as i32,
@@ -165,18 +164,21 @@ pub fn build_factory(
                                 decode_ms = decode_start.elapsed().as_millis(),
                                 "thumbnail decoded (cache miss)"
                             );
-                            cache_insert.insert(id_for_cache, pixels.clone(), width, height);
+                            // Insert takes ownership and converts to glib::Bytes.
+                            cache_insert.insert(id_for_cache.clone(), pixels, width, height);
 
                             if let Some(item) = item_weak.upgrade() {
-                                let gbytes = glib::Bytes::from_owned(pixels);
-                                let texture = gtk::gdk::MemoryTexture::new(
-                                    width as i32,
-                                    height as i32,
-                                    gtk::gdk::MemoryFormat::R8g8b8a8,
-                                    &gbytes,
-                                    (width as usize) * 4,
-                                );
-                                item.set_texture(Some(texture.upcast::<gtk::gdk::Texture>()));
+                                // Retrieve the shared glib::Bytes from cache (refcount bump).
+                                if let Some((gbytes, w, h)) = cache_insert.get(&id_for_cache) {
+                                    let texture = gtk::gdk::MemoryTexture::new(
+                                        w as i32,
+                                        h as i32,
+                                        gtk::gdk::MemoryFormat::R8g8b8a8,
+                                        &gbytes,
+                                        (w as usize) * 4,
+                                    );
+                                    item.set_texture(Some(texture.upcast::<gtk::gdk::Texture>()));
+                                }
                             }
                         }
                     });
