@@ -6,7 +6,7 @@ use gtk::glib;
 use crate::library::media::MediaId;
 
 /// Maximum number of decoded thumbnails to keep in the LRU cache.
-/// At ~355KB per thumbnail (320px RGBA), 500 entries ~ 177MB RAM.
+/// At ~400KB per thumbnail (320×320 RGBA), 500 entries ~ 195MB RAM.
 const DEFAULT_CAPACITY: usize = 500;
 
 /// Decoded RGBA pixel data stored as reference-counted `glib::Bytes`.
@@ -75,10 +75,13 @@ impl TextureCache {
     /// Insert decoded pixel data into the cache.
     ///
     /// Takes ownership of the `Vec<u8>` and converts it to `glib::Bytes`
-    /// once. If at capacity, evicts the least-recently-used entry first.
+    /// once. Returns a clone of the stored `glib::Bytes` (refcount bump)
+    /// so the caller can use it directly without a second lookup.
+    /// If at capacity, evicts the least-recently-used entry first.
     /// If the key already exists, updates it and promotes to MRU.
-    pub fn insert(&self, id: MediaId, pixels: Vec<u8>, width: u32, height: u32) {
+    pub fn insert(&self, id: MediaId, pixels: Vec<u8>, width: u32, height: u32) -> glib::Bytes {
         let bytes = glib::Bytes::from_owned(pixels);
+        let ret = bytes.clone();
         let mut inner = self.inner.borrow_mut();
 
         // Update existing entry.
@@ -95,7 +98,7 @@ impl TextureCache {
                 inner.order.remove(pos);
             }
             inner.order.push(id);
-            return;
+            return ret;
         }
 
         // Evict LRU if at capacity.
@@ -115,6 +118,7 @@ impl TextureCache {
             },
         );
         inner.order.push(id);
+        ret
     }
 }
 

@@ -164,21 +164,18 @@ pub fn build_factory(
                                 decode_ms = decode_start.elapsed().as_millis(),
                                 "thumbnail decoded (cache miss)"
                             );
-                            // Insert takes ownership and converts to glib::Bytes.
-                            cache_insert.insert(id_for_cache.clone(), pixels, width, height);
+                            // Insert takes ownership and returns shared glib::Bytes.
+                            let gbytes = cache_insert.insert(id_for_cache, pixels, width, height);
 
                             if let Some(item) = item_weak.upgrade() {
-                                // Retrieve the shared glib::Bytes from cache (refcount bump).
-                                if let Some((gbytes, w, h)) = cache_insert.get(&id_for_cache) {
-                                    let texture = gtk::gdk::MemoryTexture::new(
-                                        w as i32,
-                                        h as i32,
-                                        gtk::gdk::MemoryFormat::R8g8b8a8,
-                                        &gbytes,
-                                        (w as usize) * 4,
-                                    );
-                                    item.set_texture(Some(texture.upcast::<gtk::gdk::Texture>()));
-                                }
+                                let texture = gtk::gdk::MemoryTexture::new(
+                                    width as i32,
+                                    height as i32,
+                                    gtk::gdk::MemoryFormat::R8g8b8a8,
+                                    &gbytes,
+                                    (width as usize) * 4,
+                                );
+                                item.set_texture(Some(texture.upcast::<gtk::gdk::Texture>()));
                             }
                         }
                     });
