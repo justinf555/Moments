@@ -1,15 +1,21 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use gtk::glib;
+
 use crate::library::media::MediaId;
 
 /// Maximum number of decoded thumbnails to keep in the LRU cache.
-/// At ~250KB per thumbnail (320px RGBA), 500 entries ~ 125MB RAM.
-const DEFAULT_CAPACITY: usize = 2000;
+/// At ~400KB per thumbnail (320×320 RGBA), 500 entries ~ 195MB RAM.
+const DEFAULT_CAPACITY: usize = 500;
 
-/// Decoded RGBA pixel data ready to be wrapped in a `GdkMemoryTexture`.
+/// Decoded RGBA pixel data stored as reference-counted `glib::Bytes`.
+///
+/// Using `glib::Bytes` instead of `Vec<u8>` allows zero-copy sharing
+/// between the cache and `GdkMemoryTexture` — cloning a `glib::Bytes`
+/// is just an atomic refcount increment, not a data copy.
 pub struct CachedTexture {
-    pub pixels: Vec<u8>,
+    pub pixels: glib::Bytes,
     pub width: u32,
     pub height: u32,
 }
@@ -49,10 +55,9 @@ impl TextureCache {
 
     /// Look up decoded pixel data by media ID.
     ///
-    /// Returns cloned pixel data on hit and promotes the entry to MRU.
-    /// A ~250KB clone takes ~50us — negligible versus the 5-10ms decode
-    /// it replaces.
-    pub fn get(&self, id: &MediaId) -> Option<(Vec<u8>, u32, u32)> {
+    /// Returns a shared `glib::Bytes` on hit and promotes the entry to MRU.
+    /// Cloning `glib::Bytes` is a refcount bump — zero data copy.
+    pub fn get(&self, id: &MediaId) -> Option<(glib::Bytes, u32, u32)> {
         let mut inner = self.inner.borrow_mut();
         if inner.map.contains_key(id) {
             // Promote to MRU.
@@ -69,9 +74,14 @@ impl TextureCache {
 
     /// Insert decoded pixel data into the cache.
     ///
+    /// Takes ownership of the `Vec<u8>` and converts it to `glib::Bytes`
+    /// once. Returns a clone of the stored `glib::Bytes` (refcount bump)
+    /// so the caller can use it directly without a second lookup.
     /// If at capacity, evicts the least-recently-used entry first.
     /// If the key already exists, updates it and promotes to MRU.
-    pub fn insert(&self, id: MediaId, pixels: Vec<u8>, width: u32, height: u32) {
+    pub fn insert(&self, id: MediaId, pixels: Vec<u8>, width: u32, height: u32) -> glib::Bytes {
+        let bytes = glib::Bytes::from_owned(pixels);
+        let ret = bytes.clone();
         let mut inner = self.inner.borrow_mut();
 
         // Update existing entry.
@@ -79,7 +89,7 @@ impl TextureCache {
             inner.map.insert(
                 id.clone(),
                 CachedTexture {
-                    pixels,
+                    pixels: bytes,
                     width,
                     height,
                 },
@@ -88,7 +98,7 @@ impl TextureCache {
                 inner.order.remove(pos);
             }
             inner.order.push(id);
-            return;
+            return ret;
         }
 
         // Evict LRU if at capacity.
@@ -102,12 +112,13 @@ impl TextureCache {
         inner.map.insert(
             id.clone(),
             CachedTexture {
-                pixels,
+                pixels: bytes,
                 width,
                 height,
             },
         );
         inner.order.push(id);
+        ret
     }
 }
 
@@ -134,7 +145,7 @@ mod tests {
         let cache = TextureCache::new();
         cache.insert(make_id("a"), make_pixels(1), 10, 10);
         let (pixels, w, h) = cache.get(&make_id("a")).unwrap();
-        assert_eq!(pixels, make_pixels(1));
+        assert_eq!(&*pixels, &make_pixels(1)[..]);
         assert_eq!(w, 10);
         assert_eq!(h, 10);
     }
@@ -193,7 +204,7 @@ mod tests {
         cache.insert(make_id("a"), make_pixels(2), 20, 20);
 
         let (pixels, w, h) = cache.get(&make_id("a")).unwrap();
-        assert_eq!(pixels, make_pixels(2));
+        assert_eq!(&*pixels, &make_pixels(2)[..]);
         assert_eq!(w, 20);
         assert_eq!(h, 20);
     }

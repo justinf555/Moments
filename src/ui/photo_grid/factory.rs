@@ -119,9 +119,8 @@ pub fn build_factory(
                 let id = item.item().id.clone();
 
                 // Fast path: cache hit — create GdkTexture from cached RGBA bytes.
-                // No debounce needed since this is sub-millisecond.
-                if let Some((pixels, width, height)) = cache.get(&id) {
-                    let gbytes = glib::Bytes::from_owned(pixels);
+                // glib::Bytes clone is a refcount bump — zero data copy.
+                if let Some((gbytes, width, height)) = cache.get(&id) {
                     let texture = gtk::gdk::MemoryTexture::new(
                         width as i32,
                         height as i32,
@@ -165,10 +164,10 @@ pub fn build_factory(
                                 decode_ms = decode_start.elapsed().as_millis(),
                                 "thumbnail decoded (cache miss)"
                             );
-                            cache_insert.insert(id_for_cache, pixels.clone(), width, height);
+                            // Insert takes ownership and returns shared glib::Bytes.
+                            let gbytes = cache_insert.insert(id_for_cache, pixels, width, height);
 
                             if let Some(item) = item_weak.upgrade() {
-                                let gbytes = glib::Bytes::from_owned(pixels);
                                 let texture = gtk::gdk::MemoryTexture::new(
                                     width as i32,
                                     height as i32,

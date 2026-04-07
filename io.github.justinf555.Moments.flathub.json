@@ -9,9 +9,13 @@
     "command" : "moments",
     "finish-args" : [
         "--share=network",
+        "--share=ipc",
         "--device=dri",
         "--socket=wayland",
-        "--socket=pipewire"
+        "--socket=fallback-x11",
+        "--socket=pulseaudio",
+        "--talk-name=org.freedesktop.secrets",
+        "--filesystem=xdg-pictures"
     ],
     "build-options" : {
         "append-path" : "/usr/lib/sdk/rust-stable/bin"
@@ -39,8 +43,8 @@
                 {
                     "type" : "git",
                     "url" : "https://github.com/justinf555/Moments.git",
-                    "tag" : "v0.1.2",
-                    "commit" : "a6e2b2e34c76e3483f15e7d721061f5e0cf347f3"
+                    "tag" : "v0.2.0",
+                    "commit" : "134fa79406b1e7593932d21d2c49cfcdd134a445"
                 },
                 "cargo-sources.json",
                 {
