@@ -97,28 +97,31 @@ mod imp {
         fn realize(&self) {
             self.parent_realize();
 
-            if let (Some(store), Some(library), Some(tokio), Some(sort_order)) = (
+            let (Some(store), Some(library), Some(tokio), Some(sort_order)) = (
                 self.store.get(),
                 self.library.get(),
                 self.tokio.get(),
                 self.sort_order.get(),
-            ) {
-                super::reload_albums(store, library, tokio, Rc::clone(sort_order));
+            ) else {
+                tracing::warn!("AlbumGridView realized before setup()");
+                return;
+            };
 
-                let st = store.clone();
-                let lib = Arc::clone(library);
-                let tk = tokio.clone();
-                let so = Rc::clone(sort_order);
-                let sub = crate::event_bus::subscribe(move |event| match event {
-                    crate::app_event::AppEvent::AlbumCreated { .. }
-                    | crate::app_event::AppEvent::AlbumRenamed { .. }
-                    | crate::app_event::AppEvent::AlbumDeleted { .. } => {
-                        super::reload_albums(&st, &lib, &tk, Rc::clone(&so));
-                    }
-                    _ => {}
-                });
-                *self._subscription.borrow_mut() = Some(sub);
-            }
+            super::reload_albums(store, library, tokio, Rc::clone(sort_order));
+
+            let st = store.clone();
+            let lib = Arc::clone(library);
+            let tk = tokio.clone();
+            let so = Rc::clone(sort_order);
+            let sub = crate::event_bus::subscribe(move |event| match event {
+                crate::app_event::AppEvent::AlbumCreated { .. }
+                | crate::app_event::AppEvent::AlbumRenamed { .. }
+                | crate::app_event::AppEvent::AlbumDeleted { .. } => {
+                    super::reload_albums(&st, &lib, &tk, Rc::clone(&so));
+                }
+                _ => {}
+            });
+            *self._subscription.borrow_mut() = Some(sub);
         }
 
         fn unrealize(&self) {

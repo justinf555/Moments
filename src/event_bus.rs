@@ -86,21 +86,28 @@ impl Drop for Subscription {
 /// Apply any deferred subscription removals. Uses `try_borrow_mut` so it
 /// is a no-op when `drain_events` holds an immutable borrow — the removals
 /// are flushed after the dispatch loop instead.
+///
+/// Drains `PENDING_REMOVALS` to a local vec before touching `SUBSCRIBERS`,
+/// so that dropping a `SubscriberEntry` whose closure captures a
+/// `Subscription` cannot re-enter `PENDING_REMOVALS.borrow_mut()`.
 fn flush_pending_removals() {
-    PENDING_REMOVALS.with(|removals_cell| {
-        let removals = removals_cell.borrow();
-        if removals.is_empty() {
-            return;
+    let removals: Vec<u64> = PENDING_REMOVALS.with(|cell| {
+        let mut r = cell.borrow_mut();
+        if r.is_empty() {
+            return vec![];
         }
-        SUBSCRIBERS.with(|subs_cell| {
-            if let Ok(mut subs) = subs_cell.try_borrow_mut() {
-                subs.retain(|entry| !removals.contains(&entry.id));
-                drop(removals);
-                removals_cell.borrow_mut().clear();
-            }
-            // If try_borrow_mut fails we are inside dispatch —
-            // drain_events will flush after the loop.
-        });
+        r.drain(..).collect()
+    });
+    if removals.is_empty() {
+        return;
+    }
+    SUBSCRIBERS.with(|subs_cell| {
+        if let Ok(mut subs) = subs_cell.try_borrow_mut() {
+            subs.retain(|entry| !removals.contains(&entry.id));
+        } else {
+            // Re-queue: we are inside dispatch, drain_events will flush after.
+            PENDING_REMOVALS.with(|cell| cell.borrow_mut().extend(removals));
+        }
     });
 }
 
