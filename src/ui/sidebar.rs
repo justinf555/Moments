@@ -478,7 +478,72 @@ mod imp {
         bottom_sheet
     }
 
-    impl WidgetImpl for MomentsSidebar {}
+    impl WidgetImpl for MomentsSidebar {
+        fn realize(&self) {
+            self.parent_realize();
+
+            let weak = self.obj().downgrade();
+            let sub = crate::event_bus::subscribe(move |event| {
+                let Some(sidebar) = weak.upgrade() else {
+                    return;
+                };
+                match event {
+                    crate::app_event::AppEvent::SyncStarted => {
+                        sidebar.show_sync_started();
+                    }
+                    crate::app_event::AppEvent::SyncProgress {
+                        assets,
+                        people,
+                        faces,
+                    } => {
+                        sidebar.show_sync_progress(*assets, *people, *faces);
+                    }
+                    crate::app_event::AppEvent::SyncComplete { assets, .. } => {
+                        sidebar.show_sync_complete(*assets);
+                    }
+                    crate::app_event::AppEvent::ThumbnailDownloadProgress {
+                        completed,
+                        total,
+                    } => {
+                        sidebar.show_thumbnail_progress(*completed, *total);
+                    }
+                    crate::app_event::AppEvent::ThumbnailDownloadsComplete { total } => {
+                        sidebar.show_thumbnails_complete(*total);
+                    }
+                    crate::app_event::AppEvent::ImportProgress {
+                        current,
+                        total,
+                        imported,
+                        skipped,
+                        failed,
+                    } => {
+                        sidebar.show_upload_progress(
+                            *current, *total, *imported, *skipped, *failed,
+                        );
+                    }
+                    crate::app_event::AppEvent::ImportComplete { summary } => {
+                        sidebar.show_upload_complete(summary);
+                    }
+                    crate::app_event::AppEvent::Trashed { ids } => {
+                        sidebar.adjust_trash_count(ids.len() as i32);
+                    }
+                    crate::app_event::AppEvent::Restored { ids } => {
+                        sidebar.adjust_trash_count(-(ids.len() as i32));
+                    }
+                    crate::app_event::AppEvent::Deleted { ids } => {
+                        sidebar.adjust_trash_count(-(ids.len() as i32));
+                    }
+                    _ => {}
+                }
+            });
+            *self._subscription.borrow_mut() = Some(sub);
+        }
+
+        fn unrealize(&self) {
+            self._subscription.borrow_mut().take();
+            self.parent_unrealize();
+        }
+    }
     impl adw::subclass::prelude::NavigationPageImpl for MomentsSidebar {}
 }
 
@@ -497,61 +562,6 @@ impl Default for MomentsSidebar {
 impl MomentsSidebar {
     pub fn new() -> Self {
         glib::Object::new()
-    }
-
-    /// Subscribe to sync, import, thumbnail, and trash count events.
-    pub fn subscribe_to_bus(&self) {
-        let weak = self.downgrade();
-        let sub = crate::event_bus::subscribe(move |event| {
-            let Some(sidebar) = weak.upgrade() else {
-                return;
-            };
-            match event {
-                crate::app_event::AppEvent::SyncStarted => {
-                    sidebar.show_sync_started();
-                }
-                crate::app_event::AppEvent::SyncProgress {
-                    assets,
-                    people,
-                    faces,
-                } => {
-                    sidebar.show_sync_progress(*assets, *people, *faces);
-                }
-                crate::app_event::AppEvent::SyncComplete { assets, .. } => {
-                    sidebar.show_sync_complete(*assets);
-                }
-                crate::app_event::AppEvent::ThumbnailDownloadProgress { completed, total } => {
-                    sidebar.show_thumbnail_progress(*completed, *total);
-                }
-                crate::app_event::AppEvent::ThumbnailDownloadsComplete { total } => {
-                    sidebar.show_thumbnails_complete(*total);
-                }
-                crate::app_event::AppEvent::ImportProgress {
-                    current,
-                    total,
-                    imported,
-                    skipped,
-                    failed,
-                } => {
-                    sidebar.show_upload_progress(*current, *total, *imported, *skipped, *failed);
-                }
-                crate::app_event::AppEvent::ImportComplete { summary } => {
-                    sidebar.show_upload_complete(summary);
-                }
-                // Dynamic trash count updates.
-                crate::app_event::AppEvent::Trashed { ids } => {
-                    sidebar.adjust_trash_count(ids.len() as i32);
-                }
-                crate::app_event::AppEvent::Restored { ids } => {
-                    sidebar.adjust_trash_count(-(ids.len() as i32));
-                }
-                crate::app_event::AppEvent::Deleted { ids } => {
-                    sidebar.adjust_trash_count(-(ids.len() as i32));
-                }
-                _ => {}
-            }
-        });
-        *self.imp()._subscription.borrow_mut() = Some(sub);
     }
 
     /// Connect a callback that fires when the user activates a sidebar item.
