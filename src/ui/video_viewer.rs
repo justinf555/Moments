@@ -54,6 +54,9 @@ mod imp {
         // Mutable state
         pub items: RefCell<Vec<MediaItemObject>>,
         pub current_index: Cell<usize>,
+        /// Monotonically increasing counter. Async loads compare against this
+        /// value captured at launch to discard stale results.
+        pub load_gen: Cell<u64>,
         pub current_metadata: RefCell<Option<MediaMetadataRecord>>,
         /// Tracks a pending optimistic favourite toggle for rollback on failure.
         pub pending_fav: RefCell<Option<(MediaId, bool)>>,
@@ -199,6 +202,8 @@ impl VideoViewer {
         debug!(index, %id, %filename, count, "VideoViewer::show_at");
 
         imp.current_index.set(index);
+        let gen = imp.load_gen.get() + 1;
+        imp.load_gen.set(gen);
         *imp.current_metadata.borrow_mut() = None;
 
         self.set_title(&filename);
@@ -219,11 +224,11 @@ impl VideoViewer {
         imp.info_split.set_show_sidebar(false);
 
         // Resolve the original file path and set it on the video widget.
-        self.load_video(id.clone());
-        self.load_metadata_async(id);
+        self.load_video(gen, id.clone());
+        self.load_metadata_async(gen, id);
     }
 
-    fn load_video(&self, id: MediaId) {
+    fn load_video(&self, gen: u64, id: MediaId) {
         let imp = self.imp();
         let library = Arc::clone(imp.library());
         let tokio = imp.tokio().clone();
@@ -263,6 +268,13 @@ impl VideoViewer {
             let Some(viewer) = weak.upgrade() else { return };
             let imp = viewer.imp();
 
+            if imp.load_gen.get() != gen {
+                debug!("load_video: discarding stale result");
+                imp.spinner.set_spinning(false);
+                imp.spinner.set_visible(false);
+                return;
+            }
+
             debug!(path = %path.display(), exists = path.exists(), "load_video: setting file on GtkVideo");
             let file = gio::File::for_path(&path);
             imp.video.set_file(Some(&file));
@@ -272,7 +284,7 @@ impl VideoViewer {
         });
     }
 
-    fn load_metadata_async(&self, id: MediaId) {
+    fn load_metadata_async(&self, gen: u64, id: MediaId) {
         let imp = self.imp();
         let library = Arc::clone(imp.library());
         let tokio = imp.tokio().clone();
@@ -288,6 +300,10 @@ impl VideoViewer {
 
             let Some(viewer) = weak.upgrade() else { return };
             let imp = viewer.imp();
+
+            if imp.load_gen.get() != gen {
+                return;
+            }
 
             *imp.current_metadata.borrow_mut() = metadata;
 
