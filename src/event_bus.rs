@@ -53,8 +53,22 @@ fn next_subscriber_id() -> u64 {
 /// RAII handle for an event bus subscription. Removing the subscriber
 /// closure from the bus when dropped prevents unbounded growth of the
 /// subscriber list over long sessions.
+///
+/// # Thread safety
+///
+/// `Subscription` is `!Send` because its `Drop` impl operates on thread-local
+/// state. It must be dropped on the same thread that created it (the GTK main
+/// thread).
+///
+/// # Re-entrancy
+///
+/// A `Subscription` must not be dropped from within a subscriber callback —
+/// `drain_events()` holds an immutable borrow of the subscriber list during
+/// dispatch, and `Drop` requires a mutable borrow, which would panic.
 pub struct Subscription {
     id: u64,
+    /// Marker to prevent `Send` — `Drop` operates on thread-local state.
+    _not_send: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
 impl Drop for Subscription {
@@ -142,7 +156,10 @@ impl EventBus {
                 handler: Box::new(handler),
             });
         });
-        Subscription { id }
+        Subscription {
+            id,
+            _not_send: std::marker::PhantomData,
+        }
     }
 }
 
@@ -159,7 +176,10 @@ pub fn subscribe(handler: impl Fn(&AppEvent) + 'static) -> Subscription {
             handler: Box::new(handler),
         });
     });
-    Subscription { id }
+    Subscription {
+        id,
+        _not_send: std::marker::PhantomData,
+    }
 }
 
 impl Drop for EventBus {
