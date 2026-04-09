@@ -471,7 +471,6 @@ impl VideoViewer {
 
         // ── Wire overflow menu buttons ──────────────────────────────────────
         wire_overflow_menu(menu_popover, menu_buttons, self);
-
     }
 }
 

@@ -501,10 +501,7 @@ mod imp {
                     crate::app_event::AppEvent::SyncComplete { assets, .. } => {
                         sidebar.show_sync_complete(*assets);
                     }
-                    crate::app_event::AppEvent::ThumbnailDownloadProgress {
-                        completed,
-                        total,
-                    } => {
+                    crate::app_event::AppEvent::ThumbnailDownloadProgress { completed, total } => {
                         sidebar.show_thumbnail_progress(*completed, *total);
                     }
                     crate::app_event::AppEvent::ThumbnailDownloadsComplete { total } => {
@@ -517,9 +514,8 @@ mod imp {
                         skipped,
                         failed,
                     } => {
-                        sidebar.show_upload_progress(
-                            *current, *total, *imported, *skipped, *failed,
-                        );
+                        sidebar
+                            .show_upload_progress(*current, *total, *imported, *skipped, *failed);
                     }
                     crate::app_event::AppEvent::ImportComplete { summary } => {
                         sidebar.show_upload_complete(summary);

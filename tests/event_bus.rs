@@ -258,7 +258,11 @@ fn dropping_subscription_during_dispatch_does_not_panic() {
     // B still fires because the subscriber list snapshot is held for this cycle.
     bus.sender().send(AppEvent::SyncStarted);
     flush_events();
-    assert_eq!(b_count.get(), 1, "B fires during the dispatch cycle it was dropped");
+    assert_eq!(
+        b_count.get(),
+        1,
+        "B fires during the dispatch cycle it was dropped"
+    );
 
     // Second event: B should no longer fire — it was removed after the first cycle.
     bus.sender().send(AppEvent::SyncStarted);

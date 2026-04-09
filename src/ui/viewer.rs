@@ -496,6 +496,5 @@ impl PhotoViewer {
 
         // Wire overflow menu buttons.
         menu::wire_overflow_menu(menu_popover, menu_buttons, self);
-
     }
 }

@@ -196,13 +196,8 @@ impl MomentsWindow {
 
         let texture_cache = Rc::new(TextureCache::new());
 
-        let (content_stack, coordinator, photos_model) = self.build_coordinator(
-            &library,
-            &tokio,
-            &settings,
-            &texture_cache,
-            &bus_sender,
-        );
+        let (content_stack, coordinator, photos_model) =
+            self.build_coordinator(&library, &tokio, &settings, &texture_cache, &bus_sender);
 
         self.register_lazy_views(
             &mut coordinator.borrow_mut(),
