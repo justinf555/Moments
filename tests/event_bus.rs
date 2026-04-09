@@ -226,6 +226,46 @@ fn drop_cleans_up_thread_local_state() {
     assert!(received.get(), "new bus after drop should work");
 }
 
+// ── Re-entrancy safety ─────────────────────────────────────────────────────
+
+#[gtk::test]
+fn dropping_subscription_during_dispatch_does_not_panic() {
+    let bus = EventBus::new();
+
+    // Subscriber A holds a subscription for subscriber B.
+    // When A handles an event it drops B's subscription — this must not panic.
+    let sub_b: Rc<std::cell::RefCell<Option<moments::event_bus::Subscription>>> =
+        Rc::new(std::cell::RefCell::new(None));
+
+    let b_count = Rc::new(Cell::new(0u32));
+    let bc = Rc::clone(&b_count);
+    let sub = bus.subscribe(move |event| {
+        if matches!(event, AppEvent::SyncStarted) {
+            bc.set(bc.get() + 1);
+        }
+    });
+    *sub_b.borrow_mut() = Some(sub);
+
+    let sb = Rc::clone(&sub_b);
+    let _sub_a = bus.subscribe(move |event| {
+        if matches!(event, AppEvent::SyncStarted) {
+            // Drop subscriber B's subscription from within dispatch.
+            sb.borrow_mut().take();
+        }
+    });
+
+    // First event: A drops B's subscription during dispatch.
+    // B still fires because the subscriber list snapshot is held for this cycle.
+    bus.sender().send(AppEvent::SyncStarted);
+    flush_events();
+    assert_eq!(b_count.get(), 1, "B fires during the dispatch cycle it was dropped");
+
+    // Second event: B should no longer fire — it was removed after the first cycle.
+    bus.sender().send(AppEvent::SyncStarted);
+    flush_events();
+    assert_eq!(b_count.get(), 1, "B should not fire after being dropped");
+}
+
 // ── Subscription unsubscribe ────────────────────────────────────────────────
 
 #[gtk::test]

@@ -17,9 +17,9 @@ use crate::app_event::AppEvent;
 ///
 /// # Subscriber contract
 ///
-/// All subscribers must be registered before events begin flowing (i.e. in
-/// component constructors during app setup). Calling [`subscribe`](Self::subscribe)
-/// from within a subscriber callback will panic due to `RefCell` re-entrancy.
+/// Subscriptions can be created and dropped at any time, including during
+/// event dispatch (e.g. from `WidgetImpl::realize` / `unrealize`).
+/// Drops during dispatch are deferred and flushed after the dispatch loop.
 ///
 /// See `docs/design-event-bus.md` for the full design.
 pub struct EventBus {
@@ -40,6 +40,9 @@ thread_local! {
     static SUBSCRIBERS: RefCell<SubscriberList> = const { RefCell::new(Vec::new()) };
     static RECEIVER: RefCell<Option<mpsc::Receiver<AppEvent>>> = const { RefCell::new(None) };
     static NEXT_ID: Cell<u64> = const { Cell::new(0) };
+    /// IDs of subscriptions dropped during dispatch. Flushed after the
+    /// dispatch loop releases its immutable borrow of `SUBSCRIBERS`.
+    static PENDING_REMOVALS: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
 }
 
 fn next_subscriber_id() -> u64 {
@@ -62,9 +65,9 @@ fn next_subscriber_id() -> u64 {
 ///
 /// # Re-entrancy
 ///
-/// A `Subscription` must not be dropped from within a subscriber callback —
-/// `drain_events()` holds an immutable borrow of the subscriber list during
-/// dispatch, and `Drop` requires a mutable borrow, which would panic.
+/// Safe to drop during event dispatch (e.g. from a `WidgetImpl::unrealize`
+/// triggered by a handler). The removal is deferred and flushed after
+/// dispatch completes.
 pub struct Subscription {
     id: u64,
     /// Marker to prevent `Send` — `Drop` operates on thread-local state.
@@ -73,10 +76,32 @@ pub struct Subscription {
 
 impl Drop for Subscription {
     fn drop(&mut self) {
-        SUBSCRIBERS.with(|cell| {
-            cell.borrow_mut().retain(|entry| entry.id != self.id);
+        PENDING_REMOVALS.with(|cell| {
+            cell.borrow_mut().push(self.id);
         });
+        flush_pending_removals();
     }
+}
+
+/// Apply any deferred subscription removals. Uses `try_borrow_mut` so it
+/// is a no-op when `drain_events` holds an immutable borrow — the removals
+/// are flushed after the dispatch loop instead.
+fn flush_pending_removals() {
+    PENDING_REMOVALS.with(|removals_cell| {
+        let removals = removals_cell.borrow();
+        if removals.is_empty() {
+            return;
+        }
+        SUBSCRIBERS.with(|subs_cell| {
+            if let Ok(mut subs) = subs_cell.try_borrow_mut() {
+                subs.retain(|entry| !removals.contains(&entry.id));
+                drop(removals);
+                removals_cell.borrow_mut().clear();
+            }
+            // If try_borrow_mut fails we are inside dispatch —
+            // drain_events will flush after the loop.
+        });
+    });
 }
 
 /// Drain all pending events from the channel and deliver to subscribers.
@@ -100,6 +125,10 @@ fn drain_events() {
                 }
             }
         });
+
+        // Flush any subscriptions that were dropped during dispatch
+        // (e.g. via WidgetImpl::unrealize triggered by a handler).
+        flush_pending_removals();
     });
 }
 
@@ -144,10 +173,6 @@ impl EventBus {
     ///
     /// The subscriber receives every event — use `match` to filter.
     /// Subscribers are called in registration order.
-    ///
-    /// **Must not be called from within a subscriber callback** — the
-    /// `RefCell` borrow will panic. Register all subscribers during
-    /// component construction, before events start flowing.
     pub fn subscribe(&self, handler: impl Fn(&AppEvent) + 'static) -> Subscription {
         let id = next_subscriber_id();
         SUBSCRIBERS.with(|cell| {
@@ -190,6 +215,9 @@ impl Drop for EventBus {
             cell.borrow_mut().take();
         });
         SUBSCRIBERS.with(|cell| {
+            cell.borrow_mut().clear();
+        });
+        PENDING_REMOVALS.with(|cell| {
             cell.borrow_mut().clear();
         });
     }
