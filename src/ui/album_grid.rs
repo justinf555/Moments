@@ -30,7 +30,7 @@ const SORT_CREATED: u32 = 2;
 
 mod imp {
     use super::*;
-    use std::cell::OnceCell;
+    use std::cell::{OnceCell, RefCell};
 
     use gtk::CompositeTemplate;
 
@@ -65,6 +65,8 @@ mod imp {
         // State
         pub(super) store: OnceCell<gio::ListStore>,
         pub(super) sort_order: OnceCell<Rc<Cell<u32>>>,
+        /// Keeps the event bus subscription alive for this view's lifetime.
+        pub _subscription: RefCell<Option<crate::event_bus::Subscription>>,
     }
 
     #[glib::object_subclass]
@@ -306,7 +308,7 @@ impl AlbumGridView {
             let lib = Arc::clone(&library);
             let tk = tokio.clone();
             let so = Rc::clone(&sort_order);
-            crate::event_bus::subscribe(move |event| match event {
+            let sub = crate::event_bus::subscribe(move |event| match event {
                 crate::app_event::AppEvent::AlbumCreated { .. }
                 | crate::app_event::AppEvent::AlbumRenamed { .. }
                 | crate::app_event::AppEvent::AlbumDeleted { .. } => {
@@ -314,6 +316,7 @@ impl AlbumGridView {
                 }
                 _ => {}
             });
+            *imp._subscription.borrow_mut() = Some(sub);
         }
 
         assert!(imp.store.set(store).is_ok());

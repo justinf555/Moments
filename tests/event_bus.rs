@@ -27,7 +27,7 @@ fn single_subscriber_receives_event() {
 
     let received = Rc::new(Cell::new(false));
     let r = Rc::clone(&received);
-    bus.subscribe(move |event| {
+    let _sub = bus.subscribe(move |event| {
         if matches!(event, AppEvent::SyncStarted) {
             r.set(true);
         }
@@ -44,13 +44,14 @@ fn multiple_subscribers_all_receive() {
     let bus = EventBus::new();
 
     let count = Rc::new(Cell::new(0u32));
+    let mut subs = Vec::new();
     for _ in 0..3 {
         let c = Rc::clone(&count);
-        bus.subscribe(move |event| {
+        subs.push(bus.subscribe(move |event| {
             if matches!(event, AppEvent::SyncStarted) {
                 c.set(c.get() + 1);
             }
-        });
+        }));
     }
 
     bus.sender().send(AppEvent::SyncStarted);
@@ -65,7 +66,7 @@ fn subscribers_ignore_unmatched_events() {
 
     let received = Rc::new(Cell::new(false));
     let r = Rc::clone(&received);
-    bus.subscribe(move |event| {
+    let _sub = bus.subscribe(move |event| {
         if matches!(event, AppEvent::SyncStarted) {
             r.set(true);
         }
@@ -91,7 +92,7 @@ fn multiple_events_delivered_in_order() {
 
     let log: Rc<std::cell::RefCell<Vec<String>>> = Rc::new(std::cell::RefCell::new(Vec::new()));
     let l = Rc::clone(&log);
-    bus.subscribe(move |event| {
+    let _sub = bus.subscribe(move |event| {
         let name = match event {
             AppEvent::SyncStarted => "start",
             AppEvent::SyncComplete { .. } => "complete",
@@ -129,7 +130,7 @@ fn sender_works_from_another_thread() {
 
     let received = Rc::new(Cell::new(false));
     let r = Rc::clone(&received);
-    bus.subscribe(move |event| {
+    let _sub = bus.subscribe(move |event| {
         if matches!(event, AppEvent::SyncStarted) {
             r.set(true);
         }
@@ -159,7 +160,7 @@ fn command_event_reaches_subscriber() {
     let trashed_ids: Rc<std::cell::RefCell<Vec<String>>> =
         Rc::new(std::cell::RefCell::new(Vec::new()));
     let t = Rc::clone(&trashed_ids);
-    bus.subscribe(move |event| {
+    let _sub = bus.subscribe(move |event| {
         if let AppEvent::TrashRequested { ids } = event {
             for id in ids {
                 t.borrow_mut().push(id.as_str().to_string());
@@ -184,7 +185,7 @@ fn result_event_reaches_subscriber() {
 
     let favorite_state = Rc::new(Cell::new(false));
     let f = Rc::clone(&favorite_state);
-    bus.subscribe(move |event| {
+    let _sub = bus.subscribe(move |event| {
         if let AppEvent::FavoriteChanged { is_favorite, .. } = event {
             f.set(*is_favorite);
         }
@@ -205,7 +206,7 @@ fn result_event_reaches_subscriber() {
 fn drop_cleans_up_thread_local_state() {
     {
         let bus = EventBus::new();
-        bus.subscribe(|_| {});
+        let _sub = bus.subscribe(|_| {});
         // bus dropped here
     }
 
@@ -213,7 +214,7 @@ fn drop_cleans_up_thread_local_state() {
     let bus = EventBus::new();
     let received = Rc::new(Cell::new(false));
     let r = Rc::clone(&received);
-    bus.subscribe(move |event| {
+    let _sub = bus.subscribe(move |event| {
         if matches!(event, AppEvent::SyncStarted) {
             r.set(true);
         }
@@ -223,4 +224,30 @@ fn drop_cleans_up_thread_local_state() {
     flush_events();
 
     assert!(received.get(), "new bus after drop should work");
+}
+
+// ── Subscription unsubscribe ────────────────────────────────────────────────
+
+#[gtk::test]
+fn dropping_subscription_removes_subscriber() {
+    let bus = EventBus::new();
+
+    let count = Rc::new(Cell::new(0u32));
+    let c = Rc::clone(&count);
+    let sub = bus.subscribe(move |event| {
+        if matches!(event, AppEvent::SyncStarted) {
+            c.set(c.get() + 1);
+        }
+    });
+
+    bus.sender().send(AppEvent::SyncStarted);
+    flush_events();
+    assert_eq!(count.get(), 1);
+
+    // Drop the subscription — subscriber should be removed.
+    drop(sub);
+
+    bus.sender().send(AppEvent::SyncStarted);
+    flush_events();
+    assert_eq!(count.get(), 1, "subscriber should not fire after drop");
 }

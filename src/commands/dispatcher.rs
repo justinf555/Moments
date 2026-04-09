@@ -23,7 +23,12 @@ use super::CommandHandler;
 ///
 /// `library` and `tokio` exist in exactly one place — here. No other
 /// component needs them for action execution.
-pub struct CommandDispatcher;
+///
+/// Holds a [`Subscription`] — the subscriber is removed when the
+/// dispatcher is dropped.
+pub struct CommandDispatcher {
+    _subscription: crate::event_bus::Subscription,
+}
 
 impl CommandDispatcher {
     pub fn new(library: Arc<dyn Library>, tokio: tokio::runtime::Handle, bus: &EventBus) -> Self {
@@ -42,7 +47,7 @@ impl CommandDispatcher {
 
         let tx = bus.sender();
 
-        bus.subscribe(move |event| {
+        let subscription = bus.subscribe(move |event| {
             for handler in &handlers {
                 if handler.handles(event) {
                     let h = Arc::clone(handler);
@@ -57,6 +62,8 @@ impl CommandDispatcher {
             }
         });
 
-        Self
+        Self {
+            _subscription: subscription,
+        }
     }
 }

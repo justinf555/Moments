@@ -33,6 +33,8 @@ mod imp {
         pub has_more: Cell<bool>,
         pub id_index: RefCell<HashMap<MediaId, glib::WeakRef<MediaItemObject>>>,
         pub on_page_ready: RefCell<Option<Box<dyn Fn()>>>,
+        /// Keeps the event bus subscription alive for this model's lifetime.
+        pub _subscription: RefCell<Option<crate::event_bus::Subscription>>,
     }
 
     impl Default for PhotoGridModel {
@@ -48,6 +50,7 @@ mod imp {
                 has_more: Cell::new(true),
                 id_index: RefCell::new(HashMap::new()),
                 on_page_ready: RefCell::new(None),
+                _subscription: RefCell::new(None),
             }
         }
     }
@@ -102,21 +105,23 @@ impl PhotoGridModel {
     /// Subscribe to relevant events on the bus.
     pub fn subscribe(&self, bus: &EventBus) {
         let weak = self.downgrade();
-        bus.subscribe(move |event| {
+        let sub = bus.subscribe(move |event| {
             if let Some(model) = weak.upgrade() {
                 model.handle_event(event);
             }
         });
+        *self.imp()._subscription.borrow_mut() = Some(sub);
     }
 
     /// Subscribe to the bus via the thread-local free function.
     pub fn subscribe_to_bus(&self) {
         let weak = self.downgrade();
-        crate::event_bus::subscribe(move |event| {
+        let sub = crate::event_bus::subscribe(move |event| {
             if let Some(model) = weak.upgrade() {
                 model.handle_event(event);
             }
         });
+        *self.imp()._subscription.borrow_mut() = Some(sub);
     }
 
     /// Dispatch a bus event to the appropriate handler.
