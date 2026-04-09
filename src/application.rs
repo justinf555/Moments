@@ -63,6 +63,10 @@ mod imp {
         /// Centralised event bus for fan-out event delivery.
         /// Created when the library is loaded.
         pub event_bus: RefCell<Option<EventBus>>,
+        /// Holds the command dispatcher so its subscription stays alive.
+        pub dispatcher: RefCell<Option<crate::commands::dispatcher::CommandDispatcher>>,
+        /// App-lifetime event bus subscriptions (error toasts, etc.).
+        pub subscriptions: RefCell<Vec<crate::event_bus::Subscription>>,
     }
 
     #[glib::object_subclass]
@@ -550,24 +554,23 @@ impl MomentsApplication {
 
                         // Create the command dispatcher — routes *Requested
                         // events to library calls on the Tokio runtime.
-                        // The dispatcher is a unit struct; the real work is the
-                        // subscriber closure registered in new(), which lives in
-                        // the bus's thread-local SUBSCRIBERS for the app lifetime.
+                        // Stored in the app imp so the subscription stays alive.
                         let Some(lib) = app.imp().library.borrow().as_ref().map(Arc::clone) else {
                             tracing::error!("library not initialised when creating dispatcher");
                             return;
                         };
-                        let _dispatcher = crate::commands::dispatcher::CommandDispatcher::new(
+                        let dispatcher = crate::commands::dispatcher::CommandDispatcher::new(
                             lib,
                             tokio.clone(),
                             &bus,
                         );
+                        *app.imp().dispatcher.borrow_mut() = Some(dispatcher);
 
                         // Subscribe for error toasts — centralised error
                         // handling for all command failures.
                         {
                             let win_weak = window.downgrade();
-                            bus.subscribe(move |event| {
+                            let sub = bus.subscribe(move |event| {
                                 if let AppEvent::Error(msg) = event {
                                     if let Some(win) = win_weak.upgrade() {
                                         gtk::prelude::WidgetExt::activate_action(
@@ -579,6 +582,7 @@ impl MomentsApplication {
                                     }
                                 }
                             });
+                            app.imp().subscriptions.borrow_mut().push(sub);
                         }
 
                         // Store bus for shutdown cleanup.

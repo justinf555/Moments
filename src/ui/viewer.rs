@@ -80,6 +80,8 @@ mod imp {
         /// Tracks a pending optimistic favourite toggle for rollback on failure.
         /// Contains `(media_id, previous_favourite_state)`.
         pub pending_fav: RefCell<Option<(MediaId, bool)>>,
+        /// Keeps the event bus subscription alive for this viewer's lifetime.
+        pub _subscription: RefCell<Option<crate::event_bus::Subscription>>,
     }
 
     impl PhotoViewer {
@@ -472,7 +474,7 @@ impl PhotoViewer {
         // Subscribe to bus: clear pending favourite state on confirmation.
         {
             let viewer = self.downgrade();
-            crate::event_bus::subscribe(move |event| {
+            let sub = crate::event_bus::subscribe(move |event| {
                 if let AppEvent::FavoriteChanged { ids, .. } = event {
                     let Some(viewer) = viewer.upgrade() else {
                         return;
@@ -486,6 +488,7 @@ impl PhotoViewer {
                     }
                 }
             });
+            *self.imp()._subscription.borrow_mut() = Some(sub);
         }
     }
 }

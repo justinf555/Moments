@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::mpsc;
 
 use gtk::glib;
@@ -26,7 +26,12 @@ pub struct EventBus {
     tx: mpsc::Sender<AppEvent>,
 }
 
-type SubscriberList = Vec<Box<dyn Fn(&AppEvent)>>;
+struct SubscriberEntry {
+    id: u64,
+    handler: Box<dyn Fn(&AppEvent)>,
+}
+
+type SubscriberList = Vec<SubscriberEntry>;
 
 // Thread-local subscriber list. Accessible from `idle_add_once` callbacks
 // which run on the GTK main thread. This avoids the Send constraint — the
@@ -34,6 +39,44 @@ type SubscriberList = Vec<Box<dyn Fn(&AppEvent)>>;
 thread_local! {
     static SUBSCRIBERS: RefCell<SubscriberList> = const { RefCell::new(Vec::new()) };
     static RECEIVER: RefCell<Option<mpsc::Receiver<AppEvent>>> = const { RefCell::new(None) };
+    static NEXT_ID: Cell<u64> = const { Cell::new(0) };
+}
+
+fn next_subscriber_id() -> u64 {
+    NEXT_ID.with(|cell| {
+        let id = cell.get();
+        cell.set(id + 1);
+        id
+    })
+}
+
+/// RAII handle for an event bus subscription. Removing the subscriber
+/// closure from the bus when dropped prevents unbounded growth of the
+/// subscriber list over long sessions.
+///
+/// # Thread safety
+///
+/// `Subscription` is `!Send` because its `Drop` impl operates on thread-local
+/// state. It must be dropped on the same thread that created it (the GTK main
+/// thread).
+///
+/// # Re-entrancy
+///
+/// A `Subscription` must not be dropped from within a subscriber callback —
+/// `drain_events()` holds an immutable borrow of the subscriber list during
+/// dispatch, and `Drop` requires a mutable borrow, which would panic.
+pub struct Subscription {
+    id: u64,
+    /// Marker to prevent `Send` — `Drop` operates on thread-local state.
+    _not_send: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+impl Drop for Subscription {
+    fn drop(&mut self) {
+        SUBSCRIBERS.with(|cell| {
+            cell.borrow_mut().retain(|entry| entry.id != self.id);
+        });
+    }
 }
 
 /// Drain all pending events from the channel and deliver to subscribers.
@@ -52,8 +95,8 @@ fn drain_events() {
             // any cycle (A emits B, B emits A) will loop forever and hang the UI.
             // See the circular event loop risk in docs/design-event-bus.md.
             while let Ok(event) = rx.try_recv() {
-                for handler in subs.iter() {
-                    handler(&event);
+                for entry in subs.iter() {
+                    (entry.handler)(&event);
                 }
             }
         });
@@ -96,16 +139,27 @@ impl EventBus {
 
     /// Register a subscriber callback. Called on the GTK main thread.
     ///
+    /// Returns a [`Subscription`] handle — the closure is removed when the
+    /// handle is dropped. Store it in the subscribing component's state.
+    ///
     /// The subscriber receives every event — use `match` to filter.
     /// Subscribers are called in registration order.
     ///
     /// **Must not be called from within a subscriber callback** — the
     /// `RefCell` borrow will panic. Register all subscribers during
     /// component construction, before events start flowing.
-    pub fn subscribe(&self, handler: impl Fn(&AppEvent) + 'static) {
+    pub fn subscribe(&self, handler: impl Fn(&AppEvent) + 'static) -> Subscription {
+        let id = next_subscriber_id();
         SUBSCRIBERS.with(|cell| {
-            cell.borrow_mut().push(Box::new(handler));
+            cell.borrow_mut().push(SubscriberEntry {
+                id,
+                handler: Box::new(handler),
+            });
         });
+        Subscription {
+            id,
+            _not_send: std::marker::PhantomData,
+        }
     }
 }
 
@@ -114,10 +168,18 @@ impl EventBus {
 /// This is a convenience for components created lazily (e.g. in `register_lazy`
 /// closures) that don't have a direct reference to the `EventBus` struct.
 /// Equivalent to calling `bus.subscribe(handler)`.
-pub fn subscribe(handler: impl Fn(&AppEvent) + 'static) {
+pub fn subscribe(handler: impl Fn(&AppEvent) + 'static) -> Subscription {
+    let id = next_subscriber_id();
     SUBSCRIBERS.with(|cell| {
-        cell.borrow_mut().push(Box::new(handler));
+        cell.borrow_mut().push(SubscriberEntry {
+            id,
+            handler: Box::new(handler),
+        });
     });
+    Subscription {
+        id,
+        _not_send: std::marker::PhantomData,
+    }
 }
 
 impl Drop for EventBus {

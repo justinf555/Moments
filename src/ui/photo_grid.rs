@@ -399,6 +399,8 @@ mod view_imp {
         pub selection_title: OnceCell<gtk::Label>,
         pub bar_box: OnceCell<gtk::Box>,
         pub fav_btn: RefCell<Option<gtk::Button>>,
+        /// Keeps the event bus subscription alive for this view's lifetime.
+        pub _subscription: RefCell<Option<crate::event_bus::Subscription>>,
     }
 
     impl PhotoGridView {
@@ -845,7 +847,7 @@ impl PhotoGridView {
         // Subscribe for exit-selection on result events.
         {
             let exit = imp.exit_selection().clone();
-            crate::event_bus::subscribe(move |event| match event {
+            let sub = crate::event_bus::subscribe(move |event| match event {
                 AppEvent::Trashed { .. }
                 | AppEvent::Deleted { .. }
                 | AppEvent::Restored { .. }
@@ -855,6 +857,7 @@ impl PhotoGridView {
                 }
                 _ => {}
             });
+            *imp._subscription.borrow_mut() = Some(sub);
         }
 
         // ── Selection changed → update count, auto-exit ─────────────────

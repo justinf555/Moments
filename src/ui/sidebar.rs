@@ -47,6 +47,8 @@ mod imp {
         pub sync_timer: RefCell<Option<glib::SourceId>>,
         /// Current status bar state (for priority logic).
         pub current_state: Cell<StatusState>,
+        /// Keeps the event bus subscription alive for this sidebar's lifetime.
+        pub _subscription: RefCell<Option<crate::event_bus::Subscription>>,
     }
 
     /// Tracks the active bottom bar state for priority-based switching.
@@ -83,6 +85,7 @@ mod imp {
                 last_synced_at: Cell::new(None),
                 sync_timer: RefCell::new(None),
                 current_state: Cell::new(StatusState::Idle),
+                _subscription: RefCell::new(None),
             }
         }
     }
@@ -499,7 +502,7 @@ impl MomentsSidebar {
     /// Subscribe to sync, import, thumbnail, and trash count events.
     pub fn subscribe_to_bus(&self) {
         let weak = self.downgrade();
-        crate::event_bus::subscribe(move |event| {
+        let sub = crate::event_bus::subscribe(move |event| {
             let Some(sidebar) = weak.upgrade() else {
                 return;
             };
@@ -548,6 +551,7 @@ impl MomentsSidebar {
                 _ => {}
             }
         });
+        *self.imp()._subscription.borrow_mut() = Some(sub);
     }
 
     /// Connect a callback that fires when the user activates a sidebar item.
