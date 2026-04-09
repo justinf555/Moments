@@ -93,7 +93,42 @@ mod imp {
             }
         }
     }
-    impl WidgetImpl for AlbumGridView {}
+    impl WidgetImpl for AlbumGridView {
+        fn realize(&self) {
+            self.parent_realize();
+
+            let (Some(store), Some(library), Some(tokio), Some(sort_order)) = (
+                self.store.get(),
+                self.library.get(),
+                self.tokio.get(),
+                self.sort_order.get(),
+            ) else {
+                tracing::warn!("AlbumGridView realized before setup()");
+                return;
+            };
+
+            super::reload_albums(store, library, tokio, Rc::clone(sort_order));
+
+            let st = store.clone();
+            let lib = Arc::clone(library);
+            let tk = tokio.clone();
+            let so = Rc::clone(sort_order);
+            let sub = crate::event_bus::subscribe(move |event| match event {
+                crate::app_event::AppEvent::AlbumCreated { .. }
+                | crate::app_event::AppEvent::AlbumRenamed { .. }
+                | crate::app_event::AppEvent::AlbumDeleted { .. } => {
+                    super::reload_albums(&st, &lib, &tk, Rc::clone(&so));
+                }
+                _ => {}
+            });
+            *self._subscription.borrow_mut() = Some(sub);
+        }
+
+        fn unrealize(&self) {
+            self._subscription.borrow_mut().take();
+            self.parent_unrealize();
+        }
+    }
 }
 
 glib::wrapper! {
@@ -298,26 +333,6 @@ impl AlbumGridView {
 
         imp.toolbar_view
             .insert_action_group("album", Some(&action_group));
-
-        // ── Load albums asynchronously ──────────────────────────────────
-        reload_albums(&store, &library, &tokio, Rc::clone(&sort_order));
-
-        // ── Subscribe to bus for album changes ──────────────────────────
-        {
-            let st = store.clone();
-            let lib = Arc::clone(&library);
-            let tk = tokio.clone();
-            let so = Rc::clone(&sort_order);
-            let sub = crate::event_bus::subscribe(move |event| match event {
-                crate::app_event::AppEvent::AlbumCreated { .. }
-                | crate::app_event::AppEvent::AlbumRenamed { .. }
-                | crate::app_event::AppEvent::AlbumDeleted { .. } => {
-                    reload_albums(&st, &lib, &tk, Rc::clone(&so));
-                }
-                _ => {}
-            });
-            *imp._subscription.borrow_mut() = Some(sub);
-        }
 
         assert!(imp.store.set(store).is_ok());
         assert!(imp.sort_order.set(sort_order).is_ok());

@@ -304,8 +304,6 @@ impl PhotoGrid {
                 .connect_items_changed(move |_, _, _, _| update());
         }
 
-        model.load_more();
-
         let model_scroll = model.clone();
         let adj = scrolled.vadjustment();
         adj.connect_value_changed(move |adj| {
@@ -466,7 +464,43 @@ mod view_imp {
             self.dispose_template();
         }
     }
-    impl WidgetImpl for PhotoGridView {}
+    impl WidgetImpl for PhotoGridView {
+        fn realize(&self) {
+            self.parent_realize();
+
+            // Activate the model's bus subscription and trigger initial load.
+            if let Some(model) = self.photo_grid.imp().model.borrow().as_ref() {
+                model.activate();
+                model.load_more();
+            }
+
+            // Subscribe for exit-selection on result events.
+            if let Some(exit) = self.exit_selection.get() {
+                let exit = exit.clone();
+                let sub = crate::event_bus::subscribe(move |event| match event {
+                    crate::app_event::AppEvent::Trashed { .. }
+                    | crate::app_event::AppEvent::Deleted { .. }
+                    | crate::app_event::AppEvent::Restored { .. }
+                    | crate::app_event::AppEvent::AlbumMediaChanged { .. }
+                    | crate::app_event::AppEvent::FavoriteChanged { .. } => {
+                        exit.activate(None);
+                    }
+                    _ => {}
+                });
+                *self._subscription.borrow_mut() = Some(sub);
+            }
+        }
+
+        fn unrealize(&self) {
+            self._subscription.borrow_mut().take();
+
+            if let Some(model) = self.photo_grid.imp().model.borrow().as_ref() {
+                model.deactivate();
+            }
+
+            self.parent_unrealize();
+        }
+    }
 }
 
 glib::wrapper! {
@@ -842,22 +876,6 @@ impl PhotoGridView {
                     dialog.present(win.as_ref());
                 });
             }
-        }
-
-        // Subscribe for exit-selection on result events.
-        {
-            let exit = imp.exit_selection().clone();
-            let sub = crate::event_bus::subscribe(move |event| match event {
-                AppEvent::Trashed { .. }
-                | AppEvent::Deleted { .. }
-                | AppEvent::Restored { .. }
-                | AppEvent::AlbumMediaChanged { .. }
-                | AppEvent::FavoriteChanged { .. } => {
-                    exit.activate(None);
-                }
-                _ => {}
-            });
-            *imp._subscription.borrow_mut() = Some(sub);
         }
 
         // ── Selection changed → update count, auto-exit ─────────────────

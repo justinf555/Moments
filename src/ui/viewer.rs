@@ -116,7 +116,33 @@ mod imp {
             self.dispose_template();
         }
     }
-    impl WidgetImpl for PhotoViewer {}
+    impl WidgetImpl for PhotoViewer {
+        fn realize(&self) {
+            self.parent_realize();
+
+            let viewer = self.obj().downgrade();
+            let sub = crate::event_bus::subscribe(move |event| {
+                if let crate::app_event::AppEvent::FavoriteChanged { ids, .. } = event {
+                    let Some(viewer) = viewer.upgrade() else {
+                        return;
+                    };
+                    let imp = viewer.imp();
+                    let mut pf = imp.pending_fav.borrow_mut();
+                    if let Some((ref pending_id, _)) = *pf {
+                        if ids.contains(pending_id) {
+                            *pf = None;
+                        }
+                    }
+                }
+            });
+            *self._subscription.borrow_mut() = Some(sub);
+        }
+
+        fn unrealize(&self) {
+            self._subscription.borrow_mut().take();
+            self.parent_unrealize();
+        }
+    }
     impl NavigationPageImpl for PhotoViewer {}
 }
 
@@ -470,25 +496,5 @@ impl PhotoViewer {
 
         // Wire overflow menu buttons.
         menu::wire_overflow_menu(menu_popover, menu_buttons, self);
-
-        // Subscribe to bus: clear pending favourite state on confirmation.
-        {
-            let viewer = self.downgrade();
-            let sub = crate::event_bus::subscribe(move |event| {
-                if let AppEvent::FavoriteChanged { ids, .. } = event {
-                    let Some(viewer) = viewer.upgrade() else {
-                        return;
-                    };
-                    let imp = viewer.imp();
-                    let mut pf = imp.pending_fav.borrow_mut();
-                    if let Some((ref pending_id, _)) = *pf {
-                        if ids.contains(pending_id) {
-                            *pf = None;
-                        }
-                    }
-                }
-            });
-            *self.imp()._subscription.borrow_mut() = Some(sub);
-        }
     }
 }

@@ -46,7 +46,6 @@ pub(crate) fn open_album_drilldown(
         bus_sender.clone(),
     );
     view.set_model(model.clone());
-    model.subscribe_to_bus();
 
     let page = adw::NavigationPage::builder()
         .tag("album-detail")

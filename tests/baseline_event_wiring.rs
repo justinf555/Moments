@@ -308,8 +308,8 @@ mod bus_broadcast {
         let model_a = make_model(MediaFilter::All);
         let model_b = make_model(MediaFilter::All);
 
-        model_a.subscribe(&bus);
-        model_b.subscribe(&bus);
+        model_a.activate();
+        model_b.activate();
 
         model_a.insert_item_sorted(test_item("shared-id"));
         model_b.insert_item_sorted(test_item("shared-id"));
@@ -329,8 +329,8 @@ mod bus_broadcast {
         let model_a = make_model(MediaFilter::All);
         let model_b = make_model(MediaFilter::All);
 
-        model_a.subscribe(&bus);
-        model_b.subscribe(&bus);
+        model_a.activate();
+        model_b.activate();
 
         model_a.insert_item_sorted(test_item("fav-id"));
         model_b.insert_item_sorted(test_item("fav-id"));
@@ -361,7 +361,7 @@ mod bus_broadcast {
     fn trashed_event_removes_from_all_model() {
         let bus = EventBus::new();
         let model_all = make_model(MediaFilter::All);
-        model_all.subscribe(&bus);
+        model_all.activate();
 
         model_all.insert_item_sorted(test_item("trash-id"));
 
@@ -379,8 +379,8 @@ mod bus_broadcast {
         let model_all = make_model(MediaFilter::All);
         let model_trash = make_model(MediaFilter::Trashed);
 
-        model_all.subscribe(&bus);
-        model_trash.subscribe(&bus);
+        model_all.activate();
+        model_trash.activate();
 
         bus.sender().send(AppEvent::AssetSynced {
             item: test_item("synced-asset"),
@@ -397,8 +397,8 @@ mod bus_broadcast {
         let model_all = make_model(MediaFilter::All);
         let model_trash = make_model(MediaFilter::Trashed);
 
-        model_all.subscribe(&bus);
-        model_trash.subscribe(&bus);
+        model_all.activate();
+        model_trash.activate();
 
         let mut item = test_item("trashed-asset");
         item.is_trashed = true;

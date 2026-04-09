@@ -61,7 +61,6 @@ pub(super) fn wire_activation(
             bs.clone(),
         );
         view.set_model(model.clone());
-        model.subscribe_to_bus();
 
         let display_name = if data.name.is_empty() {
             gettext("Unnamed")
