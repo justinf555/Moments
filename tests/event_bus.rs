@@ -255,7 +255,8 @@ fn dropping_subscription_during_dispatch_does_not_panic() {
     });
 
     // First event: A drops B's subscription during dispatch.
-    // B still fires because the subscriber list snapshot is held for this cycle.
+    // B still fires because the SUBSCRIBERS immutable borrow is held for the entire
+    // dispatch cycle — the removal is deferred until after the loop completes.
     bus.sender().send(AppEvent::SyncStarted);
     flush_events();
     assert_eq!(
