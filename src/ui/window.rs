@@ -202,7 +202,6 @@ impl MomentsWindow {
             &settings,
             &texture_cache,
             &bus_sender,
-            bus,
         );
 
         self.register_lazy_views(
@@ -318,7 +317,6 @@ impl MomentsWindow {
         settings: &gio::Settings,
         texture_cache: &Rc<TextureCache>,
         bus_sender: &crate::event_bus::EventSender,
-        bus: &crate::event_bus::EventBus,
     ) -> (gtk::Stack, Rc<RefCell<ContentCoordinator>>, PhotoGridModel) {
         use crate::library::media::MediaFilter;
 
@@ -344,7 +342,6 @@ impl MomentsWindow {
             bus_sender.clone(),
         );
         photos_view.set_model(photos_model.clone());
-        photos_model.subscribe(bus);
         coordinator.register("photos", &photos_view);
 
         (
@@ -381,7 +378,6 @@ impl MomentsWindow {
                 let view = PhotoGridView::new();
                 view.setup(lib, tk, s, tc, bs);
                 view.set_model(model.clone());
-                model.subscribe_to_bus();
                 view.upcast()
             });
         }
@@ -404,7 +400,6 @@ impl MomentsWindow {
                 let view = PhotoGridView::new();
                 view.setup(lib, tk, s, tc, bs);
                 view.set_model(model.clone());
-                model.subscribe_to_bus();
                 view.upcast()
             });
         }
@@ -425,7 +420,6 @@ impl MomentsWindow {
                 let view = PhotoGridView::new();
                 view.setup(lib, tk, s, tc, bs);
                 view.set_model(model.clone());
-                model.subscribe_to_bus();
                 view.upcast()
             });
         }
@@ -530,7 +524,6 @@ impl MomentsWindow {
                         bs.clone(),
                     );
                     view.set_model(model.clone());
-                    model.subscribe_to_bus();
                     coord.register(id, &view);
                 }
                 coord.navigate(id);

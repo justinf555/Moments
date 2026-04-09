@@ -7,7 +7,7 @@ use gtk::{gdk, gio, glib, prelude::*};
 use tracing::{debug, error};
 
 use crate::app_event::AppEvent;
-use crate::event_bus::{EventBus, EventSender};
+use crate::event_bus::EventSender;
 use crate::library::media::{MediaCursor, MediaFilter, MediaId, MediaItem};
 use crate::library::Library;
 
@@ -102,19 +102,11 @@ impl PhotoGridModel {
         &self.imp().store
     }
 
-    /// Subscribe to relevant events on the bus.
-    pub fn subscribe(&self, bus: &EventBus) {
-        let weak = self.downgrade();
-        let sub = bus.subscribe(move |event| {
-            if let Some(model) = weak.upgrade() {
-                model.handle_event(event);
-            }
-        });
-        *self.imp()._subscription.borrow_mut() = Some(sub);
-    }
-
-    /// Subscribe to the bus via the thread-local free function.
-    pub fn subscribe_to_bus(&self) {
+    /// Activate this model: subscribe to the event bus.
+    ///
+    /// Called by `PhotoGridView::realize` — ties the model's subscription
+    /// lifetime to the owning widget's lifecycle.
+    pub fn activate(&self) {
         let weak = self.downgrade();
         let sub = crate::event_bus::subscribe(move |event| {
             if let Some(model) = weak.upgrade() {
@@ -122,6 +114,13 @@ impl PhotoGridModel {
             }
         });
         *self.imp()._subscription.borrow_mut() = Some(sub);
+    }
+
+    /// Deactivate this model: drop the event bus subscription.
+    ///
+    /// Called by `PhotoGridView::unrealize`.
+    pub fn deactivate(&self) {
+        self.imp()._subscription.borrow_mut().take();
     }
 
     /// Dispatch a bus event to the appropriate handler.
