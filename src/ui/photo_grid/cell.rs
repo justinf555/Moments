@@ -221,13 +221,25 @@ impl PhotoGridCell {
             imp.checkbox.set_visible(true);
         } else if !active {
             imp.checkbox.set_visible(false);
-            imp.checkbox.set_active(false);
+            self.set_checked(false);
         }
     }
 
-    /// Set the checkbox checked state (reflects MultiSelection).
+    /// Update the checkbox without firing the `toggled` handler.
+    ///
+    /// Blocks the signal while setting the active state so that
+    /// programmatic updates don't trigger select/unselect on the
+    /// `MultiSelection` model with a potentially stale position.
     pub fn set_checked(&self, checked: bool) {
-        self.imp().checkbox.set_active(checked);
+        let imp = self.imp();
+        let handler = imp.checkbox_handler.borrow();
+        if let Some(ref id) = *handler {
+            imp.checkbox.block_signal(id);
+        }
+        imp.checkbox.set_active(checked);
+        if let Some(ref id) = *handler {
+            imp.checkbox.unblock_signal(id);
+        }
     }
 
     fn update_star(&self, item: &MediaItemObject) {
