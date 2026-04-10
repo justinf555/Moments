@@ -125,7 +125,7 @@ fn drain_events() {
             // NOTE: subscribers must not call sender.send() from within a handler.
             // Events sent during dispatch are picked up by this same while loop —
             // any cycle (A emits B, B emits A) will loop forever and hang the UI.
-            // See the circular event loop risk in docs/design-event-bus.md.
+            // See the subscriber contract in docs/design-event-bus.md.
             while let Ok(event) = rx.try_recv() {
                 for entry in subs.iter() {
                     (entry.handler)(&event);

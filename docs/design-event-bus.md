@@ -53,11 +53,19 @@ via the `Send + Clone` `EventSender` and delivered via `glib::idle_add_once`.
 
 ### Subscriber contract
 
-- Subscriptions can be created and dropped at any time, including during
-  event dispatch (e.g. from `WidgetImpl::realize` / `unrealize`)
-- Drops during dispatch are deferred via `PENDING_REMOVALS` and flushed
-  after the dispatch loop (#512)
-- `Subscription` is `!Send` — must be dropped on the GTK thread
+- Subscriptions can be created and dropped at any time *outside* dispatch.
+  Drops during dispatch are deferred via `PENDING_REMOVALS` and flushed
+  after the dispatch loop (#512).
+- `Subscription` is `!Send` — must be dropped on the GTK thread.
+- **Subscribers must not call `event_bus::subscribe()` from within a handler.**
+  `drain_events()` holds a shared borrow of `SUBSCRIBERS` for the entire
+  event batch; `subscribe()` calls `borrow_mut()` and will panic with
+  `BorrowMutError`. Register all subscribers during component construction
+  (or in `realize()`, which never fires synchronously from within a handler).
+- **Subscribers must not call `sender.send()` from within a handler.**
+  Events sent during dispatch are picked up by the same `while let Ok(event) = rx.try_recv()`
+  loop in `drain_events()`. Any cycle (A emits B, B emits A) will loop
+  forever and hang the UI.
 
 ### Widget lifecycle pattern (#512)
 
@@ -106,10 +114,10 @@ The model doesn't know about selection mode.
 
 ## Known issues with current architecture
 
-### 1. Translation loop (~140 lines of boilerplate)
+### 1. Translation loop boilerplate
 
 `application.rs` contains a `LibraryEvent` → `AppEvent` translation loop
-(lines 600–737) that maps variants 1:1. This exists because the library
+that maps variants 1:1 (~140 lines). This exists because the library
 sends `LibraryEvent` via a separate `mpsc` channel, but the bus uses
 `AppEvent`. Most variants are identical field-for-field copies.
 
@@ -119,10 +127,23 @@ All events (library results, UI commands, lifecycle) live in a single
 `AppEvent` enum. Adding any event requires modifying this central type.
 Both the library layer and UI layer depend on it.
 
-### 3. Import dialog bypasses the bus
+### 3. Translation loop side effects (not a pure translator)
 
-The import dialog progress is updated directly from the translation loop
-instead of subscribing to the bus like every other component (#517).
+While the translation loop is mostly 1:1 mapping, two arms have side
+effects that bypass the bus:
+
+- **Import dialog updates** — `ImportProgress` and `ImportComplete` arms
+  call `app.imp().import_dialog` directly instead of letting the dialog
+  subscribe to the bus (#517).
+- **`PeopleSyncComplete`** — calls `win.reload_people()` directly after
+  bus dispatch. Should be a bus subscriber on the people view.
+- **`AlbumDeleted`** — synchronously unregisters the coordinator route
+  *before* bus dispatch. This is intentional (avoids a navigation race
+  with the sidebar), but it's worth noting that the translator is not
+  purely translation.
+
+These coupling points mean the translator can't simply be replaced with
+a thin adapter — they need to migrate to bus subscribers first.
 
 ---
 
