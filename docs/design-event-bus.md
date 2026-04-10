@@ -23,7 +23,7 @@ via the `Send + Clone` `EventSender` and delivered via `glib::idle_add_once`.
 ┌──────────────────────────────────────────────────────┐
 │         Event Translator (application.rs)             │
 │                                                       │
-│  LibraryEvent → AppEvent (1:1 mapping)               │
+│  LibraryEvent → AppEvent (mostly 1:1, see Known Issues)│
 │  Runs on glib::timeout_add_local (16ms poll)         │
 └──────────────────────────────────────────────────────┘
                        │
@@ -134,7 +134,9 @@ effects that bypass the bus:
 
 - **Import dialog updates** — `ImportProgress` and `ImportComplete` arms
   call `app.imp().import_dialog` directly instead of letting the dialog
-  subscribe to the bus (#517).
+  subscribe to the bus. The `ImportComplete` arm also calls
+  `win.navigate("recent")` directly to switch to the Recent Imports view
+  after import finishes (#517).
 - **`PeopleSyncComplete`** — calls `win.reload_people()` directly after
   bus dispatch. Should be a bus subscriber on the people view.
 - **`AlbumDeleted`** — synchronously unregisters the coordinator route
