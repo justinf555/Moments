@@ -5,8 +5,8 @@ use super::manager::SyncManager;
 use super::types::*;
 use super::SyncCounters;
 use crate::library::album::{AlbumId, LibraryAlbums};
+use crate::library::db::test_helpers::{get_audit_record, open_test_db};
 use crate::library::db::Database;
-use crate::library::db::test_helpers::{open_test_db, get_audit_record};
 use crate::library::error::LibraryError;
 use crate::library::event::LibraryEvent;
 use crate::library::immich_client::ImmichClient;
@@ -16,9 +16,7 @@ use tempfile::tempdir;
 /// Create a SyncManager with a real test DB for handler tests.
 /// The ImmichClient points to a dummy URL — only tests that don't
 /// call HTTP methods (handle_asset, handle_album, etc.) are safe.
-async fn test_sync_manager(
-    db: Database,
-) -> (SyncManager, std::sync::mpsc::Receiver<LibraryEvent>) {
+async fn test_sync_manager(db: Database) -> (SyncManager, std::sync::mpsc::Receiver<LibraryEvent>) {
     let (event_tx, event_rx) = std::sync::mpsc::channel();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let (thumbnail_tx, _thumbnail_rx) = tokio::sync::mpsc::channel(100);
@@ -373,8 +371,14 @@ fn deserialize_entity_invalid_returns_error() {
     let result: Result<SyncAssetV1, _> = deserialize_entity(&json, "AssetV1", 42);
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("AssetV1"), "error should name the entity type: {err}");
-    assert!(err.contains("42"), "error should include line number: {err}");
+    assert!(
+        err.contains("AssetV1"),
+        "error should name the entity type: {err}"
+    );
+    assert!(
+        err.contains("42"),
+        "error should include line number: {err}"
+    );
 }
 
 // ── process_entity tests ───────────────────────────────────────────
@@ -390,11 +394,17 @@ async fn process_entity_success_pushes_ack_and_increments_counter() {
     let mut errors = 0usize;
 
     mgr.process_entity(
-        "TestEntity", "test-id", "cycle-1", "upsert",
+        "TestEntity",
+        "test-id",
+        "cycle-1",
+        "upsert",
         "ack-token-1".to_string(),
         async { Ok(()) },
-        &mut acks, &mut success, &mut errors,
-    ).await;
+        &mut acks,
+        &mut success,
+        &mut errors,
+    )
+    .await;
 
     assert_eq!(acks, vec!["ack-token-1"]);
     assert_eq!(success, 1);
@@ -412,11 +422,17 @@ async fn process_entity_failure_increments_error_and_skips_ack() {
     let mut errors = 0usize;
 
     mgr.process_entity(
-        "TestEntity", "test-id", "cycle-1", "upsert",
+        "TestEntity",
+        "test-id",
+        "cycle-1",
+        "upsert",
         "ack-token-1".to_string(),
         async { Err(LibraryError::Immich("simulated failure".into())) },
-        &mut acks, &mut success, &mut errors,
-    ).await;
+        &mut acks,
+        &mut success,
+        &mut errors,
+    )
+    .await;
 
     assert!(acks.is_empty(), "failed entity should not be acked");
     assert_eq!(success, 0);
@@ -434,11 +450,17 @@ async fn process_entity_records_upsert_audit_action() {
     let mut errors = 0usize;
 
     mgr.process_entity(
-        "AssetV1", "audit-test-upsert", "cycle-audit", "upsert",
+        "AssetV1",
+        "audit-test-upsert",
+        "cycle-audit",
+        "upsert",
         "ack-u".to_string(),
         async { Ok(()) },
-        &mut acks, &mut success, &mut errors,
-    ).await;
+        &mut acks,
+        &mut success,
+        &mut errors,
+    )
+    .await;
 
     let (action, _) = get_audit_record(&db, "audit-test-upsert").await.unwrap();
     assert_eq!(action, "upsert");
@@ -455,11 +477,17 @@ async fn process_entity_records_delete_audit_action() {
     let mut errors = 0usize;
 
     mgr.process_entity(
-        "AssetDeleteV1", "audit-test-delete", "cycle-audit", "delete",
+        "AssetDeleteV1",
+        "audit-test-delete",
+        "cycle-audit",
+        "delete",
         "ack-d".to_string(),
         async { Ok(()) },
-        &mut acks, &mut success, &mut errors,
-    ).await;
+        &mut acks,
+        &mut success,
+        &mut errors,
+    )
+    .await;
 
     let (action, _) = get_audit_record(&db, "audit-test-delete").await.unwrap();
     assert_eq!(action, "delete");
@@ -476,11 +504,17 @@ async fn process_entity_records_error_audit_on_failure() {
     let mut errors = 0usize;
 
     mgr.process_entity(
-        "AssetV1", "audit-test-error", "cycle-audit", "upsert",
+        "AssetV1",
+        "audit-test-error",
+        "cycle-audit",
+        "upsert",
         "ack-e".to_string(),
         async { Err(LibraryError::Immich("boom".into())) },
-        &mut acks, &mut success, &mut errors,
-    ).await;
+        &mut acks,
+        &mut success,
+        &mut errors,
+    )
+    .await;
 
     let (action, error_msg) = get_audit_record(&db, "audit-test-error").await.unwrap();
     assert_eq!(action, "error");
@@ -510,18 +544,27 @@ async fn handle_sync_reset_clears_faces_people_checkpoints() {
     };
     mgr.handle_asset(asset).await.unwrap();
 
-    db.upsert_person("p1", "Alice", None, false, false, None, None).await.unwrap();
-    db.save_sync_checkpoints(&[("AssetV1".to_string(), "ack-1".to_string())]).await.unwrap();
+    db.upsert_person("p1", "Alice", None, false, false, None, None)
+        .await
+        .unwrap();
+    db.save_sync_checkpoints(&[("AssetV1".to_string(), "ack-1".to_string())])
+        .await
+        .unwrap();
 
     let mut is_reset = false;
     let mut existing_ids = None;
 
-    mgr.handle_sync_reset(&mut is_reset, &mut existing_ids).await.unwrap();
+    mgr.handle_sync_reset(&mut is_reset, &mut existing_ids)
+        .await
+        .unwrap();
 
     assert!(is_reset);
     assert!(existing_ids.is_some());
     let ids = existing_ids.unwrap();
-    assert!(ids.contains("reset-asset"), "existing_ids should contain the asset");
+    assert!(
+        ids.contains("reset-asset"),
+        "existing_ids should contain the asset"
+    );
 
     // People and checkpoints should be cleared.
     let people = db.list_people(false, false).await.unwrap();
@@ -543,11 +586,18 @@ async fn finish_sync_emits_complete_event() {
     };
 
     // finish_sync with no acks to flush (avoids HTTP call).
-    mgr.finish_sync(false, None, &mut Vec::new(), &counters).await.unwrap();
+    mgr.finish_sync(false, None, &mut Vec::new(), &counters)
+        .await
+        .unwrap();
 
     let event = events.try_recv().unwrap();
     match event {
-        LibraryEvent::SyncComplete { assets, people, faces, errors } => {
+        LibraryEvent::SyncComplete {
+            assets,
+            people,
+            faces,
+            errors,
+        } => {
             assert_eq!(assets, 5);
             assert_eq!(people, 2);
             assert_eq!(faces, 3);
@@ -563,8 +613,13 @@ async fn finish_sync_emits_people_event_when_faces_synced() {
     let db = open_test_db(dir.path()).await;
     let (mgr, events) = test_sync_manager(db.clone()).await;
 
-    let counters = SyncCounters { faces: 1, ..Default::default() };
-    mgr.finish_sync(false, None, &mut Vec::new(), &counters).await.unwrap();
+    let counters = SyncCounters {
+        faces: 1,
+        ..Default::default()
+    };
+    mgr.finish_sync(false, None, &mut Vec::new(), &counters)
+        .await
+        .unwrap();
 
     let _ = events.try_recv(); // SyncComplete
     let event = events.try_recv().unwrap();
@@ -577,11 +632,19 @@ async fn finish_sync_no_people_event_when_no_faces_or_people() {
     let db = open_test_db(dir.path()).await;
     let (mgr, events) = test_sync_manager(db.clone()).await;
 
-    let counters = SyncCounters { assets: 3, ..Default::default() };
-    mgr.finish_sync(false, None, &mut Vec::new(), &counters).await.unwrap();
+    let counters = SyncCounters {
+        assets: 3,
+        ..Default::default()
+    };
+    mgr.finish_sync(false, None, &mut Vec::new(), &counters)
+        .await
+        .unwrap();
 
     let _ = events.try_recv(); // SyncComplete
-    assert!(events.try_recv().is_err(), "no PeopleSyncComplete should be emitted");
+    assert!(
+        events.try_recv().is_err(),
+        "no PeopleSyncComplete should be emitted"
+    );
 }
 
 #[tokio::test]
@@ -611,9 +674,19 @@ async fn finish_sync_deletes_orphaned_assets_on_reset() {
     let mut orphaned = HashSet::new();
     orphaned.insert("orphan-asset".to_string());
 
-    mgr.finish_sync(true, Some(orphaned), &mut Vec::new(), &SyncCounters::default()).await.unwrap();
+    mgr.finish_sync(
+        true,
+        Some(orphaned),
+        &mut Vec::new(),
+        &SyncCounters::default(),
+    )
+    .await
+    .unwrap();
 
-    assert!(!db.media_exists(&id).await.unwrap(), "orphaned asset should be deleted");
+    assert!(
+        !db.media_exists(&id).await.unwrap(),
+        "orphaned asset should be deleted"
+    );
 }
 
 // ── handle_asset_delete tests ───────────────────────────────────────

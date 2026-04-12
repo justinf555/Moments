@@ -6,13 +6,15 @@ use futures_util::TryStreamExt;
 use tokio::io::AsyncBufReadExt;
 use tracing::{debug, error, info, instrument, warn};
 
-use super::super::db::Database;
-use super::super::db::faces::AssetFaceRow;
-use super::super::error::LibraryError;
 use super::super::album::{AlbumId, LibraryAlbums};
+use super::super::db::faces::AssetFaceRow;
+use super::super::db::Database;
+use super::super::error::LibraryError;
 use super::super::event::LibraryEvent;
 use super::super::immich_client::ImmichClient;
-use super::super::media::{LibraryMedia, MediaId, MediaItem, MediaMetadataRecord, MediaRecord, MediaType};
+use super::super::media::{
+    LibraryMedia, MediaId, MediaItem, MediaMetadataRecord, MediaRecord, MediaType,
+};
 use super::types::*;
 use super::SyncCounters;
 use super::ACK_FLUSH_THRESHOLD;
@@ -105,12 +107,8 @@ impl SyncManager {
         let _ = self.events.send(LibraryEvent::SyncStarted);
         let response = self.client.post_stream("/sync/stream", &request).await?;
 
-        let byte_stream = response
-            .bytes_stream()
-            .map_err(std::io::Error::other);
-        let reader = tokio::io::BufReader::new(
-            tokio_util::io::StreamReader::new(byte_stream),
-        );
+        let byte_stream = response.bytes_stream().map_err(std::io::Error::other);
+        let reader = tokio::io::BufReader::new(tokio_util::io::StreamReader::new(byte_stream));
 
         let mut lines = reader.lines();
         let mut acks: Vec<String> = Vec::new();
@@ -123,7 +121,9 @@ impl SyncManager {
         info!("reading sync stream");
 
         while let Some(line) = lines.next_line().await.map_err(|e| {
-            LibraryError::Immich(format!("failed to read sync stream line {line_number}: {e}"))
+            LibraryError::Immich(format!(
+                "failed to read sync stream line {line_number}: {e}"
+            ))
         })? {
             line_number += 1;
             if line.is_empty() {
@@ -137,16 +137,26 @@ impl SyncManager {
 
             match sync_line.entity_type.as_str() {
                 "SyncResetV1" => {
-                    self.handle_sync_reset(&mut is_reset, &mut existing_ids).await?;
+                    self.handle_sync_reset(&mut is_reset, &mut existing_ids)
+                        .await?;
                     acks.push(sync_line.ack);
                 }
                 "AssetV1" => {
-                    let asset: SyncAssetV1 = deserialize_entity(&sync_line.data, "AssetV1", line_number)?;
+                    let asset: SyncAssetV1 =
+                        deserialize_entity(&sync_line.data, "AssetV1", line_number)?;
                     let id = asset.id.clone();
-                    self.process_entity("AssetV1", &id, &sync_cycle, "upsert", sync_line.ack,
+                    self.process_entity(
+                        "AssetV1",
+                        &id,
+                        &sync_cycle,
+                        "upsert",
+                        sync_line.ack,
                         self.handle_asset(asset),
-                        &mut acks, &mut counters.assets, &mut counters.errors,
-                    ).await;
+                        &mut acks,
+                        &mut counters.assets,
+                        &mut counters.errors,
+                    )
+                    .await;
                     if counters.assets.is_multiple_of(500) && counters.assets > 0 {
                         info!(assets = counters.assets, "sync progress");
                     }
@@ -155,87 +165,177 @@ impl SyncManager {
                     }
                 }
                 "AssetDeleteV1" => {
-                    let delete: SyncAssetDeleteV1 = deserialize_entity(&sync_line.data, "AssetDeleteV1", line_number)?;
+                    let delete: SyncAssetDeleteV1 =
+                        deserialize_entity(&sync_line.data, "AssetDeleteV1", line_number)?;
                     let id = delete.asset_id.clone();
                     if let Some(ref mut ids) = existing_ids {
                         ids.remove(&id);
                     }
-                    self.process_entity("AssetDeleteV1", &id, &sync_cycle, "delete", sync_line.ack,
+                    self.process_entity(
+                        "AssetDeleteV1",
+                        &id,
+                        &sync_cycle,
+                        "delete",
+                        sync_line.ack,
                         self.handle_asset_delete(&id),
-                        &mut acks, &mut counters.deletes, &mut counters.errors,
-                    ).await;
+                        &mut acks,
+                        &mut counters.deletes,
+                        &mut counters.errors,
+                    )
+                    .await;
                 }
                 "AssetExifV1" => {
-                    let exif: SyncAssetExifV1 = deserialize_entity(&sync_line.data, "AssetExifV1", line_number)?;
+                    let exif: SyncAssetExifV1 =
+                        deserialize_entity(&sync_line.data, "AssetExifV1", line_number)?;
                     let id = exif.asset_id.clone();
-                    self.process_entity("AssetExifV1", &id, &sync_cycle, "upsert", sync_line.ack,
+                    self.process_entity(
+                        "AssetExifV1",
+                        &id,
+                        &sync_cycle,
+                        "upsert",
+                        sync_line.ack,
                         self.handle_asset_exif(exif),
-                        &mut acks, &mut counters.exifs, &mut counters.errors,
-                    ).await;
+                        &mut acks,
+                        &mut counters.exifs,
+                        &mut counters.errors,
+                    )
+                    .await;
                 }
                 "AlbumV1" => {
-                    let album: SyncAlbumV1 = deserialize_entity(&sync_line.data, "AlbumV1", line_number)?;
+                    let album: SyncAlbumV1 =
+                        deserialize_entity(&sync_line.data, "AlbumV1", line_number)?;
                     let id = album.id.clone();
-                    self.process_entity("AlbumV1", &id, &sync_cycle, "upsert", sync_line.ack,
+                    self.process_entity(
+                        "AlbumV1",
+                        &id,
+                        &sync_cycle,
+                        "upsert",
+                        sync_line.ack,
                         self.handle_album(album),
-                        &mut acks, &mut counters.albums, &mut counters.errors,
-                    ).await;
+                        &mut acks,
+                        &mut counters.albums,
+                        &mut counters.errors,
+                    )
+                    .await;
                 }
                 "AlbumDeleteV1" => {
-                    let delete: SyncAlbumDeleteV1 = deserialize_entity(&sync_line.data, "AlbumDeleteV1", line_number)?;
+                    let delete: SyncAlbumDeleteV1 =
+                        deserialize_entity(&sync_line.data, "AlbumDeleteV1", line_number)?;
                     let id = delete.album_id.clone();
-                    self.process_entity("AlbumDeleteV1", &id, &sync_cycle, "delete", sync_line.ack,
+                    self.process_entity(
+                        "AlbumDeleteV1",
+                        &id,
+                        &sync_cycle,
+                        "delete",
+                        sync_line.ack,
                         self.handle_album_delete(&id),
-                        &mut acks, &mut counters.deletes, &mut counters.errors,
-                    ).await;
+                        &mut acks,
+                        &mut counters.deletes,
+                        &mut counters.errors,
+                    )
+                    .await;
                 }
                 "AlbumToAssetV1" => {
-                    let assoc: SyncAlbumToAssetV1 = deserialize_entity(&sync_line.data, "AlbumToAssetV1", line_number)?;
+                    let assoc: SyncAlbumToAssetV1 =
+                        deserialize_entity(&sync_line.data, "AlbumToAssetV1", line_number)?;
                     let id = format!("{}:{}", assoc.album_id, assoc.asset_id);
-                    self.process_entity("AlbumToAssetV1", &id, &sync_cycle, "upsert", sync_line.ack,
+                    self.process_entity(
+                        "AlbumToAssetV1",
+                        &id,
+                        &sync_cycle,
+                        "upsert",
+                        sync_line.ack,
                         self.handle_album_asset(assoc),
-                        &mut acks, &mut counters.albums, &mut counters.errors,
-                    ).await;
+                        &mut acks,
+                        &mut counters.albums,
+                        &mut counters.errors,
+                    )
+                    .await;
                 }
                 "AlbumToAssetDeleteV1" => {
-                    let assoc: SyncAlbumToAssetDeleteV1 = deserialize_entity(&sync_line.data, "AlbumToAssetDeleteV1", line_number)?;
+                    let assoc: SyncAlbumToAssetDeleteV1 =
+                        deserialize_entity(&sync_line.data, "AlbumToAssetDeleteV1", line_number)?;
                     let id = format!("{}:{}", assoc.album_id, assoc.asset_id);
-                    self.process_entity("AlbumToAssetDeleteV1", &id, &sync_cycle, "delete", sync_line.ack,
+                    self.process_entity(
+                        "AlbumToAssetDeleteV1",
+                        &id,
+                        &sync_cycle,
+                        "delete",
+                        sync_line.ack,
                         self.handle_album_asset_delete(assoc),
-                        &mut acks, &mut counters.albums, &mut counters.errors,
-                    ).await;
+                        &mut acks,
+                        &mut counters.albums,
+                        &mut counters.errors,
+                    )
+                    .await;
                 }
                 "PersonV1" => {
-                    let person: SyncPersonV1 = deserialize_entity(&sync_line.data, "PersonV1", line_number)?;
+                    let person: SyncPersonV1 =
+                        deserialize_entity(&sync_line.data, "PersonV1", line_number)?;
                     let id = person.id.clone();
-                    self.process_entity("PersonV1", &id, &sync_cycle, "upsert", sync_line.ack,
+                    self.process_entity(
+                        "PersonV1",
+                        &id,
+                        &sync_cycle,
+                        "upsert",
+                        sync_line.ack,
                         self.handle_person(person),
-                        &mut acks, &mut counters.people, &mut counters.errors,
-                    ).await;
+                        &mut acks,
+                        &mut counters.people,
+                        &mut counters.errors,
+                    )
+                    .await;
                 }
                 "PersonDeleteV1" => {
-                    let delete: SyncPersonDeleteV1 = deserialize_entity(&sync_line.data, "PersonDeleteV1", line_number)?;
+                    let delete: SyncPersonDeleteV1 =
+                        deserialize_entity(&sync_line.data, "PersonDeleteV1", line_number)?;
                     let id = delete.person_id.clone();
-                    self.process_entity("PersonDeleteV1", &id, &sync_cycle, "delete", sync_line.ack,
+                    self.process_entity(
+                        "PersonDeleteV1",
+                        &id,
+                        &sync_cycle,
+                        "delete",
+                        sync_line.ack,
                         self.db.delete_person(&id),
-                        &mut acks, &mut counters.deletes, &mut counters.errors,
-                    ).await;
+                        &mut acks,
+                        &mut counters.deletes,
+                        &mut counters.errors,
+                    )
+                    .await;
                 }
                 "AssetFaceV1" => {
-                    let face: SyncAssetFaceV1 = deserialize_entity(&sync_line.data, "AssetFaceV1", line_number)?;
+                    let face: SyncAssetFaceV1 =
+                        deserialize_entity(&sync_line.data, "AssetFaceV1", line_number)?;
                     let id = face.id.clone();
-                    self.process_entity("AssetFaceV1", &id, &sync_cycle, "upsert", sync_line.ack,
+                    self.process_entity(
+                        "AssetFaceV1",
+                        &id,
+                        &sync_cycle,
+                        "upsert",
+                        sync_line.ack,
                         self.handle_asset_face(face),
-                        &mut acks, &mut counters.faces, &mut counters.errors,
-                    ).await;
+                        &mut acks,
+                        &mut counters.faces,
+                        &mut counters.errors,
+                    )
+                    .await;
                 }
                 "AssetFaceDeleteV1" => {
-                    let delete: SyncAssetFaceDeleteV1 = deserialize_entity(&sync_line.data, "AssetFaceDeleteV1", line_number)?;
+                    let delete: SyncAssetFaceDeleteV1 =
+                        deserialize_entity(&sync_line.data, "AssetFaceDeleteV1", line_number)?;
                     let id = delete.asset_face_id.clone();
-                    self.process_entity("AssetFaceDeleteV1", &id, &sync_cycle, "delete", sync_line.ack,
+                    self.process_entity(
+                        "AssetFaceDeleteV1",
+                        &id,
+                        &sync_cycle,
+                        "delete",
+                        sync_line.ack,
                         self.db.delete_asset_face(&id),
-                        &mut acks, &mut counters.deletes, &mut counters.errors,
-                    ).await;
+                        &mut acks,
+                        &mut counters.deletes,
+                        &mut counters.errors,
+                    )
+                    .await;
                 }
                 "SyncCompleteV1" => {
                     info!(
@@ -253,7 +353,10 @@ impl SyncManager {
                     break;
                 }
                 other => {
-                    debug!(entity_type = other, line_number, "ignoring unknown sync entity type");
+                    debug!(
+                        entity_type = other,
+                        line_number, "ignoring unknown sync entity type"
+                    );
                     acks.push(sync_line.ack);
                 }
             }
@@ -269,7 +372,8 @@ impl SyncManager {
             }
         }
 
-        self.finish_sync(is_reset, existing_ids, &mut acks, &counters).await
+        self.finish_sync(is_reset, existing_ids, &mut acks, &counters)
+            .await
     }
 
     pub(crate) async fn handle_sync_reset(
@@ -280,7 +384,10 @@ impl SyncManager {
         warn!("server requested sync reset — performing full resync");
         *is_reset = true;
         let ids = self.db.all_media_ids().await?;
-        info!(existing_count = ids.len(), "loaded existing media IDs for reset tracking");
+        info!(
+            existing_count = ids.len(),
+            "loaded existing media IDs for reset tracking"
+        );
         *existing_ids = Some(ids);
         self.db.clear_asset_faces().await?;
         self.db.clear_people().await?;
@@ -306,7 +413,11 @@ impl SyncManager {
         error_counter: &mut usize,
     ) {
         // Audit trail is best-effort — failure shouldn't block sync processing.
-        let audit_id = self.db.start_sync_audit(entity_type, entity_id, sync_cycle).await.ok();
+        let audit_id = self
+            .db
+            .start_sync_audit(entity_type, entity_id, sync_cycle)
+            .await
+            .ok();
 
         match handler_result.await {
             Ok(()) => {
@@ -338,11 +449,11 @@ impl SyncManager {
         if is_reset {
             if let Some(orphaned_ids) = existing_ids {
                 if !orphaned_ids.is_empty() {
-                    info!(count = orphaned_ids.len(), "removing orphaned assets after reset sync");
-                    let ids: Vec<MediaId> = orphaned_ids
-                        .into_iter()
-                        .map(MediaId::new)
-                        .collect();
+                    info!(
+                        count = orphaned_ids.len(),
+                        "removing orphaned assets after reset sync"
+                    );
+                    let ids: Vec<MediaId> = orphaned_ids.into_iter().map(MediaId::new).collect();
                     self.db.delete_permanently(&ids).await?;
                 }
             }
@@ -366,7 +477,11 @@ impl SyncManager {
         }
 
         if counters.assets > 0 || counters.errors > 0 {
-            info!(synced = counters.assets, errors = counters.errors, "sync complete");
+            info!(
+                synced = counters.assets,
+                errors = counters.errors,
+                "sync complete"
+            );
         } else {
             debug!("sync complete — no new assets");
         }
@@ -385,8 +500,12 @@ impl SyncManager {
 
         info!(count = acks.len(), "flushing acks to server");
         for chunk in acks.chunks(1000) {
-            let ack_request = SyncAckRequest { acks: chunk.to_vec() };
-            self.client.post_no_content("/sync/ack", &ack_request).await?;
+            let ack_request = SyncAckRequest {
+                acks: chunk.to_vec(),
+            };
+            self.client
+                .post_no_content("/sync/ack", &ack_request)
+                .await?;
         }
 
         // Persist checkpoints — keep only the latest ack per entity type.
@@ -473,7 +592,10 @@ impl SyncManager {
 
     /// Upsert EXIF metadata from the sync stream.
     #[instrument(skip(self, exif), fields(asset_id = %exif.asset_id))]
-    pub(crate) async fn handle_asset_exif(&self, exif: SyncAssetExifV1) -> Result<(), LibraryError> {
+    pub(crate) async fn handle_asset_exif(
+        &self,
+        exif: SyncAssetExifV1,
+    ) -> Result<(), LibraryError> {
         let record = MediaMetadataRecord {
             media_id: MediaId::new(exif.asset_id),
             camera_make: exif.make,
@@ -497,9 +619,13 @@ impl SyncManager {
     #[instrument(skip(self))]
     pub(crate) async fn handle_asset_delete(&self, asset_id: &str) -> Result<(), LibraryError> {
         let id = MediaId::new(asset_id.to_owned());
-        self.db.delete_permanently(std::slice::from_ref(&id)).await?;
+        self.db
+            .delete_permanently(std::slice::from_ref(&id))
+            .await?;
         // Receiver may be dropped during shutdown.
-        let _ = self.events.send(LibraryEvent::AssetDeletedRemote { media_id: id });
+        let _ = self
+            .events
+            .send(LibraryEvent::AssetDeletedRemote { media_id: id });
         Ok(())
     }
 
@@ -535,7 +661,10 @@ impl SyncManager {
     }
 
     /// Add an asset to an album from the sync stream.
-    pub(crate) async fn handle_album_asset(&self, assoc: SyncAlbumToAssetV1) -> Result<(), LibraryError> {
+    pub(crate) async fn handle_album_asset(
+        &self,
+        assoc: SyncAlbumToAssetV1,
+    ) -> Result<(), LibraryError> {
         let now = chrono::Utc::now().timestamp();
         self.db
             .upsert_album_media(&assoc.album_id, &assoc.asset_id, now)
@@ -590,7 +719,10 @@ impl SyncManager {
 
     /// Upsert an asset face from the sync stream and update the person's face count.
     #[instrument(skip(self, face), fields(face_id = %face.id, asset_id = %face.asset_id))]
-    pub(crate) async fn handle_asset_face(&self, face: SyncAssetFaceV1) -> Result<(), LibraryError> {
+    pub(crate) async fn handle_asset_face(
+        &self,
+        face: SyncAssetFaceV1,
+    ) -> Result<(), LibraryError> {
         let row = AssetFaceRow {
             id: face.id,
             asset_id: face.asset_id,
@@ -601,7 +733,9 @@ impl SyncManager {
             bbox_y1: face.bounding_box_y1,
             bbox_x2: face.bounding_box_x2,
             bbox_y2: face.bounding_box_y2,
-            source_type: face.source_type.unwrap_or_else(|| "MachineLearning".to_string()),
+            source_type: face
+                .source_type
+                .unwrap_or_else(|| "MachineLearning".to_string()),
         };
 
         self.db.upsert_asset_face(&row).await?;

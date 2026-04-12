@@ -77,12 +77,7 @@ fn build_image_section(item: &MediaItem) -> gtk::ListBox {
         _ => "Unknown".to_string(),
     };
 
-    let (expander, _) = expander_row(
-        Some("image-x-generic-symbolic"),
-        "Image",
-        &mp_str,
-        true,
-    );
+    let (expander, _) = expander_row(Some("image-x-generic-symbolic"), "Image", &mp_str, true);
 
     if let (Some(w), Some(h)) = (item.width, item.height) {
         expander.add_row(&detail_row("Dimensions", &format!("{w} \u{d7} {h}")));
@@ -117,12 +112,7 @@ fn build_camera_section(metadata: Option<&MediaMetadataRecord>) -> gtk::ListBox 
     });
 
     let subtitle = camera_name.as_deref().unwrap_or("No data");
-    let (expander, _) = expander_row(
-        Some("camera-photo-symbolic"),
-        "Camera",
-        subtitle,
-        true,
-    );
+    let (expander, _) = expander_row(Some("camera-photo-symbolic"), "Camera", subtitle, true);
 
     if let Some(ref name) = camera_name {
         expander.add_row(&detail_row("Camera", name));

@@ -48,10 +48,7 @@ pub fn build_for_filter(
 
 // ── Standard: Favourite, Add to album, Delete ────────────────────────────────
 
-fn build_standard_bar(
-    selection: &gtk::MultiSelection,
-    bus: &EventSender,
-) -> ActionBarButtons {
+fn build_standard_bar(selection: &gtk::MultiSelection, bus: &EventSender) -> ActionBarButtons {
     let fav_btn = make_button("starred-symbolic", "Favourite");
     fav_btn.set_width_request(150);
     let album_btn = make_button("folder-new-symbolic", "Add to album");
@@ -74,10 +71,7 @@ fn build_standard_bar(
 
 // ── Trash: Restore, Delete permanently ───────────────────────────────────────
 
-fn build_trash_bar(
-    selection: &gtk::MultiSelection,
-    bus: &EventSender,
-) -> ActionBarButtons {
+fn build_trash_bar(selection: &gtk::MultiSelection, bus: &EventSender) -> ActionBarButtons {
     let restore_btn = make_button("edit-undo-symbolic", "Restore");
     let delete_btn = make_button("edit-delete-symbolic", "Delete permanently");
 
@@ -134,9 +128,7 @@ fn make_button(icon_name: &str, label: &str) -> gtk::Button {
     content.append(&gtk::Image::from_icon_name(icon_name));
     content.append(&gtk::Label::new(Some(label)));
 
-    let btn = gtk::Button::builder()
-        .child(&content)
-        .build();
+    let btn = gtk::Button::builder().child(&content).build();
     btn.add_css_class("outlined");
     btn
 }
@@ -151,34 +143,32 @@ fn bar_container() -> gtk::Box {
 
 // ── Wiring ───────────────────────────────────────────────────────────────────
 
-fn wire_favourite(
-    btn: &gtk::Button,
-    selection: &gtk::MultiSelection,
-    bus: &EventSender,
-) {
+fn wire_favourite(btn: &gtk::Button, selection: &gtk::MultiSelection, bus: &EventSender) {
     let sel = selection.clone();
     let tx = bus.clone();
     let btn_ref = btn.clone();
     btn.connect_clicked(move |_| {
         let ids = super::collect_selected_ids(&sel);
-        if ids.is_empty() { return; }
+        if ids.is_empty() {
+            return;
+        }
 
-        let first_fav = sel.item(sel.selection().nth(0))
+        let first_fav = sel
+            .item(sel.selection().nth(0))
             .and_then(|o| o.downcast::<MediaItemObject>().ok())
             .map(|o| o.is_favorite())
             .unwrap_or(false);
         let new_state = !first_fav;
 
-        tx.send(AppEvent::FavoriteRequested { ids, state: new_state });
+        tx.send(AppEvent::FavoriteRequested {
+            ids,
+            state: new_state,
+        });
         actions::update_fav_button(&btn_ref, new_state);
     });
 }
 
-fn wire_trash(
-    btn: &gtk::Button,
-    selection: &gtk::MultiSelection,
-    bus: &EventSender,
-) {
+fn wire_trash(btn: &gtk::Button, selection: &gtk::MultiSelection, bus: &EventSender) {
     let sel = selection.clone();
     let tx = bus.clone();
     btn.connect_clicked(move |_| {
@@ -189,11 +179,7 @@ fn wire_trash(
     });
 }
 
-fn wire_restore(
-    btn: &gtk::Button,
-    selection: &gtk::MultiSelection,
-    bus: &EventSender,
-) {
+fn wire_restore(btn: &gtk::Button, selection: &gtk::MultiSelection, bus: &EventSender) {
     let sel = selection.clone();
     let tx = bus.clone();
     btn.connect_clicked(move |_| {
@@ -204,16 +190,14 @@ fn wire_restore(
     });
 }
 
-fn wire_delete_permanently(
-    btn: &gtk::Button,
-    selection: &gtk::MultiSelection,
-    bus: &EventSender,
-) {
+fn wire_delete_permanently(btn: &gtk::Button, selection: &gtk::MultiSelection, bus: &EventSender) {
     let sel = selection.clone();
     let tx = bus.clone();
     btn.connect_clicked(move |btn| {
         let ids = super::collect_selected_ids(&sel);
-        if ids.is_empty() { return; }
+        if ids.is_empty() {
+            return;
+        }
 
         let count = ids.len();
         let message = if count == 1 {
@@ -233,11 +217,15 @@ fn wire_delete_permanently(
 
         let tx = tx.clone();
         let window = btn.root().and_downcast::<gtk::Window>();
-        dialog.choose(window.as_ref(), gtk::gio::Cancellable::NONE, move |response| {
-            if response == "delete" {
-                tx.send(AppEvent::DeleteRequested { ids });
-            }
-        });
+        dialog.choose(
+            window.as_ref(),
+            gtk::gio::Cancellable::NONE,
+            move |response| {
+                if response == "delete" {
+                    tx.send(AppEvent::DeleteRequested { ids });
+                }
+            },
+        );
     });
 }
 

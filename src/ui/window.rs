@@ -22,8 +22,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use gtk::prelude::*;
 use adw::subclass::prelude::*;
+use gtk::prelude::*;
 use gtk::{gio, glib};
 use tracing::{debug, instrument};
 
@@ -53,12 +53,11 @@ impl Default for ReloadCallback {
 }
 use crate::library::Library;
 
-
 use crate::ui::collection_grid::CollectionGridView;
 use crate::ui::coordinator::ContentCoordinator;
 use crate::ui::empty_library::EmptyLibraryView;
-use crate::ui::photo_grid::{PhotoGridModel, PhotoGridView};
 use crate::ui::photo_grid::texture_cache::TextureCache;
+use crate::ui::photo_grid::{PhotoGridModel, PhotoGridView};
 use crate::ui::sidebar::MomentsSidebar;
 
 mod imp {
@@ -191,12 +190,21 @@ impl MomentsWindow {
         let texture_cache = Rc::new(TextureCache::new());
 
         let (content_stack, coordinator, photos_model) = self.build_coordinator(
-            &library, &tokio, &settings, &texture_cache, &bus_sender, bus,
+            &library,
+            &tokio,
+            &settings,
+            &texture_cache,
+            &bus_sender,
+            bus,
         );
 
         self.register_lazy_views(
             &mut coordinator.borrow_mut(),
-            &library, &tokio, &settings, &texture_cache, &bus_sender,
+            &library,
+            &tokio,
+            &settings,
+            &texture_cache,
+            &bus_sender,
         );
 
         let content_nav_page = adw::NavigationPage::builder()
@@ -214,7 +222,12 @@ impl MomentsWindow {
             .expect("coordinator set once in setup()");
 
         self.connect_sidebar_navigation(
-            &sidebar, &library, &tokio, &settings, &texture_cache, &bus_sender,
+            &sidebar,
+            &library,
+            &tokio,
+            &settings,
+            &texture_cache,
+            &bus_sender,
         );
 
         sidebar.select_first();
@@ -250,16 +263,16 @@ impl MomentsWindow {
         }
 
         imp.split_view.set_sidebar(Some(&sidebar));
-        imp.sidebar.set(sidebar.clone()).expect("sidebar set once in setup()");
+        imp.sidebar
+            .set(sidebar.clone())
+            .expect("sidebar set once in setup()");
 
         {
             let lib = Arc::clone(library);
             let tk = tokio.clone();
             let sb = sidebar.clone();
             glib::MainContext::default().spawn_local(async move {
-                let result = tk
-                    .spawn(async move { lib.library_stats().await })
-                    .await;
+                let result = tk.spawn(async move { lib.library_stats().await }).await;
                 if let Ok(Ok(stats)) = result {
                     sb.set_trash_count(stats.trashed_count as u32);
                 }
@@ -323,7 +336,11 @@ impl MomentsWindow {
         photos_model.subscribe(bus);
         coordinator.register("photos", &photos_view);
 
-        (content_stack, Rc::new(RefCell::new(coordinator)), photos_model)
+        (
+            content_stack,
+            Rc::new(RefCell::new(coordinator)),
+            photos_model,
+        )
     }
 
     fn register_lazy_views(
@@ -441,22 +458,21 @@ impl MomentsWindow {
     /// Only switches on empty ↔ non-empty transitions — deliberately does NOT
     /// override the visible child if the user has navigated away from Photos
     /// (e.g. to Trash).
-    fn connect_empty_toggle(
-        content_stack: &gtk::Stack,
-        photos_model: &PhotoGridModel,
-    ) {
+    fn connect_empty_toggle(content_stack: &gtk::Stack, photos_model: &PhotoGridModel) {
         let stack = content_stack.clone();
         let was_empty = std::cell::Cell::new(true);
-        photos_model.store().connect_items_changed(move |store, _, _, _| {
-            let is_empty = store.n_items() == 0;
-            if is_empty && !was_empty.get() {
-                stack.set_visible_child_name("empty");
-                was_empty.set(true);
-            } else if !is_empty && was_empty.get() {
-                stack.set_visible_child_name("photos");
-                was_empty.set(false);
-            }
-        });
+        photos_model
+            .store()
+            .connect_items_changed(move |store, _, _, _| {
+                let is_empty = store.n_items() == 0;
+                if is_empty && !was_empty.get() {
+                    stack.set_visible_child_name("empty");
+                    was_empty.set(true);
+                } else if !is_empty && was_empty.get() {
+                    stack.set_visible_child_name("photos");
+                    was_empty.set(false);
+                }
+            });
     }
 
     fn connect_sidebar_navigation(
@@ -475,8 +491,12 @@ impl MomentsWindow {
         let tc = Rc::clone(texture_cache);
         let bs = bus_sender.clone();
         sidebar.connect_route_selected(move |id| {
-            let Some(win) = obj_weak.upgrade() else { return };
-            let Some(coordinator) = win.imp().coordinator.get() else { return };
+            let Some(win) = obj_weak.upgrade() else {
+                return;
+            };
+            let Some(coordinator) = win.imp().coordinator.get() else {
+                return;
+            };
 
             if let Some(album_id_str) = id.strip_prefix("album:") {
                 let mut coord = coordinator.borrow_mut();
@@ -485,13 +505,18 @@ impl MomentsWindow {
                     use crate::library::media::MediaFilter;
                     let album_id = AlbumId::from_raw(album_id_str.to_owned());
                     let model = PhotoGridModel::new(
-                        Arc::clone(&lib), tk.clone(),
-                        MediaFilter::Album { album_id }, bs.clone(),
+                        Arc::clone(&lib),
+                        tk.clone(),
+                        MediaFilter::Album { album_id },
+                        bs.clone(),
                     );
                     let view = PhotoGridView::new();
                     view.setup(
-                        Arc::clone(&lib), tk.clone(), s.clone(),
-                        Rc::clone(&tc), bs.clone(),
+                        Arc::clone(&lib),
+                        tk.clone(),
+                        s.clone(),
+                        Rc::clone(&tc),
+                        bs.clone(),
                     );
                     view.set_model(model.clone());
                     model.subscribe_to_bus();
@@ -540,8 +565,12 @@ impl MomentsWindow {
         let action = gio::SimpleAction::new("show-toast", Some(glib::VariantTy::STRING));
         let overlay_weak = self.imp().toast_overlay.downgrade();
         action.connect_activate(move |_, param| {
-            let Some(overlay) = overlay_weak.upgrade() else { return };
-            let Some(msg) = param.and_then(|v| v.get::<String>()) else { return };
+            let Some(overlay) = overlay_weak.upgrade() else {
+                return;
+            };
+            let Some(msg) = param.and_then(|v| v.get::<String>()) else {
+                return;
+            };
             let toast = adw::Toast::new(&msg);
             toast.set_timeout(5);
             overlay.add_toast(toast);
@@ -564,7 +593,9 @@ impl MomentsWindow {
 
         let split_weak = split_view.downgrade();
         action.connect_activate(move |act, _| {
-            let Some(sv) = split_weak.upgrade() else { return };
+            let Some(sv) = split_weak.upgrade() else {
+                return;
+            };
             if sv.is_collapsed() {
                 let show_content = !sv.shows_content();
                 sv.set_show_content(show_content);

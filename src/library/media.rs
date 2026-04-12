@@ -175,10 +175,8 @@ pub trait LibraryMedia: Send + Sync {
     async fn insert_media(&self, record: &MediaRecord) -> Result<(), LibraryError>;
 
     /// Persist the full EXIF detail row. No-op if `record.has_data()` is false.
-    async fn insert_media_metadata(
-        &self,
-        record: &MediaMetadataRecord,
-    ) -> Result<(), LibraryError>;
+    async fn insert_media_metadata(&self, record: &MediaMetadataRecord)
+        -> Result<(), LibraryError>;
 
     /// Return a page of [`MediaItem`]s in reverse chronological order.
     ///
@@ -203,11 +201,7 @@ pub trait LibraryMedia: Send + Sync {
     ) -> Result<Option<MediaMetadataRecord>, LibraryError>;
 
     /// Set or clear the favourite flag on one or more assets.
-    async fn set_favorite(
-        &self,
-        ids: &[MediaId],
-        favorite: bool,
-    ) -> Result<(), LibraryError>;
+    async fn set_favorite(&self, ids: &[MediaId], favorite: bool) -> Result<(), LibraryError>;
 
     /// Move assets to the trash (soft delete).
     ///

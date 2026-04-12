@@ -6,7 +6,9 @@ use async_trait::async_trait;
 use tokio::runtime::Handle;
 use tracing::{debug, info, instrument};
 
+use crate::library::album::{Album, AlbumId, LibraryAlbums};
 use crate::library::bundle::Bundle;
+use crate::library::config::LocalStorageMode;
 use crate::library::db::Database;
 use crate::library::editing::{EditState, LibraryEditing};
 use crate::library::error::LibraryError;
@@ -15,7 +17,6 @@ use crate::library::faces::{LibraryFaces, Person, PersonId};
 use crate::library::format::{FormatRegistry, RawHandler, StandardHandler, VideoHandler};
 use crate::library::import::LibraryImport;
 use crate::library::importer::ImportJob;
-use crate::library::album::{Album, AlbumId, LibraryAlbums};
 use crate::library::media::{
     LibraryMedia, MediaCursor, MediaFilter, MediaId, MediaItem, MediaMetadataRecord, MediaRecord,
 };
@@ -30,23 +31,25 @@ use crate::library::viewer::LibraryViewer;
 /// through the Tokio handle so it never blocks the GTK main thread.
 pub struct LocalLibrary {
     bundle: Bundle,
+    mode: LocalStorageMode,
     events: Sender<LibraryEvent>,
     db: Database,
     tokio: Handle,
     formats: Arc<FormatRegistry>,
 }
 
-#[async_trait]
-impl LibraryStorage for LocalLibrary {
-    #[instrument(skip(events, tokio), fields(path = %bundle.path.display()))]
-    async fn open(
+impl LocalLibrary {
+    /// Construct and open a local library backend.
+    ///
+    /// Called by [`crate::library::factory::LibraryFactory`] — not via the
+    /// trait method (same pattern as `ImmichLibrary`).
+    #[instrument(skip(events, tokio), fields(path = %bundle.path.display(), mode = ?mode))]
+    pub async fn open(
         bundle: Bundle,
+        mode: LocalStorageMode,
         events: Sender<LibraryEvent>,
         tokio: Handle,
-    ) -> Result<Self, LibraryError>
-    where
-        Self: Sized,
-    {
+    ) -> Result<Self, LibraryError> {
         info!("opening local library");
 
         // Initialise the database on the Tokio executor. DB init is fast
@@ -65,6 +68,7 @@ impl LibraryStorage for LocalLibrary {
 
         let library = Self {
             bundle,
+            mode,
             events,
             db,
             tokio,
@@ -98,7 +102,8 @@ impl LibraryStorage for LocalLibrary {
                                 let _ = tokio::fs::remove_file(&path).await;
                             }
                             // Remove thumbnail file.
-                            let thumb = crate::library::thumbnail::sharded_thumbnail_path(&thumbnails, id);
+                            let thumb =
+                                crate::library::thumbnail::sharded_thumbnail_path(&thumbnails, id);
                             // Best-effort: thumbnail may already be gone.
                             let _ = tokio::fs::remove_file(&thumb).await;
                         }
@@ -118,6 +123,23 @@ impl LibraryStorage for LocalLibrary {
             .map_err(|_| LibraryError::Bundle("event channel closed".to_string()))?;
         debug!("local library ready");
         Ok(library)
+    }
+}
+
+#[async_trait]
+impl LibraryStorage for LocalLibrary {
+    async fn open(
+        _bundle: Bundle,
+        _events: Sender<LibraryEvent>,
+        _tokio: Handle,
+    ) -> Result<Self, LibraryError>
+    where
+        Self: Sized,
+    {
+        // Not reachable — factory calls LocalLibrary::open directly.
+        Err(LibraryError::Bundle(
+            "use LocalLibrary::open() instead of LibraryStorage::open()".to_string(),
+        ))
     }
 
     #[instrument(skip(self), fields(path = %self.bundle.path.display()))]
@@ -141,6 +163,7 @@ impl LibraryImport for LocalLibrary {
             self.db.clone(),
             self.events.clone(),
             Arc::clone(&self.formats),
+            self.mode.clone(),
         );
         self.tokio.spawn(async move { job.run(sources).await });
         Ok(())
@@ -184,11 +207,7 @@ impl LibraryMedia for LocalLibrary {
         self.db.media_metadata(id).await
     }
 
-    async fn set_favorite(
-        &self,
-        ids: &[MediaId],
-        favorite: bool,
-    ) -> Result<(), LibraryError> {
+    async fn set_favorite(&self, ids: &[MediaId], favorite: bool) -> Result<(), LibraryError> {
         self.db.set_favorite(ids, favorite).await
     }
 
@@ -203,14 +222,20 @@ impl LibraryMedia for LocalLibrary {
     async fn delete_permanently(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
         // Remove files from disk before deleting DB rows.
         for id in ids {
-            // Remove original file.
-            if let Ok(Some(rel)) = self.db.media_relative_path(id).await {
-                let path = self.bundle.originals.join(rel);
-                if let Err(e) = tokio::fs::remove_file(&path).await {
-                    tracing::warn!(id = %id, path = %path.display(), "failed to remove original: {e}");
+            if let Ok(Some(stored)) = self.db.media_relative_path(id).await {
+                let path = PathBuf::from(&stored);
+                if path.is_absolute() {
+                    // Referenced mode: the original belongs to the user — don't delete it.
+                    debug!(id = %id, "referenced mode: skipping original file deletion");
+                } else {
+                    // Managed mode: Moments owns the copy — remove it.
+                    let full = self.bundle.originals.join(&stored);
+                    if let Err(e) = tokio::fs::remove_file(&full).await {
+                        tracing::warn!(id = %id, path = %full.display(), "failed to remove original: {e}");
+                    }
                 }
             }
-            // Remove thumbnail file.
+            // Remove thumbnail file (always owned by Moments).
             let thumb = self.thumbnail_path(id);
             if let Err(e) = tokio::fs::remove_file(&thumb).await {
                 tracing::debug!(id = %id, "thumbnail not on disk or already removed: {e}");
@@ -230,9 +255,21 @@ impl LibraryMedia for LocalLibrary {
 
 #[async_trait]
 impl LibraryViewer for LocalLibrary {
-    async fn original_path(&self, id: &MediaId) -> Result<Option<std::path::PathBuf>, LibraryError> {
-        let relative = self.db.media_relative_path(id).await?;
-        Ok(relative.map(|rel| self.bundle.originals.join(rel)))
+    async fn original_path(
+        &self,
+        id: &MediaId,
+    ) -> Result<Option<std::path::PathBuf>, LibraryError> {
+        let stored = self.db.media_relative_path(id).await?;
+        Ok(stored.map(|p| {
+            let path = PathBuf::from(&p);
+            if path.is_absolute() {
+                // Referenced mode: the DB stores the absolute (portal) path.
+                path
+            } else {
+                // Managed mode: the DB stores a relative path under originals/.
+                self.bundle.originals.join(p)
+            }
+        }))
     }
 }
 
@@ -252,7 +289,9 @@ impl LibraryThumbnail for LocalLibrary {
         file_path: &str,
         generated_at: i64,
     ) -> Result<(), LibraryError> {
-        self.db.set_thumbnail_ready(id, file_path, generated_at).await
+        self.db
+            .set_thumbnail_ready(id, file_path, generated_at)
+            .await
     }
 
     async fn set_thumbnail_failed(&self, id: &MediaId) -> Result<(), LibraryError> {
@@ -343,11 +382,7 @@ impl LibraryFaces for LocalLibrary {
         Ok(Vec::new())
     }
 
-    async fn rename_person(
-        &self,
-        _person_id: &PersonId,
-        _name: &str,
-    ) -> Result<(), LibraryError> {
+    async fn rename_person(&self, _person_id: &PersonId, _name: &str) -> Result<(), LibraryError> {
         Ok(())
     }
 
@@ -406,14 +441,22 @@ mod tests {
 
     async fn open_test_library(bundle: Bundle, tx: Sender<LibraryEvent>) -> LocalLibrary {
         let handle = tokio::runtime::Handle::current();
-        LocalLibrary::open(bundle, tx, handle).await.unwrap()
+        LocalLibrary::open(bundle, LocalStorageMode::Managed, tx, handle)
+            .await
+            .unwrap()
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn open_sends_ready_event() {
         let dir = tempdir().unwrap();
         let bundle_path = dir.path().join("Test.library");
-        let bundle = Bundle::create(&bundle_path, &LibraryConfig::Local).unwrap();
+        let bundle = Bundle::create(
+            &bundle_path,
+            &LibraryConfig::Local {
+                mode: LocalStorageMode::Managed,
+            },
+        )
+        .unwrap();
 
         let (tx, rx) = mpsc::channel();
         let _library = open_test_library(bundle, tx).await;
@@ -426,7 +469,13 @@ mod tests {
     async fn close_sends_shutdown_complete() {
         let dir = tempdir().unwrap();
         let bundle_path = dir.path().join("Test.library");
-        let bundle = Bundle::create(&bundle_path, &LibraryConfig::Local).unwrap();
+        let bundle = Bundle::create(
+            &bundle_path,
+            &LibraryConfig::Local {
+                mode: LocalStorageMode::Managed,
+            },
+        )
+        .unwrap();
 
         let (tx, rx) = mpsc::channel();
         let library = open_test_library(bundle, tx).await;
@@ -441,7 +490,13 @@ mod tests {
     async fn import_emits_complete_event() {
         let dir = tempdir().unwrap();
         let bundle_path = dir.path().join("Test.library");
-        let bundle = Bundle::create(&bundle_path, &LibraryConfig::Local).unwrap();
+        let bundle = Bundle::create(
+            &bundle_path,
+            &LibraryConfig::Local {
+                mode: LocalStorageMode::Managed,
+            },
+        )
+        .unwrap();
 
         let src_dir = tempdir().unwrap();
         std::fs::write(src_dir.path().join("img.jpg"), b"fake").unwrap();

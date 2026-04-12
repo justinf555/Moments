@@ -1,11 +1,12 @@
-use std::cell::RefCell;
-use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::glib;
-use tracing::{debug, instrument};
+use tracing::{debug, error, instrument};
+
+use crate::library::bundle::Bundle;
+use crate::library::config::{LibraryConfig, LocalStorageMode};
 
 mod imp {
     use super::*;
@@ -14,11 +15,9 @@ mod imp {
     #[template(resource = "/io/github/justinf555/Moments/ui/setup_window/local_setup_page.ui")]
     pub struct MomentsLocalSetupPage {
         #[template_child]
-        pub path_row: TemplateChild<adw::ActionRow>,
+        pub managed_row: TemplateChild<adw::ActionRow>,
         #[template_child]
-        pub create_button: TemplateChild<gtk::Button>,
-
-        pub chosen_path: RefCell<Option<PathBuf>>,
+        pub referenced_row: TemplateChild<adw::ActionRow>,
     }
 
     #[glib::object_subclass]
@@ -50,33 +49,23 @@ mod imp {
             self.parent_constructed();
             let obj = self.obj();
 
-            // Set default path subtitle
-            let default = super::default_library_path();
-            self.path_row
-                .set_subtitle(&default.to_string_lossy());
-            *self.chosen_path.borrow_mut() = Some(default);
-            self.create_button.set_sensitive(true);
+            self.referenced_row.set_visible(true);
 
-            // path_row activation → open folder chooser
-            self.path_row.connect_activated(glib::clone!(
+            // Managed row: create bundle immediately in the app data dir.
+            self.managed_row.connect_activated(glib::clone!(
+                #[weak]
+                obj,
+                move |_| {
+                    obj.create_managed_library();
+                }
+            ));
+
+            // Referenced row: open folder picker, then create bundle.
+            self.referenced_row.connect_activated(glib::clone!(
                 #[weak]
                 obj,
                 move |_| {
                     obj.open_folder_dialog();
-                }
-            ));
-
-            // create_button clicked → emit signal
-            self.create_button.connect_clicked(glib::clone!(
-                #[weak]
-                obj,
-                move |_| {
-                    let path = obj.imp().chosen_path.borrow().clone();
-                    if let Some(p) = path {
-                        let path_str = p.to_string_lossy().to_string();
-                        debug!(path = %path_str, "user confirmed library path");
-                        obj.emit_by_name::<()>("create-requested", &[&path_str]);
-                    }
                 }
             ));
         }
@@ -110,10 +99,33 @@ impl MomentsLocalSetupPage {
         )
     }
 
+    /// Managed mode: create (or re-use) the bundle in the app's sandbox data directory.
+    #[instrument(skip(self))]
+    fn create_managed_library(&self) {
+        let bundle_path = default_local_library_path();
+
+        if !bundle_path.exists() {
+            let config = LibraryConfig::Local {
+                mode: LocalStorageMode::Managed,
+            };
+            if let Err(e) = Bundle::create(&bundle_path, &config) {
+                error!("failed to create managed library bundle: {e}");
+                return;
+            }
+            debug!(path = %bundle_path.display(), "managed library bundle created");
+        } else {
+            debug!(path = %bundle_path.display(), "re-using existing managed library bundle");
+        }
+
+        let path_str = bundle_path.to_string_lossy().to_string();
+        self.emit_by_name::<()>("create-requested", &[&path_str]);
+    }
+
+    /// Referenced mode: open a folder picker, then create the bundle.
     #[instrument(skip(self))]
     fn open_folder_dialog(&self) {
         let dialog = gtk::FileDialog::builder()
-            .title("Choose Library Location")
+            .title("Choose Photos Folder")
             .modal(true)
             .build();
 
@@ -121,25 +133,27 @@ impl MomentsLocalSetupPage {
             #[weak(rename_to = page)]
             self,
             async move {
-                let window = page
-                    .root()
-                    .and_then(|r| r.downcast::<gtk::Window>().ok());
-                let result = dialog
-                    .select_folder_future(window.as_ref())
-                    .await;
+                let window = page.root().and_then(|r| r.downcast::<gtk::Window>().ok());
+                let result = dialog.select_folder_future(window.as_ref()).await;
 
-                if let Ok(file) = result {
-                    if let Some(mut path) = file.path() {
-                        // Append Moments.library if not already a .library bundle
-                        if path.extension().and_then(|e| e.to_str()) != Some("library") {
-                            path = path.join("Moments.library");
+                if let Ok(_file) = result {
+                    let bundle_path = default_local_library_path();
+
+                    if !bundle_path.exists() {
+                        let config = LibraryConfig::Local {
+                            mode: LocalStorageMode::Referenced,
+                        };
+                        if let Err(e) = Bundle::create(&bundle_path, &config) {
+                            error!("failed to create referenced library bundle: {e}");
+                            return;
                         }
-                        let path_str = path.to_string_lossy().to_string();
-                        debug!(path = %path_str, "folder chosen");
-                        page.imp().path_row.set_subtitle(&path_str);
-                        page.imp().create_button.set_sensitive(true);
-                        *page.imp().chosen_path.borrow_mut() = Some(path);
+                        debug!(path = %bundle_path.display(), "referenced library bundle created");
+                    } else {
+                        debug!(path = %bundle_path.display(), "re-using existing library bundle");
                     }
+
+                    let path_str = bundle_path.to_string_lossy().to_string();
+                    page.emit_by_name::<()>("create-requested", &[&path_str]);
                 }
             }
         ));
@@ -152,7 +166,10 @@ impl Default for MomentsLocalSetupPage {
     }
 }
 
-/// Returns the default bundle path: `~/Pictures/Moments.library`.
-fn default_library_path() -> PathBuf {
-    glib::home_dir().join("Pictures").join("Moments.library")
+/// Returns the default bundle path for local libraries.
+///
+/// Uses the app's XDG data directory so the bundle is inside the Flatpak
+/// sandbox: `~/.local/share/moments/local.library` (or the sandbox equivalent).
+fn default_local_library_path() -> std::path::PathBuf {
+    glib::user_data_dir().join("moments").join("local.library")
 }

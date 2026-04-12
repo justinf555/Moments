@@ -1,8 +1,8 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use gettextrs::gettext;
 use adw::prelude::*;
+use gettextrs::gettext;
 use gtk::{glib, subclass::prelude::*};
 use tracing::debug;
 
@@ -60,11 +60,7 @@ pub(crate) fn open_album_drilldown(
 /// Find the clicked album item by resolving the cell's bound data.
 /// Walks up from the picked widget to find the `AlbumCard`, then searches
 /// the store for the matching item. Correct regardless of scroll position.
-fn find_clicked_item(
-    grid_view: &gtk::GridView,
-    x: f64,
-    y: f64,
-) -> Option<AlbumItemObject> {
+fn find_clicked_item(grid_view: &gtk::GridView, x: f64, y: f64) -> Option<AlbumItemObject> {
     let picked = grid_view.pick(x, y, gtk::PickFlags::DEFAULT)?;
 
     let mut widget = Some(picked);
@@ -156,20 +152,38 @@ pub(crate) fn show_context_menu(
 
     // Wire Open.
     wire_open_button(
-        &open_btn, &popover, library, tokio, settings,
-        texture_cache, bus_sender, nav_view, &album_id_str, &album_name,
+        &open_btn,
+        &popover,
+        library,
+        tokio,
+        settings,
+        texture_cache,
+        bus_sender,
+        nav_view,
+        &album_id_str,
+        &album_name,
     );
 
     // Wire Rename.
     wire_rename_button(
-        &rename_btn, &popover, library, tokio, bus_sender,
-        grid_view, &album_id_str, &album_name,
+        &rename_btn,
+        &popover,
+        library,
+        tokio,
+        bus_sender,
+        grid_view,
+        &album_id_str,
+        &album_name,
     );
 
     // Wire Delete.
     wire_delete_button(
-        &delete_btn, &popover, bus_sender,
-        grid_view, &album_id_str, &album_name,
+        &delete_btn,
+        &popover,
+        bus_sender,
+        grid_view,
+        &album_id_str,
+        &album_name,
     );
 
     popover.connect_closed(|p| {
@@ -293,7 +307,10 @@ fn wire_rename_button(
                 glib::MainContext::default().spawn_local(async move {
                     let n = new_name.clone();
                     let id = AlbumId::from_raw(aid.clone());
-                    match tk.spawn(async move { lib.rename_album(&id, &n).await }).await {
+                    match tk
+                        .spawn(async move { lib.rename_album(&id, &n).await })
+                        .await
+                    {
                         Ok(Ok(())) => {
                             debug!(album_id = %aid, name = %new_name, "album renamed");
                             bs.send(crate::app_event::AppEvent::AlbumRenamed {
@@ -303,15 +320,15 @@ fn wire_rename_button(
                         }
                         Ok(Err(e)) => {
                             tracing::error!("failed to rename album: {e}");
-                            bs.send(crate::app_event::AppEvent::Error(
-                                format!("Failed to rename album: {e}"),
-                            ));
+                            bs.send(crate::app_event::AppEvent::Error(format!(
+                                "Failed to rename album: {e}"
+                            )));
                         }
                         Err(e) => {
                             tracing::error!("tokio join error: {e}");
-                            bs.send(crate::app_event::AppEvent::Error(
-                                format!("Failed to rename album: {e}"),
-                            ));
+                            bs.send(crate::app_event::AppEvent::Error(format!(
+                                "Failed to rename album: {e}"
+                            )));
                         }
                     }
                 });

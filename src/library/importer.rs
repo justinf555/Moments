@@ -16,6 +16,7 @@ fn max_thumbnail_workers() -> usize {
     .max(2)
 }
 
+use super::config::LocalStorageMode;
 use super::db::Database;
 use super::error::LibraryError;
 use super::event::LibraryEvent;
@@ -44,6 +45,8 @@ pub struct ImportJob {
     formats: Arc<FormatRegistry>,
     /// Limits concurrent thumbnail generation to avoid CPU/memory spikes.
     thumbnail_semaphore: Arc<Semaphore>,
+    /// Storage mode — determines whether files are copied (managed) or referenced in place.
+    mode: LocalStorageMode,
 }
 
 impl ImportJob {
@@ -53,6 +56,7 @@ impl ImportJob {
         db: Database,
         events: Sender<LibraryEvent>,
         formats: Arc<FormatRegistry>,
+        mode: LocalStorageMode,
     ) -> Self {
         Self {
             originals_dir,
@@ -61,6 +65,7 @@ impl ImportJob {
             events,
             formats,
             thumbnail_semaphore: Arc::new(Semaphore::new(max_thumbnail_workers())),
+            mode,
         }
     }
 
@@ -123,9 +128,7 @@ impl ImportJob {
         );
 
         // Receiver may be dropped during shutdown.
-        self.events
-            .send(LibraryEvent::ImportComplete(summary))
-            .ok();
+        self.events.send(LibraryEvent::ImportComplete(summary)).ok();
     }
 
     /// Import a single file.
@@ -186,26 +189,42 @@ impl ImportJob {
             return Ok(Some(SkipReason::Duplicate));
         }
 
-        // ── 4. Compute destination path ───────────────────────────────────────
-        // Use EXIF capture time if available; fall back to file mtime.
-        let base_target =
-            compute_base_target(source, &self.originals_dir, exif.captured_at).await?;
-        let target = resolve_collision(base_target);
+        // ── 4–5. Store or copy file ───────────────────────────────────────────
+        let (relative_path, file_size, thumbnail_source) = match &self.mode {
+            LocalStorageMode::Managed => {
+                // Compute destination path inside originals/.
+                let base_target =
+                    compute_base_target(source, &self.originals_dir, exif.captured_at).await?;
+                let target = resolve_collision(base_target);
 
-        let relative_path = target
-            .strip_prefix(&self.originals_dir)
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|_| target.to_string_lossy().into_owned());
+                let rel = target
+                    .strip_prefix(&self.originals_dir)
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| target.to_string_lossy().into_owned());
 
-        // ── 5. Copy file ──────────────────────────────────────────────────────
-        if let Some(parent) = target.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(LibraryError::Io)?;
-        }
-        let file_size = tokio::fs::copy(source, &target)
-            .await
-            .map_err(LibraryError::Io)? as i64;
+                // Copy file into the bundle.
+                if let Some(parent) = target.parent() {
+                    tokio::fs::create_dir_all(parent)
+                        .await
+                        .map_err(LibraryError::Io)?;
+                }
+                let size = tokio::fs::copy(source, &target)
+                    .await
+                    .map_err(LibraryError::Io)? as i64;
+
+                (rel, size, target)
+            }
+            LocalStorageMode::Referenced => {
+                // No copy — store the absolute path to the original.
+                let abs = source.to_string_lossy().into_owned();
+                let size = tokio::fs::metadata(source)
+                    .await
+                    .map_err(LibraryError::Io)?
+                    .len() as i64;
+
+                (abs, size, source.to_path_buf())
+            }
+        };
 
         // ── 6. Persist to database ────────────────────────────────────────────
         let original_filename = source
@@ -255,11 +274,11 @@ impl ImportJob {
             .await?;
 
         // ── 7. Emit event ─────────────────────────────────────────────────────
-        debug!(?target, "imported");
+        debug!(path = %thumbnail_source.display(), "imported");
         self.events
             .send(LibraryEvent::AssetImported {
                 media_id: media_id.clone(),
-                path: target.clone(),
+                path: thumbnail_source.clone(),
             })
             .ok();
 
@@ -276,7 +295,7 @@ impl ImportJob {
         let permit = Arc::clone(&self.thumbnail_semaphore);
         tokio::spawn(async move {
             let _permit = permit.acquire().await;
-            thumb_job.generate(media_id, target).await;
+            thumb_job.generate(media_id, thumbnail_source).await;
         });
 
         // Increment summary via the Ok(None) sentinel — summary is updated
@@ -423,7 +442,16 @@ mod tests {
         let photo = make_file(src_dir.path(), "photo.jpg", b"fake jpeg");
 
         let (tx, rx) = mpsc::channel();
-        ImportJob::new(originals, thumbnails, db, tx, test_registry()).run(vec![photo]).await;
+        ImportJob::new(
+            originals,
+            thumbnails,
+            db,
+            tx,
+            test_registry(),
+            LocalStorageMode::Managed,
+        )
+        .run(vec![photo])
+        .await;
 
         let events: Vec<_> = rx.try_iter().collect();
         assert!(events
@@ -454,7 +482,16 @@ mod tests {
         let file = make_file(src_dir.path(), "document.pdf", b"not a photo");
 
         let (tx, rx) = mpsc::channel();
-        ImportJob::new(originals, thumbnails, db, tx, test_registry()).run(vec![file]).await;
+        ImportJob::new(
+            originals,
+            thumbnails,
+            db,
+            tx,
+            test_registry(),
+            LocalStorageMode::Managed,
+        )
+        .run(vec![file])
+        .await;
 
         let events: Vec<_> = rx.try_iter().collect();
         let summary = events
@@ -483,13 +520,29 @@ mod tests {
         // First import
         let thumbnails = bundle_dir.path().join("thumbnails");
         let (tx, rx) = mpsc::channel();
-        ImportJob::new(originals.clone(), thumbnails.clone(), db.clone(), tx.clone(), test_registry())
-            .run(vec![photo.clone()])
-            .await;
+        ImportJob::new(
+            originals.clone(),
+            thumbnails.clone(),
+            db.clone(),
+            tx.clone(),
+            test_registry(),
+            LocalStorageMode::Managed,
+        )
+        .run(vec![photo.clone()])
+        .await;
 
         // Second import — same content, even if renamed
         let photo2 = make_file(src_dir.path(), "dup_renamed.jpg", b"fake jpeg content");
-        ImportJob::new(originals, thumbnails, db, tx, test_registry()).run(vec![photo2]).await;
+        ImportJob::new(
+            originals,
+            thumbnails,
+            db,
+            tx,
+            test_registry(),
+            LocalStorageMode::Managed,
+        )
+        .run(vec![photo2])
+        .await;
 
         let events: Vec<_> = rx.try_iter().collect();
         let summaries: Vec<_> = events
@@ -523,9 +576,16 @@ mod tests {
         let db = open_test_db(bundle_dir.path()).await;
 
         let (tx, rx) = mpsc::channel();
-        ImportJob::new(originals, thumbnails, db, tx, test_registry())
-            .run(vec![src_dir.path().to_path_buf()])
-            .await;
+        ImportJob::new(
+            originals,
+            thumbnails,
+            db,
+            tx,
+            test_registry(),
+            LocalStorageMode::Managed,
+        )
+        .run(vec![src_dir.path().to_path_buf()])
+        .await;
 
         let events: Vec<_> = rx.try_iter().collect();
         let summary = events
@@ -553,9 +613,16 @@ mod tests {
         make_file(src_dir.path(), "clip.mp4", b"fake video");
 
         let (tx, rx) = mpsc::channel();
-        ImportJob::new(originals, thumbnails, db.clone(), tx, test_registry())
-            .run(vec![src_dir.path().to_path_buf()])
-            .await;
+        ImportJob::new(
+            originals,
+            thumbnails,
+            db.clone(),
+            tx,
+            test_registry(),
+            LocalStorageMode::Managed,
+        )
+        .run(vec![src_dir.path().to_path_buf()])
+        .await;
 
         let events: Vec<_> = rx.try_iter().collect();
         let summary = events

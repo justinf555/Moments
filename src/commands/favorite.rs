@@ -17,13 +17,10 @@ impl CommandHandler for FavoriteCommand {
         matches!(event, AppEvent::FavoriteRequested { .. })
     }
 
-    async fn execute(
-        &self,
-        event: AppEvent,
-        library: &Arc<dyn Library>,
-        bus: &EventSender,
-    ) {
-        let AppEvent::FavoriteRequested { ids, state } = event else { return };
+    async fn execute(&self, event: AppEvent, library: &Arc<dyn Library>, bus: &EventSender) {
+        let AppEvent::FavoriteRequested { ids, state } = event else {
+            return;
+        };
         match library.set_favorite(&ids, state).await {
             Ok(()) => {
                 bus.send(AppEvent::FavoriteChanged {
@@ -47,7 +44,10 @@ mod tests {
 
     #[tokio::test]
     async fn handles_favorite_requested() {
-        assert!(FavoriteCommand.handles(&AppEvent::FavoriteRequested { ids: vec![], state: true }));
+        assert!(FavoriteCommand.handles(&AppEvent::FavoriteRequested {
+            ids: vec![],
+            state: true
+        }));
     }
 
     #[tokio::test]
@@ -60,22 +60,36 @@ mod tests {
         let lib = MockLibrary::mock();
         let (bus, rx) = crate::event_bus::EventSender::test_channel();
         let ids = vec![MediaId::new("abc".into())];
-        FavoriteCommand.execute(
-            AppEvent::FavoriteRequested { ids: ids.clone(), state: true },
-            &lib, &bus,
-        ).await;
+        FavoriteCommand
+            .execute(
+                AppEvent::FavoriteRequested {
+                    ids: ids.clone(),
+                    state: true,
+                },
+                &lib,
+                &bus,
+            )
+            .await;
         let event = rx.try_recv().unwrap();
-        assert!(matches!(event, AppEvent::FavoriteChanged { ids: ref got, is_favorite: true } if got == &ids));
+        assert!(
+            matches!(event, AppEvent::FavoriteChanged { ids: ref got, is_favorite: true } if got == &ids)
+        );
     }
 
     #[tokio::test]
     async fn failure_emits_error() {
         let lib = MockLibrary::mock_failing("db error");
         let (bus, rx) = crate::event_bus::EventSender::test_channel();
-        FavoriteCommand.execute(
-            AppEvent::FavoriteRequested { ids: vec![MediaId::new("x".into())], state: false },
-            &lib, &bus,
-        ).await;
+        FavoriteCommand
+            .execute(
+                AppEvent::FavoriteRequested {
+                    ids: vec![MediaId::new("x".into())],
+                    state: false,
+                },
+                &lib,
+                &bus,
+            )
+            .await;
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, AppEvent::Error(msg) if msg.contains("favourite")));
     }

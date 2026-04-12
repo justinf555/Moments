@@ -14,11 +14,11 @@ use crate::library::event::LibraryEvent;
 use crate::library::faces::{LibraryFaces, Person, PersonId};
 use crate::library::immich_client::ImmichClient;
 use crate::library::import::LibraryImport;
-use crate::library::sync::SyncHandle;
 use crate::library::media::{
     LibraryMedia, MediaCursor, MediaFilter, MediaId, MediaItem, MediaMetadataRecord, MediaRecord,
 };
 use crate::library::storage::LibraryStorage;
+use crate::library::sync::SyncHandle;
 use crate::library::thumbnail::{sharded_thumbnail_path, LibraryThumbnail, ThumbnailStatus};
 use crate::library::viewer::LibraryViewer;
 
@@ -193,11 +193,7 @@ impl LibraryMedia for ImmichLibrary {
         self.db.media_metadata(id).await
     }
 
-    async fn set_favorite(
-        &self,
-        ids: &[MediaId],
-        favorite: bool,
-    ) -> Result<(), LibraryError> {
+    async fn set_favorite(&self, ids: &[MediaId], favorite: bool) -> Result<(), LibraryError> {
         // Write-through: API first, then local cache.
         let api_ids: Vec<String> = ids.iter().map(|id| id.as_str().to_owned()).collect();
         self.client
@@ -215,10 +211,7 @@ impl LibraryMedia for ImmichLibrary {
     async fn trash(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
         let api_ids: Vec<String> = ids.iter().map(|id| id.as_str().to_owned()).collect();
         self.client
-            .delete_with_body(
-                "/assets",
-                &serde_json::json!({ "ids": api_ids }),
-            )
+            .delete_with_body("/assets", &serde_json::json!({ "ids": api_ids }))
             .await?;
         self.db.trash(ids).await
     }
@@ -269,14 +262,22 @@ impl LibraryMedia for ImmichLibrary {
         };
 
         // GET /assets/statistics — user-scoped photo/video counts.
-        if let Ok(asset_stats) = self.client.get::<AssetStatistics>("/assets/statistics").await {
+        if let Ok(asset_stats) = self
+            .client
+            .get::<AssetStatistics>("/assets/statistics")
+            .await
+        {
             server.server_photos = asset_stats.images as u64;
             server.server_videos = asset_stats.videos as u64;
         }
 
         // GET /server/statistics — Immich-specific storage usage (admin only).
         // Falls back to /server/storage (OS-level) if the user is not an admin.
-        if let Ok(stats_resp) = self.client.get::<ServerStatistics>("/server/statistics").await {
+        if let Ok(stats_resp) = self
+            .client
+            .get::<ServerStatistics>("/server/statistics")
+            .await
+        {
             server.disk_use = stats_resp.usage as u64;
             // /server/statistics doesn't include total disk size — fetch from /server/storage.
             if let Ok(storage) = self.client.get::<ServerStorage>("/server/storage").await {
@@ -330,7 +331,9 @@ impl LibraryThumbnail for ImmichLibrary {
         file_path: &str,
         generated_at: i64,
     ) -> Result<(), LibraryError> {
-        self.db.set_thumbnail_ready(id, file_path, generated_at).await
+        self.db
+            .set_thumbnail_ready(id, file_path, generated_at)
+            .await
     }
 
     async fn set_thumbnail_failed(&self, id: &MediaId) -> Result<(), LibraryError> {
@@ -348,10 +351,7 @@ impl LibraryThumbnail for ImmichLibrary {
 #[async_trait]
 impl LibraryViewer for ImmichLibrary {
     #[instrument(skip(self))]
-    async fn original_path(
-        &self,
-        id: &MediaId,
-    ) -> Result<Option<PathBuf>, LibraryError> {
+    async fn original_path(&self, id: &MediaId) -> Result<Option<PathBuf>, LibraryError> {
         // Get the original filename for its extension (needed by image decoders).
         let filename = self.db.media_original_filename(id).await?;
         let ext = filename
@@ -517,7 +517,12 @@ async fn collect_cache_candidates(
     };
 
     while let Ok(Some(shard1)) = read_dir.next_entry().await {
-        if !shard1.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
+        if !shard1
+            .file_type()
+            .await
+            .map(|t| t.is_dir())
+            .unwrap_or(false)
+        {
             continue;
         }
         collect_shard_entries(shard1.path(), &mut entries, &mut total_size).await;
@@ -536,7 +541,12 @@ async fn collect_shard_entries(
     };
 
     while let Ok(Some(shard2)) = shard1_dir.next_entry().await {
-        if !shard2.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
+        if !shard2
+            .file_type()
+            .await
+            .map(|t| t.is_dir())
+            .unwrap_or(false)
+        {
             continue;
         }
         collect_file_entries(shard2.path(), entries, total_size).await;
@@ -701,11 +711,7 @@ impl LibraryFaces for ImmichLibrary {
         Ok(ids.into_iter().map(MediaId::new).collect())
     }
 
-    async fn rename_person(
-        &self,
-        person_id: &PersonId,
-        name: &str,
-    ) -> Result<(), LibraryError> {
+    async fn rename_person(&self, person_id: &PersonId, name: &str) -> Result<(), LibraryError> {
         let path = format!("/people/{}", person_id.as_str());
         let body = serde_json::json!({ "name": name });
         self.client.put_no_content(&path, &body).await?;
@@ -733,7 +739,11 @@ impl LibraryFaces for ImmichLibrary {
     }
 
     fn person_thumbnail_path(&self, person_id: &PersonId) -> Option<std::path::PathBuf> {
-        let path = self.bundle.thumbnails.join("people").join(format!("{}.jpg", person_id.as_str()));
+        let path = self
+            .bundle
+            .thumbnails
+            .join("people")
+            .join(format!("{}.jpg", person_id.as_str()));
         if path.exists() {
             Some(path)
         } else {

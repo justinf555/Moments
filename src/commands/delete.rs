@@ -17,13 +17,10 @@ impl CommandHandler for DeleteCommand {
         matches!(event, AppEvent::DeleteRequested { .. })
     }
 
-    async fn execute(
-        &self,
-        event: AppEvent,
-        library: &Arc<dyn Library>,
-        bus: &EventSender,
-    ) {
-        let AppEvent::DeleteRequested { ids } = event else { return };
+    async fn execute(&self, event: AppEvent, library: &Arc<dyn Library>, bus: &EventSender) {
+        let AppEvent::DeleteRequested { ids } = event else {
+            return;
+        };
         match library.delete_permanently(&ids).await {
             Ok(()) => {
                 bus.send(AppEvent::Deleted { ids });
@@ -57,7 +54,9 @@ mod tests {
         let lib = MockLibrary::mock();
         let (bus, rx) = crate::event_bus::EventSender::test_channel();
         let ids = vec![MediaId::new("abc".into())];
-        DeleteCommand.execute(AppEvent::DeleteRequested { ids: ids.clone() }, &lib, &bus).await;
+        DeleteCommand
+            .execute(AppEvent::DeleteRequested { ids: ids.clone() }, &lib, &bus)
+            .await;
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, AppEvent::Deleted { ids: ref got } if got == &ids));
     }
@@ -66,7 +65,15 @@ mod tests {
     async fn failure_emits_error() {
         let lib = MockLibrary::mock_failing("db error");
         let (bus, rx) = crate::event_bus::EventSender::test_channel();
-        DeleteCommand.execute(AppEvent::DeleteRequested { ids: vec![MediaId::new("x".into())] }, &lib, &bus).await;
+        DeleteCommand
+            .execute(
+                AppEvent::DeleteRequested {
+                    ids: vec![MediaId::new("x".into())],
+                },
+                &lib,
+                &bus,
+            )
+            .await;
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, AppEvent::Error(msg) if msg.contains("delete")));
     }

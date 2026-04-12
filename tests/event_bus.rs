@@ -79,7 +79,10 @@ fn subscribers_ignore_unmatched_events() {
     });
     flush_events();
 
-    assert!(!received.get(), "subscriber should not fire for unmatched event");
+    assert!(
+        !received.get(),
+        "subscriber should not fire for unmatched event"
+    );
 }
 
 #[gtk::test]
@@ -141,7 +144,10 @@ fn sender_works_from_another_thread() {
 
     flush_events();
 
-    assert!(received.get(), "event from background thread should be delivered");
+    assert!(
+        received.get(),
+        "event from background thread should be delivered"
+    );
 }
 
 // ── Command / result event pattern ──────────────────────────────────────────
@@ -162,10 +168,7 @@ fn command_event_reaches_subscriber() {
     });
 
     bus.sender().send(AppEvent::TrashRequested {
-        ids: vec![
-            MediaId::new("a".to_string()),
-            MediaId::new("b".to_string()),
-        ],
+        ids: vec![MediaId::new("a".to_string()), MediaId::new("b".to_string())],
     });
     flush_events();
 

@@ -16,9 +16,9 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use adw::prelude::*;
 use gtk::glib;
 use gtk::prelude::*;
-use adw::prelude::*;
 
 /// Process all pending GLib main loop events.
 fn flush_events() {
@@ -36,7 +36,6 @@ mod event_fan_out {
     /// events from a background thread to the GTK main loop.
     #[gtk::test]
     fn fan_out_delivers_to_all_subscribers() {
-
         let subscribers: Rc<std::cell::RefCell<Vec<Box<dyn Fn(&str)>>>> =
             Rc::new(std::cell::RefCell::new(Vec::new()));
 
@@ -67,7 +66,6 @@ mod event_fan_out {
     /// (the pattern used by LibraryEvent today).
     #[gtk::test]
     fn cross_thread_event_delivery() {
-
         let (tx, rx) = std::sync::mpsc::channel::<String>();
 
         let received = Rc::new(Cell::new(false));
@@ -91,13 +89,15 @@ mod event_fan_out {
 
         flush_events();
 
-        assert!(received.get(), "cross-thread send should deliver to main loop");
+        assert!(
+            received.get(),
+            "cross-thread send should deliver to main loop"
+        );
     }
 
     /// Verifies that multiple events are dispatched independently.
     #[gtk::test]
     fn multiple_events_dispatched_in_order() {
-
         let events: Rc<std::cell::RefCell<Vec<String>>> =
             Rc::new(std::cell::RefCell::new(Vec::new()));
 
@@ -235,11 +235,8 @@ mod gtk_widgets {
     #[gtk::test]
     fn stateful_action_tracks_boolean_state() {
         // Simulates selection-mode stateful action
-        let action = gtk::gio::SimpleAction::new_stateful(
-            "selection-mode",
-            None,
-            &false.to_variant(),
-        );
+        let action =
+            gtk::gio::SimpleAction::new_stateful("selection-mode", None, &false.to_variant());
 
         assert!(!action.state().unwrap().get::<bool>().unwrap());
 
@@ -291,9 +288,7 @@ mod adw_widgets {
     fn action_row_with_prefix_icon() {
         adw::init().expect("adw::init failed");
 
-        let row = adw::ActionRow::builder()
-            .title("Location")
-            .build();
+        let row = adw::ActionRow::builder().title("Location").build();
 
         let icon = gtk::Image::from_icon_name("find-location-symbolic");
         row.add_prefix(&icon);

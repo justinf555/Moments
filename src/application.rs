@@ -22,9 +22,9 @@ use std::cell::{Cell, OnceCell, RefCell};
 use std::path::PathBuf;
 use std::sync::{mpsc::Receiver, Arc};
 
-use gettextrs::gettext;
 use adw::prelude::*;
 use adw::subclass::prelude::*;
+use gettextrs::gettext;
 use gtk::{gio, glib};
 use tracing::{debug, error, info, instrument, warn};
 
@@ -83,7 +83,10 @@ mod imp {
             obj.set_accels_for_action("app.shortcuts", &["<control>question"]);
             // F9 is handled by the viewer's EventControllerKey for the info
             // panel toggle — don't register it as a global accelerator here.
-            obj.set_accels_for_action("view.zoom-in", &["<control>equal", "<control>plus", "<control>KP_Add"]);
+            obj.set_accels_for_action(
+                "view.zoom-in",
+                &["<control>equal", "<control>plus", "<control>KP_Add"],
+            );
             obj.set_accels_for_action("view.zoom-out", &["<control>minus", "<control>KP_Subtract"]);
         }
     }
@@ -215,12 +218,21 @@ impl MomentsApplication {
         let shortcuts_action = gio::ActionEntry::builder("shortcuts")
             .activate(move |app: &Self, _, _| app.show_shortcuts())
             .build();
-        self.add_action_entries([quit_action, about_action, import_action, preferences_action, shortcuts_action]);
+        self.add_action_entries([
+            quit_action,
+            about_action,
+            import_action,
+            preferences_action,
+            shortcuts_action,
+        ]);
     }
 
     fn show_shortcuts(&self) {
-        let Some(window) = self.active_window() else { return };
-        let builder = gtk::Builder::from_resource("/io/github/justinf555/Moments/shortcuts-dialog.ui");
+        let Some(window) = self.active_window() else {
+            return;
+        };
+        let builder =
+            gtk::Builder::from_resource("/io/github/justinf555/Moments/shortcuts-dialog.ui");
         let dialog = builder
             .object::<adw::ShortcutsDialog>("shortcuts_dialog")
             .expect("shortcuts_dialog in resource");
@@ -228,7 +240,9 @@ impl MomentsApplication {
     }
 
     fn show_about(&self) {
-        let Some(window) = self.active_window() else { return };
+        let Some(window) = self.active_window() else {
+            return;
+        };
         let about = adw::AboutDialog::builder()
             .application_name("moments")
             .application_icon("io.github.justinf555.Moments")
@@ -247,17 +261,18 @@ impl MomentsApplication {
             Some(w) => w,
             None => return,
         };
-        let settings = self.imp().settings.get().expect("settings initialised").clone();
+        let settings = self
+            .imp()
+            .settings
+            .get()
+            .expect("settings initialised")
+            .clone();
         let is_immich = self.imp().is_immich.get();
         let library = self.imp().library.borrow().clone();
         let immich_url = self.imp().immich_server_url.borrow().clone();
 
         crate::ui::preferences_dialog::show_preferences(
-            &window,
-            &settings,
-            is_immich,
-            library,
-            immich_url,
+            &window, &settings, is_immich, library, immich_url,
         );
     }
 
@@ -277,47 +292,30 @@ impl MomentsApplication {
 
     /// Called when the user completes the setup wizard.
     ///
-    /// Creates the bundle, persists the path to GSettings, presents the main
-    /// window, closes the setup window, then loads the library asynchronously.
-    /// The main window is created before the setup window closes so there is
-    /// never a windowless state.
+    /// Opens the bundle (already created by the setup page), persists the path
+    /// to GSettings, presents the main window, closes the setup window, then
+    /// loads the library asynchronously. The main window is created before the
+    /// setup window closes so there is never a windowless state.
     #[instrument(skip(self, setup_win), fields(path = %path))]
     fn on_setup_complete(&self, setup_win: &MomentsSetupWindow, path: String) {
         let bundle_path = PathBuf::from(&path);
 
-        // Determine config from the bundle manifest (works for both local and Immich).
-        // For new bundles, we create first then open to read the config back.
-        // For Immich, the ImmichSetupPage already called Bundle::create before emitting
-        // setup-complete. For Local, we create here.
-        let (bundle, config) = if bundle_path.exists() {
-            // Immich path: bundle was created by ImmichSetupPage.
-            match Bundle::open(&bundle_path) {
-                Ok(result) => result,
-                Err(e) => {
-                    error!("failed to open bundle: {e}");
-                    show_library_error_dialog(
-                        setup_win,
-                        "Could not open library",
-                        &format!("The library at {} could not be opened.\n\nDetails: {e}", bundle_path.display()),
-                    );
-                    return;
-                }
+        // All setup pages (Local and Immich) create the bundle before emitting
+        // setup-complete. We just open it here.
+        let (bundle, config) = match Bundle::open(&bundle_path) {
+            Ok(result) => result,
+            Err(e) => {
+                error!("failed to open bundle: {e}");
+                show_library_error_dialog(
+                    setup_win,
+                    "Could not open library",
+                    &format!(
+                        "The library at {} could not be opened.\n\nDetails: {e}",
+                        bundle_path.display()
+                    ),
+                );
+                return;
             }
-        } else {
-            // Local path: create the bundle now.
-            let bundle = match Bundle::create(&bundle_path, &LibraryConfig::Local) {
-                Ok(b) => b,
-                Err(e) => {
-                    error!("failed to create library bundle: {e}");
-                    show_library_error_dialog(
-                        setup_win,
-                        "Could not create library",
-                        &format!("Failed to create a library at {}.\n\nDetails: {e}", bundle_path.display()),
-                    );
-                    return;
-                }
-            };
-            (bundle, LibraryConfig::Local)
         };
 
         // For Immich configs, inject the session token from the keyring.
@@ -327,7 +325,10 @@ impl MomentsApplication {
                     .ok()
                     .flatten()
                     .unwrap_or_default();
-                LibraryConfig::Immich { server_url, access_token }
+                LibraryConfig::Immich {
+                    server_url,
+                    access_token,
+                }
             }
             other => other,
         };
@@ -384,7 +385,10 @@ impl MomentsApplication {
                     .ok()
                     .flatten()
                     .unwrap_or_default();
-                LibraryConfig::Immich { server_url, access_token }
+                LibraryConfig::Immich {
+                    server_url,
+                    access_token,
+                }
             }
             other => other,
         };
@@ -443,7 +447,9 @@ impl MomentsApplication {
             None => return,
         };
 
-        let display_path = folder.path().map(|p| p.display().to_string())
+        let display_path = folder
+            .path()
+            .map(|p| p.display().to_string())
             .unwrap_or_else(|| folder.uri().to_string());
         info!(path = %display_path, "starting import");
 
@@ -463,7 +469,8 @@ impl MomentsApplication {
             if let Ok(Err(e)) = result {
                 error!("import pipeline error: {e}");
                 if let Some(win) = win_weak.upgrade() {
-                    let _ = win.activate_action("win.show-toast", Some(&"Import failed".to_variant()));
+                    let _ =
+                        win.activate_action("win.show-toast", Some(&"Import failed".to_variant()));
                 }
             }
         });
@@ -509,8 +516,12 @@ impl MomentsApplication {
                         // Wire the shell: builds sidebar, registers views,
                         // and switches to the content page. All components
                         // subscribe to the bus for event delivery.
-                        let settings = app.imp().settings.get()
-                            .expect("settings initialised").clone();
+                        let settings = app
+                            .imp()
+                            .settings
+                            .get()
+                            .expect("settings initialised")
+                            .clone();
                         window.setup(library, tokio.clone(), settings, &bus);
 
                         // Create the command dispatcher — routes *Requested
@@ -539,7 +550,8 @@ impl MomentsApplication {
                                             &win,
                                             "win.show-toast",
                                             Some(&msg.to_variant()),
-                                        ).ok();
+                                        )
+                                        .ok();
                                     }
                                 }
                             });
@@ -564,96 +576,137 @@ impl MomentsApplication {
                         // Subscribers handle their own events via the bus.
                         let app_for_idle = app.downgrade();
                         let win_for_idle = window.downgrade();
-                        let source_id = glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
-                            let app = match app_for_idle.upgrade() {
-                                Some(a) => a,
-                                None => return glib::ControlFlow::Break,
-                            };
-                            loop {
-                                match receiver.try_recv() {
-                                    Ok(LibraryEvent::ThumbnailReady { media_id }) => {
-                                        bus_tx.send(AppEvent::ThumbnailReady { media_id });
-                                    }
-                                    Ok(LibraryEvent::ImportProgress { current, total, imported, skipped, failed }) => {
-                                        // Import dialog is app-level (not a bus subscriber).
-                                        let borrow = app.imp().import_dialog.borrow();
-                                        if let Some(d) = borrow.as_ref() {
-                                            d.set_progress(current, total);
+                        let source_id = glib::timeout_add_local(
+                            std::time::Duration::from_millis(16),
+                            move || {
+                                let app = match app_for_idle.upgrade() {
+                                    Some(a) => a,
+                                    None => return glib::ControlFlow::Break,
+                                };
+                                loop {
+                                    match receiver.try_recv() {
+                                        Ok(LibraryEvent::ThumbnailReady { media_id }) => {
+                                            bus_tx.send(AppEvent::ThumbnailReady { media_id });
                                         }
-                                        bus_tx.send(AppEvent::ImportProgress { current, total, imported, skipped, failed });
-                                    }
-                                    Ok(LibraryEvent::ImportComplete(summary)) => {
-                                        // Import dialog is app-level (not a bus subscriber).
-                                        {
+                                        Ok(LibraryEvent::ImportProgress {
+                                            current,
+                                            total,
+                                            imported,
+                                            skipped,
+                                            failed,
+                                        }) => {
+                                            // Import dialog is app-level (not a bus subscriber).
                                             let borrow = app.imp().import_dialog.borrow();
                                             if let Some(d) = borrow.as_ref() {
-                                                d.set_complete(&summary);
+                                                d.set_progress(current, total);
+                                            }
+                                            bus_tx.send(AppEvent::ImportProgress {
+                                                current,
+                                                total,
+                                                imported,
+                                                skipped,
+                                                failed,
+                                            });
+                                        }
+                                        Ok(LibraryEvent::ImportComplete(summary)) => {
+                                            // Import dialog is app-level (not a bus subscriber).
+                                            {
+                                                let borrow = app.imp().import_dialog.borrow();
+                                                if let Some(d) = borrow.as_ref() {
+                                                    d.set_complete(&summary);
+                                                }
+                                            }
+                                            app.imp().import_dialog.borrow_mut().take();
+                                            bus_tx.send(AppEvent::ImportComplete { summary });
+                                            // Navigate to Recent Imports so the user sees what arrived.
+                                            if let Some(win) = win_for_idle.upgrade() {
+                                                win.navigate("recent");
                                             }
                                         }
-                                        app.imp().import_dialog.borrow_mut().take();
-                                        bus_tx.send(AppEvent::ImportComplete { summary });
-                                        // Navigate to Recent Imports so the user sees what arrived.
-                                        if let Some(win) = win_for_idle.upgrade() {
-                                            win.navigate("recent");
+                                        Ok(LibraryEvent::AssetSynced { item }) => {
+                                            bus_tx.send(AppEvent::AssetSynced { item });
                                         }
-                                    }
-                                    Ok(LibraryEvent::AssetSynced { item }) => {
-                                        bus_tx.send(AppEvent::AssetSynced { item });
-                                    }
-                                    Ok(LibraryEvent::AssetDeletedRemote { media_id }) => {
-                                        bus_tx.send(AppEvent::AssetDeletedRemote { media_id });
-                                    }
-                                    Ok(LibraryEvent::AlbumCreated { id, name }) => {
-                                        bus_tx.send(AppEvent::AlbumCreated { id, name });
-                                    }
-                                    Ok(LibraryEvent::AlbumDeleted { id }) => {
-                                        // NOTE: coordinator cleanup is synchronous and intentionally
-                                        // precedes the bus dispatch — the route must be dead before
-                                        // the sidebar removes the entry, to avoid a navigation race.
-                                        if let Some(win) = win_for_idle.upgrade() {
-                                            if let Some(coord) = win.imp().coordinator.get() {
-                                                let route = format!("album:{}", id.as_str());
-                                                coord.borrow_mut().unregister(&route);
+                                        Ok(LibraryEvent::AssetDeletedRemote { media_id }) => {
+                                            bus_tx.send(AppEvent::AssetDeletedRemote { media_id });
+                                        }
+                                        Ok(LibraryEvent::AlbumCreated { id, name }) => {
+                                            bus_tx.send(AppEvent::AlbumCreated { id, name });
+                                        }
+                                        Ok(LibraryEvent::AlbumDeleted { id }) => {
+                                            // NOTE: coordinator cleanup is synchronous and intentionally
+                                            // precedes the bus dispatch — the route must be dead before
+                                            // the sidebar removes the entry, to avoid a navigation race.
+                                            if let Some(win) = win_for_idle.upgrade() {
+                                                if let Some(coord) = win.imp().coordinator.get() {
+                                                    let route = format!("album:{}", id.as_str());
+                                                    coord.borrow_mut().unregister(&route);
+                                                }
+                                            }
+                                            bus_tx.send(AppEvent::AlbumDeleted { id });
+                                        }
+                                        Ok(LibraryEvent::AlbumRenamed { id, name }) => {
+                                            bus_tx.send(AppEvent::AlbumRenamed { id, name });
+                                        }
+                                        Ok(LibraryEvent::AlbumMediaChanged { album_id }) => {
+                                            bus_tx.send(AppEvent::AlbumMediaChanged { album_id });
+                                        }
+                                        Ok(LibraryEvent::PeopleSyncComplete) => {
+                                            bus_tx.send(AppEvent::PeopleSyncComplete);
+                                            if let Some(win) = win_for_idle.upgrade() {
+                                                win.reload_people();
                                             }
                                         }
-                                        bus_tx.send(AppEvent::AlbumDeleted { id });
-                                    }
-                                    Ok(LibraryEvent::AlbumRenamed { id, name }) => {
-                                        bus_tx.send(AppEvent::AlbumRenamed { id, name });
-                                    }
-                                    Ok(LibraryEvent::AlbumMediaChanged { album_id }) => {
-                                        bus_tx.send(AppEvent::AlbumMediaChanged { album_id });
-                                    }
-                                    Ok(LibraryEvent::PeopleSyncComplete) => {
-                                        bus_tx.send(AppEvent::PeopleSyncComplete);
-                                        if let Some(win) = win_for_idle.upgrade() {
-                                            win.reload_people();
+                                        Ok(LibraryEvent::SyncStarted) => {
+                                            bus_tx.send(AppEvent::SyncStarted);
                                         }
-                                    }
-                                    Ok(LibraryEvent::SyncStarted) => {
-                                        bus_tx.send(AppEvent::SyncStarted);
-                                    }
-                                    Ok(LibraryEvent::SyncProgress { assets, people, faces }) => {
-                                        bus_tx.send(AppEvent::SyncProgress { assets, people, faces });
-                                    }
-                                    Ok(LibraryEvent::SyncComplete { assets, people, faces, errors }) => {
-                                        bus_tx.send(AppEvent::SyncComplete { assets, people, faces, errors });
-                                    }
-                                    Ok(LibraryEvent::ThumbnailDownloadProgress { completed, total }) => {
-                                        bus_tx.send(AppEvent::ThumbnailDownloadProgress { completed, total });
-                                    }
-                                    Ok(LibraryEvent::ThumbnailDownloadsComplete { total }) => {
-                                        bus_tx.send(AppEvent::ThumbnailDownloadsComplete { total });
-                                    }
-                                    Ok(_) => {}
-                                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                                        return glib::ControlFlow::Break;
+                                        Ok(LibraryEvent::SyncProgress {
+                                            assets,
+                                            people,
+                                            faces,
+                                        }) => {
+                                            bus_tx.send(AppEvent::SyncProgress {
+                                                assets,
+                                                people,
+                                                faces,
+                                            });
+                                        }
+                                        Ok(LibraryEvent::SyncComplete {
+                                            assets,
+                                            people,
+                                            faces,
+                                            errors,
+                                        }) => {
+                                            bus_tx.send(AppEvent::SyncComplete {
+                                                assets,
+                                                people,
+                                                faces,
+                                                errors,
+                                            });
+                                        }
+                                        Ok(LibraryEvent::ThumbnailDownloadProgress {
+                                            completed,
+                                            total,
+                                        }) => {
+                                            bus_tx.send(AppEvent::ThumbnailDownloadProgress {
+                                                completed,
+                                                total,
+                                            });
+                                        }
+                                        Ok(LibraryEvent::ThumbnailDownloadsComplete { total }) => {
+                                            bus_tx.send(AppEvent::ThumbnailDownloadsComplete {
+                                                total,
+                                            });
+                                        }
+                                        Ok(_) => {}
+                                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                            return glib::ControlFlow::Break;
+                                        }
                                     }
                                 }
-                            }
-                            glib::ControlFlow::Continue
-                        });
+                                glib::ControlFlow::Continue
+                            },
+                        );
                         *app.imp().idle_source.borrow_mut() = Some(source_id);
                     }
                     Err(e) => {
@@ -667,7 +720,8 @@ impl MomentsApplication {
                             .build();
                         dialog.add_response("setup", "Set Up Library");
                         dialog.add_response("quit", "Quit");
-                        dialog.set_response_appearance("quit", adw::ResponseAppearance::Destructive);
+                        dialog
+                            .set_response_appearance("quit", adw::ResponseAppearance::Destructive);
                         dialog.set_default_response(Some("setup"));
                         dialog.set_close_response("setup");
 

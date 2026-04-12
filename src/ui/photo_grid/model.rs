@@ -190,7 +190,10 @@ impl PhotoGridModel {
             return;
         }
         imp.loading.set(true);
-        debug!("loading next page (has_cursor={})", imp.cursor.borrow().is_some());
+        debug!(
+            "loading next page (has_cursor={})",
+            imp.cursor.borrow().is_some()
+        );
 
         let filter = imp.filter.borrow().clone();
         let cursor = imp.cursor.borrow().clone();
@@ -217,12 +220,22 @@ impl PhotoGridModel {
                 }
                 Ok(Err(e)) => {
                     error!(elapsed_ms = elapsed.as_millis(), "list_media failed: {e}");
-                    model.imp().bus_sender.get().unwrap().send(AppEvent::Error("Could not load photos".into()));
+                    model
+                        .imp()
+                        .bus_sender
+                        .get()
+                        .unwrap()
+                        .send(AppEvent::Error("Could not load photos".into()));
                     model.imp().loading.set(false);
                 }
                 Err(e) => {
                     error!(elapsed_ms = elapsed.as_millis(), "tokio join failed: {e}");
-                    model.imp().bus_sender.get().unwrap().send(AppEvent::Error("Could not load photos".into()));
+                    model
+                        .imp()
+                        .bus_sender
+                        .get()
+                        .unwrap()
+                        .send(AppEvent::Error("Could not load photos".into()));
                     model.imp().loading.set(false);
                 }
             }
@@ -336,7 +349,10 @@ impl PhotoGridModel {
     pub fn on_favorite_changed(&self, id: &MediaId, is_favorite: bool) {
         let imp = self.imp();
         match imp.filter.borrow().clone() {
-            MediaFilter::All | MediaFilter::RecentImports { .. } | MediaFilter::Album { .. } | MediaFilter::Person { .. } => {
+            MediaFilter::All
+            | MediaFilter::RecentImports { .. }
+            | MediaFilter::Album { .. }
+            | MediaFilter::Person { .. } => {
                 let weak = imp.id_index.borrow().get(id).cloned();
                 if let Some(obj) = weak.and_then(|w| w.upgrade()) {
                     obj.set_is_favorite(is_favorite);
@@ -355,7 +371,11 @@ impl PhotoGridModel {
 
     pub fn on_trashed(&self, id: &MediaId, is_trashed: bool) {
         match self.imp().filter.borrow().clone() {
-            MediaFilter::All | MediaFilter::Favorites | MediaFilter::RecentImports { .. } | MediaFilter::Album { .. } | MediaFilter::Person { .. } => {
+            MediaFilter::All
+            | MediaFilter::Favorites
+            | MediaFilter::RecentImports { .. }
+            | MediaFilter::Album { .. }
+            | MediaFilter::Person { .. } => {
                 if is_trashed {
                     self.remove_item(id);
                 } else {

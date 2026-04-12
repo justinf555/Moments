@@ -35,9 +35,7 @@ impl AlbumRow {
         // ── Thumbnail (48×48) ───────────────────────────────────────────
         // Pixels are pre-decoded on the Tokio thread to avoid blocking
         // the GTK thread with synchronous file I/O.
-        let thumbnail = gtk::Image::builder()
-            .pixel_size(48)
-            .build();
+        let thumbnail = gtk::Image::builder().pixel_size(48).build();
         thumbnail.add_css_class("icon-dropshadow");
 
         if let Some((ref pixels, width, height)) = entry.thumbnail_rgba {
@@ -72,12 +70,20 @@ impl AlbumRow {
             .max_width_chars(30)
             .build();
 
-        let subtitle = if entry.already_added_count > 0 && entry.already_added_count < total_selected {
-            format!("{} photos · {} already added", entry.media_count, entry.already_added_count)
-        } else {
-            let noun = if entry.media_count == 1 { "photo" } else { "photos" };
-            format!("{} {noun}", entry.media_count)
-        };
+        let subtitle =
+            if entry.already_added_count > 0 && entry.already_added_count < total_selected {
+                format!(
+                    "{} photos · {} already added",
+                    entry.media_count, entry.already_added_count
+                )
+            } else {
+                let noun = if entry.media_count == 1 {
+                    "photo"
+                } else {
+                    "photos"
+                };
+                format!("{} {noun}", entry.media_count)
+            };
         let subtitle_label = gtk::Label::builder()
             .label(&subtitle)
             .halign(gtk::Align::Start)
@@ -109,8 +115,7 @@ impl AlbumRow {
         check_icon.add_css_class("accent");
         hbox.append(&check_icon);
 
-        let all_already_added = total_selected > 0
-            && entry.already_added_count >= total_selected;
+        let all_already_added = total_selected > 0 && entry.already_added_count >= total_selected;
 
         let row = gtk::ListBoxRow::builder()
             .child(&hbox)
@@ -137,7 +142,8 @@ impl AlbumRow {
 
     /// Update the name label with search highlighting.
     pub fn update_search_highlight(&self, query: &str) {
-        self.name_label.set_markup(&highlight_name(&self.album_name, query));
+        self.name_label
+            .set_markup(&highlight_name(&self.album_name, query));
     }
 }
 

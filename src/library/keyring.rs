@@ -34,12 +34,8 @@ pub fn lookup_access_token(server_url: &str) -> Result<Option<String>, LibraryEr
     let schema = schema();
     let attributes = std::collections::HashMap::from([("server_url", server_url)]);
 
-    let secret = libsecret::password_lookup_sync(
-        Some(&schema),
-        attributes,
-        gio::Cancellable::NONE,
-    )
-    .map_err(|e| LibraryError::Immich(format!("failed to lookup token in keyring: {e}")))?;
+    let secret = libsecret::password_lookup_sync(Some(&schema), attributes, gio::Cancellable::NONE)
+        .map_err(|e| LibraryError::Immich(format!("failed to lookup token in keyring: {e}")))?;
 
     if secret.is_some() {
         debug!("access token found in keyring");
@@ -57,12 +53,8 @@ pub fn delete_access_token(server_url: &str) -> Result<(), LibraryError> {
     let schema = schema();
     let attributes = std::collections::HashMap::from([("server_url", server_url)]);
 
-    libsecret::password_clear_sync(
-        Some(&schema),
-        attributes,
-        gio::Cancellable::NONE,
-    )
-    .map_err(|e| LibraryError::Immich(format!("failed to delete token from keyring: {e}")))?;
+    libsecret::password_clear_sync(Some(&schema), attributes, gio::Cancellable::NONE)
+        .map_err(|e| LibraryError::Immich(format!("failed to delete token from keyring: {e}")))?;
 
     debug!("access token deleted from keyring");
     Ok(())

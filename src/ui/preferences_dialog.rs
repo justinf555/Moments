@@ -125,6 +125,7 @@ struct LibraryStatsRows {
     videos: adw::ActionRow,
     albums: adw::ActionRow,
     people: adw::ActionRow,
+    library_size: adw::ActionRow,
     cache_used: Option<adw::ActionRow>,
 }
 
@@ -137,11 +138,10 @@ fn build_library_page(
     page.set_title("Library");
     page.set_icon_name(Some("folder-symbolic"));
 
-    let (overview_group, photos_row, videos_row, albums_row, people_row) =
-        build_overview_group();
+    let (overview_group, photos_row, videos_row, albums_row, people_row) = build_overview_group();
     page.add(&overview_group);
 
-    let (storage_group, cache_usage_row) =
+    let (storage_group, library_size_row, cache_usage_row) =
         build_storage_group(settings, is_immich, library);
     page.add(&storage_group);
 
@@ -150,6 +150,7 @@ fn build_library_page(
         videos: videos_row,
         albums: albums_row,
         people: people_row,
+        library_size: library_size_row,
         cache_used: cache_usage_row,
     };
 
@@ -193,9 +194,22 @@ fn build_storage_group(
     settings: &gio::Settings,
     is_immich: bool,
     library: &Option<Arc<dyn Library>>,
-) -> (adw::PreferencesGroup, Option<adw::ActionRow>) {
+) -> (adw::PreferencesGroup, adw::ActionRow, Option<adw::ActionRow>) {
     let group = adw::PreferencesGroup::new();
     group.set_title("Storage");
+
+    // Library location — always shown.
+    let library_path = settings.string("library-path");
+    let location_row = adw::ActionRow::new();
+    location_row.set_title("Library location");
+    location_row.set_subtitle(&library_path);
+    group.add(&location_row);
+
+    // Library size — populated async from stats.
+    let size_row = adw::ActionRow::new();
+    size_row.set_title("Library size");
+    size_row.set_subtitle("Loading...");
+    group.add(&size_row);
 
     let cache_usage_row = if is_immich {
         let cache_row = adw::SpinRow::new(
@@ -226,7 +240,7 @@ fn build_storage_group(
         None
     };
 
-    (group, cache_usage_row)
+    (group, size_row, cache_usage_row)
 }
 
 fn spawn_library_stats(library: Option<Arc<dyn Library>>, rows: LibraryStatsRows) {
@@ -236,11 +250,10 @@ fn spawn_library_stats(library: Option<Arc<dyn Library>>, rows: LibraryStatsRows
     let videos_weak = rows.videos.downgrade();
     let albums_weak = rows.albums.downgrade();
     let people_weak = rows.people.downgrade();
+    let size_weak = rows.library_size.downgrade();
     let cache_weak = rows.cache_used.as_ref().map(|r| r.downgrade());
     glib::MainContext::default().spawn_local(async move {
-        let result = tokio
-            .spawn(async move { lib.library_stats().await })
-            .await;
+        let result = tokio.spawn(async move { lib.library_stats().await }).await;
         match result {
             Ok(Ok(stats)) => {
                 if let Some(r) = photos_weak.upgrade() {
@@ -255,17 +268,34 @@ fn spawn_library_stats(library: Option<Arc<dyn Library>>, rows: LibraryStatsRows
                 if let Some(r) = people_weak.upgrade() {
                     r.set_subtitle(&format_count(stats.people_count, "person"));
                 }
+                if let Some(r) = size_weak.upgrade() {
+                    r.set_subtitle(&format_bytes(stats.total_file_size));
+                }
                 if let Some(Some(r)) = cache_weak.as_ref().map(|w| w.upgrade()) {
                     r.set_subtitle(&format_bytes(stats.cache_used_bytes));
                 }
             }
             Ok(Err(e)) => {
                 tracing::error!("library_stats failed: {e}");
-                if let Some(r) = photos_weak.upgrade() { r.set_subtitle("—"); }
-                if let Some(r) = videos_weak.upgrade() { r.set_subtitle("—"); }
-                if let Some(r) = albums_weak.upgrade() { r.set_subtitle("—"); }
-                if let Some(r) = people_weak.upgrade() { r.set_subtitle("—"); }
-                if let Some(Some(r)) = cache_weak.as_ref().map(|w| w.upgrade()) { r.set_subtitle("—"); }
+                let dash = "—";
+                if let Some(r) = photos_weak.upgrade() {
+                    r.set_subtitle(dash);
+                }
+                if let Some(r) = videos_weak.upgrade() {
+                    r.set_subtitle(dash);
+                }
+                if let Some(r) = albums_weak.upgrade() {
+                    r.set_subtitle(dash);
+                }
+                if let Some(r) = people_weak.upgrade() {
+                    r.set_subtitle(dash);
+                }
+                if let Some(r) = size_weak.upgrade() {
+                    r.set_subtitle(dash);
+                }
+                if let Some(Some(r)) = cache_weak.as_ref().map(|w| w.upgrade()) {
+                    r.set_subtitle(dash);
+                }
             }
             Err(e) => {
                 tracing::error!("library_stats join failed: {e}");
@@ -387,9 +417,7 @@ fn spawn_server_stats(library: Option<Arc<dyn Library>>, rows: ServerStatsRows) 
     let sv_weak = rows.videos.downgrade();
     let sd_weak = rows.disk.downgrade();
     glib::MainContext::default().spawn_local(async move {
-        let result = tokio
-            .spawn(async move { lib.library_stats().await })
-            .await;
+        let result = tokio.spawn(async move { lib.library_stats().await }).await;
         if let Ok(Ok(stats)) = result {
             if let Some(server) = stats.server {
                 if let Some(r) = sp_weak.upgrade() {

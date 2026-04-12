@@ -143,7 +143,11 @@ pub(crate) mod test_helpers {
         MediaRecord {
             id,
             relative_path: path.to_string(),
-            original_filename: path.split('/').next_back().unwrap_or("photo.jpg").to_string(),
+            original_filename: path
+                .split('/')
+                .next_back()
+                .unwrap_or("photo.jpg")
+                .to_string(),
             file_size: 512,
             imported_at: 1_700_000_000,
             media_type: MediaType::Image,
@@ -159,9 +163,12 @@ pub(crate) mod test_helpers {
     }
 
     /// Query the audit action and error_msg for a given entity_id (test helper).
-    pub async fn get_audit_record(db: &Database, entity_id: &str) -> Option<(String, Option<String>)> {
+    pub async fn get_audit_record(
+        db: &Database,
+        entity_id: &str,
+    ) -> Option<(String, Option<String>)> {
         sqlx::query_as::<_, (String, Option<String>)>(
-            "SELECT action, error_msg FROM sync_audit WHERE entity_id = ?"
+            "SELECT action, error_msg FROM sync_audit WHERE entity_id = ?",
         )
         .bind(entity_id)
         .fetch_optional(&db.pool)
@@ -173,7 +180,11 @@ pub(crate) mod test_helpers {
         MediaRecord {
             id,
             relative_path: path.to_string(),
-            original_filename: path.split('/').next_back().unwrap_or("photo.jpg").to_string(),
+            original_filename: path
+                .split('/')
+                .next_back()
+                .unwrap_or("photo.jpg")
+                .to_string(),
             file_size: 512,
             imported_at,
             media_type: MediaType::Image,

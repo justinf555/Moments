@@ -78,12 +78,16 @@ mod imp {
             motion.set_propagation_phase(gtk::PropagationPhase::Capture);
             let cell_weak = obj.downgrade();
             motion.connect_enter(move |_, _x, _y| {
-                let Some(cell) = cell_weak.upgrade() else { return };
+                let Some(cell) = cell_weak.upgrade() else {
+                    return;
+                };
                 cell.imp().checkbox.set_visible(true);
             });
             let cell_weak = obj.downgrade();
             motion.connect_leave(move |_| {
-                let Some(cell) = cell_weak.upgrade() else { return };
+                let Some(cell) = cell_weak.upgrade() else {
+                    return;
+                };
                 if !cell.imp().in_selection_mode.get() {
                     cell.imp().checkbox.set_visible(false);
                 }
@@ -235,7 +239,8 @@ impl AlbumCard {
     /// Switch between placeholder, single cover, and mosaic display.
     fn set_display_mode(&self, mode: DisplayMode) {
         let imp = self.imp();
-        imp.placeholder.set_visible(mode == DisplayMode::Placeholder);
+        imp.placeholder
+            .set_visible(mode == DisplayMode::Placeholder);
         imp.single_picture.set_visible(mode == DisplayMode::Single);
         imp.mosaic_grid.set_visible(mode == DisplayMode::Mosaic);
     }

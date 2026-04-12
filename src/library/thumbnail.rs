@@ -10,8 +10,8 @@ use super::media::MediaId;
 #[repr(i64)]
 pub enum ThumbnailStatus {
     Pending = 0,
-    Ready   = 1,
-    Failed  = 2,
+    Ready = 1,
+    Failed = 2,
 }
 
 impl ThumbnailStatus {
@@ -57,7 +57,8 @@ pub trait LibraryThumbnail: Send + Sync {
     async fn set_thumbnail_failed(&self, id: &MediaId) -> Result<(), LibraryError>;
 
     /// Return the stored [`ThumbnailStatus`] for `id`, or `None` if no row exists.
-    async fn thumbnail_status(&self, id: &MediaId) -> Result<Option<ThumbnailStatus>, LibraryError>;
+    async fn thumbnail_status(&self, id: &MediaId)
+        -> Result<Option<ThumbnailStatus>, LibraryError>;
 }
 
 /// Compute the two-level sharded thumbnail path.

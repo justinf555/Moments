@@ -58,8 +58,7 @@ pub fn ensure_resources() {
 
         // Rewrite gresource.xml to point at the compiled .ui files in out_dir
         let gresource_xml = src_dir.join("moments.gresource.xml");
-        let content =
-            std::fs::read_to_string(&gresource_xml).expect("read gresource.xml");
+        let content = std::fs::read_to_string(&gresource_xml).expect("read gresource.xml");
 
         let test_xml_path = out_dir.join("moments-test.gresource.xml");
         std::fs::write(&test_xml_path, &content).expect("write test gresource.xml");
@@ -79,8 +78,7 @@ pub fn ensure_resources() {
         assert!(status.success(), "glib-compile-resources failed");
 
         // Register the compiled resources
-        let resource =
-            gio::Resource::load(&gresource_path).expect("load compiled gresource");
+        let resource = gio::Resource::load(&gresource_path).expect("load compiled gresource");
         gio::resources_register(&resource);
     });
 }
