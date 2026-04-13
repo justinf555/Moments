@@ -65,9 +65,7 @@ mod imp {
                     return;
                 };
                 match event {
-                    crate::app_event::AppEvent::ImportProgress {
-                        current, total, ..
-                    } => {
+                    crate::app_event::AppEvent::ImportProgress { current, total, .. } => {
                         dialog.set_progress(*current, *total);
                     }
                     crate::app_event::AppEvent::ImportComplete { summary } => {
