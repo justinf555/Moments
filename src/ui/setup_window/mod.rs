@@ -17,7 +17,7 @@ mod imp {
     use super::*;
 
     #[derive(Default, gtk::CompositeTemplate)]
-    #[template(resource = "/io/github/justinf555/Moments/ui/setup_window.ui")]
+    #[template(resource = "/io/github/justinf555/Moments/ui/setup_window/setup_window.ui")]
     pub struct MomentsSetupWindow {
         #[template_child]
         pub navigation_view: TemplateChild<adw::NavigationView>,

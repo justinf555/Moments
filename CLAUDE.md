@@ -287,7 +287,7 @@ All log output uses the `tracing` crate — never `println!` or `eprintln!`.
 
 ## Code conventions
 
-- Use Rust 2018+ module naming: place submodules in `src/foo/bar.rs`, never `src/foo/bar/mod.rs`
+- Use `mod.rs` for modules with children; co-locate `.blp` Blueprint templates with their Rust code inside the directory (e.g. `src/ui/photo_grid/mod.rs` + `photo_grid.blp` + `cell.blp`)
 - Prefer many small, focused files over large ones
 - Every feature must be developed on a dedicated git branch — never commit directly to `main` without branching first
 - GTK dependency versions are pinned together — keep `gtk4` and `libadwaita` version-aligned when upgrading

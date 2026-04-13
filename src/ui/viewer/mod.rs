@@ -30,7 +30,7 @@ mod imp {
     use gtk::CompositeTemplate;
 
     #[derive(Default, CompositeTemplate)]
-    #[template(resource = "/io/github/justinf555/Moments/ui/viewer.ui")]
+    #[template(resource = "/io/github/justinf555/Moments/ui/viewer/viewer.ui")]
     pub struct PhotoViewer {
         // Template children (from Blueprint)
         #[template_child]
