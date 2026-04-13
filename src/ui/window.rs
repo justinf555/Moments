@@ -256,11 +256,18 @@ impl MomentsWindow {
         let mut subs = self.imp()._subscriptions.borrow_mut();
 
         // Navigate to Recent Imports when an import completes.
+        // Deferred via idle_add_local_once because navigate() can materialise
+        // a lazy view, which triggers realize → subscribe() on the new widget,
+        // and the bus's subscriber list is borrowed during dispatch.
         let weak = self.downgrade();
         subs.push(bus.subscribe(move |event| {
-            let Some(win) = weak.upgrade() else { return };
             if matches!(event, crate::app_event::AppEvent::ImportComplete { .. }) {
-                win.navigate("recent");
+                let weak = weak.clone();
+                glib::idle_add_local_once(move || {
+                    if let Some(win) = weak.upgrade() {
+                        win.navigate("recent");
+                    }
+                });
             }
         }));
     }
