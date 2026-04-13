@@ -6,10 +6,11 @@ use tracing::{debug, instrument, warn};
 
 use super::db::Database;
 use super::error::LibraryError;
-use super::event::LibraryEvent;
 use super::format::FormatRegistry;
 use super::media::MediaId;
 use super::thumbnail::sharded_thumbnail_path;
+use crate::app_event::AppEvent;
+use crate::event_bus::EventSender;
 
 /// Longest edge in pixels for the grid thumbnail.
 const GRID_SIZE: u32 = 360;
@@ -19,11 +20,11 @@ const GRID_SIZE: u32 = 360;
 /// `ThumbnailJob::generate` is **async** and must be spawned on the Tokio
 /// runtime. The CPU-bound decode/resize/encode step runs on a blocking
 /// thread via [`tokio::task::spawn_blocking`] so the async executor stays
-/// free. Results flow back through [`LibraryEvent::ThumbnailReady`].
+/// free. Results flow back through [`AppEvent::ThumbnailReady`].
 pub struct ThumbnailJob {
     thumbnails_dir: PathBuf,
     db: Database,
-    events: std::sync::mpsc::Sender<LibraryEvent>,
+    events: EventSender,
     formats: Arc<FormatRegistry>,
 }
 
@@ -31,7 +32,7 @@ impl ThumbnailJob {
     pub fn new(
         thumbnails_dir: PathBuf,
         db: Database,
-        events: std::sync::mpsc::Sender<LibraryEvent>,
+        events: EventSender,
         formats: Arc<FormatRegistry>,
     ) -> Self {
         Self {
@@ -48,7 +49,7 @@ impl ThumbnailJob {
     /// 2. Decode the source image on a blocking thread.
     /// 3. Resize to [`GRID_SIZE`] on the longest edge, preserving aspect ratio.
     /// 4. Encode as WebP and write atomically (temp file → rename).
-    /// 5. Mark the DB row `Ready` and emit [`LibraryEvent::ThumbnailReady`].
+    /// 5. Mark the DB row `Ready` and emit [`AppEvent::ThumbnailReady`].
     ///
     /// On any failure the DB row is marked `Failed` and the error is logged
     /// but not propagated — a thumbnail failure must not abort an import.
@@ -114,12 +115,9 @@ impl ThumbnailJob {
             .await?;
 
         debug!(%media_id, "thumbnail ready");
-        // Receiver may be dropped during shutdown.
-        self.events
-            .send(LibraryEvent::ThumbnailReady {
-                media_id: media_id.clone(),
-            })
-            .ok();
+        self.events.send(AppEvent::ThumbnailReady {
+            media_id: media_id.clone(),
+        });
 
         Ok(())
     }
@@ -183,10 +181,10 @@ pub(crate) fn apply_orientation(img: image::DynamicImage, orientation: u8) -> im
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event_bus::EventSender;
     use crate::library::db::Database;
     use crate::library::format::StandardHandler;
     use crate::library::media::{LibraryMedia, MediaRecord, MediaType};
-    use std::sync::mpsc;
     use tempfile::tempdir;
 
     async fn open_test_db(dir: &Path) -> Database {
@@ -243,7 +241,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = EventSender::test_channel();
         ThumbnailJob::new(thumbnails_dir.clone(), db.clone(), tx, test_registry())
             .generate(id.clone(), src_path)
             .await;
@@ -259,7 +257,7 @@ mod tests {
         let events: Vec<_> = rx.try_iter().collect();
         assert!(events
             .iter()
-            .any(|e| matches!(e, LibraryEvent::ThumbnailReady { .. })));
+            .any(|e| matches!(e, AppEvent::ThumbnailReady { .. })));
     }
 
     #[test]
@@ -307,7 +305,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (tx, _rx) = mpsc::channel();
+        let tx = EventSender::no_op();
         ThumbnailJob::new(thumbnails_dir, db.clone(), tx, test_registry())
             .generate(id.clone(), src_path)
             .await;

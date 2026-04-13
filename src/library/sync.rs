@@ -6,16 +6,16 @@ mod types;
 mod tests;
 
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use tokio::sync::Semaphore;
 use tracing::error;
 
 use super::db::Database;
-use super::event::LibraryEvent;
 use super::immich_client::ImmichClient;
 use super::media::MediaId;
+use crate::app_event::AppEvent;
+use crate::event_bus::EventSender;
 
 use downloader::ThumbnailDownloader;
 use manager::SyncManager;
@@ -54,7 +54,7 @@ impl SyncHandle {
     pub fn start(
         client: ImmichClient,
         db: Database,
-        events: Sender<LibraryEvent>,
+        events: EventSender,
         thumbnails_dir: PathBuf,
         tokio: tokio::runtime::Handle,
         initial_interval_secs: u64,
@@ -92,7 +92,7 @@ impl SyncHandle {
             if let Err(e) = manager.run().await {
                 error!("sync manager error: {e}");
                 // Receiver may be dropped during shutdown.
-                let _ = manager.events.send(LibraryEvent::Error(e));
+                manager.events.send(AppEvent::Error(e.to_string()));
             }
         });
 

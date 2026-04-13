@@ -20,7 +20,7 @@
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::path::PathBuf;
-use std::sync::{mpsc::Receiver, Arc};
+use std::sync::Arc;
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
@@ -33,7 +33,6 @@ use crate::config::{APP_ID, PROFILE, VERSION};
 use crate::event_bus::EventBus;
 use crate::library::bundle::Bundle;
 use crate::library::config::LibraryConfig;
-use crate::library::event::LibraryEvent;
 use crate::library::factory::LibraryFactory;
 use crate::library::Library;
 use crate::ui::MomentsSetupWindow;
@@ -49,13 +48,6 @@ mod imp {
         pub library: RefCell<Option<Arc<dyn Library>>>,
         pub is_immich: Cell<bool>,
         pub immich_server_url: RefCell<Option<String>>,
-        pub library_events: RefCell<Option<Receiver<LibraryEvent>>>,
-        /// The GLib source ID of the library-event idle loop.
-        ///
-        /// Stored so `shutdown()` can remove it explicitly, which frees the
-        /// closure and releases the `Rc<PhotoGridModel>` (→ `Arc<dyn Library>`
-        /// → `SqlitePool`) before the Tokio runtime is dropped in `main()`.
-        pub idle_source: RefCell<Option<glib::SourceId>>,
         /// Centralised event bus for fan-out event delivery.
         /// Created when the library is loaded.
         pub event_bus: RefCell<Option<EventBus>>,
@@ -94,13 +86,6 @@ mod imp {
     impl ApplicationImpl for MomentsApplication {
         fn shutdown(&self) {
             info!("application shutting down");
-
-            // Remove the idle source first — this frees the closure while
-            // the Tokio runtime is still alive so the SqlitePool background
-            // task can exit cleanly.
-            if let Some(source_id) = self.idle_source.borrow_mut().take() {
-                source_id.remove();
-            }
 
             // Drop all library-related state so the Arc<dyn Library>
             // (and the SqlitePool it wraps) is freed before drop(tokio)
@@ -479,20 +464,15 @@ impl MomentsApplication {
     /// Spawn the async factory call on the glib main context.
     ///
     /// On success:
-    ///  1. Creates a `PhotoGridModel` backed by the new library.
-    ///  2. Wires the model into the window's photo grid.
+    ///  1. Creates the event bus and opens the library backend.
+    ///  2. Wires the shell (sidebar, views, command dispatcher).
     ///  3. Switches the window to its content page.
-    ///  4. Starts polling `LibraryEvent`s via `glib::idle_add_local`, forwarding
-    ///     `ThumbnailReady` events into the model so cells repaint automatically.
     fn load_library_async(&self, bundle: Bundle, config: LibraryConfig, window: MomentsWindow) {
         // Store backend type for preferences dialog.
         if let LibraryConfig::Immich { ref server_url, .. } = config {
             self.imp().is_immich.set(true);
             *self.imp().immich_server_url.borrow_mut() = Some(server_url.clone());
         }
-
-        let (sender, receiver) = std::sync::mpsc::channel::<LibraryEvent>();
-        *self.imp().library_events.borrow_mut() = Some(receiver);
 
         glib::MainContext::default().spawn_local(glib::clone!(
             #[weak(rename_to = app)]
@@ -501,17 +481,18 @@ impl MomentsApplication {
             window,
             async move {
                 let tokio = app.imp().tokio.get().expect("tokio handle set").clone();
-                match LibraryFactory::create(bundle, config, sender, tokio.clone()).await {
+
+                // Create the event bus early so LibraryFactory can pass
+                // its sender into the backend for direct event delivery.
+                let bus = EventBus::new();
+                let bus_tx = bus.sender();
+
+                match LibraryFactory::create(bundle, config, bus_tx, tokio.clone()).await {
                     Ok(library) => {
                         info!("library ready");
 
                         // Store library on the application.
                         *app.imp().library.borrow_mut() = Some(Arc::clone(&library));
-
-                        // Create the event bus before wiring the shell so
-                        // components can subscribe during construction.
-                        let bus = EventBus::new();
-                        let bus_tx = bus.sender();
 
                         // Wire the shell: builds sidebar, registers views,
                         // and switches to the content page. All components
@@ -559,137 +540,6 @@ impl MomentsApplication {
 
                         // Store bus for shutdown cleanup.
                         *app.imp().event_bus.borrow_mut() = Some(bus);
-
-                        // Poll library events on every GTK idle tick.
-                        // Routes thumbnail and import events via the registry.
-                        let receiver = app
-                            .imp()
-                            .library_events
-                            .borrow_mut()
-                            .take()
-                            .expect("receiver set above");
-
-                        // ── Event translator ─────────────────────────────
-                        // Thin 1:1 mapping from LibraryEvent → AppEvent.
-                        // The idle loop is now a pure translator — no routing
-                        // logic, no references to models, sidebar, or dialogs.
-                        // Subscribers handle their own events via the bus.
-                        let app_for_idle = app.downgrade();
-                        let win_for_idle = window.downgrade();
-                        let source_id = glib::timeout_add_local(
-                            std::time::Duration::from_millis(16),
-                            move || {
-                                if app_for_idle.upgrade().is_none() {
-                                    return glib::ControlFlow::Break;
-                                }
-                                loop {
-                                    match receiver.try_recv() {
-                                        Ok(LibraryEvent::ThumbnailReady { media_id }) => {
-                                            bus_tx.send(AppEvent::ThumbnailReady { media_id });
-                                        }
-                                        Ok(LibraryEvent::ImportProgress {
-                                            current,
-                                            total,
-                                            imported,
-                                            skipped,
-                                            failed,
-                                        }) => {
-                                            bus_tx.send(AppEvent::ImportProgress {
-                                                current,
-                                                total,
-                                                imported,
-                                                skipped,
-                                                failed,
-                                            });
-                                        }
-                                        Ok(LibraryEvent::ImportComplete(summary)) => {
-                                            bus_tx.send(AppEvent::ImportComplete { summary });
-                                        }
-                                        Ok(LibraryEvent::AssetSynced { item }) => {
-                                            bus_tx.send(AppEvent::AssetSynced { item });
-                                        }
-                                        Ok(LibraryEvent::AssetDeletedRemote { media_id }) => {
-                                            bus_tx.send(AppEvent::AssetDeletedRemote { media_id });
-                                        }
-                                        Ok(LibraryEvent::AlbumCreated { id, name }) => {
-                                            bus_tx.send(AppEvent::AlbumCreated { id, name });
-                                        }
-                                        Ok(LibraryEvent::AlbumDeleted { id }) => {
-                                            // NOTE: coordinator cleanup is synchronous and intentionally
-                                            // precedes the bus dispatch — the route must be dead before
-                                            // the sidebar removes the entry, to avoid a navigation race.
-                                            if let Some(win) = win_for_idle.upgrade() {
-                                                if let Some(coord) = win.imp().coordinator.get() {
-                                                    let route = format!("album:{}", id.as_str());
-                                                    coord.borrow_mut().unregister(&route);
-                                                }
-                                            }
-                                            bus_tx.send(AppEvent::AlbumDeleted { id });
-                                        }
-                                        Ok(LibraryEvent::AlbumRenamed { id, name }) => {
-                                            bus_tx.send(AppEvent::AlbumRenamed { id, name });
-                                        }
-                                        Ok(LibraryEvent::AlbumMediaChanged { album_id }) => {
-                                            bus_tx.send(AppEvent::AlbumMediaChanged { album_id });
-                                        }
-                                        Ok(LibraryEvent::PeopleSyncComplete) => {
-                                            bus_tx.send(AppEvent::PeopleSyncComplete);
-                                            if let Some(win) = win_for_idle.upgrade() {
-                                                win.reload_people();
-                                            }
-                                        }
-                                        Ok(LibraryEvent::SyncStarted) => {
-                                            bus_tx.send(AppEvent::SyncStarted);
-                                        }
-                                        Ok(LibraryEvent::SyncProgress {
-                                            assets,
-                                            people,
-                                            faces,
-                                        }) => {
-                                            bus_tx.send(AppEvent::SyncProgress {
-                                                assets,
-                                                people,
-                                                faces,
-                                            });
-                                        }
-                                        Ok(LibraryEvent::SyncComplete {
-                                            assets,
-                                            people,
-                                            faces,
-                                            errors,
-                                        }) => {
-                                            bus_tx.send(AppEvent::SyncComplete {
-                                                assets,
-                                                people,
-                                                faces,
-                                                errors,
-                                            });
-                                        }
-                                        Ok(LibraryEvent::ThumbnailDownloadProgress {
-                                            completed,
-                                            total,
-                                        }) => {
-                                            bus_tx.send(AppEvent::ThumbnailDownloadProgress {
-                                                completed,
-                                                total,
-                                            });
-                                        }
-                                        Ok(LibraryEvent::ThumbnailDownloadsComplete { total }) => {
-                                            bus_tx.send(AppEvent::ThumbnailDownloadsComplete {
-                                                total,
-                                            });
-                                        }
-                                        Ok(_) => {}
-                                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                                            return glib::ControlFlow::Break;
-                                        }
-                                    }
-                                }
-                                glib::ControlFlow::Continue
-                            },
-                        );
-                        *app.imp().idle_source.borrow_mut() = Some(source_id);
                     }
                     Err(e) => {
                         error!("failed to open library: {e}");

@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use tokio::sync::Semaphore;
@@ -7,10 +6,11 @@ use tracing::{debug, info, instrument};
 
 use super::super::db::Database;
 use super::super::error::LibraryError;
-use super::super::event::LibraryEvent;
 use super::super::immich_client::ImmichClient;
 use super::super::media::MediaId;
 use super::super::thumbnail::sharded_thumbnail_path;
+use crate::app_event::AppEvent;
+use crate::event_bus::EventSender;
 
 /// Thumbnail download worker pool.
 ///
@@ -19,7 +19,7 @@ use super::super::thumbnail::sharded_thumbnail_path;
 pub(crate) struct ThumbnailDownloader {
     pub client: ImmichClient,
     pub db: Database,
-    pub events: Sender<LibraryEvent>,
+    pub events: EventSender,
     pub thumbnails_dir: PathBuf,
     pub rx: tokio::sync::mpsc::Receiver<MediaId>,
     pub semaphore: Arc<Semaphore>,
@@ -58,7 +58,7 @@ impl ThumbnailDownloader {
 
             // Emit progress every 10 thumbnails to update the status bar.
             if download_count.is_multiple_of(10) {
-                let _ = self.events.send(LibraryEvent::ThumbnailDownloadProgress {
+                self.events.send(AppEvent::ThumbnailDownloadProgress {
                     // receiver may be dropped during shutdown
                     completed: download_count,
                     total: download_count, // Total not known upfront; shows running count.
@@ -73,7 +73,7 @@ impl ThumbnailDownloader {
             tokio::time::sleep(super::THUMBNAIL_THROTTLE).await;
         }
 
-        let _ = self.events.send(LibraryEvent::ThumbnailDownloadsComplete {
+        self.events.send(AppEvent::ThumbnailDownloadsComplete {
             // receiver may be dropped during shutdown
             total: download_count,
         });
@@ -86,7 +86,7 @@ impl ThumbnailDownloader {
 async fn download_thumbnail(
     client: &ImmichClient,
     db: &Database,
-    events: &Sender<LibraryEvent>,
+    events: &EventSender,
     thumbnails_dir: &std::path::Path,
     media_id: &MediaId,
 ) -> Result<(), LibraryError> {
@@ -98,7 +98,7 @@ async fn download_thumbnail(
         let now = chrono::Utc::now().timestamp();
         db.set_thumbnail_ready(media_id, &path.to_string_lossy(), now)
             .await?;
-        let _ = events.send(LibraryEvent::ThumbnailReady {
+        events.send(AppEvent::ThumbnailReady {
             // receiver may be dropped during shutdown
             media_id: media_id.clone(),
         });
@@ -123,7 +123,7 @@ async fn download_thumbnail(
     let now = chrono::Utc::now().timestamp();
     db.set_thumbnail_ready(media_id, &path.to_string_lossy(), now)
         .await?;
-    let _ = events.send(LibraryEvent::ThumbnailReady {
+    events.send(AppEvent::ThumbnailReady {
         // receiver may be dropped during shutdown
         media_id: media_id.clone(),
     });

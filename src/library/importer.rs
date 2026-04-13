@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -19,18 +18,19 @@ fn max_thumbnail_workers() -> usize {
 use super::config::LocalStorageMode;
 use super::db::Database;
 use super::error::LibraryError;
-use super::event::LibraryEvent;
 use super::exif::extract_exif;
 use super::format::FormatRegistry;
 use super::import::{ImportSummary, SkipReason};
 use super::media::{LibraryMedia, MediaId, MediaMetadataRecord, MediaRecord, MediaType};
 use super::thumbnailer::ThumbnailJob;
+use crate::app_event::AppEvent;
+use crate::event_bus::EventSender;
 
 /// Drives a single import run for the local backend.
 ///
 /// [`ImportJob::run`] is **async** and must be spawned on the Tokio runtime
 /// via the handle stored on `LocalLibrary`. Results are communicated back
-/// through the [`Sender<LibraryEvent>`] channel so the GTK layer receives
+/// through the [`EventSender`] so the GTK layer receives
 /// progress without any extra wiring.
 pub struct ImportJob {
     /// Root `originals/` directory inside the bundle.
@@ -40,7 +40,7 @@ pub struct ImportJob {
     /// Open database — used for hash-based duplicate detection and thumbnail tracking.
     db: Database,
     /// Shared event sender for the lifetime of the backend.
-    events: Sender<LibraryEvent>,
+    events: EventSender,
     /// Format registry — drives extension filtering and thumbnail decode dispatch.
     formats: Arc<FormatRegistry>,
     /// Limits concurrent thumbnail generation to avoid CPU/memory spikes.
@@ -54,7 +54,7 @@ impl ImportJob {
         originals_dir: PathBuf,
         thumbnails_dir: PathBuf,
         db: Database,
-        events: Sender<LibraryEvent>,
+        events: EventSender,
         formats: Arc<FormatRegistry>,
         mode: LocalStorageMode,
     ) -> Self {
@@ -88,15 +88,13 @@ impl ImportJob {
         for (idx, path) in candidates.into_iter().enumerate() {
             let current = idx + 1;
             // Receiver may be dropped during shutdown.
-            self.events
-                .send(LibraryEvent::ImportProgress {
-                    current,
-                    total,
-                    imported: summary.imported,
-                    skipped: summary.skipped_duplicates + summary.skipped_unsupported,
-                    failed: summary.failed,
-                })
-                .ok();
+            self.events.send(AppEvent::ImportProgress {
+                current,
+                total,
+                imported: summary.imported,
+                skipped: summary.skipped_duplicates + summary.skipped_unsupported,
+                failed: summary.failed,
+            });
 
             match self.import_one(&path).await {
                 Ok(Some(skip)) => {
@@ -112,7 +110,7 @@ impl ImportJob {
                 Err(e) => {
                     warn!(?path, error = %e, "failed to import file");
                     summary.failed += 1;
-                    self.events.send(LibraryEvent::Error(e)).ok(); // receiver may be dropped
+                    self.events.send(AppEvent::Error(e.to_string()));
                 }
             }
         }
@@ -128,13 +126,12 @@ impl ImportJob {
         );
 
         // Receiver may be dropped during shutdown.
-        self.events.send(LibraryEvent::ImportComplete(summary)).ok();
+        self.events.send(AppEvent::ImportComplete { summary });
     }
 
     /// Import a single file.
     ///
-    /// Returns `Ok(Some(reason))` if skipped, `Ok(None)` after emitting
-    /// [`LibraryEvent::AssetImported`] on success, or `Err` on failure.
+    /// Returns `Ok(Some(reason))` if skipped, `Ok(None)` on success, or `Err` on failure.
     #[instrument(skip(self), fields(path = %source.display()))]
     async fn import_one(&self, source: &Path) -> Result<Option<SkipReason>, LibraryError> {
         // ── 1. Extension check ────────────────────────────────────────────────
@@ -273,16 +270,9 @@ impl ImportJob {
             })
             .await?;
 
-        // ── 7. Emit event ─────────────────────────────────────────────────────
         debug!(?thumbnail_source, "imported");
-        self.events
-            .send(LibraryEvent::AssetImported {
-                media_id: media_id.clone(),
-                path: thumbnail_source.clone(),
-            })
-            .ok();
 
-        // ── 8. Spawn thumbnail generation (non-blocking, best-effort) ─────────
+        // ── 7. Spawn thumbnail generation (non-blocking, best-effort) ─────────
         // Images use image-crate decode; videos use GStreamer poster frame.
         // Both go through the same FormatRegistry → resize → WebP pipeline.
         // Bounded by semaphore to avoid CPU/memory spikes on large imports.
@@ -408,9 +398,9 @@ fn resolve_collision(base: PathBuf) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::library::event::LibraryEvent;
+    use crate::app_event::AppEvent;
+    use crate::event_bus::EventSender;
     use crate::library::format::StandardHandler;
-    use std::sync::mpsc;
     use tempfile::tempdir;
 
     fn make_file(dir: &Path, name: &str, content: &[u8]) -> PathBuf {
@@ -441,7 +431,7 @@ mod tests {
 
         let photo = make_file(src_dir.path(), "photo.jpg", b"fake jpeg");
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = EventSender::test_channel();
         ImportJob::new(
             originals,
             thumbnails,
@@ -454,15 +444,11 @@ mod tests {
         .await;
 
         let events: Vec<_> = rx.try_iter().collect();
-        assert!(events
-            .iter()
-            .any(|e| matches!(e, LibraryEvent::AssetImported { .. })));
-
         let summary = events
             .iter()
             .find_map(|e| {
-                if let LibraryEvent::ImportComplete(s) = e {
-                    Some(s)
+                if let AppEvent::ImportComplete { summary } = e {
+                    Some(summary)
                 } else {
                     None
                 }
@@ -481,7 +467,7 @@ mod tests {
 
         let photo = make_file(src_dir.path(), "ref.jpg", b"referenced jpeg");
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = EventSender::test_channel();
         ImportJob::new(
             originals.clone(),
             thumbnails,
@@ -497,7 +483,7 @@ mod tests {
         let summary = events
             .iter()
             .find_map(|e| {
-                if let LibraryEvent::ImportComplete(s) = e {
+                if let AppEvent::ImportComplete { summary: s } = e {
                     Some(s)
                 } else {
                     None
@@ -531,7 +517,7 @@ mod tests {
 
         let file = make_file(src_dir.path(), "document.pdf", b"not a photo");
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = EventSender::test_channel();
         ImportJob::new(
             originals,
             thumbnails,
@@ -547,7 +533,7 @@ mod tests {
         let summary = events
             .iter()
             .find_map(|e| {
-                if let LibraryEvent::ImportComplete(s) = e {
+                if let AppEvent::ImportComplete { summary: s } = e {
                     Some(s)
                 } else {
                     None
@@ -569,7 +555,7 @@ mod tests {
 
         // First import
         let thumbnails = bundle_dir.path().join("thumbnails");
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = EventSender::test_channel();
         ImportJob::new(
             originals.clone(),
             thumbnails.clone(),
@@ -598,7 +584,7 @@ mod tests {
         let summaries: Vec<_> = events
             .iter()
             .filter_map(|e| {
-                if let LibraryEvent::ImportComplete(s) = e {
+                if let AppEvent::ImportComplete { summary: s } = e {
                     Some(s)
                 } else {
                     None
@@ -625,7 +611,7 @@ mod tests {
         let thumbnails = bundle_dir.path().join("thumbnails");
         let db = open_test_db(bundle_dir.path()).await;
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = EventSender::test_channel();
         ImportJob::new(
             originals,
             thumbnails,
@@ -641,7 +627,7 @@ mod tests {
         let summary = events
             .iter()
             .find_map(|e| {
-                if let LibraryEvent::ImportComplete(s) = e {
+                if let AppEvent::ImportComplete { summary: s } = e {
                     Some(s)
                 } else {
                     None
@@ -662,7 +648,7 @@ mod tests {
 
         make_file(src_dir.path(), "clip.mp4", b"fake video");
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = EventSender::test_channel();
         ImportJob::new(
             originals,
             thumbnails,
@@ -678,7 +664,7 @@ mod tests {
         let summary = events
             .iter()
             .find_map(|e| {
-                if let LibraryEvent::ImportComplete(s) = e {
+                if let AppEvent::ImportComplete { summary: s } = e {
                     Some(s)
                 } else {
                     None

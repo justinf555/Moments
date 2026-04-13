@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
 
 use futures_util::TryStreamExt;
 use tokio::io::AsyncBufReadExt;
@@ -10,7 +9,6 @@ use super::super::album::{AlbumId, LibraryAlbums};
 use super::super::db::faces::AssetFaceRow;
 use super::super::db::Database;
 use super::super::error::LibraryError;
-use super::super::event::LibraryEvent;
 use super::super::immich_client::ImmichClient;
 use super::super::media::{
     LibraryMedia, MediaId, MediaItem, MediaMetadataRecord, MediaRecord, MediaType,
@@ -18,6 +16,8 @@ use super::super::media::{
 use super::types::*;
 use super::SyncCounters;
 use super::ACK_FLUSH_THRESHOLD;
+use crate::app_event::AppEvent;
+use crate::event_bus::EventSender;
 
 /// Background sync engine for the Immich backend.
 ///
@@ -26,9 +26,8 @@ use super::ACK_FLUSH_THRESHOLD;
 pub(crate) struct SyncManager {
     pub client: ImmichClient,
     pub db: Database,
-    /// Event channel to the GTK idle loop. Sends use `let _ =` because
-    /// the receiver may be dropped during app shutdown — this is intentional.
-    pub events: Sender<LibraryEvent>,
+    /// Event sender for push-based delivery to the GTK event bus.
+    pub events: EventSender,
     pub shutdown_rx: tokio::sync::watch::Receiver<bool>,
     pub thumbnail_tx: tokio::sync::mpsc::Sender<MediaId>,
     pub thumbnails_dir: PathBuf,
@@ -104,7 +103,7 @@ impl SyncManager {
 
         debug!("starting sync stream");
         // Receiver may be dropped during shutdown.
-        let _ = self.events.send(LibraryEvent::SyncStarted);
+        self.events.send(AppEvent::SyncStarted);
         let response = self.client.post_stream("/sync/stream", &request).await?;
 
         let byte_stream = response.bytes_stream().map_err(std::io::Error::other);
@@ -364,7 +363,7 @@ impl SyncManager {
             if acks.len() >= ACK_FLUSH_THRESHOLD {
                 self.flush_acks(&mut acks).await?;
                 // Receiver may be dropped during shutdown.
-                let _ = self.events.send(LibraryEvent::SyncProgress {
+                self.events.send(AppEvent::SyncProgress {
                     assets: counters.assets,
                     people: counters.people,
                     faces: counters.faces,
@@ -464,7 +463,7 @@ impl SyncManager {
         }
 
         // Receiver may be dropped during shutdown.
-        let _ = self.events.send(LibraryEvent::SyncComplete {
+        self.events.send(AppEvent::SyncComplete {
             assets: counters.assets,
             people: counters.people,
             faces: counters.faces,
@@ -473,7 +472,7 @@ impl SyncManager {
 
         if counters.people > 0 || counters.faces > 0 {
             // Receiver may be dropped during shutdown.
-            let _ = self.events.send(LibraryEvent::PeopleSyncComplete);
+            self.events.send(AppEvent::PeopleSyncComplete);
         }
 
         if counters.assets > 0 || counters.errors > 0 {
@@ -579,7 +578,7 @@ impl SyncManager {
             duration_ms: record.duration_ms,
         };
         // Receiver may be dropped during shutdown.
-        let _ = self.events.send(LibraryEvent::AssetSynced { item });
+        self.events.send(AppEvent::AssetSynced { item });
 
         // Queue thumbnail download — the worker pool handles concurrency.
         self.db.insert_thumbnail_pending(&media_id).await?;
@@ -622,10 +621,8 @@ impl SyncManager {
         self.db
             .delete_permanently(std::slice::from_ref(&id))
             .await?;
-        // Receiver may be dropped during shutdown.
-        let _ = self
-            .events
-            .send(LibraryEvent::AssetDeletedRemote { media_id: id });
+        self.events
+            .send(AppEvent::AssetDeletedRemote { media_id: id });
         Ok(())
     }
 
@@ -640,7 +637,7 @@ impl SyncManager {
             .await?;
 
         // Receiver may be dropped during shutdown.
-        let _ = self.events.send(LibraryEvent::AlbumCreated {
+        self.events.send(AppEvent::AlbumCreated {
             id: AlbumId::from_raw(album.id),
             name: album.name,
         });
@@ -655,7 +652,7 @@ impl SyncManager {
         self.db.delete_album(&id).await?;
 
         // Receiver may be dropped during shutdown.
-        let _ = self.events.send(LibraryEvent::AlbumDeleted { id });
+        self.events.send(AppEvent::AlbumDeleted { id });
 
         Ok(())
     }
@@ -671,7 +668,7 @@ impl SyncManager {
             .await?;
 
         // Receiver may be dropped during shutdown.
-        let _ = self.events.send(LibraryEvent::AlbumMediaChanged {
+        self.events.send(AppEvent::AlbumMediaChanged {
             album_id: AlbumId::from_raw(assoc.album_id),
         });
 
@@ -758,7 +755,7 @@ impl SyncManager {
             .await?;
 
         // Receiver may be dropped during shutdown.
-        let _ = self.events.send(LibraryEvent::AlbumMediaChanged {
+        self.events.send(AppEvent::AlbumMediaChanged {
             album_id: AlbumId::from_raw(assoc.album_id),
         });
 

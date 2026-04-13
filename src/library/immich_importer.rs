@@ -1,23 +1,23 @@
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use tracing::info;
 
 use super::db::Database;
 use super::error::LibraryError;
-use super::event::LibraryEvent;
 use super::format::{FormatRegistry, RawHandler, StandardHandler, VideoHandler};
 use super::immich_client::ImmichClient;
 use super::import::ImportSummary;
 use super::importer::collect_candidates;
 use super::media::{MediaId, MediaItem, MediaRecord, MediaType};
+use crate::app_event::AppEvent;
+use crate::event_bus::EventSender;
 
 /// Upload job for importing local files to the Immich server.
 pub struct ImmichImportJob {
     pub client: ImmichClient,
     pub db: Database,
-    pub events: Sender<LibraryEvent>,
+    pub events: EventSender,
 }
 
 impl ImmichImportJob {
@@ -44,7 +44,7 @@ impl ImmichImportJob {
         for (idx, path) in candidates.iter().enumerate() {
             let current = idx + 1;
             // Receiver may be dropped during shutdown.
-            let _ = self.events.send(LibraryEvent::ImportProgress {
+            self.events.send(AppEvent::ImportProgress {
                 current,
                 total,
                 imported: summary.imported,
@@ -73,7 +73,7 @@ impl ImmichImportJob {
         let _ = self.db.clear_completed_uploads().await;
 
         // Receiver may be dropped during shutdown.
-        let _ = self.events.send(LibraryEvent::ImportComplete(summary));
+        self.events.send(AppEvent::ImportComplete { summary });
     }
 
     async fn upload_one(
@@ -200,7 +200,7 @@ impl ImmichImportJob {
 
         self.db.upsert_media(&record).await?;
         // Receiver may be dropped during shutdown.
-        let _ = self.events.send(LibraryEvent::AssetSynced { item });
+        self.events.send(AppEvent::AssetSynced { item });
         // Best-effort: status tracking is advisory.
         let _ = self.db.set_upload_status(&path_str, 1, None).await;
 

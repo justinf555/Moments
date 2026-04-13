@@ -252,6 +252,7 @@ impl MomentsWindow {
 
     /// Subscribe to event bus events that the window handles directly.
     fn subscribe_bus_events(&self, bus: &crate::event_bus::EventBus) {
+        use crate::app_event::AppEvent;
         let mut subs = self.imp()._subscriptions.borrow_mut();
 
         // Navigate to Recent Imports when an import completes.
@@ -260,11 +261,39 @@ impl MomentsWindow {
         // and the bus's subscriber list is borrowed during dispatch.
         let weak = self.downgrade();
         subs.push(bus.subscribe(move |event| {
-            if matches!(event, crate::app_event::AppEvent::ImportComplete { .. }) {
+            if matches!(event, AppEvent::ImportComplete { .. }) {
                 let weak = weak.clone();
                 glib::idle_add_local_once(move || {
                     if let Some(win) = weak.upgrade() {
                         win.navigate("recent");
+                    }
+                });
+            }
+        }));
+
+        // Unregister deleted album routes from the coordinator before the
+        // sidebar processes the event (avoids a navigation race).
+        let weak = self.downgrade();
+        subs.push(bus.subscribe(move |event| {
+            if let AppEvent::AlbumDeleted { id } = event {
+                if let Some(win) = weak.upgrade() {
+                    if let Some(coord) = win.imp().coordinator.get() {
+                        let route = format!("album:{}", id.as_str());
+                        coord.borrow_mut().unregister(&route);
+                    }
+                }
+            }
+        }));
+
+        // Reload the People collection grid after sync completes.
+        // Deferred to avoid bus re-entrancy if reload triggers realization.
+        let weak = self.downgrade();
+        subs.push(bus.subscribe(move |event| {
+            if matches!(event, AppEvent::PeopleSyncComplete) {
+                let weak = weak.clone();
+                glib::idle_add_local_once(move || {
+                    if let Some(win) = weak.upgrade() {
+                        win.reload_people();
                     }
                 });
             }
