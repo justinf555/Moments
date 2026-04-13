@@ -32,7 +32,7 @@ mod imp {
     use gtk::CompositeTemplate;
 
     #[derive(Default, CompositeTemplate)]
-    #[template(resource = "/io/github/justinf555/Moments/ui/people_grid.ui")]
+    #[template(resource = "/io/github/justinf555/Moments/ui/people_grid/people_grid.ui")]
     pub struct PeopleGridView {
         #[template_child]
         pub nav_view: TemplateChild<adw::NavigationView>,

@@ -35,7 +35,7 @@ mod imp {
     use gtk::CompositeTemplate;
 
     #[derive(Default, CompositeTemplate)]
-    #[template(resource = "/io/github/justinf555/Moments/ui/album_grid.ui")]
+    #[template(resource = "/io/github/justinf555/Moments/ui/album_grid/album_grid.ui")]
     pub struct AlbumGridView {
         #[template_child]
         pub nav_view: TemplateChild<adw::NavigationView>,

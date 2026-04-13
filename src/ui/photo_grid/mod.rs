@@ -360,7 +360,7 @@ mod view_imp {
     use gtk::CompositeTemplate;
 
     #[derive(Default, CompositeTemplate)]
-    #[template(resource = "/io/github/justinf555/Moments/ui/photo_grid.ui")]
+    #[template(resource = "/io/github/justinf555/Moments/ui/photo_grid/photo_grid.ui")]
     pub struct PhotoGridView {
         #[template_child]
         pub nav_view: TemplateChild<adw::NavigationView>,

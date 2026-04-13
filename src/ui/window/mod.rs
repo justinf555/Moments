@@ -65,7 +65,7 @@ mod imp {
     use std::cell::OnceCell;
 
     #[derive(Debug, Default, gtk::CompositeTemplate)]
-    #[template(resource = "/io/github/justinf555/Moments/ui/window.ui")]
+    #[template(resource = "/io/github/justinf555/Moments/ui/window/window.ui")]
     pub struct MomentsWindow {
         #[template_child]
         pub main_stack: TemplateChild<gtk::Stack>,

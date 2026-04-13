@@ -2,15 +2,24 @@ use std::sync::Arc;
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
-use gtk::{gdk, gio, glib};
-use tracing::debug;
+use gtk::{gdk, glib};
 
 use crate::app_event::AppEvent;
 use crate::event_bus::EventSender;
 use crate::library::media::{MediaId, MediaMetadataRecord};
 use crate::library::Library;
 use crate::ui::photo_grid::item::MediaItemObject;
-use crate::ui::viewer::info_panel::InfoPanel;
+
+pub mod edit_panel;
+pub mod info_panel;
+mod loading;
+mod menu;
+
+use edit_panel::EditPanel;
+use info_panel::InfoPanel;
+
+// Re-export shared menu utilities used by video_viewer.
+pub use menu::{build_viewer_menu_popover, ViewerMenuButtons};
 
 // ── GObject subclass ─────────────────────────────────────────────────────────
 
@@ -21,13 +30,13 @@ mod imp {
     use gtk::CompositeTemplate;
 
     #[derive(Default, CompositeTemplate)]
-    #[template(resource = "/io/github/justinf555/Moments/ui/video_viewer.ui")]
-    pub struct VideoViewer {
+    #[template(resource = "/io/github/justinf555/Moments/ui/viewer/viewer.ui")]
+    pub struct PhotoViewer {
         // Template children (from Blueprint)
         #[template_child]
         pub toolbar_view: TemplateChild<adw::ToolbarView>,
         #[template_child]
-        pub video: TemplateChild<gtk::Video>,
+        pub picture: TemplateChild<gtk::Picture>,
         #[template_child]
         pub spinner: TemplateChild<gtk::Spinner>,
         #[template_child]
@@ -39,7 +48,11 @@ mod imp {
         #[template_child]
         pub info_split: TemplateChild<adw::OverlaySplitView>,
         #[template_child]
+        pub sidebar_stack: TemplateChild<gtk::Stack>,
+        #[template_child]
         pub info_toggle: TemplateChild<gtk::ToggleButton>,
+        #[template_child]
+        pub edit_toggle: TemplateChild<gtk::ToggleButton>,
         #[template_child]
         pub menu_btn: TemplateChild<gtk::MenuButton>,
 
@@ -48,8 +61,9 @@ mod imp {
         pub tokio: OnceCell<tokio::runtime::Handle>,
         pub bus_sender: OnceCell<EventSender>,
 
-        // Owned sub-panel (set in setup, not GObject yet)
+        // Owned sub-panels (set in setup, not GObject yet)
         pub info_panel: RefCell<Option<InfoPanel>>,
+        pub edit_panel: RefCell<Option<EditPanel>>,
 
         // Mutable state
         pub items: RefCell<Vec<MediaItemObject>>,
@@ -57,14 +71,20 @@ mod imp {
         /// Monotonically increasing counter. Async loads compare against this
         /// value captured at launch to discard stale results.
         pub load_gen: Cell<u64>,
+        /// Set by `show_at` when the viewer is being pushed onto the
+        /// NavigationView. The `shown` signal handler reads this to start
+        /// the full-res load after the slide-in animation completes.
+        pub pending_load: RefCell<Option<MediaId>>,
+        /// Cached metadata for the currently displayed item.
         pub current_metadata: RefCell<Option<MediaMetadataRecord>>,
         /// Tracks a pending optimistic favourite toggle for rollback on failure.
+        /// Contains `(media_id, previous_favourite_state)`.
         pub pending_fav: RefCell<Option<(MediaId, bool)>>,
         /// Keeps the event bus subscription alive for this viewer's lifetime.
         pub _subscription: RefCell<Option<crate::event_bus::Subscription>>,
     }
 
-    impl VideoViewer {
+    impl PhotoViewer {
         pub fn library(&self) -> &Arc<dyn Library> {
             self.library.get().expect("library not initialized")
         }
@@ -77,9 +97,9 @@ mod imp {
     }
 
     #[glib::object_subclass]
-    impl ObjectSubclass for VideoViewer {
-        const NAME: &'static str = "MomentsVideoViewer";
-        type Type = super::VideoViewer;
+    impl ObjectSubclass for PhotoViewer {
+        const NAME: &'static str = "MomentsPhotoViewer";
+        type Type = super::PhotoViewer;
         type ParentType = adw::NavigationPage;
 
         fn class_init(klass: &mut Self::Class) {
@@ -91,19 +111,19 @@ mod imp {
         }
     }
 
-    impl ObjectImpl for VideoViewer {
+    impl ObjectImpl for PhotoViewer {
         fn dispose(&self) {
             self.dispose_template();
         }
     }
-    impl WidgetImpl for VideoViewer {
+    impl WidgetImpl for PhotoViewer {
         fn realize(&self) {
             self.parent_realize();
 
-            let weak = self.obj().downgrade();
+            let viewer = self.obj().downgrade();
             let sub = crate::event_bus::subscribe(move |event| {
                 if let crate::app_event::AppEvent::FavoriteChanged { ids, .. } = event {
-                    let Some(viewer) = weak.upgrade() else {
+                    let Some(viewer) = viewer.upgrade() else {
                         return;
                     };
                     let imp = viewer.imp();
@@ -123,27 +143,27 @@ mod imp {
             self.parent_unrealize();
         }
     }
-    impl NavigationPageImpl for VideoViewer {}
+    impl NavigationPageImpl for PhotoViewer {}
 }
 
 glib::wrapper! {
-    pub struct VideoViewer(ObjectSubclass<imp::VideoViewer>)
+    pub struct PhotoViewer(ObjectSubclass<imp::PhotoViewer>)
         @extends adw::NavigationPage, gtk::Widget,
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
-impl Default for VideoViewer {
+impl Default for PhotoViewer {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl VideoViewer {
+impl PhotoViewer {
     pub fn new() -> Self {
         glib::Object::new()
     }
 
-    /// Inject service dependencies, build info panel, and wire signal handlers.
+    /// Inject service dependencies, build sub-panels, and wire signal handlers.
     pub fn setup(
         &self,
         library: Arc<dyn Library>,
@@ -153,18 +173,27 @@ impl VideoViewer {
         let imp = self.imp();
 
         // Store service deps.
-        assert!(imp.library.set(library).is_ok(), "setup called twice");
-        assert!(imp.tokio.set(tokio).is_ok(), "setup called twice");
-        assert!(imp.bus_sender.set(bus_sender).is_ok(), "setup called twice");
+        assert!(
+            imp.library.set(library.clone()).is_ok(),
+            "setup called twice"
+        );
+        assert!(imp.tokio.set(tokio.clone()).is_ok(), "setup called twice");
+        assert!(
+            imp.bus_sender.set(bus_sender.clone()).is_ok(),
+            "setup called twice"
+        );
 
-        // Build info panel and set as sidebar.
+        // Build sub-panels and add to sidebar stack.
         let info_panel = InfoPanel::new();
-        imp.info_split.set_sidebar(Some(&info_panel));
+        let edit_panel = EditPanel::new();
+        edit_panel.setup(imp.picture.clone(), library, tokio, bus_sender);
+        imp.sidebar_stack.add_named(&info_panel, Some("info"));
+        imp.sidebar_stack.add_named(&edit_panel, Some("edit"));
         *imp.info_panel.borrow_mut() = Some(info_panel);
+        *imp.edit_panel.borrow_mut() = Some(edit_panel);
 
         // Build and attach overflow menu.
-        let (menu_popover, menu_buttons) =
-            crate::ui::viewer::build_viewer_menu_popover(false, "Delete video");
+        let (menu_popover, menu_buttons) = menu::build_viewer_menu_popover(true, "Delete photo");
         imp.menu_btn.set_popover(Some(&menu_popover));
 
         // Wire all signal handlers.
@@ -172,48 +201,49 @@ impl VideoViewer {
     }
 
     /// Load `items` and navigate to `index`.
+    ///
+    /// Replaces the current item list, resets async state, and starts loading
+    /// the new photo. Call this every time the user activates a grid item.
     pub fn show(&self, items: Vec<MediaItemObject>, index: usize) {
-        let imp = self.imp();
-        debug!(index, item_count = items.len(), "VideoViewer::show");
-        // Stop any previous playback.
-        imp.video.set_file(None::<&gio::File>);
-        *imp.items.borrow_mut() = items;
+        *self.imp().items.borrow_mut() = items;
         self.show_at(index);
-        self.grab_focus();
     }
 
-    #[tracing::instrument(skip(self), fields(index))]
+    /// Switch to the item at `index`.
+    ///
+    /// Updates the title, sets the thumbnail immediately, updates navigation
+    /// button visibility, and kicks off async loads for full-res and metadata.
     fn show_at(&self, index: usize) {
         let imp = self.imp();
 
-        let (id, filename, count) = {
+        // Extract what we need before releasing the borrow.
+        let (id, filename, texture, count) = {
             let items = imp.items.borrow();
-            let Some(obj) = items.get(index) else {
-                tracing::warn!(index, "show_at: index out of bounds");
-                return;
-            };
+            let Some(obj) = items.get(index) else { return };
             (
                 obj.item().id.clone(),
                 obj.item().original_filename.clone(),
+                obj.texture(),
                 items.len(),
             )
         };
-
-        debug!(index, %id, %filename, count, "VideoViewer::show_at");
 
         imp.current_index.set(index);
         let gen = imp.load_gen.get() + 1;
         imp.load_gen.set(gen);
         *imp.current_metadata.borrow_mut() = None;
 
+        // AdwHeaderBar reads the title directly from the NavigationPage.
         self.set_title(&filename);
+
+        // Show cached thumbnail while full-res loads.
+        imp.picture
+            .set_paintable(texture.as_ref().map(|t| t.upcast_ref::<gdk::Paintable>()));
+
         imp.prev_btn.set_visible(index > 0);
         imp.next_btn.set_visible(index + 1 < count);
 
-        // Grab focus so the key controller works immediately.
-        imp.toolbar_view.grab_focus();
-
-        // Sync star button.
+        // Sync star button with the current item's favourite state.
         {
             let items = imp.items.borrow();
             if let Some(obj) = items.get(index) {
@@ -221,117 +251,46 @@ impl VideoViewer {
             }
         }
 
-        imp.info_split.set_show_sidebar(false);
-
-        // Resolve the original file path and set it on the video widget.
-        self.load_video(gen, id.clone());
-        self.load_metadata_async(gen, id);
-    }
-
-    fn load_video(&self, gen: u64, id: MediaId) {
-        let imp = self.imp();
-        let library = Arc::clone(imp.library());
-        let tokio = imp.tokio().clone();
-        let bus_sender = imp.bus_sender().clone();
-
-        debug!(%id, "load_video: resolving path");
-
-        // Stop any current playback and show loading spinner.
-        imp.video.set_file(None::<&gio::File>);
-        imp.spinner.set_spinning(true);
-        imp.spinner.set_visible(true);
-
-        let weak = self.downgrade();
-        glib::MainContext::default().spawn_local(async move {
-            let path = match tokio
-                .spawn(async move { library.original_path(&id).await })
-                .await
-                .ok()
-                .and_then(|r| r.ok())
-                .flatten()
-            {
-                Some(p) => p,
-                None => {
-                    if let Some(viewer) = weak.upgrade() {
-                        let imp = viewer.imp();
-                        imp.spinner.set_spinning(false);
-                        imp.spinner.set_visible(false);
-                    }
-                    tracing::warn!("load_video: could not resolve original path");
-                    bus_sender.send(AppEvent::Error(
-                        "Could not find original video".into(),
-                    ));
-                    return;
-                }
-            };
-
-            let Some(viewer) = weak.upgrade() else { return };
-            let imp = viewer.imp();
-
-            if imp.load_gen.get() != gen {
-                debug!("load_video: discarding stale result");
-                imp.spinner.set_spinning(false);
-                imp.spinner.set_visible(false);
-                return;
-            }
-
-            debug!(path = %path.display(), exists = path.exists(), "load_video: setting file on GtkVideo");
-            let file = gio::File::for_path(&path);
-            imp.video.set_file(Some(&file));
-            imp.spinner.set_spinning(false);
-            imp.spinner.set_visible(false);
-            debug!("load_video: file set, playback should start (autoplay=true)");
-        });
-    }
-
-    fn load_metadata_async(&self, gen: u64, id: MediaId) {
-        let imp = self.imp();
-        let library = Arc::clone(imp.library());
-        let tokio = imp.tokio().clone();
-
-        let weak = self.downgrade();
-        glib::MainContext::default().spawn_local(async move {
-            let metadata = tokio
-                .spawn(async move { library.media_metadata(&id).await })
-                .await
-                .ok()
-                .and_then(|r| r.ok())
-                .flatten();
-
-            let Some(viewer) = weak.upgrade() else { return };
-            let imp = viewer.imp();
-
-            if imp.load_gen.get() != gen {
-                return;
-            }
-
-            *imp.current_metadata.borrow_mut() = metadata;
-
-            if imp.info_split.shows_sidebar() {
-                let items = imp.items.borrow();
-                let idx = imp.current_index.get();
-                if let Some(obj) = items.get(idx) {
-                    let item = obj.item().clone();
-                    let meta = imp.current_metadata.borrow();
-                    if let Some(ref panel) = *imp.info_panel.borrow() {
-                        panel.set_item(&item, meta.as_ref());
-                    }
-                    drop(meta);
+        // Close the sidebar only on initial open — during next/prev
+        // navigation the info panel stays open and updates in-place.
+        if !self.is_mapped() {
+            imp.info_split.set_show_sidebar(false);
+        } else if imp.info_split.shows_sidebar() {
+            // Clear stale metadata immediately so the panel doesn't
+            // show the previous photo's EXIF data while the async
+            // fetch completes.
+            let items = imp.items.borrow();
+            if let Some(obj) = items.get(index) {
+                let item = obj.item().clone();
+                drop(items);
+                if let Some(ref panel) = *imp.info_panel.borrow() {
+                    panel.set_item(&item, None);
                 }
             }
-        });
+        }
+
+        // Defer full-res load until the page transition completes (shown
+        // signal) to avoid a stutter as the large image replaces the
+        // thumbnail mid-animation. If the page is already visible (e.g.
+        // prev/next navigation), start immediately.
+        if self.is_mapped() {
+            self.start_full_res_load(gen, id.clone());
+            self.load_metadata_async(gen, id);
+        } else {
+            *imp.pending_load.borrow_mut() = Some(id);
+        }
     }
 
     fn navigate_prev(&self) {
         let imp = self.imp();
         let items = imp.items.borrow();
         let mut idx = imp.current_index.get();
-        // Skip image items — they belong in PhotoViewer.
+        // Skip video items — they belong in VideoViewer.
         while idx > 0 {
             idx -= 1;
             if items
                 .get(idx)
-                .map(|o| o.item().media_type == crate::library::media::MediaType::Video)
+                .map(|o| o.item().media_type != crate::library::media::MediaType::Video)
                 .unwrap_or(false)
             {
                 drop(items);
@@ -346,12 +305,12 @@ impl VideoViewer {
         let items = imp.items.borrow();
         let len = items.len();
         let mut idx = imp.current_index.get();
-        // Skip image items — they belong in PhotoViewer.
+        // Skip video items — they belong in VideoViewer.
         while idx + 1 < len {
             idx += 1;
             if items
                 .get(idx)
-                .map(|o| o.item().media_type == crate::library::media::MediaType::Video)
+                .map(|o| o.item().media_type != crate::library::media::MediaType::Video)
                 .unwrap_or(false)
             {
                 drop(items);
@@ -361,18 +320,33 @@ impl VideoViewer {
         }
     }
 
-    fn setup_signals(
-        &self,
-        menu_popover: &gtk::Popover,
-        menu_buttons: &crate::ui::viewer::ViewerMenuButtons,
-    ) {
+    fn setup_signals(&self, menu_popover: &gtk::Popover, menu_buttons: &menu::ViewerMenuButtons) {
         let imp = self.imp();
+
+        // Start deferred full-res load after the slide-in animation completes,
+        // and grab focus so the key controller (← → F9 Escape) works immediately.
+        {
+            let viewer = self.downgrade();
+            self.connect_shown(move |_| {
+                let Some(viewer) = viewer.upgrade() else {
+                    return;
+                };
+                let imp = viewer.imp();
+                imp.toolbar_view.grab_focus();
+                let pending = imp.pending_load.borrow_mut().take();
+                if let Some(id) = pending {
+                    let gen = imp.load_gen.get();
+                    viewer.start_full_res_load(gen, id.clone());
+                    viewer.load_metadata_async(gen, id);
+                }
+            });
+        }
 
         // Prev button
         {
-            let weak = self.downgrade();
+            let viewer = self.downgrade();
             imp.prev_btn.connect_clicked(move |_| {
-                if let Some(viewer) = weak.upgrade() {
+                if let Some(viewer) = viewer.upgrade() {
                     viewer.navigate_prev();
                 }
             });
@@ -380,9 +354,9 @@ impl VideoViewer {
 
         // Next button
         {
-            let weak = self.downgrade();
+            let viewer = self.downgrade();
             imp.next_btn.connect_clicked(move |_| {
-                if let Some(viewer) = weak.upgrade() {
+                if let Some(viewer) = viewer.upgrade() {
                     viewer.navigate_next();
                 }
             });
@@ -390,9 +364,11 @@ impl VideoViewer {
 
         // Star (favourite) button — optimistic toggle with rollback on failure.
         {
-            let weak = self.downgrade();
+            let viewer = self.downgrade();
             imp.star_btn.connect_clicked(move |btn| {
-                let Some(viewer) = weak.upgrade() else { return };
+                let Some(viewer) = viewer.upgrade() else {
+                    return;
+                };
                 let imp = viewer.imp();
                 let items = imp.items.borrow();
                 let idx = imp.current_index.get();
@@ -400,6 +376,8 @@ impl VideoViewer {
 
                 let was_fav = obj.is_favorite();
                 let new_fav = !was_fav;
+
+                // Optimistic: update icon and current item immediately.
                 crate::ui::widgets::update_star_button(btn, new_fav);
                 obj.set_is_favorite(new_fav);
 
@@ -413,15 +391,21 @@ impl VideoViewer {
             });
         }
 
-        // Info toggle → split view
+        // Info toggle → show info sidebar
         {
-            let weak = self.downgrade();
+            let viewer = self.downgrade();
             imp.info_toggle.connect_toggled(move |btn| {
-                let Some(viewer) = weak.upgrade() else { return };
+                let Some(viewer) = viewer.upgrade() else {
+                    return;
+                };
                 let imp = viewer.imp();
-                imp.info_split.set_show_sidebar(btn.is_active());
-
                 if btn.is_active() {
+                    // Deactivate edit toggle (mutually exclusive).
+                    imp.edit_toggle.set_active(false);
+                    imp.sidebar_stack.set_visible_child_name("info");
+                    imp.info_split.set_show_sidebar(true);
+
+                    // Populate info panel.
                     let items = imp.items.borrow();
                     let idx = imp.current_index.get();
                     if let Some(obj) = items.get(idx) {
@@ -430,18 +414,56 @@ impl VideoViewer {
                         if let Some(ref panel) = *imp.info_panel.borrow() {
                             panel.set_item(&item, meta.as_ref());
                         }
-                        drop(meta);
+                    }
+                } else if !imp.edit_toggle.is_active() {
+                    imp.info_split.set_show_sidebar(false);
+                }
+            });
+        }
+
+        // Edit toggle → show edit sidebar and start edit session
+        {
+            let viewer = self.downgrade();
+            imp.edit_toggle.connect_toggled(move |btn| {
+                let Some(viewer) = viewer.upgrade() else {
+                    return;
+                };
+                let imp = viewer.imp();
+                if btn.is_active() {
+                    // Deactivate info toggle (mutually exclusive).
+                    imp.info_toggle.set_active(false);
+                    imp.sidebar_stack.set_visible_child_name("edit");
+                    imp.info_split.set_show_sidebar(true);
+
+                    // Start edit session — load original image for preview.
+                    viewer.start_edit_session();
+                } else {
+                    if !imp.info_toggle.is_active() {
+                        imp.info_split.set_show_sidebar(false);
+                    }
+                    if let Some(ref panel) = *imp.edit_panel.borrow() {
+                        panel.end_session();
                     }
                 }
             });
         }
 
-        // Split view sidebar closed externally → sync toggle
+        // Split view sidebar closed externally → sync toggles
         {
-            let weak = self.downgrade();
+            let viewer = self.downgrade();
             imp.info_split.connect_show_sidebar_notify(move |split| {
-                if let Some(viewer) = weak.upgrade() {
-                    viewer.imp().info_toggle.set_active(split.shows_sidebar());
+                if !split.shows_sidebar() {
+                    let Some(viewer) = viewer.upgrade() else {
+                        return;
+                    };
+                    let imp = viewer.imp();
+                    imp.info_toggle.set_active(false);
+                    if imp.edit_toggle.is_active() {
+                        imp.edit_toggle.set_active(false);
+                        if let Some(ref panel) = *imp.edit_panel.borrow() {
+                            panel.end_session();
+                        }
+                    }
                 }
             });
         }
@@ -450,9 +472,9 @@ impl VideoViewer {
         {
             let key_ctrl = gtk::EventControllerKey::new();
             imp.toolbar_view.add_controller(key_ctrl.clone());
-            let weak = self.downgrade();
+            let viewer = self.downgrade();
             key_ctrl.connect_key_pressed(move |_, keyval, _, _| {
-                let Some(viewer) = weak.upgrade() else {
+                let Some(viewer) = viewer.upgrade() else {
                     return glib::Propagation::Proceed;
                 };
                 match keyval {
@@ -470,6 +492,7 @@ impl VideoViewer {
                         glib::Propagation::Stop
                     }
                     gdk::Key::Escape => {
+                        // Pop the viewer page to return to the grid.
                         if let Some(nav_view) = viewer
                             .parent()
                             .and_then(|p| p.downcast::<adw::NavigationView>().ok())
@@ -485,81 +508,7 @@ impl VideoViewer {
             });
         }
 
-        // ── Wire overflow menu buttons ──────────────────────────────────────
-        wire_overflow_menu(menu_popover, menu_buttons, self);
-    }
-}
-
-/// Wire overflow menu button handlers for the video viewer.
-fn wire_overflow_menu(
-    popover: &gtk::Popover,
-    buttons: &crate::ui::viewer::ViewerMenuButtons,
-    viewer: &VideoViewer,
-) {
-    // Add to album
-    {
-        let weak = viewer.downgrade();
-        let pop = popover.downgrade();
-        buttons.add_to_album.connect_clicked(move |_| {
-            if let Some(p) = pop.upgrade() {
-                p.popdown();
-            }
-            let Some(viewer) = weak.upgrade() else { return };
-            let imp = viewer.imp();
-            let id = {
-                let items = imp.items.borrow();
-                let idx = imp.current_index.get();
-                items.get(idx).map(|obj| obj.item().id.clone())
-            };
-            let Some(id) = id else { return };
-            crate::ui::album_picker_dialog::show_album_picker_dialog(
-                viewer.upcast_ref::<gtk::Widget>(),
-                vec![id],
-                Arc::clone(imp.library()),
-                imp.tokio().clone(),
-                imp.bus_sender().clone(),
-            );
-        });
-    }
-
-    // Stub items — just close the popover on click.
-    for btn in [
-        &buttons.share,
-        &buttons.export_original,
-        &buttons.show_in_files,
-    ] {
-        let pop = popover.downgrade();
-        btn.connect_clicked(move |_| {
-            if let Some(p) = pop.upgrade() {
-                p.popdown();
-            }
-        });
-    }
-
-    // Delete video — trash + pop back to grid.
-    {
-        let weak = viewer.downgrade();
-        let pop = popover.downgrade();
-        buttons.delete.connect_clicked(move |_| {
-            if let Some(p) = pop.upgrade() {
-                p.popdown();
-            }
-            let Some(viewer) = weak.upgrade() else { return };
-            let imp = viewer.imp();
-            let id = {
-                let items = imp.items.borrow();
-                let idx = imp.current_index.get();
-                items.get(idx).map(|obj| obj.item().id.clone())
-            };
-            let Some(id) = id else { return };
-            imp.bus_sender()
-                .send(AppEvent::TrashRequested { ids: vec![id] });
-            if let Some(nav_view) = viewer
-                .parent()
-                .and_then(|p| p.downcast::<adw::NavigationView>().ok())
-            {
-                nav_view.pop();
-            }
-        });
+        // Wire overflow menu buttons.
+        menu::wire_overflow_menu(menu_popover, menu_buttons, self);
     }
 }
