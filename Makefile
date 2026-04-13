@@ -70,7 +70,7 @@ test-all: test test-integration
 # ── Linting & Analysis ──────────────────────────────────────────────────────
 
 lint:
-	$(FLATPAK_RUN) -c '$(SDK_INIT) && cargo clippy --all-targets -- -D warnings'
+	$(FLATPAK_RUN) -c '$(SDK_INIT) && cargo fmt -- --check && cargo clippy --all-targets -- -D warnings'
 
 fmt:
 	$(FLATPAK_RUN) -c '$(SDK_INIT) && cargo fmt'
