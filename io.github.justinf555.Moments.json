@@ -9,8 +9,10 @@
     "command" : "moments",
     "finish-args" : [
         "--share=network",
+        "--share=ipc",
         "--device=dri",
         "--socket=wayland",
+        "--socket=fallback-x11",
         "--socket=pulseaudio"
     ],
     "build-options" : {
