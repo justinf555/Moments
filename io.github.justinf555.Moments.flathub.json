@@ -9,8 +9,10 @@
     "command" : "moments",
     "finish-args" : [
         "--share=network",
+        "--share=ipc",
         "--device=dri",
         "--socket=wayland",
+        "--socket=fallback-x11",
         "--socket=pipewire"
     ],
     "build-options" : {
@@ -39,8 +41,8 @@
                 {
                     "type" : "git",
                     "url" : "https://github.com/justinf555/Moments.git",
-                    "tag" : "v0.2.0",
-                    "commit" : "134fa79406b1e7593932d21d2c49cfcdd134a445"
+                    "tag" : "v0.3.0",
+                    "commit" : "08b7764500032ca0623e6cfce1a82417933bb6a6"
                 },
                 "cargo-sources.json",
                 {
