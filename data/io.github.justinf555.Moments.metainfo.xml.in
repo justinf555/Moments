@@ -9,11 +9,11 @@
   <description>
     <p>Moments is a photo management application for the GNOME desktop. Browse, organize, and manage your photo library with a clean, modern interface.</p>
     <p>Connect to a local folder or an Immich server to manage your photos. The Immich backend works fully offline, caching everything locally and syncing when connected.</p>
-    <p>Moments supports JPEG, PNG, WebP, HEIC, TIFF, and RAW formats (CR2, NEF, ARW, DNG), as well as video playback.</p>
+    <p>Moments supports JPEG, PNG, WebP, HEIC, TIFF, and common RAW formats, as well as video playback.</p>
   </description>
 
   <developer id="io.github.justinf555">
-    <name>justinf555</name>
+    <name>Justin F</name>
   </developer>
 
   <url type="homepage">https://github.com/justinf555/Moments</url>
@@ -53,15 +53,46 @@
       <image>https://github.com/justinf555/Moments/raw/main/data/screenshots/moments_2.png</image>
       <caption>Library preferences and statistics</caption>
     </screenshot>
+    <screenshot>
+      <image>https://github.com/justinf555/Moments/raw/main/data/screenshots/moments_3.png</image>
+      <caption>Photo viewer with EXIF metadata panel</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://github.com/justinf555/Moments/raw/main/data/screenshots/moments_4.png</image>
+      <caption>Full-screen photo viewer</caption>
+    </screenshot>
   </screenshots>
 
   <releases>
+    <release version="0.3.0" date="2026-04-13">
+      <description translate="no">
+        <p>Referenced storage mode and Flatpak sandbox improvements.</p>
+        <ul>
+          <li>New storage option — photos stay in your folders, Moments indexes them in place</li>
+          <li>Improved Flatpak sandbox compliance — no longer requires blanket filesystem access</li>
+          <li>Faster album and thumbnail loading</li>
+          <li>Bug fixes for selection, video playback, and trash view</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.2.0" date="2026-04-05">
+      <description translate="no">
+        <p>Selection mode, GNOME 50, and quality improvements.</p>
+        <ul>
+          <li>Selection mode with checkbox overlays and batch actions</li>
+          <li>Album picker with search and cover thumbnails</li>
+          <li>Redesigned photo and video viewer</li>
+          <li>Updated to GNOME 50 runtime</li>
+          <li>Accessibility improvements</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-03-27">
       <description translate="no">
-        <p>Initial development release.</p>
+        <p>Initial release.</p>
         <ul>
-          <li>Local and Immich library backends</li>
-          <li>Photo grid with zoom levels and keyset pagination</li>
+          <li>Local and Immich server library backends</li>
+          <li>Photo grid with adjustable zoom levels</li>
           <li>RAW and video format support</li>
           <li>Albums and people management</li>
           <li>EXIF metadata viewer</li>
