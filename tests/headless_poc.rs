@@ -63,7 +63,7 @@ mod event_fan_out {
     }
 
     /// Verifies cross-thread event delivery via mpsc + idle_add_local
-    /// (the pattern used by LibraryEvent today).
+    /// (the pattern used by the event bus).
     #[gtk::test]
     fn cross_thread_event_delivery() {
         let (tx, rx) = std::sync::mpsc::channel::<String>();

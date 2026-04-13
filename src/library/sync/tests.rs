@@ -4,11 +4,12 @@ use std::path::PathBuf;
 use super::manager::SyncManager;
 use super::types::*;
 use super::SyncCounters;
+use crate::app_event::AppEvent;
+use crate::event_bus::EventSender;
 use crate::library::album::{AlbumId, LibraryAlbums};
 use crate::library::db::test_helpers::{get_audit_record, open_test_db};
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
-use crate::library::event::LibraryEvent;
 use crate::library::immich_client::ImmichClient;
 use crate::library::media::{LibraryMedia, MediaId, MediaType};
 use tempfile::tempdir;
@@ -16,8 +17,8 @@ use tempfile::tempdir;
 /// Create a SyncManager with a real test DB for handler tests.
 /// The ImmichClient points to a dummy URL — only tests that don't
 /// call HTTP methods (handle_asset, handle_album, etc.) are safe.
-async fn test_sync_manager(db: Database) -> (SyncManager, std::sync::mpsc::Receiver<LibraryEvent>) {
-    let (event_tx, event_rx) = std::sync::mpsc::channel();
+async fn test_sync_manager(db: Database) -> (SyncManager, std::sync::mpsc::Receiver<AppEvent>) {
+    let (event_tx, event_rx) = EventSender::test_channel();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let (thumbnail_tx, _thumbnail_rx) = tokio::sync::mpsc::channel(100);
     let (interval_tx, interval_rx) = tokio::sync::watch::channel(60u64);
@@ -108,7 +109,7 @@ async fn handle_asset_upserts_image() {
 
     // Verify event emitted.
     let event = events.try_recv().unwrap();
-    assert!(matches!(event, LibraryEvent::AssetSynced { .. }));
+    assert!(matches!(event, AppEvent::AssetSynced { .. }));
 }
 
 #[tokio::test]
@@ -229,7 +230,7 @@ async fn handle_album_upserts_album() {
     assert_eq!(albums[0].id.as_str(), "album-001");
 
     let event = events.try_recv().unwrap();
-    assert!(matches!(event, LibraryEvent::AlbumCreated { .. }));
+    assert!(matches!(event, AppEvent::AlbumCreated { .. }));
 }
 
 #[tokio::test]
@@ -592,7 +593,7 @@ async fn finish_sync_emits_complete_event() {
 
     let event = events.try_recv().unwrap();
     match event {
-        LibraryEvent::SyncComplete {
+        AppEvent::SyncComplete {
             assets,
             people,
             faces,
@@ -623,7 +624,7 @@ async fn finish_sync_emits_people_event_when_faces_synced() {
 
     let _ = events.try_recv(); // SyncComplete
     let event = events.try_recv().unwrap();
-    assert!(matches!(event, LibraryEvent::PeopleSyncComplete));
+    assert!(matches!(event, AppEvent::PeopleSyncComplete));
 }
 
 #[tokio::test]
@@ -721,5 +722,5 @@ async fn handle_asset_delete_removes_asset() {
     assert!(!db.media_exists(&id).await.unwrap());
 
     let event = events.try_recv().unwrap();
-    assert!(matches!(event, LibraryEvent::AssetDeletedRemote { .. }));
+    assert!(matches!(event, AppEvent::AssetDeletedRemote { .. }));
 }

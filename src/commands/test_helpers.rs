@@ -16,7 +16,6 @@ use crate::library::bundle::Bundle;
 use crate::library::db::LibraryStats;
 use crate::library::editing::{EditState, LibraryEditing};
 use crate::library::error::LibraryError;
-use crate::library::event::LibraryEvent;
 use crate::library::faces::{LibraryFaces, Person, PersonId};
 use crate::library::import::LibraryImport;
 use crate::library::media::{
@@ -83,7 +82,7 @@ impl MockLibrary {
 impl LibraryStorage for MockLibrary {
     async fn open(
         _bundle: Bundle,
-        _events: std::sync::mpsc::Sender<LibraryEvent>,
+        _events: crate::event_bus::EventSender,
         _tokio: tokio::runtime::Handle,
     ) -> Result<Self, LibraryError>
     where

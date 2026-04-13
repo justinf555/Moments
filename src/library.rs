@@ -5,7 +5,6 @@ pub mod db;
 pub mod edit_renderer;
 pub mod editing;
 pub mod error;
-pub mod event;
 pub mod exif;
 pub mod faces;
 pub mod factory;

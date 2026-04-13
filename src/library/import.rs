@@ -16,7 +16,7 @@ pub enum SkipReason {
     UnsupportedFormat,
 }
 
-/// Summary returned inside [`super::event::LibraryEvent::ImportComplete`].
+/// Summary returned inside [`AppEvent::ImportComplete`](crate::app_event::AppEvent::ImportComplete).
 #[derive(Debug, Clone, Default)]
 pub struct ImportSummary {
     /// Number of files successfully copied into the library.
@@ -34,17 +34,14 @@ pub struct ImportSummary {
 /// Feature trait for importing media into the library.
 ///
 /// Implemented by every backend that supports local import. The GTK layer
-/// calls `library.import(sources)` and observes progress via the shared
-/// `LibraryEvent` channel that was established when the library was opened.
+/// calls `library.import(sources)` and observes progress via the event bus.
 #[async_trait]
 pub trait LibraryImport: Send + Sync {
     /// Import files or directories into the library.
     ///
     /// `sources` may contain individual files or directories; directories are
-    /// walked recursively. Progress events ([`super::event::LibraryEvent::ImportProgress`],
-    /// [`super::event::LibraryEvent::AssetImported`]) and the terminal
-    /// [`super::event::LibraryEvent::ImportComplete`] are sent through the
-    /// backend's existing event sender.
+    /// walked recursively. Progress events and the terminal
+    /// `ImportComplete` are sent through the backend's event sender.
     async fn import(&self, sources: Vec<PathBuf>) -> Result<(), LibraryError>;
 }
 

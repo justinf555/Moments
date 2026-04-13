@@ -1,16 +1,16 @@
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
 
 use async_trait::async_trait;
 use tokio::runtime::Handle;
 use tracing::{debug, info, instrument};
 
+use crate::app_event::AppEvent;
+use crate::event_bus::EventSender;
 use crate::library::album::{Album, AlbumId, LibraryAlbums};
 use crate::library::bundle::Bundle;
 use crate::library::db::Database;
 use crate::library::editing::{EditState, LibraryEditing};
 use crate::library::error::LibraryError;
-use crate::library::event::LibraryEvent;
 use crate::library::faces::{LibraryFaces, Person, PersonId};
 use crate::library::immich_client::ImmichClient;
 use crate::library::import::LibraryImport;
@@ -33,7 +33,7 @@ pub struct ImmichLibrary {
     bundle: Bundle,
     client: ImmichClient,
     db: Database,
-    events: Sender<LibraryEvent>,
+    events: EventSender,
     tokio: Handle,
     sync_handle: SyncHandle,
     cache_limit_tx: tokio::sync::watch::Sender<u32>,
@@ -50,7 +50,7 @@ impl ImmichLibrary {
     pub async fn open(
         bundle: Bundle,
         client: ImmichClient,
-        events: Sender<LibraryEvent>,
+        events: EventSender,
         tokio: Handle,
     ) -> Result<Self, LibraryError> {
         info!("opening immich library");
@@ -102,10 +102,7 @@ impl ImmichLibrary {
             cache_limit_tx,
         };
 
-        library
-            .events
-            .send(LibraryEvent::Ready)
-            .map_err(|_| LibraryError::Bundle("event channel closed".to_string()))?;
+        library.events.send(AppEvent::Ready);
 
         debug!("immich library ready");
         Ok(library)
@@ -119,7 +116,7 @@ impl ImmichLibrary {
 impl LibraryStorage for ImmichLibrary {
     async fn open(
         _bundle: Bundle,
-        _events: Sender<LibraryEvent>,
+        _events: EventSender,
         _tokio: Handle,
     ) -> Result<Self, LibraryError>
     where
@@ -135,9 +132,7 @@ impl LibraryStorage for ImmichLibrary {
     async fn close(&self) -> Result<(), LibraryError> {
         info!("closing immich library");
         self.sync_handle.shutdown();
-        self.events
-            .send(LibraryEvent::ShutdownComplete)
-            .map_err(|_| LibraryError::Bundle("event channel closed".to_string()))?;
+        self.events.send(AppEvent::ShutdownComplete);
         Ok(())
     }
 

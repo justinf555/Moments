@@ -1,4 +1,4 @@
-use std::sync::{mpsc::Sender, Arc};
+use std::sync::Arc;
 
 use tokio::runtime::Handle;
 use tracing::instrument;
@@ -6,11 +6,11 @@ use tracing::instrument;
 use super::bundle::Bundle;
 use super::config::LibraryConfig;
 use super::error::LibraryError;
-use super::event::LibraryEvent;
 use super::immich_client::ImmichClient;
 use super::providers::immich::ImmichLibrary;
 use super::providers::local::LocalLibrary;
 use super::Library;
+use crate::event_bus::EventSender;
 
 /// Creates `Library` instances from a [`Bundle`] and [`LibraryConfig`].
 ///
@@ -31,7 +31,7 @@ impl LibraryFactory {
     pub async fn create(
         bundle: Bundle,
         config: LibraryConfig,
-        events: Sender<LibraryEvent>,
+        events: EventSender,
         tokio: Handle,
     ) -> Result<Arc<dyn Library>, LibraryError> {
         match config {

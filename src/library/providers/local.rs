@@ -1,18 +1,18 @@
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::runtime::Handle;
 use tracing::{debug, info, instrument};
 
+use crate::app_event::AppEvent;
+use crate::event_bus::EventSender;
 use crate::library::album::{Album, AlbumId, LibraryAlbums};
 use crate::library::bundle::Bundle;
 use crate::library::config::LocalStorageMode;
 use crate::library::db::Database;
 use crate::library::editing::{EditState, LibraryEditing};
 use crate::library::error::LibraryError;
-use crate::library::event::LibraryEvent;
 use crate::library::faces::{LibraryFaces, Person, PersonId};
 use crate::library::format::{FormatRegistry, RawHandler, StandardHandler, VideoHandler};
 use crate::library::import::LibraryImport;
@@ -32,7 +32,7 @@ use crate::library::viewer::LibraryViewer;
 pub struct LocalLibrary {
     bundle: Bundle,
     mode: LocalStorageMode,
-    events: Sender<LibraryEvent>,
+    events: EventSender,
     db: Database,
     tokio: Handle,
     formats: Arc<FormatRegistry>,
@@ -47,7 +47,7 @@ impl LocalLibrary {
     pub async fn open(
         bundle: Bundle,
         mode: LocalStorageMode,
-        events: Sender<LibraryEvent>,
+        events: EventSender,
         tokio: Handle,
     ) -> Result<Self, LibraryError> {
         info!("opening local library");
@@ -124,10 +124,7 @@ impl LocalLibrary {
             });
         }
 
-        library
-            .events
-            .send(LibraryEvent::Ready)
-            .map_err(|_| LibraryError::Bundle("event channel closed".to_string()))?;
+        library.events.send(AppEvent::Ready);
         debug!("local library ready");
         Ok(library)
     }
@@ -137,7 +134,7 @@ impl LocalLibrary {
 impl LibraryStorage for LocalLibrary {
     async fn open(
         _bundle: Bundle,
-        _events: Sender<LibraryEvent>,
+        _events: EventSender,
         _tokio: Handle,
     ) -> Result<Self, LibraryError>
     where
@@ -152,9 +149,7 @@ impl LibraryStorage for LocalLibrary {
     #[instrument(skip(self), fields(path = %self.bundle.path.display()))]
     async fn close(&self) -> Result<(), LibraryError> {
         info!("closing local library");
-        self.events
-            .send(LibraryEvent::ShutdownComplete)
-            .map_err(|_| LibraryError::Bundle("event channel closed".to_string()))?;
+        self.events.send(AppEvent::ShutdownComplete);
         Ok(())
     }
 }
@@ -438,12 +433,12 @@ impl LibraryEditing for LocalLibrary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_event::AppEvent;
+    use crate::event_bus::EventSender;
     use crate::library::config::{LibraryConfig, LocalStorageMode};
-    use crate::library::event::LibraryEvent;
-    use std::sync::mpsc;
     use tempfile::tempdir;
 
-    async fn open_test_library(bundle: Bundle, tx: Sender<LibraryEvent>) -> LocalLibrary {
+    async fn open_test_library(bundle: Bundle, tx: EventSender) -> LocalLibrary {
         let handle = tokio::runtime::Handle::current();
         LocalLibrary::open(bundle, LocalStorageMode::Managed, tx, handle)
             .await
@@ -462,11 +457,11 @@ mod tests {
         )
         .unwrap();
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = EventSender::test_channel();
         let _library = open_test_library(bundle, tx).await;
 
         let event = rx.try_recv().unwrap();
-        assert!(matches!(event, LibraryEvent::Ready));
+        assert!(matches!(event, AppEvent::Ready));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -481,13 +476,13 @@ mod tests {
         )
         .unwrap();
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = EventSender::test_channel();
         let library = open_test_library(bundle, tx).await;
         rx.try_recv().unwrap(); // consume Ready
 
         library.close().await.unwrap();
         let event = rx.try_recv().unwrap();
-        assert!(matches!(event, LibraryEvent::ShutdownComplete));
+        assert!(matches!(event, AppEvent::ShutdownComplete));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -505,7 +500,7 @@ mod tests {
         let src_dir = tempdir().unwrap();
         std::fs::write(src_dir.path().join("img.jpg"), b"fake").unwrap();
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = EventSender::test_channel();
         let library = open_test_library(bundle, tx).await;
         rx.try_recv().unwrap(); // consume Ready
 
@@ -517,7 +512,7 @@ mod tests {
         // import() spawns on Tokio; drain events until ImportComplete arrives.
         let has_complete = loop {
             match rx.recv().unwrap() {
-                LibraryEvent::ImportComplete(_) => break true,
+                AppEvent::ImportComplete { .. } => break true,
                 _ => continue,
             }
         };

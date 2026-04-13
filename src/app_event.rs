@@ -4,10 +4,9 @@ use crate::library::media::{MediaId, MediaItem};
 
 /// Application-layer event type.
 ///
-/// Translated from [`LibraryEvent`](crate::library::event::LibraryEvent) at the
-/// application boundary and delivered to all [`EventBus`](crate::event_bus::EventBus)
-/// subscribers. UI components subscribe to the events they care about; the bus
-/// handles fan-out.
+/// Sent directly by library backends via [`EventSender`](crate::event_bus::EventSender)
+/// and delivered to all [`EventBus`](crate::event_bus::EventBus) subscribers.
+/// UI components subscribe to the events they care about; the bus handles fan-out.
 ///
 /// Events are split into two categories:
 /// - **Result events** — outcomes from library operations or sync. Consumed by

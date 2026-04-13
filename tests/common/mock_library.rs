@@ -15,7 +15,6 @@ use moments::library::bundle::Bundle;
 use moments::library::db::LibraryStats;
 use moments::library::editing::{EditState, LibraryEditing};
 use moments::library::error::LibraryError;
-use moments::library::event::LibraryEvent;
 use moments::library::faces::{LibraryFaces, Person, PersonId};
 use moments::library::import::LibraryImport;
 use moments::library::media::{
@@ -44,7 +43,7 @@ pub fn stub_deps() -> (Arc<dyn Library>, tokio::runtime::Handle) {
 impl LibraryStorage for StubLibrary {
     async fn open(
         _bundle: Bundle,
-        _events: std::sync::mpsc::Sender<LibraryEvent>,
+        _events: moments::event_bus::EventSender,
         _tokio: tokio::runtime::Handle,
     ) -> Result<Self, LibraryError>
     where
