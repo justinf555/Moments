@@ -89,22 +89,29 @@ impl LocalLibrary {
             let db = library.db.clone();
             let originals = library.bundle.originals.clone();
             let thumbnails = library.bundle.thumbnails.clone();
+            let purge_mode = library.mode.clone();
             library.tokio.spawn(async move {
                 let max_age_secs = retention_days * 24 * 60 * 60;
                 match db.expired_trash(max_age_secs).await {
                     Ok(ids) if !ids.is_empty() => {
                         info!(count = ids.len(), "auto-purging expired trash");
                         for id in &ids {
-                            // Remove original file.
-                            if let Ok(Some(rel)) = db.media_relative_path(id).await {
-                                let path = originals.join(&rel);
-                                // Best-effort: file may already be gone.
-                                let _ = tokio::fs::remove_file(&path).await;
+                            // Remove original file (managed mode only).
+                            match purge_mode {
+                                LocalStorageMode::Managed => {
+                                    if let Ok(Some(rel)) = db.media_relative_path(id).await {
+                                        let path = originals.join(&rel);
+                                        let _ = tokio::fs::remove_file(&path).await;
+                                    }
+                                }
+                                LocalStorageMode::Referenced => {
+                                    // Referenced mode: the original belongs to the
+                                    // user — never delete it.
+                                }
                             }
-                            // Remove thumbnail file.
+                            // Remove thumbnail file (always owned by Moments).
                             let thumb =
                                 crate::library::thumbnail::sharded_thumbnail_path(&thumbnails, id);
-                            // Best-effort: thumbnail may already be gone.
                             let _ = tokio::fs::remove_file(&thumb).await;
                         }
                         if let Err(e) = db.delete_permanently(&ids).await {
@@ -222,17 +229,18 @@ impl LibraryMedia for LocalLibrary {
     async fn delete_permanently(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
         // Remove files from disk before deleting DB rows.
         for id in ids {
-            if let Ok(Some(stored)) = self.db.media_relative_path(id).await {
-                let path = PathBuf::from(&stored);
-                if path.is_absolute() {
+            match self.mode {
+                LocalStorageMode::Managed => {
+                    if let Ok(Some(rel)) = self.db.media_relative_path(id).await {
+                        let full = self.bundle.originals.join(&rel);
+                        if let Err(e) = tokio::fs::remove_file(&full).await {
+                            tracing::warn!(id = %id, path = %full.display(), "failed to remove original: {e}");
+                        }
+                    }
+                }
+                LocalStorageMode::Referenced => {
                     // Referenced mode: the original belongs to the user — don't delete it.
                     debug!(id = %id, "referenced mode: skipping original file deletion");
-                } else {
-                    // Managed mode: Moments owns the copy — remove it.
-                    let full = self.bundle.originals.join(&stored);
-                    if let Err(e) = tokio::fs::remove_file(&full).await {
-                        tracing::warn!(id = %id, path = %full.display(), "failed to remove original: {e}");
-                    }
                 }
             }
             // Remove thumbnail file (always owned by Moments).
@@ -260,15 +268,11 @@ impl LibraryViewer for LocalLibrary {
         id: &MediaId,
     ) -> Result<Option<std::path::PathBuf>, LibraryError> {
         let stored = self.db.media_relative_path(id).await?;
-        Ok(stored.map(|p| {
-            let path = PathBuf::from(&p);
-            if path.is_absolute() {
-                // Referenced mode: the DB stores the absolute (portal) path.
-                path
-            } else {
-                // Managed mode: the DB stores a relative path under originals/.
-                self.bundle.originals.join(p)
-            }
+        Ok(stored.map(|p| match self.mode {
+            // Referenced mode: the DB stores the absolute (portal) path.
+            LocalStorageMode::Referenced => PathBuf::from(p),
+            // Managed mode: the DB stores a relative path under originals/.
+            LocalStorageMode::Managed => self.bundle.originals.join(p),
         }))
     }
 }

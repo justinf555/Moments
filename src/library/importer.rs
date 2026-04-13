@@ -465,6 +465,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn referenced_import_does_not_copy_and_stores_absolute_path() {
+        let src_dir = tempdir().unwrap();
+        let bundle_dir = tempdir().unwrap();
+        let originals = bundle_dir.path().join("originals");
+        let thumbnails = bundle_dir.path().join("thumbnails");
+        let db = open_test_db(bundle_dir.path()).await;
+
+        let photo = make_file(src_dir.path(), "ref.jpg", b"referenced jpeg");
+
+        let (tx, rx) = mpsc::channel();
+        ImportJob::new(originals.clone(), thumbnails, db.clone(), tx, test_registry(), LocalStorageMode::Referenced)
+            .run(vec![photo.clone()])
+            .await;
+
+        let events: Vec<_> = rx.try_iter().collect();
+        let summary = events
+            .iter()
+            .find_map(|e| {
+                if let LibraryEvent::ImportComplete(s) = e {
+                    Some(s)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        assert_eq!(summary.imported, 1);
+
+        // Referenced mode should NOT copy the file into originals/.
+        assert!(!originals.exists() || std::fs::read_dir(&originals).unwrap().count() == 0);
+
+        // The DB should store the absolute source path, not a relative one.
+        use crate::library::media::{LibraryMedia, MediaFilter};
+        let items = db.list_media(MediaFilter::All, None, 10).await.unwrap();
+        assert_eq!(items.len(), 1);
+        let stored_path = db
+            .media_relative_path(&items[0].id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            std::path::Path::new(&stored_path).is_absolute(),
+            "referenced mode should store absolute path, got: {stored_path}"
+        );
+        assert_eq!(stored_path, photo.to_string_lossy());
+    }
+
+    #[tokio::test]
     async fn unsupported_extension_is_skipped() {
         let src_dir = tempdir().unwrap();
         let bundle_dir = tempdir().unwrap();

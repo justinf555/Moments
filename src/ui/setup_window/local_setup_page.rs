@@ -49,8 +49,6 @@ mod imp {
             self.parent_constructed();
             let obj = self.obj();
 
-            self.referenced_row.set_visible(true);
-
             // Managed row: create bundle immediately in the app data dir.
             self.managed_row.connect_activated(glib::clone!(
                 #[weak]
@@ -103,40 +101,36 @@ impl MomentsLocalSetupPage {
     /// Managed mode: create (or re-use) the bundle in the app's sandbox data directory.
     #[instrument(skip(self))]
     fn create_managed_library(&self) {
-        let bundle_path = default_local_library_path();
-
-        if !bundle_path.exists() {
-            let config = LibraryConfig::Local {
-                mode: LocalStorageMode::Managed,
-            };
-            if let Err(e) = Bundle::create(&bundle_path, &config) {
-                error!("failed to create managed library bundle: {e}");
-                return;
-            }
-            debug!(path = %bundle_path.display(), "managed library bundle created");
-        } else {
-            debug!(path = %bundle_path.display(), "re-using existing managed library bundle");
-        }
-
-        let path_str = bundle_path.to_string_lossy().to_string();
-        self.emit_by_name::<()>("create-requested", &[&path_str]);
+        self.create_library(LocalStorageMode::Managed);
     }
 
     /// Referenced mode: create the bundle and proceed to the empty library.
     /// Photos are added later via the import dialog (which uses the portal).
     #[instrument(skip(self))]
     fn create_referenced_library(&self) {
+        self.create_library(LocalStorageMode::Referenced);
+    }
+
+    /// Shared helper: create (or re-use) a local library bundle with the given mode.
+    fn create_library(&self, mode: LocalStorageMode) {
         let bundle_path = default_local_library_path();
 
         if !bundle_path.exists() {
-            let config = LibraryConfig::Local {
-                mode: LocalStorageMode::Referenced,
-            };
+            let config = LibraryConfig::Local { mode };
             if let Err(e) = Bundle::create(&bundle_path, &config) {
-                error!("failed to create referenced library bundle: {e}");
+                error!("failed to create library bundle: {e}");
+                let dialog = adw::AlertDialog::builder()
+                    .heading("Could Not Create Library")
+                    .body(format!(
+                        "Failed to create library at {}.\n\n{e}",
+                        bundle_path.display()
+                    ))
+                    .build();
+                dialog.add_response("ok", "OK");
+                dialog.present(self.root().and_downcast_ref::<gtk::Window>());
                 return;
             }
-            debug!(path = %bundle_path.display(), "referenced library bundle created");
+            debug!(path = %bundle_path.display(), "library bundle created");
         } else {
             debug!(path = %bundle_path.display(), "re-using existing library bundle");
         }
