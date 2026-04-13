@@ -10,6 +10,12 @@
     <file preprocess="xml-stripblanks">ui/viewer.ui</file>
     <file preprocess="xml-stripblanks">ui/video_viewer.ui</file>
     <file preprocess="xml-stripblanks">ui/viewer/edit_panel.ui</file>
+    <file preprocess="xml-stripblanks">ui/viewer/info_panel/info_panel.ui</file>
+    <file preprocess="xml-stripblanks">ui/viewer/info_panel/date_section.ui</file>
+    <file preprocess="xml-stripblanks">ui/viewer/info_panel/image_section.ui</file>
+    <file preprocess="xml-stripblanks">ui/viewer/info_panel/camera_section.ui</file>
+    <file preprocess="xml-stripblanks">ui/viewer/info_panel/location_section.ui</file>
+    <file preprocess="xml-stripblanks">ui/viewer/info_panel/file_section.ui</file>
     <file preprocess="xml-stripblanks">ui/people_grid.ui</file>
     <file preprocess="xml-stripblanks">ui/album_grid.ui</file>
     <file preprocess="xml-stripblanks">ui/photo_grid.ui</file>

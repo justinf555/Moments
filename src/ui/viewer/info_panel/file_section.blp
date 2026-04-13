@@ -1,0 +1,42 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $MomentsInfoFileSection : Gtk.Widget {
+  layout-manager: Gtk.BinLayout {};
+
+  Gtk.ListBox {
+    selection-mode: none;
+    styles ["boxed-list"]
+
+    Adw.ExpanderRow expander {
+      title: "File";
+      show-enable-switch: false;
+      expanded: false;
+
+      [prefix]
+      Gtk.Image { icon-name: "document-open-symbolic"; }
+
+      [suffix]
+      Gtk.Label subtitle_label {
+        label: "";
+        halign: end;
+        ellipsize: end;
+        max-width-chars: 20;
+        styles ["dim-label"]
+      }
+
+      Gtk.ListBoxRow {
+        activatable: false;
+        selectable: false;
+        child: Gtk.Box {
+          orientation: horizontal;
+          spacing: 12;
+          margin-start: 12; margin-end: 12;
+          margin-top: 8; margin-bottom: 8;
+          Gtk.Label { label: "Filename"; halign: start; hexpand: true; styles ["dim-label"] }
+          Gtk.Label filename_value { halign: end; selectable: true; ellipsize: end; max-width-chars: 24; }
+        };
+      }
+    }
+  }
+}

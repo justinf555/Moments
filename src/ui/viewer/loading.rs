@@ -300,7 +300,7 @@ impl PhotoViewer {
                     let item = obj.item().clone();
                     let meta = imp.current_metadata.borrow();
                     if let Some(ref panel) = *imp.info_panel.borrow() {
-                        panel.populate(&item, meta.as_ref());
+                        panel.set_item(&item, meta.as_ref());
                     }
                 }
             }

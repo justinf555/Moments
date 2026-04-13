@@ -1,0 +1,25 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $MomentsInfoPanel : Gtk.Widget {
+  layout-manager: Gtk.BinLayout {};
+
+  Gtk.ScrolledWindow {
+    hscrollbar-policy: never;
+
+    child: Gtk.Box {
+      orientation: vertical;
+      spacing: 12;
+      margin-top: 12;
+      margin-bottom: 12;
+      margin-start: 12;
+      margin-end: 12;
+
+      $MomentsInfoDateSection date_section {}
+      $MomentsInfoImageSection image_section {}
+      $MomentsInfoCameraSection camera_section {}
+      $MomentsInfoLocationSection location_section {}
+      $MomentsInfoFileSection file_section {}
+    };
+  }
+}

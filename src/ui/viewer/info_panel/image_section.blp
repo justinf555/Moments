@@ -1,0 +1,68 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $MomentsInfoImageSection : Gtk.Widget {
+  layout-manager: Gtk.BinLayout {};
+
+  Gtk.ListBox {
+    selection-mode: none;
+    styles ["boxed-list"]
+
+    Adw.ExpanderRow expander {
+      title: "Image";
+      show-enable-switch: false;
+      expanded: true;
+
+      [prefix]
+      Gtk.Image { icon-name: "image-x-generic-symbolic"; }
+
+      [suffix]
+      Gtk.Label subtitle_label {
+        label: "";
+        halign: end;
+        ellipsize: end;
+        max-width-chars: 20;
+        styles ["dim-label"]
+      }
+
+      Gtk.ListBoxRow dimensions_row {
+        activatable: false;
+        selectable: false;
+        child: Gtk.Box {
+          orientation: horizontal;
+          spacing: 12;
+          margin-start: 12; margin-end: 12;
+          margin-top: 8; margin-bottom: 8;
+          Gtk.Label { label: "Dimensions"; halign: start; hexpand: true; styles ["dim-label"] }
+          Gtk.Label dimensions_value { halign: end; selectable: true; ellipsize: end; max-width-chars: 24; }
+        };
+      }
+
+      Gtk.ListBoxRow {
+        activatable: false;
+        selectable: false;
+        child: Gtk.Box {
+          orientation: horizontal;
+          spacing: 12;
+          margin-start: 12; margin-end: 12;
+          margin-top: 8; margin-bottom: 8;
+          Gtk.Label { label: "Resolution"; halign: start; hexpand: true; styles ["dim-label"] }
+          Gtk.Label resolution_value { halign: end; selectable: true; ellipsize: end; max-width-chars: 24; }
+        };
+      }
+
+      Gtk.ListBoxRow {
+        activatable: false;
+        selectable: false;
+        child: Gtk.Box {
+          orientation: horizontal;
+          spacing: 12;
+          margin-start: 12; margin-end: 12;
+          margin-top: 8; margin-bottom: 8;
+          Gtk.Label { label: "Format"; halign: start; hexpand: true; styles ["dim-label"] }
+          Gtk.Label format_value { halign: end; selectable: true; ellipsize: end; max-width-chars: 24; }
+        };
+      }
+    }
+  }
+}

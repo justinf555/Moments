@@ -1,0 +1,124 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $MomentsInfoCameraSection : Gtk.Widget {
+  layout-manager: Gtk.BinLayout {};
+
+  Gtk.ListBox {
+    selection-mode: none;
+    styles ["boxed-list"]
+
+    Adw.ExpanderRow expander {
+      title: "Camera";
+      show-enable-switch: false;
+      expanded: true;
+
+      [prefix]
+      Gtk.Image { icon-name: "camera-photo-symbolic"; }
+
+      [suffix]
+      Gtk.Label subtitle_label {
+        label: "";
+        halign: end;
+        ellipsize: end;
+        max-width-chars: 20;
+        styles ["dim-label"]
+      }
+
+      Gtk.ListBoxRow camera_row {
+        activatable: false;
+        selectable: false;
+        child: Gtk.Box {
+          orientation: horizontal;
+          spacing: 12;
+          margin-start: 12; margin-end: 12;
+          margin-top: 8; margin-bottom: 8;
+          Gtk.Label { label: "Camera"; halign: start; hexpand: true; styles ["dim-label"] }
+          Gtk.Label camera_value { halign: end; selectable: true; ellipsize: end; max-width-chars: 24; }
+        };
+      }
+
+      Gtk.ListBoxRow lens_row {
+        activatable: false;
+        selectable: false;
+        child: Gtk.Box {
+          orientation: horizontal;
+          spacing: 12;
+          margin-start: 12; margin-end: 12;
+          margin-top: 8; margin-bottom: 8;
+          Gtk.Label { label: "Lens"; halign: start; hexpand: true; styles ["dim-label"] }
+          Gtk.Label lens_value { halign: end; selectable: true; ellipsize: end; max-width-chars: 24; }
+        };
+      }
+
+      Gtk.ListBoxRow exif_row {
+        activatable: false;
+        selectable: false;
+        child: Gtk.Grid exif_grid {
+          column-spacing: 8;
+          row-spacing: 8;
+          column-homogeneous: true;
+          margin-top: 8;
+          margin-bottom: 8;
+          margin-start: 12;
+          margin-end: 12;
+
+          Gtk.Box aperture_card {
+            orientation: vertical;
+            spacing: 2;
+            styles ["card"]
+
+            layout { column: 0; row: 0; }
+
+            Gtk.Label { label: "Aperture"; halign: start; margin-start: 8; margin-top: 6; styles ["caption", "dim-label"] }
+            Gtk.Label aperture_value { label: ""; halign: start; margin-start: 8; margin-bottom: 6; styles ["heading"] }
+          }
+
+          Gtk.Box shutter_card {
+            orientation: vertical;
+            spacing: 2;
+            styles ["card"]
+
+            layout { column: 1; row: 0; }
+
+            Gtk.Label { label: "Shutter"; halign: start; margin-start: 8; margin-top: 6; styles ["caption", "dim-label"] }
+            Gtk.Label shutter_value { label: ""; halign: start; margin-start: 8; margin-bottom: 6; styles ["heading"] }
+          }
+
+          Gtk.Box iso_card {
+            orientation: vertical;
+            spacing: 2;
+            styles ["card"]
+
+            layout { column: 0; row: 1; }
+
+            Gtk.Label { label: "ISO"; halign: start; margin-start: 8; margin-top: 6; styles ["caption", "dim-label"] }
+            Gtk.Label iso_value { label: ""; halign: start; margin-start: 8; margin-bottom: 6; styles ["heading"] }
+          }
+
+          Gtk.Box focal_card {
+            orientation: vertical;
+            spacing: 2;
+            styles ["card"]
+
+            layout { column: 1; row: 1; }
+
+            Gtk.Label { label: "Focal"; halign: start; margin-start: 8; margin-top: 6; styles ["caption", "dim-label"] }
+            Gtk.Label focal_value { label: ""; halign: start; margin-start: 8; margin-bottom: 6; styles ["heading"] }
+          }
+        };
+      }
+
+      Gtk.ListBoxRow no_data_row {
+        activatable: false;
+        selectable: false;
+        child: Gtk.Label {
+          label: "No EXIF data available";
+          margin-start: 12; margin-end: 12;
+          margin-top: 8; margin-bottom: 8;
+          styles ["dim-label"]
+        };
+      }
+    }
+  }
+}
