@@ -12,8 +12,8 @@ use crate::library::media::{MediaId, MediaItem};
 /// - **Result events** — outcomes from library operations or sync. Consumed by
 ///   models, sidebar, and other UI components.
 /// - **Command events** (`*Requested`) — UI intent emitted by buttons. Consumed
-///   by the [`CommandDispatcher`] which executes the library call and emits the
-///   corresponding result event.
+///   by the library's command handler which executes the library call and emits
+///   the corresponding result event.
 ///
 /// See `docs/design-event-bus.md` for the full design.
 #[derive(Debug, Clone)]
@@ -47,7 +47,7 @@ pub enum AppEvent {
         total: usize,
     },
 
-    // ── Commands (UI intent → CommandDispatcher) ─────────────────────────────
+    // ── Commands (UI intent → library command handler) ────────────────────────
     TrashRequested {
         ids: Vec<MediaId>,
     },
@@ -79,7 +79,7 @@ pub enum AppEvent {
     EmptyTrashRequested,
     RestoreAllTrashRequested,
 
-    // ── Results (CommandDispatcher → subscribers) ────────────────────────────
+    // ── Results (command handler → subscribers) ───────────────────────────────
     FavoriteChanged {
         ids: Vec<MediaId>,
         is_favorite: bool,

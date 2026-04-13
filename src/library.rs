@@ -1,5 +1,6 @@
 pub mod album;
 pub mod bundle;
+pub mod commands;
 pub mod config;
 pub mod db;
 pub mod edit_renderer;

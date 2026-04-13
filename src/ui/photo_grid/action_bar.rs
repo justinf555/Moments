@@ -6,9 +6,8 @@
 //! - **Album**: Favourite, Remove from album, Delete
 //!
 //! Button handlers emit command events via the [`EventBus`] — they resolve
-//! UI state (selection → IDs) and nothing else. The
-//! [`CommandDispatcher`](crate::commands::dispatcher::CommandDispatcher)
-//! handles execution and emits result events.
+//! UI state (selection → IDs) and nothing else. The library's command
+//! handler handles execution and emits result events.
 
 use adw::prelude::*;
 
