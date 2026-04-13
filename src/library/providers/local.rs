@@ -454,7 +454,13 @@ mod tests {
     async fn open_sends_ready_event() {
         let dir = tempdir().unwrap();
         let bundle_path = dir.path().join("Test.library");
-        let bundle = Bundle::create(&bundle_path, &LibraryConfig::Local { mode: LocalStorageMode::Managed }).unwrap();
+        let bundle = Bundle::create(
+            &bundle_path,
+            &LibraryConfig::Local {
+                mode: LocalStorageMode::Managed,
+            },
+        )
+        .unwrap();
 
         let (tx, rx) = mpsc::channel();
         let _library = open_test_library(bundle, tx).await;
@@ -467,7 +473,13 @@ mod tests {
     async fn close_sends_shutdown_complete() {
         let dir = tempdir().unwrap();
         let bundle_path = dir.path().join("Test.library");
-        let bundle = Bundle::create(&bundle_path, &LibraryConfig::Local { mode: LocalStorageMode::Managed }).unwrap();
+        let bundle = Bundle::create(
+            &bundle_path,
+            &LibraryConfig::Local {
+                mode: LocalStorageMode::Managed,
+            },
+        )
+        .unwrap();
 
         let (tx, rx) = mpsc::channel();
         let library = open_test_library(bundle, tx).await;
@@ -482,7 +494,13 @@ mod tests {
     async fn import_emits_complete_event() {
         let dir = tempdir().unwrap();
         let bundle_path = dir.path().join("Test.library");
-        let bundle = Bundle::create(&bundle_path, &LibraryConfig::Local { mode: LocalStorageMode::Managed }).unwrap();
+        let bundle = Bundle::create(
+            &bundle_path,
+            &LibraryConfig::Local {
+                mode: LocalStorageMode::Managed,
+            },
+        )
+        .unwrap();
 
         let src_dir = tempdir().unwrap();
         std::fs::write(src_dir.path().join("img.jpg"), b"fake").unwrap();

@@ -442,9 +442,16 @@ mod tests {
         let photo = make_file(src_dir.path(), "photo.jpg", b"fake jpeg");
 
         let (tx, rx) = mpsc::channel();
-        ImportJob::new(originals, thumbnails, db, tx, test_registry(), LocalStorageMode::Managed)
-            .run(vec![photo])
-            .await;
+        ImportJob::new(
+            originals,
+            thumbnails,
+            db,
+            tx,
+            test_registry(),
+            LocalStorageMode::Managed,
+        )
+        .run(vec![photo])
+        .await;
 
         let events: Vec<_> = rx.try_iter().collect();
         assert!(events
@@ -475,9 +482,16 @@ mod tests {
         let photo = make_file(src_dir.path(), "ref.jpg", b"referenced jpeg");
 
         let (tx, rx) = mpsc::channel();
-        ImportJob::new(originals.clone(), thumbnails, db.clone(), tx, test_registry(), LocalStorageMode::Referenced)
-            .run(vec![photo.clone()])
-            .await;
+        ImportJob::new(
+            originals.clone(),
+            thumbnails,
+            db.clone(),
+            tx,
+            test_registry(),
+            LocalStorageMode::Referenced,
+        )
+        .run(vec![photo.clone()])
+        .await;
 
         let events: Vec<_> = rx.try_iter().collect();
         let summary = events
@@ -499,11 +513,7 @@ mod tests {
         use crate::library::media::{LibraryMedia, MediaFilter};
         let items = db.list_media(MediaFilter::All, None, 10).await.unwrap();
         assert_eq!(items.len(), 1);
-        let stored_path = db
-            .media_relative_path(&items[0].id)
-            .await
-            .unwrap()
-            .unwrap();
+        let stored_path = db.media_relative_path(&items[0].id).await.unwrap().unwrap();
         assert!(
             std::path::Path::new(&stored_path).is_absolute(),
             "referenced mode should store absolute path, got: {stored_path}"
@@ -522,9 +532,16 @@ mod tests {
         let file = make_file(src_dir.path(), "document.pdf", b"not a photo");
 
         let (tx, rx) = mpsc::channel();
-        ImportJob::new(originals, thumbnails, db, tx, test_registry(), LocalStorageMode::Managed)
-            .run(vec![file])
-            .await;
+        ImportJob::new(
+            originals,
+            thumbnails,
+            db,
+            tx,
+            test_registry(),
+            LocalStorageMode::Managed,
+        )
+        .run(vec![file])
+        .await;
 
         let events: Vec<_> = rx.try_iter().collect();
         let summary = events
@@ -566,10 +583,16 @@ mod tests {
 
         // Second import — same content, even if renamed
         let photo2 = make_file(src_dir.path(), "dup_renamed.jpg", b"fake jpeg content");
-        ImportJob::new(originals, thumbnails, db, tx, test_registry(), LocalStorageMode::Managed)
-            .run(vec![photo2])
-
-            .await;
+        ImportJob::new(
+            originals,
+            thumbnails,
+            db,
+            tx,
+            test_registry(),
+            LocalStorageMode::Managed,
+        )
+        .run(vec![photo2])
+        .await;
 
         let events: Vec<_> = rx.try_iter().collect();
         let summaries: Vec<_> = events
@@ -603,9 +626,16 @@ mod tests {
         let db = open_test_db(bundle_dir.path()).await;
 
         let (tx, rx) = mpsc::channel();
-        ImportJob::new(originals, thumbnails, db, tx, test_registry(), LocalStorageMode::Managed)
-            .run(vec![src_dir.path().to_path_buf()])
-            .await;
+        ImportJob::new(
+            originals,
+            thumbnails,
+            db,
+            tx,
+            test_registry(),
+            LocalStorageMode::Managed,
+        )
+        .run(vec![src_dir.path().to_path_buf()])
+        .await;
 
         let events: Vec<_> = rx.try_iter().collect();
         let summary = events
@@ -633,9 +663,16 @@ mod tests {
         make_file(src_dir.path(), "clip.mp4", b"fake video");
 
         let (tx, rx) = mpsc::channel();
-        ImportJob::new(originals, thumbnails, db.clone(), tx, test_registry(), LocalStorageMode::Managed)
-            .run(vec![src_dir.path().to_path_buf()])
-            .await;
+        ImportJob::new(
+            originals,
+            thumbnails,
+            db.clone(),
+            tx,
+            test_registry(),
+            LocalStorageMode::Managed,
+        )
+        .run(vec![src_dir.path().to_path_buf()])
+        .await;
 
         let events: Vec<_> = rx.try_iter().collect();
         let summary = events
