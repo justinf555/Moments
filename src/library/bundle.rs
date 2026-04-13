@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument};
 
-use super::config::LibraryConfig;
+use super::config::{LibraryConfig, LocalStorageMode};
 use super::error::LibraryError;
 
 /// Current bundle format version written to `library.toml`.
@@ -19,6 +19,7 @@ const MANIFEST_FILE: &str = "library.toml";
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LibraryManifest {
     pub library: LibrarySection,
+    pub local: Option<LocalSection>,
     pub immich: Option<ImmichSection>,
 }
 
@@ -27,6 +28,13 @@ pub struct LibrarySection {
     pub version: u32,
     /// `"local"` or `"immich"`
     pub backend: String,
+}
+
+/// Local backend configuration persisted in `library.toml`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LocalSection {
+    /// `"managed"` or `"referenced"`
+    pub mode: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -38,11 +46,17 @@ impl LibraryManifest {
     /// Build a manifest from a [`LibraryConfig`], ready to be written to `library.toml`.
     fn new(config: &LibraryConfig) -> Self {
         match config {
-            LibraryConfig::Local => Self {
+            LibraryConfig::Local { mode } => Self {
                 library: LibrarySection {
                     version: BUNDLE_VERSION,
                     backend: "local".to_string(),
                 },
+                local: Some(LocalSection {
+                    mode: match mode {
+                        LocalStorageMode::Managed => "managed".to_string(),
+                        LocalStorageMode::Referenced => "referenced".to_string(),
+                    },
+                }),
                 immich: None,
             },
             LibraryConfig::Immich { server_url, .. } => Self {
@@ -50,6 +64,7 @@ impl LibraryManifest {
                     version: BUNDLE_VERSION,
                     backend: "immich".to_string(),
                 },
+                local: None,
                 immich: Some(ImmichSection {
                     server_url: server_url.clone(),
                 }),
@@ -65,7 +80,15 @@ impl LibraryConfig {
     /// are missing.
     fn from_manifest(manifest: &LibraryManifest) -> Result<Self, LibraryError> {
         match manifest.library.backend.as_str() {
-            "local" => Ok(LibraryConfig::Local),
+            "local" => {
+                // Default to Managed for backward compatibility with bundles
+                // created before the [local] section was introduced.
+                let mode = match manifest.local.as_ref().map(|l| l.mode.as_str()) {
+                    Some("referenced") => LocalStorageMode::Referenced,
+                    _ => LocalStorageMode::Managed,
+                };
+                Ok(LibraryConfig::Local { mode })
+            }
             "immich" => {
                 let immich = manifest.immich.as_ref().ok_or_else(|| {
                     LibraryError::Bundle("[immich] section missing from library.toml".to_string())
@@ -94,9 +117,9 @@ impl LibraryConfig {
 /// subsequent runs.
 #[derive(Debug)]
 pub struct Bundle {
-    /// Root bundle directory, e.g. `~/Pictures/Moments.library`.
+    /// Root bundle directory, e.g. `~/.local/share/moments/local.library`.
     pub path: PathBuf,
-    /// `<bundle>/originals/` — source files (local backend; created on first import).
+    /// `<bundle>/originals/` — source files (managed mode; created on first import).
     pub originals: PathBuf,
     /// `<bundle>/thumbnails/` — generated thumbnails (created when thumbnail generation runs).
     pub thumbnails: PathBuf,
@@ -198,12 +221,24 @@ impl Bundle {
 mod tests {
     use super::*;
 
+    fn local_managed() -> LibraryConfig {
+        LibraryConfig::Local {
+            mode: LocalStorageMode::Managed,
+        }
+    }
+
+    fn local_referenced() -> LibraryConfig {
+        LibraryConfig::Local {
+            mode: LocalStorageMode::Referenced,
+        }
+    }
+
     #[test]
     fn create_local_bundle_creates_root_directory() {
         let dir = tempfile::tempdir().unwrap();
         let bundle_path = dir.path().join("Test.library");
 
-        let bundle = Bundle::create(&bundle_path, &LibraryConfig::Local).unwrap();
+        let bundle = Bundle::create(&bundle_path, &local_managed()).unwrap();
 
         assert!(bundle.path.is_dir());
     }
@@ -213,7 +248,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bundle_path = dir.path().join("Test.library");
 
-        let bundle = Bundle::create(&bundle_path, &LibraryConfig::Local).unwrap();
+        let bundle = Bundle::create(&bundle_path, &local_managed()).unwrap();
 
         assert!(!bundle.originals.exists());
         assert!(!bundle.thumbnails.exists());
@@ -226,7 +261,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bundle_path = dir.path().join("Test.library");
 
-        Bundle::create(&bundle_path, &LibraryConfig::Local).unwrap();
+        Bundle::create(&bundle_path, &local_managed()).unwrap();
 
         let manifest_path = bundle_path.join(MANIFEST_FILE);
         assert!(manifest_path.exists());
@@ -234,6 +269,7 @@ mod tests {
         let content = fs::read_to_string(&manifest_path).unwrap();
         assert!(content.contains("local"));
         assert!(content.contains("version"));
+        assert!(content.contains("managed"));
     }
 
     #[test]
@@ -241,22 +277,62 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bundle_path = dir.path().join("Test.library");
 
-        Bundle::create(&bundle_path, &LibraryConfig::Local).unwrap();
-        let result = Bundle::create(&bundle_path, &LibraryConfig::Local);
+        Bundle::create(&bundle_path, &local_managed()).unwrap();
+        let result = Bundle::create(&bundle_path, &local_managed());
 
         assert!(matches!(result, Err(LibraryError::Bundle(_))));
     }
 
     #[test]
-    fn open_local_bundle_returns_correct_config() {
+    fn open_local_managed_bundle_returns_correct_config() {
         let dir = tempfile::tempdir().unwrap();
         let bundle_path = dir.path().join("Test.library");
 
-        Bundle::create(&bundle_path, &LibraryConfig::Local).unwrap();
+        Bundle::create(&bundle_path, &local_managed()).unwrap();
         let (bundle, config) = Bundle::open(&bundle_path).unwrap();
 
         assert_eq!(bundle.path, bundle_path);
-        assert!(matches!(config, LibraryConfig::Local));
+        assert!(matches!(
+            config,
+            LibraryConfig::Local {
+                mode: LocalStorageMode::Managed
+            }
+        ));
+    }
+
+    #[test]
+    fn open_local_referenced_bundle_returns_correct_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle_path = dir.path().join("Test.library");
+
+        Bundle::create(&bundle_path, &local_referenced()).unwrap();
+        let (_, config) = Bundle::open(&bundle_path).unwrap();
+
+        assert!(matches!(
+            config,
+            LibraryConfig::Local {
+                mode: LocalStorageMode::Referenced
+            }
+        ));
+    }
+
+    #[test]
+    fn open_legacy_local_bundle_defaults_to_managed() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle_path = dir.path().join("Test.library");
+
+        // Simulate an old bundle without the [local] section.
+        fs::create_dir_all(&bundle_path).unwrap();
+        let manifest = "[library]\nversion = 1\nbackend = \"local\"\n";
+        fs::write(bundle_path.join(MANIFEST_FILE), manifest).unwrap();
+
+        let (_, config) = Bundle::open(&bundle_path).unwrap();
+        assert!(matches!(
+            config,
+            LibraryConfig::Local {
+                mode: LocalStorageMode::Managed
+            }
+        ));
     }
 
     #[test]
@@ -288,10 +364,27 @@ mod tests {
     }
 
     #[test]
-    fn manifest_roundtrip_local() {
-        let manifest = LibraryManifest::new(&LibraryConfig::Local);
+    fn manifest_roundtrip_local_managed() {
+        let manifest = LibraryManifest::new(&local_managed());
         let config = LibraryConfig::from_manifest(&manifest).unwrap();
-        assert!(matches!(config, LibraryConfig::Local));
+        assert!(matches!(
+            config,
+            LibraryConfig::Local {
+                mode: LocalStorageMode::Managed
+            }
+        ));
+    }
+
+    #[test]
+    fn manifest_roundtrip_local_referenced() {
+        let manifest = LibraryManifest::new(&local_referenced());
+        let config = LibraryConfig::from_manifest(&manifest).unwrap();
+        assert!(matches!(
+            config,
+            LibraryConfig::Local {
+                mode: LocalStorageMode::Referenced
+            }
+        ));
     }
 
     #[test]
@@ -317,6 +410,7 @@ mod tests {
                 version: 1,
                 backend: "s3".to_string(),
             },
+            local: None,
             immich: None,
         };
         let result = LibraryConfig::from_manifest(&manifest);
@@ -330,6 +424,7 @@ mod tests {
                 version: 1,
                 backend: "immich".to_string(),
             },
+            local: None,
             immich: None,
         };
         let result = LibraryConfig::from_manifest(&manifest);
