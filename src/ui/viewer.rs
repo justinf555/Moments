@@ -187,8 +187,7 @@ impl PhotoViewer {
         let info_panel = InfoPanel::new();
         let edit_panel = EditPanel::new();
         edit_panel.setup(imp.picture.clone(), library, tokio, bus_sender);
-        imp.sidebar_stack
-            .add_named(info_panel.widget(), Some("info"));
+        imp.sidebar_stack.add_named(&info_panel, Some("info"));
         imp.sidebar_stack.add_named(&edit_panel, Some("edit"));
         *imp.info_panel.borrow_mut() = Some(info_panel);
         *imp.edit_panel.borrow_mut() = Some(edit_panel);
@@ -252,8 +251,11 @@ impl PhotoViewer {
             }
         }
 
-        // Collapse info panel to avoid showing stale metadata.
-        imp.info_split.set_show_sidebar(false);
+        // Close the sidebar only on initial open — during next/prev
+        // navigation the info panel stays open and updates in-place.
+        if !self.is_mapped() {
+            imp.info_split.set_show_sidebar(false);
+        }
 
         // Defer full-res load until the page transition completes (shown
         // signal) to avoid a stutter as the large image replaces the
@@ -398,7 +400,7 @@ impl PhotoViewer {
                         let item = obj.item().clone();
                         let meta = imp.current_metadata.borrow();
                         if let Some(ref panel) = *imp.info_panel.borrow() {
-                            panel.populate(&item, meta.as_ref());
+                            panel.set_item(&item, meta.as_ref());
                         }
                     }
                 } else if !imp.edit_toggle.is_active() {

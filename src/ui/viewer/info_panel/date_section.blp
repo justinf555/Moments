@@ -1,0 +1,55 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $MomentsInfoDateSection : Gtk.Widget {
+  layout-manager: Gtk.BinLayout {};
+
+  Gtk.ListBox {
+    selection-mode: none;
+    styles ["boxed-list"]
+
+    Adw.ExpanderRow expander {
+      title: "Date";
+      show-enable-switch: false;
+      expanded: true;
+
+      [prefix]
+      Gtk.Image { icon-name: "x-office-calendar-symbolic"; }
+
+      [suffix]
+      Gtk.Label subtitle_label {
+        label: "";
+        halign: end;
+        ellipsize: end;
+        max-width-chars: 20;
+        styles ["dim-label"]
+      }
+
+      Gtk.ListBoxRow {
+        activatable: false;
+        selectable: false;
+        child: Gtk.Box {
+          orientation: horizontal;
+          spacing: 12;
+          margin-start: 12; margin-end: 12;
+          margin-top: 8; margin-bottom: 8;
+          Gtk.Label { label: "Captured"; halign: start; hexpand: true; styles ["dim-label"] }
+          Gtk.Label captured_value { halign: end; selectable: true; ellipsize: end; max-width-chars: 24; }
+        };
+      }
+
+      Gtk.ListBoxRow {
+        activatable: false;
+        selectable: false;
+        child: Gtk.Box {
+          orientation: horizontal;
+          spacing: 12;
+          margin-start: 12; margin-end: 12;
+          margin-top: 8; margin-bottom: 8;
+          Gtk.Label { label: "Time"; halign: start; hexpand: true; styles ["dim-label"] }
+          Gtk.Label time_value { halign: end; selectable: true; ellipsize: end; max-width-chars: 24; }
+        };
+      }
+    }
+  }
+}

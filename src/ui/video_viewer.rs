@@ -159,7 +159,7 @@ impl VideoViewer {
 
         // Build info panel and set as sidebar.
         let info_panel = InfoPanel::new();
-        imp.info_split.set_sidebar(Some(info_panel.widget()));
+        imp.info_split.set_sidebar(Some(&info_panel));
         *imp.info_panel.borrow_mut() = Some(info_panel);
 
         // Build and attach overflow menu.
@@ -314,7 +314,7 @@ impl VideoViewer {
                     let item = obj.item().clone();
                     let meta = imp.current_metadata.borrow();
                     if let Some(ref panel) = *imp.info_panel.borrow() {
-                        panel.populate(&item, meta.as_ref());
+                        panel.set_item(&item, meta.as_ref());
                     }
                     drop(meta);
                 }
@@ -428,7 +428,7 @@ impl VideoViewer {
                         let item = obj.item().clone();
                         let meta = imp.current_metadata.borrow();
                         if let Some(ref panel) = *imp.info_panel.borrow() {
-                            panel.populate(&item, meta.as_ref());
+                            panel.set_item(&item, meta.as_ref());
                         }
                         drop(meta);
                     }
