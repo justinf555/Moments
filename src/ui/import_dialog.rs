@@ -84,6 +84,7 @@ mod imp {
             self.parent_unrealize();
         }
     }
+
     impl AdwDialogImpl for ImportDialog {}
 }
 

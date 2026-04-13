@@ -579,10 +579,9 @@ impl MomentsApplication {
                         let source_id = glib::timeout_add_local(
                             std::time::Duration::from_millis(16),
                             move || {
-                                let _app = match app_for_idle.upgrade() {
-                                    Some(a) => a,
-                                    None => return glib::ControlFlow::Break,
-                                };
+                                if app_for_idle.upgrade().is_none() {
+                                    return glib::ControlFlow::Break;
+                                }
                                 loop {
                                     match receiver.try_recv() {
                                         Ok(LibraryEvent::ThumbnailReady { media_id }) => {

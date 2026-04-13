@@ -88,7 +88,6 @@ mod imp {
         pub people_reload: RefCell<Option<super::ReloadCallback>>,
 
         /// Event bus subscriptions kept alive for the window's lifetime.
-        #[allow(missing_debug_implementations)]
         pub _subscriptions: RefCell<Vec<crate::event_bus::Subscription>>,
     }
 
