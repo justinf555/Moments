@@ -61,7 +61,11 @@ mod imp {
                 }
                 let launcher = gtk::UriLauncher::new(&uri);
                 let window = btn.root().and_downcast::<gtk::Window>();
-                launcher.launch(window.as_ref(), gio::Cancellable::NONE, |_| {});
+                launcher.launch(window.as_ref(), gio::Cancellable::NONE, |result| {
+                    if let Err(e) = result {
+                        tracing::warn!("failed to open map: {e}");
+                    }
+                });
             });
         }
 

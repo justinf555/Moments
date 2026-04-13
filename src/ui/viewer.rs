@@ -255,6 +255,18 @@ impl PhotoViewer {
         // navigation the info panel stays open and updates in-place.
         if !self.is_mapped() {
             imp.info_split.set_show_sidebar(false);
+        } else if imp.info_split.shows_sidebar() {
+            // Clear stale metadata immediately so the panel doesn't
+            // show the previous photo's EXIF data while the async
+            // fetch completes.
+            let items = imp.items.borrow();
+            if let Some(obj) = items.get(index) {
+                let item = obj.item().clone();
+                drop(items);
+                if let Some(ref panel) = *imp.info_panel.borrow() {
+                    panel.set_item(&item, None);
+                }
+            }
         }
 
         // Defer full-res load until the page transition completes (shown

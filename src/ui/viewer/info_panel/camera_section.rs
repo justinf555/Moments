@@ -115,54 +115,49 @@ impl InfoCameraSection {
         }
 
         // EXIF cards — static widgets, just update labels and visibility
-        let meta = metadata;
-        let has_exif = meta
-            .map(|m| {
-                m.aperture.is_some()
-                    || m.shutter_str.is_some()
-                    || m.iso.is_some()
-                    || m.focal_length.is_some()
-            })
-            .unwrap_or(false);
-
-        if has_exif {
-            let m = meta.unwrap();
+        if let Some(m) = metadata {
+            let has_aperture = m.aperture.is_some();
+            let has_shutter = m.shutter_str.is_some();
+            let has_iso = m.iso.is_some();
+            let has_focal = m.focal_length.is_some();
 
             if let Some(f) = m.aperture {
                 imp.aperture_value.set_label(&format!("f/{f:.1}"));
-                imp.aperture_card.set_visible(true);
-            } else {
-                imp.aperture_card.set_visible(false);
             }
+            imp.aperture_card.set_visible(has_aperture);
 
             if let Some(s) = &m.shutter_str {
                 imp.shutter_value.set_label(&format!("{s}s"));
-                imp.shutter_card.set_visible(true);
-            } else {
-                imp.shutter_card.set_visible(false);
             }
+            imp.shutter_card.set_visible(has_shutter);
 
             if let Some(iso) = m.iso {
                 imp.iso_value.set_label(&format!("{iso}"));
-                imp.iso_card.set_visible(true);
-            } else {
-                imp.iso_card.set_visible(false);
             }
+            imp.iso_card.set_visible(has_iso);
 
             if let Some(fl) = m.focal_length {
                 imp.focal_value.set_label(&format!("{fl:.0}mm"));
-                imp.focal_card.set_visible(true);
-            } else {
-                imp.focal_card.set_visible(false);
             }
+            imp.focal_card.set_visible(has_focal);
 
-            imp.exif_row.set_visible(true);
+            imp.exif_row
+                .set_visible(has_aperture || has_shutter || has_iso || has_focal);
         } else {
             imp.exif_row.set_visible(false);
         }
 
-        // No data placeholder
-        let has_any_data = camera_name.is_some() || metadata.map(|m| m.has_data()).unwrap_or(false);
-        imp.no_data_row.set_visible(!has_any_data);
+        // No data placeholder — only check camera-relevant fields, not GPS
+        let has_any_camera_data = camera_name.is_some()
+            || metadata
+                .map(|m| {
+                    m.lens_model.is_some()
+                        || m.aperture.is_some()
+                        || m.shutter_str.is_some()
+                        || m.iso.is_some()
+                        || m.focal_length.is_some()
+                })
+                .unwrap_or(false);
+        imp.no_data_row.set_visible(!has_any_camera_data);
     }
 }

@@ -112,13 +112,11 @@ template $MomentsInfoCameraSection : Gtk.Widget {
       Gtk.ListBoxRow no_data_row {
         activatable: false;
         selectable: false;
-        child: Gtk.Box {
-          orientation: horizontal;
-          spacing: 12;
+        child: Gtk.Label {
+          label: "No EXIF data available";
           margin-start: 12; margin-end: 12;
           margin-top: 8; margin-bottom: 8;
-          Gtk.Label { label: ""; halign: start; hexpand: true; styles ["dim-label"] }
-          Gtk.Label { label: "No EXIF data available"; halign: end; styles ["dim-label"] }
+          styles ["dim-label"]
         };
       }
     }
