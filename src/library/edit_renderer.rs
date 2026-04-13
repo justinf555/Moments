@@ -164,80 +164,6 @@ fn apply_pixel_adjustments(img: DynamicImage, e: &ExposureState, c: &ColorState)
 }
 
 // ---------------------------------------------------------------------------
-// Filter presets
-// ---------------------------------------------------------------------------
-
-/// Built-in filter presets. Each preset is an `EditState` with exposure and
-/// color values tuned for a particular look.
-pub fn filter_preset(name: &str) -> Option<EditState> {
-    let mut state = EditState {
-        filter: Some(name.to_string()),
-        ..Default::default()
-    };
-
-    match name {
-        "bw" => {
-            state.color.saturation = -1.0;
-            state.exposure.contrast = 0.1;
-        }
-        "vintage" => {
-            state.color.saturation = -0.3;
-            state.color.temperature = 0.3;
-            state.exposure.contrast = -0.1;
-            state.exposure.brightness = 0.05;
-        }
-        "warm" => {
-            state.color.temperature = 0.4;
-            state.color.saturation = 0.1;
-        }
-        "cool" => {
-            state.color.temperature = -0.4;
-            state.color.saturation = 0.1;
-        }
-        "vivid" => {
-            state.color.saturation = 0.5;
-            state.color.vibrance = 0.3;
-            state.exposure.contrast = 0.15;
-        }
-        "fade" => {
-            state.exposure.contrast = -0.2;
-            state.exposure.brightness = 0.1;
-            state.color.saturation = -0.2;
-        }
-        "noir" => {
-            state.color.saturation = -1.0;
-            state.exposure.contrast = 0.3;
-            state.exposure.brightness = -0.05;
-        }
-        "chrome" => {
-            state.exposure.contrast = 0.25;
-            state.color.saturation = -0.15;
-            state.exposure.highlights = 0.2;
-            state.exposure.shadows = -0.2;
-        }
-        "matte" => {
-            state.exposure.contrast = -0.15;
-            state.exposure.shadows = 0.3;
-            state.color.saturation = -0.1;
-        }
-        "golden" => {
-            state.color.temperature = 0.5;
-            state.color.saturation = 0.15;
-            state.exposure.brightness = 0.05;
-            state.exposure.contrast = 0.1;
-        }
-        _ => return None,
-    }
-
-    Some(state)
-}
-
-/// Names of all built-in filter presets.
-pub const FILTER_NAMES: &[&str] = &[
-    "bw", "vivid", "cool", "warm", "fade", "noir", "chrome", "matte", "golden",
-];
-
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -423,30 +349,6 @@ mod tests {
         // In grayscale, R ≈ G ≈ B (may differ by 1 due to rounding).
         assert!((px[0] as i16 - px[1] as i16).abs() <= 1);
         assert!((px[1] as i16 - px[2] as i16).abs() <= 1);
-    }
-
-    #[test]
-    fn bw_filter_desaturates() {
-        let preset = filter_preset("bw").unwrap();
-        assert_eq!(preset.color.saturation, -1.0);
-        assert!(preset.filter.as_deref() == Some("bw"));
-    }
-
-    #[test]
-    fn all_filter_presets_are_valid() {
-        for name in FILTER_NAMES {
-            let preset = filter_preset(name);
-            assert!(preset.is_some(), "filter '{name}' should exist");
-            assert!(
-                !preset.unwrap().is_identity(),
-                "filter '{name}' should not be identity"
-            );
-        }
-    }
-
-    #[test]
-    fn unknown_filter_returns_none() {
-        assert!(filter_preset("nonexistent").is_none());
     }
 
     #[test]
