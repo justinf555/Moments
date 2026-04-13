@@ -59,7 +59,6 @@ impl ThumbnailDownloader {
             // Emit progress every 10 thumbnails to update the status bar.
             if download_count.is_multiple_of(10) {
                 self.events.send(AppEvent::ThumbnailDownloadProgress {
-                    // receiver may be dropped during shutdown
                     completed: download_count,
                     total: download_count, // Total not known upfront; shows running count.
                 });
@@ -74,7 +73,6 @@ impl ThumbnailDownloader {
         }
 
         self.events.send(AppEvent::ThumbnailDownloadsComplete {
-            // receiver may be dropped during shutdown
             total: download_count,
         });
         info!(total = download_count, "thumbnail downloader finished");
@@ -99,7 +97,6 @@ async fn download_thumbnail(
         db.set_thumbnail_ready(media_id, &path.to_string_lossy(), now)
             .await?;
         events.send(AppEvent::ThumbnailReady {
-            // receiver may be dropped during shutdown
             media_id: media_id.clone(),
         });
         return Ok(());

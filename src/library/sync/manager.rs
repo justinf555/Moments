@@ -102,7 +102,6 @@ impl SyncManager {
         };
 
         debug!("starting sync stream");
-        // Receiver may be dropped during shutdown.
         self.events.send(AppEvent::SyncStarted);
         let response = self.client.post_stream("/sync/stream", &request).await?;
 
@@ -362,7 +361,6 @@ impl SyncManager {
 
             if acks.len() >= ACK_FLUSH_THRESHOLD {
                 self.flush_acks(&mut acks).await?;
-                // Receiver may be dropped during shutdown.
                 self.events.send(AppEvent::SyncProgress {
                     assets: counters.assets,
                     people: counters.people,
@@ -462,7 +460,6 @@ impl SyncManager {
             self.flush_acks(acks).await?;
         }
 
-        // Receiver may be dropped during shutdown.
         self.events.send(AppEvent::SyncComplete {
             assets: counters.assets,
             people: counters.people,
@@ -471,7 +468,6 @@ impl SyncManager {
         });
 
         if counters.people > 0 || counters.faces > 0 {
-            // Receiver may be dropped during shutdown.
             self.events.send(AppEvent::PeopleSyncComplete);
         }
 
@@ -577,7 +573,6 @@ impl SyncManager {
             trashed_at: record.trashed_at,
             duration_ms: record.duration_ms,
         };
-        // Receiver may be dropped during shutdown.
         self.events.send(AppEvent::AssetSynced { item });
 
         // Queue thumbnail download — the worker pool handles concurrency.
@@ -636,7 +631,6 @@ impl SyncManager {
             .upsert_album(&album.id, &album.name, created_at, updated_at)
             .await?;
 
-        // Receiver may be dropped during shutdown.
         self.events.send(AppEvent::AlbumCreated {
             id: AlbumId::from_raw(album.id),
             name: album.name,
@@ -651,7 +645,6 @@ impl SyncManager {
         let id = AlbumId::from_raw(album_id.to_owned());
         self.db.delete_album(&id).await?;
 
-        // Receiver may be dropped during shutdown.
         self.events.send(AppEvent::AlbumDeleted { id });
 
         Ok(())
@@ -667,7 +660,6 @@ impl SyncManager {
             .upsert_album_media(&assoc.album_id, &assoc.asset_id, now)
             .await?;
 
-        // Receiver may be dropped during shutdown.
         self.events.send(AppEvent::AlbumMediaChanged {
             album_id: AlbumId::from_raw(assoc.album_id),
         });
@@ -754,7 +746,6 @@ impl SyncManager {
             .delete_album_media_entry(&assoc.album_id, &assoc.asset_id)
             .await?;
 
-        // Receiver may be dropped during shutdown.
         self.events.send(AppEvent::AlbumMediaChanged {
             album_id: AlbumId::from_raw(assoc.album_id),
         });

@@ -271,8 +271,8 @@ impl MomentsWindow {
             }
         }));
 
-        // Unregister deleted album routes from the coordinator before the
-        // sidebar processes the event (avoids a navigation race).
+        // Unregister deleted album routes from the coordinator before
+        // AlbumGridView processes the event (avoids a navigation race).
         let weak = self.downgrade();
         subs.push(bus.subscribe(move |event| {
             if let AppEvent::AlbumDeleted { id } = event {
