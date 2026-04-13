@@ -86,6 +86,10 @@ mod imp {
         /// Callback to reload the People collection grid after sync.
         #[allow(missing_debug_implementations)]
         pub people_reload: RefCell<Option<super::ReloadCallback>>,
+
+        /// Event bus subscriptions kept alive for the window's lifetime.
+        #[allow(missing_debug_implementations)]
+        pub _subscriptions: RefCell<Vec<crate::event_bus::Subscription>>,
     }
 
     #[glib::object_subclass]
@@ -241,9 +245,24 @@ impl MomentsWindow {
 
         self.install_show_toast_action();
         self.install_toggle_sidebar_action();
+        self.subscribe_bus_events(bus);
 
         debug!("switching main window to content page");
         imp.main_stack.set_visible_child_name("content");
+    }
+
+    /// Subscribe to event bus events that the window handles directly.
+    fn subscribe_bus_events(&self, bus: &crate::event_bus::EventBus) {
+        let mut subs = self.imp()._subscriptions.borrow_mut();
+
+        // Navigate to Recent Imports when an import completes.
+        let weak = self.downgrade();
+        subs.push(bus.subscribe(move |event| {
+            let Some(win) = weak.upgrade() else { return };
+            if matches!(event, crate::app_event::AppEvent::ImportComplete { .. }) {
+                win.navigate("recent");
+            }
+        }));
     }
 
     fn setup_sidebar(

@@ -1,6 +1,6 @@
 use adw::{prelude::*, subclass::prelude::*};
 use gtk::glib;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use crate::library::import::ImportSummary;
 
@@ -20,6 +20,8 @@ mod imp {
         pub action_button: TemplateChild<gtk::Button>,
         /// True once `ImportComplete` has been received.
         pub complete: Cell<bool>,
+        /// Event bus subscription — alive while the dialog is realized.
+        pub _subscription: RefCell<Option<crate::event_bus::Subscription>>,
     }
 
     #[glib::object_subclass]
@@ -53,7 +55,35 @@ mod imp {
         }
     }
 
-    impl WidgetImpl for ImportDialog {}
+    impl WidgetImpl for ImportDialog {
+        fn realize(&self) {
+            self.parent_realize();
+
+            let weak = self.obj().downgrade();
+            let sub = crate::event_bus::subscribe(move |event| {
+                let Some(dialog) = weak.upgrade() else {
+                    return;
+                };
+                match event {
+                    crate::app_event::AppEvent::ImportProgress {
+                        current, total, ..
+                    } => {
+                        dialog.set_progress(*current, *total);
+                    }
+                    crate::app_event::AppEvent::ImportComplete { summary } => {
+                        dialog.set_complete(summary);
+                    }
+                    _ => {}
+                }
+            });
+            *self._subscription.borrow_mut() = Some(sub);
+        }
+
+        fn unrealize(&self) {
+            self._subscription.borrow_mut().take();
+            self.parent_unrealize();
+        }
+    }
     impl AdwDialogImpl for ImportDialog {}
 }
 
@@ -69,8 +99,6 @@ impl ImportDialog {
     }
 
     /// Update the dialog with current import progress.
-    ///
-    /// Called for each `LibraryEvent::ImportProgress` while the dialog is open.
     pub fn set_progress(&self, current: usize, total: usize) {
         let imp = self.imp();
         imp.phase_label.set_label("Importing…");
@@ -83,9 +111,6 @@ impl ImportDialog {
     }
 
     /// Transition the dialog to its completed state.
-    ///
-    /// Called once `LibraryEvent::ImportComplete` arrives. Shows a summary
-    /// and changes the action button to "Done".
     pub fn set_complete(&self, summary: &ImportSummary) {
         let imp = self.imp();
         imp.complete.set(true);

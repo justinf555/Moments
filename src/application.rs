@@ -36,7 +36,6 @@ use crate::library::config::LibraryConfig;
 use crate::library::event::LibraryEvent;
 use crate::library::factory::LibraryFactory;
 use crate::library::Library;
-use crate::ui::import_dialog::ImportDialog;
 use crate::ui::MomentsSetupWindow;
 use crate::ui::MomentsWindow;
 
@@ -51,9 +50,6 @@ mod imp {
         pub is_immich: Cell<bool>,
         pub immich_server_url: RefCell<Option<String>>,
         pub library_events: RefCell<Option<Receiver<LibraryEvent>>>,
-        /// Held while an import is in flight so the idle loop can update it.
-        /// Cleared when `ImportComplete` arrives or the user dismisses it.
-        pub import_dialog: RefCell<Option<ImportDialog>>,
         /// The GLib source ID of the library-event idle loop.
         ///
         /// Stored so `shutdown()` can remove it explicitly, which frees the
@@ -110,7 +106,6 @@ mod imp {
             // (and the SqlitePool it wraps) is freed before drop(tokio)
             // in main() tries to shut down the runtime.
             self.event_bus.borrow_mut().take();
-            self.import_dialog.borrow_mut().take();
             self.library.borrow_mut().take();
 
             self.parent_shutdown();
@@ -584,7 +579,7 @@ impl MomentsApplication {
                         let source_id = glib::timeout_add_local(
                             std::time::Duration::from_millis(16),
                             move || {
-                                let app = match app_for_idle.upgrade() {
+                                let _app = match app_for_idle.upgrade() {
                                     Some(a) => a,
                                     None => return glib::ControlFlow::Break,
                                 };
@@ -600,11 +595,6 @@ impl MomentsApplication {
                                             skipped,
                                             failed,
                                         }) => {
-                                            // Import dialog is app-level (not a bus subscriber).
-                                            let borrow = app.imp().import_dialog.borrow();
-                                            if let Some(d) = borrow.as_ref() {
-                                                d.set_progress(current, total);
-                                            }
                                             bus_tx.send(AppEvent::ImportProgress {
                                                 current,
                                                 total,
@@ -614,19 +604,7 @@ impl MomentsApplication {
                                             });
                                         }
                                         Ok(LibraryEvent::ImportComplete(summary)) => {
-                                            // Import dialog is app-level (not a bus subscriber).
-                                            {
-                                                let borrow = app.imp().import_dialog.borrow();
-                                                if let Some(d) = borrow.as_ref() {
-                                                    d.set_complete(&summary);
-                                                }
-                                            }
-                                            app.imp().import_dialog.borrow_mut().take();
                                             bus_tx.send(AppEvent::ImportComplete { summary });
-                                            // Navigate to Recent Imports so the user sees what arrived.
-                                            if let Some(win) = win_for_idle.upgrade() {
-                                                win.navigate("recent");
-                                            }
                                         }
                                         Ok(LibraryEvent::AssetSynced { item }) => {
                                             bus_tx.send(AppEvent::AssetSynced { item });

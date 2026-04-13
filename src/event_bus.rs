@@ -68,6 +68,7 @@ fn next_subscriber_id() -> u64 {
 /// Safe to drop during event dispatch (e.g. from a `WidgetImpl::unrealize`
 /// triggered by a handler). The removal is deferred and flushed after
 /// dispatch completes.
+#[derive(Debug)]
 pub struct Subscription {
     id: u64,
     /// Marker to prevent `Send` — `Drop` operates on thread-local state.
