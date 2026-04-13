@@ -9,7 +9,11 @@
     <file preprocess="xml-stripblanks">ui/setup_window/immich_setup_page.ui</file>
     <file preprocess="xml-stripblanks">ui/viewer.ui</file>
     <file preprocess="xml-stripblanks">ui/video_viewer.ui</file>
-    <file preprocess="xml-stripblanks">ui/viewer/edit_panel.ui</file>
+    <file preprocess="xml-stripblanks">ui/viewer/edit_panel/edit_panel.ui</file>
+    <file preprocess="xml-stripblanks">ui/viewer/edit_panel/transform_section.ui</file>
+    <file preprocess="xml-stripblanks">ui/viewer/edit_panel/filter_section.ui</file>
+    <file preprocess="xml-stripblanks">ui/viewer/edit_panel/filter_swatch.ui</file>
+    <file preprocess="xml-stripblanks">ui/viewer/edit_panel/adjust_section.ui</file>
     <file preprocess="xml-stripblanks">ui/viewer/info_panel/info_panel.ui</file>
     <file preprocess="xml-stripblanks">ui/viewer/info_panel/date_section.ui</file>
     <file preprocess="xml-stripblanks">ui/viewer/info_panel/image_section.ui</file>

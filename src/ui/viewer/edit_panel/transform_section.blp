@@ -1,0 +1,46 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $MomentsEditTransformSection : Gtk.Widget {
+  layout-manager: Gtk.BinLayout {};
+
+  Gtk.ListBox {
+    selection-mode: none;
+    styles ["boxed-list"]
+
+    Adw.ExpanderRow expander {
+      title: "Transform";
+      show-enable-switch: false;
+      expanded: false;
+
+      [prefix]
+      Gtk.Image {
+        icon-name: "object-rotate-right-symbolic";
+      }
+
+      [suffix]
+      Gtk.Label subtitle_label {
+        label: "Crop, rotate, flip";
+        halign: end;
+        ellipsize: end;
+        max-width-chars: 20;
+        styles ["dim-label"]
+      }
+
+      Gtk.ListBoxRow {
+        activatable: false;
+        selectable: false;
+
+        child: Gtk.Grid grid {
+          column-spacing: 8;
+          row-spacing: 8;
+          margin-top: 8;
+          margin-bottom: 8;
+          margin-start: 12;
+          margin-end: 12;
+          column-homogeneous: true;
+        };
+      }
+    }
+  }
+}

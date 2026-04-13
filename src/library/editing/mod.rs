@@ -97,6 +97,24 @@ impl EditState {
             && self.color == ColorState::default()
             && self.filter.is_none()
     }
+
+    /// Apply a filter preset's exposure/color values scaled by strength.
+    ///
+    /// Sets this state's exposure and color fields to the preset values
+    /// multiplied by `strength` (0.0–1.0), and records the filter strength.
+    pub fn apply_filter_at_strength(&mut self, preset: &EditState, strength: f64) {
+        self.exposure.brightness = preset.exposure.brightness * strength;
+        self.exposure.contrast = preset.exposure.contrast * strength;
+        self.exposure.highlights = preset.exposure.highlights * strength;
+        self.exposure.shadows = preset.exposure.shadows * strength;
+        self.exposure.white_balance = preset.exposure.white_balance * strength;
+        self.color.saturation = preset.color.saturation * strength;
+        self.color.vibrance = preset.color.vibrance * strength;
+        self.color.hue_shift = preset.color.hue_shift * strength;
+        self.color.temperature = preset.color.temperature * strength;
+        self.color.tint = preset.color.tint * strength;
+        self.filter_strength = strength;
+    }
 }
 
 /// Feature trait for non-destructive photo editing.

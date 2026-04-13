@@ -1,0 +1,98 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $MomentsEditFilterSection : Gtk.Widget {
+  layout-manager: Gtk.BinLayout {};
+
+  Gtk.ListBox {
+    selection-mode: none;
+    styles ["boxed-list"]
+
+    Adw.ExpanderRow expander {
+      title: "Filters";
+      show-enable-switch: false;
+      expanded: true;
+
+      [prefix]
+      Gtk.Image {
+        icon-name: "color-select-symbolic";
+      }
+
+      [suffix]
+      Gtk.Label subtitle_label {
+        label: "None";
+        halign: end;
+        ellipsize: end;
+        max-width-chars: 20;
+        styles ["dim-label"]
+      }
+
+      // Filter grid row — populated dynamically in Rust
+      Gtk.ListBoxRow {
+        activatable: false;
+        selectable: false;
+
+        child: Gtk.FlowBox filter_grid {
+          selection-mode: none;
+          homogeneous: true;
+          max-children-per-line: 3;
+          min-children-per-line: 2;
+          row-spacing: 8;
+          column-spacing: 8;
+          margin-top: 8;
+          margin-bottom: 8;
+          margin-start: 12;
+          margin-end: 12;
+        };
+      }
+
+      // Strength slider row
+      Gtk.ListBoxRow {
+        activatable: false;
+        selectable: false;
+
+        child: Gtk.Box {
+          orientation: vertical;
+          spacing: 2;
+          margin-top: 4;
+          margin-bottom: 4;
+
+          Gtk.Box {
+            orientation: horizontal;
+            spacing: 8;
+            margin-start: 12;
+            margin-end: 12;
+
+            Gtk.Label {
+              label: "Strength";
+              halign: start;
+              hexpand: true;
+            }
+
+            Gtk.Label strength_value_label {
+              label: "100";
+              halign: end;
+              width-chars: 4;
+              styles ["dim-label"]
+            }
+          }
+
+          Gtk.Scale strength_scale {
+            orientation: horizontal;
+            hexpand: true;
+            margin-start: 12;
+            margin-end: 12;
+            draw-value: false;
+            adjustment: Gtk.Adjustment {
+              lower: 0;
+              upper: 1;
+              value: 1;
+              step-increment: 0.01;
+              page-increment: 0.1;
+            };
+          }
+        };
+      }
+    }
+  }
+}

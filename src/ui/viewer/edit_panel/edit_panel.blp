@@ -1,0 +1,37 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $MomentsEditPanel : Gtk.Widget {
+  Gtk.Box {
+    orientation: vertical;
+
+    Gtk.ScrolledWindow {
+      hscrollbar-policy: never;
+      vexpand: true;
+
+      child: Gtk.Box content_box {
+        orientation: vertical;
+        spacing: 12;
+        margin-top: 12;
+        margin-bottom: 12;
+        margin-start: 12;
+        margin-end: 12;
+
+        $MomentsEditTransformSection transform_section {}
+        $MomentsEditFilterSection filter_section {}
+        $MomentsEditAdjustSection adjust_section {}
+      };
+    }
+
+    Gtk.Button revert_btn {
+      label: "Revert to Original";
+      tooltip-text: _("Remove all edits and restore the original image");
+      hexpand: true;
+      margin-top: 12;
+      margin-bottom: 12;
+      margin-start: 12;
+      margin-end: 12;
+      styles ["destructive-action"]
+    }
+  }
+}
