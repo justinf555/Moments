@@ -8,7 +8,7 @@ mod imp {
     use super::*;
 
     #[derive(Default, gtk::CompositeTemplate)]
-    #[template(resource = "/io/github/justinf555/Moments/ui/import_dialog.ui")]
+    #[template(resource = "/io/github/justinf555/Moments/ui/import_dialog/import_dialog.ui")]
     pub struct ImportDialog {
         #[template_child]
         pub phase_label: TemplateChild<gtk::Label>,

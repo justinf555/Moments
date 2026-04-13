@@ -21,7 +21,7 @@ mod imp {
     use gtk::CompositeTemplate;
 
     #[derive(Default, CompositeTemplate)]
-    #[template(resource = "/io/github/justinf555/Moments/ui/video_viewer.ui")]
+    #[template(resource = "/io/github/justinf555/Moments/ui/video_viewer/video_viewer.ui")]
     pub struct VideoViewer {
         // Template children (from Blueprint)
         #[template_child]

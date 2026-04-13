@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <gresources>
   <gresource prefix="/io/github/justinf555/Moments">
-    <file preprocess="xml-stripblanks">ui/window.ui</file>
-    <file preprocess="xml-stripblanks">ui/import_dialog.ui</file>
+    <file preprocess="xml-stripblanks">ui/window/window.ui</file>
+    <file preprocess="xml-stripblanks">ui/import_dialog/import_dialog.ui</file>
     <file preprocess="xml-stripblanks">ui/setup_window/setup_window.ui</file>
     <file preprocess="xml-stripblanks">ui/setup_window/backend_picker_page.ui</file>
     <file preprocess="xml-stripblanks">ui/setup_window/local_setup_page.ui</file>
     <file preprocess="xml-stripblanks">ui/setup_window/immich_setup_page.ui</file>
     <file preprocess="xml-stripblanks">ui/viewer/viewer.ui</file>
-    <file preprocess="xml-stripblanks">ui/video_viewer.ui</file>
+    <file preprocess="xml-stripblanks">ui/video_viewer/video_viewer.ui</file>
     <file preprocess="xml-stripblanks">ui/viewer/edit_panel/edit_panel.ui</file>
     <file preprocess="xml-stripblanks">ui/viewer/edit_panel/transform_section.ui</file>
     <file preprocess="xml-stripblanks">ui/viewer/edit_panel/filter_section.ui</file>
