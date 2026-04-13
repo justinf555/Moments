@@ -183,10 +183,6 @@ impl PhotoViewer {
             "setup called twice"
         );
 
-        // Hide edit button until editing is fully implemented (thumbnail
-        // refresh after edits is not yet wired up).
-        imp.edit_toggle.set_visible(false);
-
         // Build sub-panels and add to sidebar stack.
         let info_panel = InfoPanel::new();
         let edit_panel = EditPanel::new();
