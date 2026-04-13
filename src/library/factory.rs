@@ -10,7 +10,6 @@ use super::event::LibraryEvent;
 use super::immich_client::ImmichClient;
 use super::providers::immich::ImmichLibrary;
 use super::providers::local::LocalLibrary;
-use super::storage::LibraryStorage;
 use super::Library;
 
 /// Creates `Library` instances from a [`Bundle`] and [`LibraryConfig`].
@@ -36,8 +35,8 @@ impl LibraryFactory {
         tokio: Handle,
     ) -> Result<Arc<dyn Library>, LibraryError> {
         match config {
-            LibraryConfig::Local => {
-                let library = LocalLibrary::open(bundle, events, tokio).await?;
+            LibraryConfig::Local { mode } => {
+                let library = LocalLibrary::open(bundle, mode, events, tokio).await?;
                 Ok(Arc::new(library))
             }
             LibraryConfig::Immich {

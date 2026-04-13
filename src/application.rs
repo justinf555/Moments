@@ -305,45 +305,22 @@ impl MomentsApplication {
     fn on_setup_complete(&self, setup_win: &MomentsSetupWindow, path: String) {
         let bundle_path = PathBuf::from(&path);
 
-        // Determine config from the bundle manifest (works for both local and Immich).
-        // For new bundles, we create first then open to read the config back.
-        // For Immich, the ImmichSetupPage already called Bundle::create before emitting
-        // setup-complete. For Local, we create here.
-        let (bundle, config) = if bundle_path.exists() {
-            // Immich path: bundle was created by ImmichSetupPage.
-            match Bundle::open(&bundle_path) {
-                Ok(result) => result,
-                Err(e) => {
-                    error!("failed to open bundle: {e}");
-                    show_library_error_dialog(
-                        setup_win,
-                        "Could not open library",
-                        &format!(
-                            "The library at {} could not be opened.\n\nDetails: {e}",
-                            bundle_path.display()
-                        ),
-                    );
-                    return;
-                }
+        // All setup pages (Local and Immich) create the bundle before emitting
+        // setup-complete. We just open it here.
+        let (bundle, config) = match Bundle::open(&bundle_path) {
+            Ok(result) => result,
+            Err(e) => {
+                error!("failed to open bundle: {e}");
+                show_library_error_dialog(
+                    setup_win,
+                    "Could not open library",
+                    &format!(
+                        "The library at {} could not be opened.\n\nDetails: {e}",
+                        bundle_path.display()
+                    ),
+                );
+                return;
             }
-        } else {
-            // Local path: create the bundle now.
-            let bundle = match Bundle::create(&bundle_path, &LibraryConfig::Local) {
-                Ok(b) => b,
-                Err(e) => {
-                    error!("failed to create library bundle: {e}");
-                    show_library_error_dialog(
-                        setup_win,
-                        "Could not create library",
-                        &format!(
-                            "Failed to create a library at {}.\n\nDetails: {e}",
-                            bundle_path.display()
-                        ),
-                    );
-                    return;
-                }
-            };
-            (bundle, LibraryConfig::Local)
         };
 
         // For Immich configs, inject the session token from the keyring.

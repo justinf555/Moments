@@ -1,3 +1,16 @@
+/// How the local backend stores original photos.
+///
+/// Written into the `[local]` section of `library.toml` so the correct
+/// behaviour is restored on subsequent launches.
+#[derive(Debug, Clone)]
+pub enum LocalStorageMode {
+    /// Moments copies photos into its own storage inside the app sandbox.
+    Managed,
+    /// Photos stay at their original location. The database stores absolute
+    /// (portal) paths to the originals.
+    Referenced,
+}
+
 /// Identifies which backend to use and provides its connection details.
 ///
 /// Created during onboarding and written into `library.toml`. On subsequent
@@ -5,8 +18,8 @@
 /// so [`super::factory::LibraryFactory`] can construct the correct backend.
 #[derive(Clone)]
 pub enum LibraryConfig {
-    /// Local filesystem backend — originals are imported into the bundle itself.
-    Local,
+    /// Local filesystem backend.
+    Local { mode: LocalStorageMode },
 
     /// Immich server backend — originals live on the server; the bundle caches
     /// metadata and thumbnails locally.
@@ -21,7 +34,7 @@ pub enum LibraryConfig {
 impl std::fmt::Debug for LibraryConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Local => write!(f, "Local"),
+            Self::Local { mode } => f.debug_struct("Local").field("mode", mode).finish(),
             Self::Immich { server_url, .. } => f
                 .debug_struct("Immich")
                 .field("server_url", server_url)
@@ -36,9 +49,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn local_config_variant() {
-        let config = LibraryConfig::Local;
-        assert!(matches!(config, LibraryConfig::Local));
+    fn local_managed_config_variant() {
+        let config = LibraryConfig::Local {
+            mode: LocalStorageMode::Managed,
+        };
+        assert!(matches!(
+            config,
+            LibraryConfig::Local {
+                mode: LocalStorageMode::Managed
+            }
+        ));
+    }
+
+    #[test]
+    fn local_referenced_config_variant() {
+        let config = LibraryConfig::Local {
+            mode: LocalStorageMode::Referenced,
+        };
+        assert!(matches!(
+            config,
+            LibraryConfig::Local {
+                mode: LocalStorageMode::Referenced
+            }
+        ));
     }
 
     #[test]

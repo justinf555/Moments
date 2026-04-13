@@ -74,6 +74,16 @@ pub fn build_viewer_menu_popover(
     let popover = gtk::Popover::new();
     popover.set_child(Some(&vbox));
 
+    // Hide unimplemented menu items for v0.3.0.
+    // See: #534 (Share), #535 (Export), #536 (Wallpaper), #537 (Show in Files)
+    share.set_visible(false);
+    export_original.set_visible(false);
+    if let Some(ref btn) = set_wallpaper {
+        btn.set_visible(false);
+    }
+    show_in_files.set_visible(false);
+    sep1.set_visible(false);
+
     let buttons = ViewerMenuButtons {
         add_to_album,
         share,

@@ -18,9 +18,9 @@ template $MomentsLocalSetupPage : Adw.NavigationPage {
       margin-end: 24;
 
       Adw.StatusPage {
-        icon-name: "folder-symbolic";
-        title: _("Library Location");
-        description: _("Choose where to create your Moments library. A new folder will be created at this location.");
+        icon-name: "folder-pictures-symbolic";
+        title: _("Local Library");
+        description: _("Choose how Moments stores your photos.");
       }
 
       Gtk.ListBox {
@@ -28,23 +28,27 @@ template $MomentsLocalSetupPage : Adw.NavigationPage {
 
         styles ["boxed-list"]
 
-        Adw.ActionRow path_row {
-          title: _("Library Folder");
+        Adw.ActionRow managed_row {
+          title: _("Moments manages your photos");
+          subtitle: _("Photos are copied into the Moments library. Moments handles storage and organization.");
           activatable: true;
 
           [suffix]
           Gtk.Image {
-            icon-name: "folder-open-symbolic";
+            icon-name: "go-next-symbolic";
           }
         }
-      }
 
-      Gtk.Button create_button {
-        label: _("Create Library");
-        sensitive: false;
-        halign: center;
+        Adw.ActionRow referenced_row {
+          title: _("You manage your photos");
+          subtitle: _("Photos stay in your existing folders. Moments indexes them in place.");
+          activatable: true;
 
-        styles ["suggested-action", "pill"]
+          [suffix]
+          Gtk.Image {
+            icon-name: "go-next-symbolic";
+          }
+        }
       }
     }
   };
