@@ -60,12 +60,13 @@ mod imp {
                 }
             ));
 
-            // Referenced row: open folder picker, then create bundle.
+            // Referenced row: create bundle immediately (photos are added
+            // later via the import dialog, which uses the portal).
             self.referenced_row.connect_activated(glib::clone!(
                 #[weak]
                 obj,
                 move |_| {
-                    obj.open_folder_dialog();
+                    obj.create_referenced_library();
                 }
             ));
         }
@@ -121,42 +122,27 @@ impl MomentsLocalSetupPage {
         self.emit_by_name::<()>("create-requested", &[&path_str]);
     }
 
-    /// Referenced mode: open a folder picker, then create the bundle.
+    /// Referenced mode: create the bundle and proceed to the empty library.
+    /// Photos are added later via the import dialog (which uses the portal).
     #[instrument(skip(self))]
-    fn open_folder_dialog(&self) {
-        let dialog = gtk::FileDialog::builder()
-            .title("Choose Photos Folder")
-            .modal(true)
-            .build();
+    fn create_referenced_library(&self) {
+        let bundle_path = default_local_library_path();
 
-        glib::MainContext::default().spawn_local(glib::clone!(
-            #[weak(rename_to = page)]
-            self,
-            async move {
-                let window = page.root().and_then(|r| r.downcast::<gtk::Window>().ok());
-                let result = dialog.select_folder_future(window.as_ref()).await;
-
-                if let Ok(_file) = result {
-                    let bundle_path = default_local_library_path();
-
-                    if !bundle_path.exists() {
-                        let config = LibraryConfig::Local {
-                            mode: LocalStorageMode::Referenced,
-                        };
-                        if let Err(e) = Bundle::create(&bundle_path, &config) {
-                            error!("failed to create referenced library bundle: {e}");
-                            return;
-                        }
-                        debug!(path = %bundle_path.display(), "referenced library bundle created");
-                    } else {
-                        debug!(path = %bundle_path.display(), "re-using existing library bundle");
-                    }
-
-                    let path_str = bundle_path.to_string_lossy().to_string();
-                    page.emit_by_name::<()>("create-requested", &[&path_str]);
-                }
+        if !bundle_path.exists() {
+            let config = LibraryConfig::Local {
+                mode: LocalStorageMode::Referenced,
+            };
+            if let Err(e) = Bundle::create(&bundle_path, &config) {
+                error!("failed to create referenced library bundle: {e}");
+                return;
             }
-        ));
+            debug!(path = %bundle_path.display(), "referenced library bundle created");
+        } else {
+            debug!(path = %bundle_path.display(), "re-using existing library bundle");
+        }
+
+        let path_str = bundle_path.to_string_lossy().to_string();
+        self.emit_by_name::<()>("create-requested", &[&path_str]);
     }
 }
 
