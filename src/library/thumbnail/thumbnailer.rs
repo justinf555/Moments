@@ -4,13 +4,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use tracing::{debug, instrument, warn};
 
-use super::db::Database;
-use super::error::LibraryError;
-use super::format::FormatRegistry;
-use super::media::MediaId;
-use super::thumbnail::sharded_thumbnail_path;
+use super::repository::ThumbnailRepository;
+use super::service::sharded_thumbnail_path;
 use crate::app_event::AppEvent;
 use crate::event_bus::EventSender;
+use crate::library::db::Database;
+use crate::library::error::LibraryError;
+use crate::library::format::FormatRegistry;
+use crate::library::media::MediaId;
 
 /// Longest edge in pixels for the grid thumbnail.
 const GRID_SIZE: u32 = 360;
@@ -23,7 +24,7 @@ const GRID_SIZE: u32 = 360;
 /// free. Results flow back through [`AppEvent::ThumbnailReady`].
 pub struct ThumbnailJob {
     thumbnails_dir: PathBuf,
-    db: Database,
+    repo: ThumbnailRepository,
     events: EventSender,
     formats: Arc<FormatRegistry>,
 }
@@ -37,7 +38,7 @@ impl ThumbnailJob {
     ) -> Self {
         Self {
             thumbnails_dir,
-            db,
+            repo: ThumbnailRepository::new(db),
             events,
             formats,
         }
@@ -58,13 +59,13 @@ impl ThumbnailJob {
         if let Err(e) = self.try_generate(&media_id, &source).await {
             warn!(%media_id, error = %e, "thumbnail generation failed");
             // Best-effort: DB failure here doesn't warrant a second error path.
-            let _ = self.db.set_thumbnail_failed(&media_id).await;
+            let _ = self.repo.set_failed(&media_id).await;
         }
     }
 
     async fn try_generate(&self, media_id: &MediaId, source: &Path) -> Result<(), LibraryError> {
         // ── 1. Mark pending ───────────────────────────────────────────────────
-        self.db.insert_thumbnail_pending(media_id).await?;
+        self.repo.insert_pending(media_id).await?;
 
         // ── 2. Compute paths ──────────────────────────────────────────────────
         let final_path = sharded_thumbnail_path(&self.thumbnails_dir, media_id);
@@ -110,8 +111,8 @@ impl ThumbnailJob {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
 
-        self.db
-            .set_thumbnail_ready(media_id, &relative, generated_at)
+        self.repo
+            .set_ready(media_id, &relative, generated_at)
             .await?;
 
         debug!(%media_id, "thumbnail ready");

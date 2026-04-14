@@ -106,7 +106,7 @@ impl PhotoViewer {
                             let orientation = crate::library::exif::extract_exif(&path)
                                 .orientation
                                 .unwrap_or(1);
-                            crate::library::thumbnailer::apply_orientation(img, orientation)
+                            crate::library::thumbnail::thumbnailer::apply_orientation(img, orientation)
                         };
                         let rgba = img.into_rgba8();
                         let (w, h) = rgba.dimensions();
@@ -227,7 +227,7 @@ impl PhotoViewer {
                             let orientation = crate::library::exif::extract_exif(&path)
                                 .orientation
                                 .unwrap_or(1);
-                            crate::library::thumbnailer::apply_orientation(img, orientation)
+                            crate::library::thumbnail::thumbnailer::apply_orientation(img, orientation)
                         };
                         // Downscale to ~1200px for fast preview rendering.
                         let (w, h) = image::GenericImageView::dimensions(&img);

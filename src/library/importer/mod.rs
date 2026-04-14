@@ -22,7 +22,7 @@ use super::exif::extract_exif;
 use super::format::FormatRegistry;
 use super::import::{ImportSummary, SkipReason};
 use super::media::{LibraryMedia, MediaId, MediaMetadataRecord, MediaRecord, MediaType};
-use super::thumbnailer::ThumbnailJob;
+use super::thumbnail::thumbnailer::ThumbnailJob;
 use crate::app_event::AppEvent;
 use crate::event_bus::EventSender;
 
