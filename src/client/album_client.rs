@@ -47,7 +47,10 @@ impl AlbumClient {
     // ── Queries (service → GObject) ─────────────────────────────────
 
     /// Fetch all albums and deliver as GObjects on the GTK thread.
-    pub fn list_albums(&self, callback: impl FnOnce(Result<Vec<AlbumItemObject>, LibraryError>) + 'static) {
+    pub fn list_albums(
+        &self,
+        callback: impl FnOnce(Result<Vec<AlbumItemObject>, LibraryError>) + 'static,
+    ) {
         let service = self.service.clone();
         let tokio = self.tokio.clone();
 
@@ -150,16 +153,14 @@ impl AlbumClient {
                 .await
                 .unwrap_or_default();
 
-            let decoded_map: std::collections::HashMap<_, _> =
-                decoded.into_iter().collect();
+            let decoded_map: std::collections::HashMap<_, _> = decoded.into_iter().collect();
 
             // Step 4: assemble the view-model.
             let entries = albums
                 .into_iter()
                 .map(|a| {
                     let already = containing.get(&a.id).copied().unwrap_or(0);
-                    let thumbnail_rgba =
-                        decoded_map.get(&a.id).and_then(|opt| opt.clone());
+                    let thumbnail_rgba = decoded_map.get(&a.id).and_then(|opt| opt.clone());
                     AlbumEntry {
                         id: a.id,
                         name: a.name,

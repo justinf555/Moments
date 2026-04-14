@@ -105,7 +105,9 @@ impl LibraryFaces for FacesService {
         person_id: &PersonId,
         hidden: bool,
     ) -> Result<(), LibraryError> {
-        self.repo.set_person_hidden(person_id.as_str(), hidden).await
+        self.repo
+            .set_person_hidden(person_id.as_str(), hidden)
+            .await
     }
 
     async fn merge_people(

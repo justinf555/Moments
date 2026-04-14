@@ -60,10 +60,7 @@ impl ThumbnailRepository {
     }
 
     /// Return the stored [`ThumbnailStatus`] for `id`, or `None` if no row exists.
-    pub async fn status(
-        &self,
-        id: &MediaId,
-    ) -> Result<Option<ThumbnailStatus>, LibraryError> {
+    pub async fn status(&self, id: &MediaId) -> Result<Option<ThumbnailStatus>, LibraryError> {
         let id_str = id.as_str();
         let row: Option<i64> =
             sqlx::query_scalar("SELECT status FROM thumbnails WHERE media_id = ?")

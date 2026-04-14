@@ -351,10 +351,8 @@ mod tests {
             .await
             .unwrap();
 
-        let rec1 =
-            record_with_taken_at(MediaId::new("m1".to_string()), "a/photo1.jpg", Some(1000));
-        let rec2 =
-            record_with_taken_at(MediaId::new("m2".to_string()), "a/photo2.jpg", Some(2000));
+        let rec1 = record_with_taken_at(MediaId::new("m1".to_string()), "a/photo1.jpg", Some(1000));
+        let rec2 = record_with_taken_at(MediaId::new("m2".to_string()), "a/photo2.jpg", Some(2000));
         db.insert_media(&rec1).await.unwrap();
         db.insert_media(&rec2).await.unwrap();
 
@@ -502,8 +500,7 @@ mod tests {
             .await
             .unwrap();
 
-        let rec1 =
-            record_with_taken_at(MediaId::new("m1".to_string()), "a/photo1.jpg", Some(1000));
+        let rec1 = record_with_taken_at(MediaId::new("m1".to_string()), "a/photo1.jpg", Some(1000));
         let mut rec2 =
             record_with_taken_at(MediaId::new("m2".to_string()), "a/photo2.jpg", Some(2000));
         rec2.is_trashed = true;

@@ -47,7 +47,15 @@ impl Database {
         face_asset_id: Option<&str>,
     ) -> Result<(), LibraryError> {
         FacesRepository::new(self.clone())
-            .upsert_person(id, name, birth_date, is_hidden, is_favorite, color, face_asset_id)
+            .upsert_person(
+                id,
+                name,
+                birth_date,
+                is_hidden,
+                is_favorite,
+                color,
+                face_asset_id,
+            )
             .await
     }
 
@@ -67,17 +75,12 @@ impl Database {
 
     /// Forwarding shim — delegates to `FacesRepository`.
     pub async fn delete_person(&self, id: &str) -> Result<(), LibraryError> {
-        FacesRepository::new(self.clone())
-            .delete_person(id)
-            .await
+        FacesRepository::new(self.clone()).delete_person(id).await
     }
 
     /// Forwarding shim — delegates to `FacesRepository`.
     #[allow(dead_code)] // used in db/media.rs tests
-    pub(crate) async fn upsert_asset_face(
-        &self,
-        face: &AssetFaceRow,
-    ) -> Result<(), LibraryError> {
+    pub(crate) async fn upsert_asset_face(&self, face: &AssetFaceRow) -> Result<(), LibraryError> {
         FacesRepository::new(self.clone())
             .upsert_asset_face(face)
             .await
@@ -104,9 +107,6 @@ impl Database {
 
     /// Forwarding shim — delegates to `FacesRepository`.
     pub async fn clear_asset_faces(&self) -> Result<(), LibraryError> {
-        FacesRepository::new(self.clone())
-            .clear_asset_faces()
-            .await
+        FacesRepository::new(self.clone()).clear_asset_faces().await
     }
-
 }

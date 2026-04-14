@@ -21,10 +21,10 @@ use adjust_section::EditAdjustSection;
 use filter_section::EditFilterSection;
 use transform_section::EditTransformSection;
 
-use crate::renderer::apply_edits;
 use crate::library::editing::EditState;
 use crate::library::media::MediaId;
 use crate::library::Library;
+use crate::renderer::apply_edits;
 use crate::ui::widgets::wire_single_expansion;
 
 /// Delay before auto-saving edit state to DB after the last change (milliseconds).

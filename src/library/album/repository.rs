@@ -401,10 +401,7 @@ mod tests {
         repo.add_media(&album_id, std::slice::from_ref(&media_id))
             .await
             .unwrap();
-        assert_eq!(
-            repo.list_media(&album_id, None, 50).await.unwrap().len(),
-            1
-        );
+        assert_eq!(repo.list_media(&album_id, None, 50).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
