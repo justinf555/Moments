@@ -3,7 +3,6 @@ pub mod bundle;
 pub mod commands;
 pub mod config;
 pub mod db;
-pub mod edit_renderer;
 pub mod editing;
 pub mod error;
 pub mod exif;

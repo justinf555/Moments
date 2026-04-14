@@ -21,7 +21,7 @@ use adjust_section::EditAdjustSection;
 use filter_section::EditFilterSection;
 use transform_section::EditTransformSection;
 
-use crate::library::edit_renderer::apply_edits;
+use crate::renderer::apply_edits;
 use crate::library::editing::EditState;
 use crate::library::media::MediaId;
 use crate::library::Library;

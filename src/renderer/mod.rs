@@ -1,6 +1,6 @@
 use image::{DynamicImage, GenericImageView, Rgba};
 
-use super::editing::{ColorState, EditState, ExposureState, TransformState};
+use crate::library::editing::{ColorState, EditState, ExposureState, TransformState};
 
 /// Apply all edit operations to an image and return the result.
 ///
