@@ -3,7 +3,7 @@ use std::cell::{Cell, RefCell};
 use gettextrs::gettext;
 use gtk::{glib, prelude::*, subclass::prelude::*};
 
-use super::item::MediaItemObject;
+use crate::client::MediaItemObject;
 
 /// Handler IDs stored between `bind` and `unbind` calls.
 ///

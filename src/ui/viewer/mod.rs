@@ -5,11 +5,11 @@ use adw::subclass::prelude::*;
 use gtk::{gdk, glib};
 
 use crate::app_event::AppEvent;
+use crate::client::MediaItemObject;
 use crate::event_bus::EventSender;
 use crate::library::media::MediaId;
 use crate::library::metadata::MediaMetadataRecord;
 use crate::library::Library;
-use crate::ui::photo_grid::item::MediaItemObject;
 
 pub mod edit_panel;
 pub mod info_panel;

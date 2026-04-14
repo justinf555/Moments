@@ -8,7 +8,7 @@ use crate::app_event::AppEvent;
 use crate::event_bus::EventSender;
 use crate::library::media::MediaFilter;
 
-use super::item::MediaItemObject;
+use crate::client::MediaItemObject;
 
 /// Context passed to wiring functions.
 ///

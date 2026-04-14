@@ -9,6 +9,7 @@ use gtk::{gio, glib};
 use tracing::instrument;
 
 use crate::app_event::AppEvent;
+use crate::client::MediaItemObject;
 use crate::library::media::{MediaFilter, MediaType};
 use crate::library::Library;
 use crate::ui::video_viewer::VideoViewer;
@@ -18,7 +19,6 @@ pub mod action_bar;
 pub mod actions;
 pub mod cell;
 pub mod factory;
-pub mod item;
 pub mod model;
 pub mod texture_cache;
 
@@ -250,7 +250,7 @@ impl PhotoGrid {
         bus_sender: crate::event_bus::EventSender,
         filter: crate::library::media::MediaFilter,
         cache: Rc<texture_cache::TextureCache>,
-        on_activate: impl Fn(Vec<item::MediaItemObject>, usize) + 'static,
+        on_activate: impl Fn(Vec<MediaItemObject>, usize) + 'static,
     ) {
         let imp = self.imp();
         let _ = imp.library.set(Arc::clone(&library));
@@ -331,11 +331,11 @@ impl PhotoGrid {
         let selection_ref = selection.clone();
         grid_view.connect_activate(move |_, position| {
             let n = selection_ref.n_items();
-            let items: Vec<item::MediaItemObject> = (0..n)
+            let items: Vec<MediaItemObject> = (0..n)
                 .filter_map(|i| {
                     selection_ref
                         .item(i)
-                        .and_then(|obj| obj.downcast::<item::MediaItemObject>().ok())
+                        .and_then(|obj| obj.downcast::<MediaItemObject>().ok())
                 })
                 .collect();
             on_activate(items, position as usize);
@@ -744,7 +744,7 @@ impl PhotoGridView {
                 let nav_view = imp.nav_view.clone();
                 let photo_viewer = imp.photo_viewer().clone();
                 let video_viewer = imp.video_viewer().clone();
-                move |items, index| {
+                move |items: Vec<MediaItemObject>, index: usize| {
                     let media_type = items
                         .get(index)
                         .map(|obj| obj.item().media_type)
@@ -896,7 +896,7 @@ impl PhotoGridView {
                         let bitset = sel.selection();
                         let all_fav = (0..bitset.size() as u32).all(|i| {
                             sel.item(bitset.nth(i))
-                                .and_then(|o| o.downcast::<item::MediaItemObject>().ok())
+                                .and_then(|o| o.downcast::<MediaItemObject>().ok())
                                 .map(|o| o.is_favorite())
                                 .unwrap_or(false)
                         });
@@ -923,7 +923,7 @@ pub(super) fn collect_selected_ids(
         let pos = bitset.nth(i as u32);
         if let Some(obj) = selection
             .item(pos)
-            .and_then(|o| o.downcast::<item::MediaItemObject>().ok())
+            .and_then(|o| o.downcast::<MediaItemObject>().ok())
         {
             ids.push(obj.item().id.clone());
         }

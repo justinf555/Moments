@@ -11,7 +11,7 @@ use crate::event_bus::EventSender;
 use crate::library::media::{MediaCursor, MediaFilter, MediaId, MediaItem};
 use crate::library::Library;
 
-use super::item::MediaItemObject;
+use crate::client::MediaItemObject;
 
 /// Number of items fetched per page.
 const PAGE_SIZE: u32 = 250;

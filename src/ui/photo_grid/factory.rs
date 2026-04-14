@@ -13,8 +13,8 @@ use crate::library::media::{MediaFilter, MediaItem};
 use crate::library::Library;
 
 use super::cell::PhotoGridCell;
-use super::item::MediaItemObject;
 use super::texture_cache::TextureCache;
+use crate::client::MediaItemObject;
 
 /// Concurrent thumbnail decodes: half of available cores, minimum 2.
 fn max_decode_workers() -> usize {

@@ -17,7 +17,7 @@ use crate::library::album::AlbumId;
 use crate::library::media::MediaFilter;
 
 use super::actions;
-use super::item::MediaItemObject;
+use crate::client::MediaItemObject;
 
 /// The built action bar buttons and the container box.
 pub struct ActionBarButtons {
