@@ -1,26 +1,9 @@
 use crate::library::error::LibraryError;
 use crate::library::media::{
-    LibraryMedia, MediaCursor, MediaFilter, MediaId, MediaItem, MediaMetadataRecord, MediaRecord,
-    MediaType,
+    LibraryMedia, MediaCursor, MediaFilter, MediaId, MediaItem, MediaRecord, MediaType,
 };
 
 use super::Database;
-
-/// Internal row type for `media_metadata` queries.
-#[derive(sqlx::FromRow)]
-pub(super) struct MetadataRow {
-    camera_make: Option<String>,
-    camera_model: Option<String>,
-    lens_model: Option<String>,
-    aperture: Option<f32>,
-    shutter_str: Option<String>,
-    iso: Option<i64>,
-    focal_length: Option<f32>,
-    gps_lat: Option<f64>,
-    gps_lon: Option<f64>,
-    gps_alt: Option<f64>,
-    color_space: Option<String>,
-}
 
 /// Row type for `list_media` — maps SQLite columns to Rust types.
 ///
@@ -212,36 +195,6 @@ impl LibraryMedia for Database {
         Ok(rows.into_iter().map(MediaRow::into_item).collect())
     }
 
-    async fn media_metadata(
-        &self,
-        id: &MediaId,
-    ) -> Result<Option<MediaMetadataRecord>, LibraryError> {
-        let row: Option<MetadataRow> = sqlx::query_as(
-            "SELECT camera_make, camera_model, lens_model, aperture, shutter_str,
-                    iso, focal_length, gps_lat, gps_lon, gps_alt, color_space
-             FROM media_metadata WHERE media_id = ?",
-        )
-        .bind(id.as_str())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(LibraryError::Db)?;
-
-        Ok(row.map(|r| MediaMetadataRecord {
-            media_id: id.clone(),
-            camera_make: r.camera_make,
-            camera_model: r.camera_model,
-            lens_model: r.lens_model,
-            aperture: r.aperture,
-            shutter_str: r.shutter_str,
-            iso: r.iso.map(|v| v as u32),
-            focal_length: r.focal_length,
-            gps_lat: r.gps_lat,
-            gps_lon: r.gps_lon,
-            gps_alt: r.gps_alt,
-            color_space: r.color_space,
-        }))
-    }
-
     async fn set_favorite(&self, ids: &[MediaId], favorite: bool) -> Result<(), LibraryError> {
         self.set_favorite_ids(ids, favorite).await
     }
@@ -267,49 +220,6 @@ impl LibraryMedia for Database {
                 .await
                 .map_err(LibraryError::Db)?;
         Ok(rows.into_iter().map(|(id,)| MediaId::new(id)).collect())
-    }
-
-    async fn insert_media_metadata(
-        &self,
-        record: &MediaMetadataRecord,
-    ) -> Result<(), LibraryError> {
-        if !record.has_data() {
-            return Ok(());
-        }
-        sqlx::query(
-            "INSERT INTO media_metadata
-                (media_id, camera_make, camera_model, lens_model, aperture, shutter_str,
-                 iso, focal_length, gps_lat, gps_lon, gps_alt, color_space)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(media_id) DO UPDATE SET
-                camera_make = excluded.camera_make,
-                camera_model = excluded.camera_model,
-                lens_model = excluded.lens_model,
-                aperture = excluded.aperture,
-                shutter_str = excluded.shutter_str,
-                iso = excluded.iso,
-                focal_length = excluded.focal_length,
-                gps_lat = excluded.gps_lat,
-                gps_lon = excluded.gps_lon,
-                gps_alt = excluded.gps_alt,
-                color_space = excluded.color_space",
-        )
-        .bind(record.media_id.as_str())
-        .bind(&record.camera_make)
-        .bind(&record.camera_model)
-        .bind(&record.lens_model)
-        .bind(record.aperture)
-        .bind(&record.shutter_str)
-        .bind(record.iso.map(|v| v as i64))
-        .bind(record.focal_length)
-        .bind(record.gps_lat)
-        .bind(record.gps_lon)
-        .bind(record.gps_alt)
-        .bind(&record.color_space)
-        .execute(&self.pool)
-        .await
-        .map_err(LibraryError::Db)?;
-        Ok(())
     }
 
     async fn library_stats(&self) -> Result<super::LibraryStats, LibraryError> {

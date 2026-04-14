@@ -7,7 +7,8 @@ use tracing::debug;
 
 use crate::app_event::AppEvent;
 use crate::event_bus::EventSender;
-use crate::library::media::{MediaId, MediaMetadataRecord};
+use crate::library::media::MediaId;
+use crate::library::metadata::MediaMetadataRecord;
 use crate::library::Library;
 use crate::ui::photo_grid::item::MediaItemObject;
 use crate::ui::viewer::info_panel::InfoPanel;

@@ -148,7 +148,7 @@ fn generate_thumbnail(
     let img = if skip_orientation {
         img
     } else {
-        let orientation = crate::library::exif::extract_exif(source)
+        let orientation = crate::library::metadata::exif::extract_exif(source)
             .orientation
             .unwrap_or(1);
         apply_orientation(img, orientation)

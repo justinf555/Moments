@@ -224,9 +224,9 @@ mod tests {
     use crate::library::faces::{LibraryFaces, Person, PersonId};
     use crate::library::import::LibraryImport;
     use crate::library::media::{
-        LibraryMedia, MediaCursor, MediaFilter, MediaId, MediaItem, MediaMetadataRecord,
-        MediaRecord, MediaType,
+        LibraryMedia, MediaCursor, MediaFilter, MediaId, MediaItem, MediaRecord, MediaType,
     };
+    use crate::library::metadata::{LibraryMetadata, MediaMetadataRecord};
     use crate::library::storage::LibraryStorage;
     use crate::library::thumbnail::{LibraryThumbnail, ThumbnailStatus};
     use crate::library::viewer::LibraryViewer;
@@ -314,12 +314,6 @@ mod tests {
         async fn insert_media(&self, _record: &MediaRecord) -> Result<(), LibraryError> {
             unimplemented!()
         }
-        async fn insert_media_metadata(
-            &self,
-            _record: &MediaMetadataRecord,
-        ) -> Result<(), LibraryError> {
-            unimplemented!()
-        }
         async fn list_media(
             &self,
             _filter: MediaFilter,
@@ -327,12 +321,6 @@ mod tests {
             _limit: u32,
         ) -> Result<Vec<MediaItem>, LibraryError> {
             Ok(self.items.lock().await.clone())
-        }
-        async fn media_metadata(
-            &self,
-            _id: &MediaId,
-        ) -> Result<Option<MediaMetadataRecord>, LibraryError> {
-            unimplemented!()
         }
         async fn set_favorite(&self, _ids: &[MediaId], _fav: bool) -> Result<(), LibraryError> {
             self.check_fail().await
@@ -350,6 +338,22 @@ mod tests {
             unimplemented!()
         }
         async fn library_stats(&self) -> Result<LibraryStats, LibraryError> {
+            unimplemented!()
+        }
+    }
+
+    #[async_trait]
+    impl LibraryMetadata for MockLibrary {
+        async fn insert_media_metadata(
+            &self,
+            _record: &MediaMetadataRecord,
+        ) -> Result<(), LibraryError> {
+            unimplemented!()
+        }
+        async fn media_metadata(
+            &self,
+            _id: &MediaId,
+        ) -> Result<Option<MediaMetadataRecord>, LibraryError> {
             unimplemented!()
         }
     }

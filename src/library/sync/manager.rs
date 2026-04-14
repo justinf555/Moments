@@ -8,12 +8,11 @@ use tracing::{debug, error, info, instrument, warn};
 use super::super::album::repository::AlbumRepository;
 use super::super::album::AlbumId;
 use super::super::db::Database;
-use super::super::faces::repository::{AssetFaceRow, FacesRepository};
 use super::super::error::LibraryError;
+use super::super::faces::repository::{AssetFaceRow, FacesRepository};
 use super::super::immich_client::ImmichClient;
-use super::super::media::{
-    LibraryMedia, MediaId, MediaItem, MediaMetadataRecord, MediaRecord, MediaType,
-};
+use super::super::media::{LibraryMedia, MediaId, MediaItem, MediaRecord, MediaType};
+use super::super::metadata::MediaMetadataRecord;
 use super::types::*;
 use super::SyncCounters;
 use super::ACK_FLUSH_THRESHOLD;

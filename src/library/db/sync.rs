@@ -1,5 +1,6 @@
 use crate::library::error::LibraryError;
-use crate::library::media::{MediaMetadataRecord, MediaRecord};
+use crate::library::media::MediaRecord;
+use crate::library::metadata::MediaMetadataRecord;
 
 use super::Database;
 
@@ -34,36 +35,14 @@ impl Database {
         Ok(())
     }
 
-    /// Upsert a media metadata record.
+    /// Forwarding shim — delegates to `MetadataRepository`.
     pub async fn upsert_media_metadata(
         &self,
         record: &MediaMetadataRecord,
     ) -> Result<(), LibraryError> {
-        if !record.has_data() {
-            return Ok(());
-        }
-        sqlx::query(
-            "INSERT OR REPLACE INTO media_metadata
-                (media_id, camera_make, camera_model, lens_model, aperture, shutter_str,
-                 iso, focal_length, gps_lat, gps_lon, gps_alt, color_space)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(record.media_id.as_str())
-        .bind(&record.camera_make)
-        .bind(&record.camera_model)
-        .bind(&record.lens_model)
-        .bind(record.aperture)
-        .bind(&record.shutter_str)
-        .bind(record.iso.map(|v| v as i64))
-        .bind(record.focal_length)
-        .bind(record.gps_lat)
-        .bind(record.gps_lon)
-        .bind(record.gps_alt)
-        .bind(&record.color_space)
-        .execute(&self.pool)
-        .await
-        .map_err(LibraryError::Db)?;
-        Ok(())
+        crate::library::metadata::repository::MetadataRepository::new(self.clone())
+            .upsert(record)
+            .await
     }
 
     /// Upsert an album-media association from the sync stream.

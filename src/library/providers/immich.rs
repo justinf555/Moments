@@ -15,8 +15,9 @@ use crate::library::faces::{FacesService, LibraryFaces, Person, PersonId};
 use crate::library::immich_client::ImmichClient;
 use crate::library::import::LibraryImport;
 use crate::library::media::{
-    LibraryMedia, MediaCursor, MediaFilter, MediaId, MediaItem, MediaMetadataRecord, MediaRecord,
+    LibraryMedia, MediaCursor, MediaFilter, MediaId, MediaItem, MediaRecord,
 };
+use crate::library::metadata::{LibraryMetadata, MediaMetadataRecord, MetadataService};
 use crate::library::storage::LibraryStorage;
 use crate::library::sync::SyncHandle;
 use crate::library::thumbnail::{LibraryThumbnail, ThumbnailService, ThumbnailStatus};
@@ -36,6 +37,7 @@ pub struct ImmichLibrary {
     albums: AlbumService,
     faces: FacesService,
     editing: EditingService,
+    metadata: MetadataService,
     thumbnails: ThumbnailService,
     events: EventSender,
     tokio: Handle,
@@ -99,6 +101,7 @@ impl ImmichLibrary {
         let albums = AlbumService::new(db.clone());
         let faces = FacesService::new(db.clone(), Some(bundle.thumbnails.clone()));
         let editing = EditingService::new(db.clone());
+        let metadata = MetadataService::new(db.clone());
         let thumbnails = ThumbnailService::new(db.clone(), bundle.thumbnails.clone());
 
         let library = Self {
@@ -108,6 +111,7 @@ impl ImmichLibrary {
             albums,
             faces,
             editing,
+            metadata,
             thumbnails,
             events,
             tokio,
@@ -177,14 +181,6 @@ impl LibraryMedia for ImmichLibrary {
         Ok(())
     }
 
-    async fn insert_media_metadata(
-        &self,
-        _record: &MediaMetadataRecord,
-    ) -> Result<(), LibraryError> {
-        // Managed by SyncManager.
-        Ok(())
-    }
-
     async fn list_media(
         &self,
         filter: MediaFilter,
@@ -192,13 +188,6 @@ impl LibraryMedia for ImmichLibrary {
         limit: u32,
     ) -> Result<Vec<MediaItem>, LibraryError> {
         self.db.list_media(filter, cursor, limit).await
-    }
-
-    async fn media_metadata(
-        &self,
-        id: &MediaId,
-    ) -> Result<Option<MediaMetadataRecord>, LibraryError> {
-        self.db.media_metadata(id).await
     }
 
     async fn set_favorite(&self, ids: &[MediaId], favorite: bool) -> Result<(), LibraryError> {
@@ -305,6 +294,24 @@ impl LibraryMedia for ImmichLibrary {
 
         stats.server = Some(server);
         Ok(stats)
+    }
+}
+
+#[async_trait]
+impl LibraryMetadata for ImmichLibrary {
+    async fn insert_media_metadata(
+        &self,
+        _record: &MediaMetadataRecord,
+    ) -> Result<(), LibraryError> {
+        // Managed by SyncManager.
+        Ok(())
+    }
+
+    async fn media_metadata(
+        &self,
+        id: &MediaId,
+    ) -> Result<Option<MediaMetadataRecord>, LibraryError> {
+        self.metadata.media_metadata(id).await
     }
 }
 
@@ -708,7 +715,9 @@ impl LibraryFaces for ImmichLibrary {
         include_hidden: bool,
         include_unnamed: bool,
     ) -> Result<Vec<Person>, LibraryError> {
-        self.faces.list_people(include_hidden, include_unnamed).await
+        self.faces
+            .list_people(include_hidden, include_unnamed)
+            .await
     }
 
     async fn list_media_for_person(
@@ -722,7 +731,10 @@ impl LibraryFaces for ImmichLibrary {
         let path = format!("/people/{}", person_id.as_str());
         let body = serde_json::json!({ "name": name });
         self.client.put_no_content(&path, &body).await?;
-        self.faces.repo.rename_person(person_id.as_str(), name).await
+        self.faces
+            .repo
+            .rename_person(person_id.as_str(), name)
+            .await
     }
 
     async fn set_person_hidden(
@@ -733,7 +745,10 @@ impl LibraryFaces for ImmichLibrary {
         let path = format!("/people/{}", person_id.as_str());
         let body = serde_json::json!({ "isHidden": hidden });
         self.client.put_no_content(&path, &body).await?;
-        self.faces.repo.set_person_hidden(person_id.as_str(), hidden).await
+        self.faces
+            .repo
+            .set_person_hidden(person_id.as_str(), hidden)
+            .await
     }
 
     async fn merge_people(

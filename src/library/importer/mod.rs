@@ -18,10 +18,11 @@ fn max_thumbnail_workers() -> usize {
 use super::config::LocalStorageMode;
 use super::db::Database;
 use super::error::LibraryError;
-use super::exif::extract_exif;
 use super::format::FormatRegistry;
 use super::import::{ImportSummary, SkipReason};
-use super::media::{LibraryMedia, MediaId, MediaMetadataRecord, MediaRecord, MediaType};
+use super::media::{LibraryMedia, MediaId, MediaRecord, MediaType};
+use super::metadata::exif::extract_exif;
+use super::metadata::MediaMetadataRecord;
 use super::thumbnail::thumbnailer::ThumbnailJob;
 use crate::app_event::AppEvent;
 use crate::event_bus::EventSender;
@@ -171,7 +172,7 @@ impl ImportJob {
                     extract_exif(&source_clone)
                 };
                 let duration_ms = if is_vid {
-                    super::video_meta::extract_video_metadata(&source_clone).duration_ms
+                    super::metadata::video_meta::extract_video_metadata(&source_clone).duration_ms
                 } else {
                     None
                 };

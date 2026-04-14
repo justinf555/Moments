@@ -174,10 +174,6 @@ pub trait LibraryMedia: Send + Sync {
     /// Persist a newly imported media asset record.
     async fn insert_media(&self, record: &MediaRecord) -> Result<(), LibraryError>;
 
-    /// Persist the full EXIF detail row. No-op if `record.has_data()` is false.
-    async fn insert_media_metadata(&self, record: &MediaMetadataRecord)
-        -> Result<(), LibraryError>;
-
     /// Return a page of [`MediaItem`]s in reverse chronological order.
     ///
     /// Pass `cursor: None` for the first page. Pass the cursor from a previous
@@ -190,15 +186,6 @@ pub trait LibraryMedia: Send + Sync {
         cursor: Option<&MediaCursor>,
         limit: u32,
     ) -> Result<Vec<MediaItem>, LibraryError>;
-
-    /// Fetch the full EXIF metadata record for `id`.
-    ///
-    /// Returns `None` if no metadata row was stored (e.g. the asset has no EXIF
-    /// data, or metadata extraction failed silently at import time).
-    async fn media_metadata(
-        &self,
-        id: &MediaId,
-    ) -> Result<Option<MediaMetadataRecord>, LibraryError>;
 
     /// Set or clear the favourite flag on one or more assets.
     async fn set_favorite(&self, ids: &[MediaId], favorite: bool) -> Result<(), LibraryError>;
@@ -248,42 +235,6 @@ pub struct MediaRecord {
     pub is_trashed: bool,
     /// Unix timestamp when the item was trashed. `None` if not trashed.
     pub trashed_at: Option<i64>,
-}
-
-/// A row in the `media_metadata` table — full EXIF detail, loaded on demand.
-#[derive(Debug, Clone)]
-pub struct MediaMetadataRecord {
-    pub media_id: MediaId,
-    pub camera_make: Option<String>,
-    pub camera_model: Option<String>,
-    pub lens_model: Option<String>,
-    pub aperture: Option<f32>,
-    pub shutter_str: Option<String>,
-    pub iso: Option<u32>,
-    pub focal_length: Option<f32>,
-    pub gps_lat: Option<f64>,
-    pub gps_lon: Option<f64>,
-    pub gps_alt: Option<f64>,
-    pub color_space: Option<String>,
-}
-
-impl MediaMetadataRecord {
-    /// Returns `true` if at least one field is populated.
-    ///
-    /// Used to skip inserting an empty row for assets with no EXIF metadata.
-    pub fn has_data(&self) -> bool {
-        self.camera_make.is_some()
-            || self.camera_model.is_some()
-            || self.lens_model.is_some()
-            || self.aperture.is_some()
-            || self.shutter_str.is_some()
-            || self.iso.is_some()
-            || self.focal_length.is_some()
-            || self.gps_lat.is_some()
-            || self.gps_lon.is_some()
-            || self.gps_alt.is_some()
-            || self.color_space.is_some()
-    }
 }
 
 #[cfg(test)]

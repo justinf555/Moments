@@ -18,8 +18,9 @@ use crate::library::format::{FormatRegistry, RawHandler, StandardHandler, VideoH
 use crate::library::import::LibraryImport;
 use crate::library::importer::ImportJob;
 use crate::library::media::{
-    LibraryMedia, MediaCursor, MediaFilter, MediaId, MediaItem, MediaMetadataRecord, MediaRecord,
+    LibraryMedia, MediaCursor, MediaFilter, MediaId, MediaItem, MediaRecord,
 };
+use crate::library::metadata::{LibraryMetadata, MediaMetadataRecord, MetadataService};
 use crate::library::storage::LibraryStorage;
 use crate::library::thumbnail::{LibraryThumbnail, ThumbnailService};
 use crate::library::viewer::LibraryViewer;
@@ -37,6 +38,7 @@ pub struct LocalLibrary {
     albums: AlbumService,
     faces: FacesService,
     editing: EditingService,
+    metadata: MetadataService,
     thumbnails: ThumbnailService,
     tokio: Handle,
     formats: Arc<FormatRegistry>,
@@ -73,6 +75,7 @@ impl LocalLibrary {
         let albums = AlbumService::new(db.clone());
         let faces = FacesService::new(db.clone(), None); // local backend: no face thumbnails
         let editing = EditingService::new(db.clone());
+        let metadata = MetadataService::new(db.clone());
         let thumbnails = ThumbnailService::new(db.clone(), bundle.thumbnails.clone());
 
         let library = Self {
@@ -83,6 +86,7 @@ impl LocalLibrary {
             albums,
             faces,
             editing,
+            metadata,
             thumbnails,
             tokio,
             formats,
@@ -199,13 +203,6 @@ impl LibraryMedia for LocalLibrary {
         self.db.insert_media(record).await
     }
 
-    async fn insert_media_metadata(
-        &self,
-        record: &MediaMetadataRecord,
-    ) -> Result<(), LibraryError> {
-        self.db.insert_media_metadata(record).await
-    }
-
     async fn list_media(
         &self,
         filter: MediaFilter,
@@ -213,13 +210,6 @@ impl LibraryMedia for LocalLibrary {
         limit: u32,
     ) -> Result<Vec<MediaItem>, LibraryError> {
         self.db.list_media(filter, cursor, limit).await
-    }
-
-    async fn media_metadata(
-        &self,
-        id: &MediaId,
-    ) -> Result<Option<MediaMetadataRecord>, LibraryError> {
-        self.db.media_metadata(id).await
     }
 
     async fn set_favorite(&self, ids: &[MediaId], favorite: bool) -> Result<(), LibraryError> {
@@ -266,6 +256,23 @@ impl LibraryMedia for LocalLibrary {
 
     async fn library_stats(&self) -> Result<crate::library::db::LibraryStats, LibraryError> {
         self.db.library_stats().await
+    }
+}
+
+#[async_trait]
+impl LibraryMetadata for LocalLibrary {
+    async fn insert_media_metadata(
+        &self,
+        record: &MediaMetadataRecord,
+    ) -> Result<(), LibraryError> {
+        self.metadata.insert_media_metadata(record).await
+    }
+
+    async fn media_metadata(
+        &self,
+        id: &MediaId,
+    ) -> Result<Option<MediaMetadataRecord>, LibraryError> {
+        self.metadata.media_metadata(id).await
     }
 }
 
@@ -384,7 +391,9 @@ impl LibraryFaces for LocalLibrary {
         include_hidden: bool,
         include_unnamed: bool,
     ) -> Result<Vec<Person>, LibraryError> {
-        self.faces.list_people(include_hidden, include_unnamed).await
+        self.faces
+            .list_people(include_hidden, include_unnamed)
+            .await
     }
 
     async fn list_media_for_person(

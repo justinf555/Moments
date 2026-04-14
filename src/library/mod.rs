@@ -5,7 +5,6 @@ pub mod config;
 pub mod db;
 pub mod editing;
 pub mod error;
-pub mod exif;
 pub mod faces;
 pub mod factory;
 pub mod format;
@@ -15,11 +14,11 @@ pub mod import;
 pub mod importer;
 pub mod keyring;
 pub mod media;
+pub mod metadata;
 pub mod providers;
 pub mod storage;
 pub mod sync;
 pub mod thumbnail;
-pub mod video_meta;
 pub mod viewer;
 
 use album::LibraryAlbums;
@@ -27,6 +26,7 @@ use editing::LibraryEditing;
 use faces::LibraryFaces;
 use import::LibraryImport;
 use media::LibraryMedia;
+use metadata::LibraryMetadata;
 use storage::LibraryStorage;
 use thumbnail::LibraryThumbnail;
 use viewer::LibraryViewer;
@@ -52,6 +52,7 @@ pub trait Library:
     LibraryStorage
     + LibraryImport
     + LibraryMedia
+    + LibraryMetadata
     + LibraryThumbnail
     + LibraryViewer
     + LibraryAlbums
@@ -66,6 +67,7 @@ impl<
         T: LibraryStorage
             + LibraryImport
             + LibraryMedia
+            + LibraryMetadata
             + LibraryThumbnail
             + LibraryViewer
             + LibraryAlbums
