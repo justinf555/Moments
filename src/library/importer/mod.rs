@@ -19,13 +19,14 @@ use super::config::LocalStorageMode;
 use super::db::Database;
 use super::error::LibraryError;
 use super::format::FormatRegistry;
-use super::import::{ImportSummary, SkipReason};
+use super::import::SkipReason;
 use super::media::{LibraryMedia, MediaId, MediaRecord, MediaType};
 use super::metadata::exif::extract_exif;
 use super::metadata::MediaMetadataRecord;
 use super::thumbnail::thumbnailer::ThumbnailJob;
 use crate::app_event::AppEvent;
 use crate::event_bus::EventSender;
+use crate::importer::ImportSummary;
 
 /// Drives a single import run for the local backend.
 ///

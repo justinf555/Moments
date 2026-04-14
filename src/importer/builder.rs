@@ -6,9 +6,7 @@ use super::pipeline::ProgressFn;
 use super::ImportPipeline;
 use crate::library::config::LocalStorageMode;
 use crate::library::format::FormatRegistry;
-use crate::library::media::MediaService;
-use crate::library::metadata::MetadataService;
-use crate::library::thumbnail::ThumbnailService;
+use crate::library::Library;
 
 /// Builder for [`ImportPipeline`].
 ///
@@ -17,9 +15,7 @@ use crate::library::thumbnail::ThumbnailService;
 pub struct ImportPipelineBuilder {
     originals_dir: Option<PathBuf>,
     thumbnails_dir: Option<PathBuf>,
-    media: Option<MediaService>,
-    metadata: Option<MetadataService>,
-    thumbnail: Option<ThumbnailService>,
+    library: Option<Arc<dyn Library>>,
     formats: Option<Arc<FormatRegistry>>,
     mode: Option<LocalStorageMode>,
     on_progress: Option<ProgressFn>,
@@ -30,9 +26,7 @@ impl ImportPipelineBuilder {
         Self {
             originals_dir: None,
             thumbnails_dir: None,
-            media: None,
-            metadata: None,
-            thumbnail: None,
+            library: None,
             formats: None,
             mode: None,
             on_progress: None,
@@ -49,18 +43,13 @@ impl ImportPipelineBuilder {
         self
     }
 
-    pub fn media(mut self, svc: MediaService) -> Self {
-        self.media = Some(svc);
-        self
-    }
-
-    pub fn metadata(mut self, svc: MetadataService) -> Self {
-        self.metadata = Some(svc);
-        self
-    }
-
-    pub fn thumbnail(mut self, svc: ThumbnailService) -> Self {
-        self.thumbnail = Some(svc);
+    /// Set the library backend providing media, metadata, and thumbnail services.
+    ///
+    /// Temporary: accepts `Arc<dyn Library>` because Rust cannot upcast trait
+    /// objects. Will switch to individual services (MediaService, MetadataService,
+    /// ThumbnailService) once the full refactor gives the caller direct access.
+    pub fn library(mut self, lib: Arc<dyn Library>) -> Self {
+        self.library = Some(lib);
         self
     }
 
@@ -81,7 +70,7 @@ impl ImportPipelineBuilder {
     /// marshal to the GTK main thread if updating widgets.
     pub fn on_progress(
         mut self,
-        callback: impl Fn(super::types::ImportProgress) + Send + 'static,
+        callback: impl Fn(super::types::ImportProgress) + Send + Sync + 'static,
     ) -> Self {
         self.on_progress = Some(Box::new(callback));
         self
@@ -99,9 +88,7 @@ impl ImportPipelineBuilder {
             thumbnails_dir: self
                 .thumbnails_dir
                 .ok_or_else(|| missing("thumbnails_dir"))?,
-            media: self.media.ok_or_else(|| missing("media"))?,
-            metadata: self.metadata.ok_or_else(|| missing("metadata"))?,
-            thumbnail: self.thumbnail.ok_or_else(|| missing("thumbnail"))?,
+            library: self.library.ok_or_else(|| missing("library"))?,
             formats: self.formats.ok_or_else(|| missing("formats"))?,
             mode: self.mode.ok_or_else(|| missing("mode"))?,
             on_progress: self.on_progress,

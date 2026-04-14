@@ -2,7 +2,7 @@ use adw::{prelude::*, subclass::prelude::*};
 use gtk::glib;
 use std::cell::{Cell, RefCell};
 
-use crate::library::import::ImportSummary;
+use crate::importer::ImportSummary;
 
 mod imp {
     use super::*;

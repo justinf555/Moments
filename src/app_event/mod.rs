@@ -1,5 +1,5 @@
+use crate::importer::ImportSummary;
 use crate::library::album::AlbumId;
-use crate::library::import::ImportSummary;
 use crate::library::media::{MediaId, MediaItem};
 
 /// Application-layer event type.

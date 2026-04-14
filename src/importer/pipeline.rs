@@ -10,12 +10,10 @@ use super::types::{ImportProgress, ImportSummary};
 use super::{discovery, filter, hasher, metadata, persistence, thumbnail, types::SkipReason};
 use crate::library::config::LocalStorageMode;
 use crate::library::format::FormatRegistry;
-use crate::library::media::{LibraryMedia, MediaService};
-use crate::library::metadata::MetadataService;
-use crate::library::thumbnail::ThumbnailService;
+use crate::library::Library;
 
 /// Progress callback type — invoked after each file is processed.
-pub type ProgressFn = Box<dyn Fn(ImportProgress) + Send>;
+pub type ProgressFn = Box<dyn Fn(ImportProgress) + Send + Sync>;
 
 /// Import pipeline for local media files.
 ///
@@ -27,9 +25,14 @@ pub type ProgressFn = Box<dyn Fn(ImportProgress) + Send>;
 pub struct ImportPipeline {
     pub(super) originals_dir: PathBuf,
     pub(super) thumbnails_dir: PathBuf,
-    pub(super) media: MediaService,
-    pub(super) metadata: MetadataService,
-    pub(super) thumbnail: ThumbnailService,
+    /// Provides media, metadata, and thumbnail services.
+    ///
+    /// Uses `Arc<dyn Library>` as a temporary workaround because Rust does not
+    /// support upcasting `Arc<dyn Library>` to `Arc<dyn LibraryMedia>` etc.
+    /// Once the full refactor is complete and the `ImportClient` has direct
+    /// access to individual services (MediaService, MetadataService,
+    /// ThumbnailService), this should be replaced with those concrete types.
+    pub(super) library: Arc<dyn Library>,
     pub(super) formats: Arc<FormatRegistry>,
     pub(super) mode: LocalStorageMode,
     pub(super) on_progress: Option<ProgressFn>,
@@ -121,7 +124,7 @@ impl ImportPipeline {
         let media_id = hasher::hash_file(source).await?;
 
         // Step 3: Deduplicate — check if hash already exists
-        if self.media.media_exists(&media_id).await? {
+        if self.library.media_exists(&media_id).await? {
             debug!(%media_id, "duplicate detected via hash");
             return Ok(Some(SkipReason::Duplicate));
         }
@@ -138,8 +141,8 @@ impl ImportPipeline {
             duration_ms: extracted.duration_ms,
             originals_dir: &self.originals_dir,
             mode: &self.mode,
-            media: &self.media,
-            metadata: &self.metadata,
+            media: &*self.library,
+            metadata: &*self.library,
         })
         .await?;
 
@@ -148,7 +151,7 @@ impl ImportPipeline {
             &media_id,
             &result.thumbnail_source,
             &self.thumbnails_dir,
-            &self.thumbnail,
+            &*self.library,
             &self.formats,
         )
         .await;

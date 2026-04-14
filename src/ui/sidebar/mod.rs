@@ -863,7 +863,7 @@ impl MomentsSidebar {
         self.set_status(imp::StatusState::Upload, "upload");
     }
 
-    pub fn show_upload_complete(&self, summary: &crate::library::import::ImportSummary) {
+    pub fn show_upload_complete(&self, summary: &crate::importer::ImportSummary) {
         let imp = self.imp();
 
         let mut bar_text = format!("{} imported", summary.imported);
