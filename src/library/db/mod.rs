@@ -11,9 +11,7 @@ mod albums;
 mod edits;
 pub(crate) mod faces;
 pub(crate) mod media;
-mod media_write;
 mod metadata;
-mod stats;
 mod sync;
 mod thumbnails;
 mod upload;
@@ -177,6 +175,7 @@ pub(crate) mod test_helpers {
         .unwrap()
     }
 
+    #[allow(dead_code)] // used by db/media.rs filter tests when re-added
     pub fn record_with_imported_at(id: MediaId, path: &str, imported_at: i64) -> MediaRecord {
         MediaRecord {
             id,

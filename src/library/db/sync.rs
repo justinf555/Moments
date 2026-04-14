@@ -1,38 +1,14 @@
 use crate::library::error::LibraryError;
+use crate::library::media::repository::MediaRepository;
 use crate::library::media::MediaRecord;
 use crate::library::metadata::MediaMetadataRecord;
 
 use super::Database;
 
 impl Database {
-    /// Upsert a media record. Uses `INSERT OR REPLACE` so existing records
-    /// are updated without a separate EXISTS check.
+    /// Forwarding shim — delegates to `MediaRepository`.
     pub async fn upsert_media(&self, record: &MediaRecord) -> Result<(), LibraryError> {
-        sqlx::query(
-            "INSERT OR REPLACE INTO media (id, relative_path, original_filename, file_size,
-                                           imported_at, media_type, taken_at, width, height,
-                                           orientation, duration_ms, is_favorite, is_trashed,
-                                           trashed_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(record.id.as_str())
-        .bind(&record.relative_path)
-        .bind(&record.original_filename)
-        .bind(record.file_size)
-        .bind(record.imported_at)
-        .bind(record.media_type as i64)
-        .bind(record.taken_at)
-        .bind(record.width)
-        .bind(record.height)
-        .bind(record.orientation as i64)
-        .bind(record.duration_ms.map(|v| v as i64))
-        .bind(record.is_favorite as i64)
-        .bind(record.is_trashed as i64)
-        .bind(record.trashed_at)
-        .execute(&self.pool)
-        .await
-        .map_err(LibraryError::Db)?;
-        Ok(())
+        MediaRepository::new(self.clone()).upsert(record).await
     }
 
     /// Forwarding shim — delegates to `MetadataRepository`.

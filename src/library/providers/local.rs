@@ -18,7 +18,7 @@ use crate::library::format::{FormatRegistry, RawHandler, StandardHandler, VideoH
 use crate::library::import::LibraryImport;
 use crate::library::importer::ImportJob;
 use crate::library::media::{
-    LibraryMedia, MediaCursor, MediaFilter, MediaId, MediaItem, MediaRecord,
+    LibraryMedia, MediaCursor, MediaFilter, MediaId, MediaItem, MediaRecord, MediaService,
 };
 use crate::library::metadata::{LibraryMetadata, MediaMetadataRecord, MetadataService};
 use crate::library::storage::LibraryStorage;
@@ -38,6 +38,7 @@ pub struct LocalLibrary {
     albums: AlbumService,
     faces: FacesService,
     editing: EditingService,
+    media_svc: MediaService,
     metadata: MetadataService,
     thumbnails: ThumbnailService,
     tokio: Handle,
@@ -75,6 +76,7 @@ impl LocalLibrary {
         let albums = AlbumService::new(db.clone());
         let faces = FacesService::new(db.clone(), None); // local backend: no face thumbnails
         let editing = EditingService::new(db.clone());
+        let media_svc = MediaService::new(db.clone());
         let metadata = MetadataService::new(db.clone());
         let thumbnails = ThumbnailService::new(db.clone(), bundle.thumbnails.clone());
 
@@ -86,6 +88,7 @@ impl LocalLibrary {
             albums,
             faces,
             editing,
+            media_svc,
             metadata,
             thumbnails,
             tokio,
@@ -192,15 +195,15 @@ impl LibraryImport for LocalLibrary {
 #[async_trait]
 impl LibraryMedia for LocalLibrary {
     async fn get_media_item(&self, id: &MediaId) -> Result<Option<MediaItem>, LibraryError> {
-        self.db.get_media_item(id).await
+        self.media_svc.get_media_item(id).await
     }
 
     async fn media_exists(&self, id: &MediaId) -> Result<bool, LibraryError> {
-        self.db.media_exists(id).await
+        self.media_svc.media_exists(id).await
     }
 
     async fn insert_media(&self, record: &MediaRecord) -> Result<(), LibraryError> {
-        self.db.insert_media(record).await
+        self.media_svc.insert_media(record).await
     }
 
     async fn list_media(
@@ -209,19 +212,19 @@ impl LibraryMedia for LocalLibrary {
         cursor: Option<&MediaCursor>,
         limit: u32,
     ) -> Result<Vec<MediaItem>, LibraryError> {
-        self.db.list_media(filter, cursor, limit).await
+        self.media_svc.list_media(filter, cursor, limit).await
     }
 
     async fn set_favorite(&self, ids: &[MediaId], favorite: bool) -> Result<(), LibraryError> {
-        self.db.set_favorite(ids, favorite).await
+        self.media_svc.set_favorite(ids, favorite).await
     }
 
     async fn trash(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
-        self.db.trash(ids).await
+        self.media_svc.trash(ids).await
     }
 
     async fn restore(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
-        self.db.restore(ids).await
+        self.media_svc.restore(ids).await
     }
 
     async fn delete_permanently(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
@@ -229,7 +232,7 @@ impl LibraryMedia for LocalLibrary {
         for id in ids {
             match self.mode {
                 LocalStorageMode::Managed => {
-                    if let Ok(Some(rel)) = self.db.media_relative_path(id).await {
+                    if let Ok(Some(rel)) = self.media_svc.repo.relative_path(id).await {
                         let full = self.bundle.originals.join(&rel);
                         if let Err(e) = tokio::fs::remove_file(&full).await {
                             tracing::warn!(id = %id, path = %full.display(), "failed to remove original: {e}");
@@ -247,15 +250,15 @@ impl LibraryMedia for LocalLibrary {
                 tracing::debug!(id = %id, "thumbnail not on disk or already removed: {e}");
             }
         }
-        self.db.delete_permanently(ids).await
+        self.media_svc.delete_permanently(ids).await
     }
 
     async fn expired_trash(&self, max_age_secs: i64) -> Result<Vec<MediaId>, LibraryError> {
-        self.db.expired_trash(max_age_secs).await
+        self.media_svc.expired_trash(max_age_secs).await
     }
 
     async fn library_stats(&self) -> Result<crate::library::db::LibraryStats, LibraryError> {
-        self.db.library_stats().await
+        self.media_svc.library_stats().await
     }
 }
 

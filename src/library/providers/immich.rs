@@ -15,7 +15,7 @@ use crate::library::faces::{FacesService, LibraryFaces, Person, PersonId};
 use crate::library::immich_client::ImmichClient;
 use crate::library::import::LibraryImport;
 use crate::library::media::{
-    LibraryMedia, MediaCursor, MediaFilter, MediaId, MediaItem, MediaRecord,
+    LibraryMedia, MediaCursor, MediaFilter, MediaId, MediaItem, MediaRecord, MediaService,
 };
 use crate::library::metadata::{LibraryMetadata, MediaMetadataRecord, MetadataService};
 use crate::library::storage::LibraryStorage;
@@ -37,6 +37,7 @@ pub struct ImmichLibrary {
     albums: AlbumService,
     faces: FacesService,
     editing: EditingService,
+    media_svc: MediaService,
     metadata: MetadataService,
     thumbnails: ThumbnailService,
     events: EventSender,
@@ -101,6 +102,7 @@ impl ImmichLibrary {
         let albums = AlbumService::new(db.clone());
         let faces = FacesService::new(db.clone(), Some(bundle.thumbnails.clone()));
         let editing = EditingService::new(db.clone());
+        let media_svc = MediaService::new(db.clone());
         let metadata = MetadataService::new(db.clone());
         let thumbnails = ThumbnailService::new(db.clone(), bundle.thumbnails.clone());
 
@@ -111,6 +113,7 @@ impl ImmichLibrary {
             albums,
             faces,
             editing,
+            media_svc,
             metadata,
             thumbnails,
             events,
@@ -169,11 +172,11 @@ impl LibraryStorage for ImmichLibrary {
 #[async_trait]
 impl LibraryMedia for ImmichLibrary {
     async fn get_media_item(&self, id: &MediaId) -> Result<Option<MediaItem>, LibraryError> {
-        self.db.get_media_item(id).await
+        self.media_svc.get_media_item(id).await
     }
 
     async fn media_exists(&self, id: &MediaId) -> Result<bool, LibraryError> {
-        self.db.media_exists(id).await
+        self.media_svc.media_exists(id).await
     }
 
     async fn insert_media(&self, _record: &MediaRecord) -> Result<(), LibraryError> {
@@ -187,7 +190,7 @@ impl LibraryMedia for ImmichLibrary {
         cursor: Option<&MediaCursor>,
         limit: u32,
     ) -> Result<Vec<MediaItem>, LibraryError> {
-        self.db.list_media(filter, cursor, limit).await
+        self.media_svc.list_media(filter, cursor, limit).await
     }
 
     async fn set_favorite(&self, ids: &[MediaId], favorite: bool) -> Result<(), LibraryError> {
@@ -202,7 +205,7 @@ impl LibraryMedia for ImmichLibrary {
                 }),
             )
             .await?;
-        self.db.set_favorite(ids, favorite).await
+        self.media_svc.set_favorite(ids, favorite).await
     }
 
     async fn trash(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
@@ -210,7 +213,7 @@ impl LibraryMedia for ImmichLibrary {
         self.client
             .delete_with_body("/assets", &serde_json::json!({ "ids": api_ids }))
             .await?;
-        self.db.trash(ids).await
+        self.media_svc.trash(ids).await
     }
 
     async fn restore(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
@@ -221,7 +224,7 @@ impl LibraryMedia for ImmichLibrary {
                 &serde_json::json!({ "ids": api_ids }),
             )
             .await?;
-        self.db.restore(ids).await
+        self.media_svc.restore(ids).await
     }
 
     async fn delete_permanently(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
@@ -232,7 +235,7 @@ impl LibraryMedia for ImmichLibrary {
                 &serde_json::json!({ "ids": api_ids, "force": true }),
             )
             .await?;
-        self.db.delete_permanently(ids).await
+        self.media_svc.delete_permanently(ids).await
     }
 
     async fn expired_trash(&self, _max_age_secs: i64) -> Result<Vec<MediaId>, LibraryError> {
@@ -241,7 +244,7 @@ impl LibraryMedia for ImmichLibrary {
     }
 
     async fn library_stats(&self) -> Result<crate::library::db::LibraryStats, LibraryError> {
-        let mut stats = self.db.library_stats().await?;
+        let mut stats = self.media_svc.library_stats().await?;
 
         // Calculate originals cache disk usage.
         let originals_dir = self.bundle.originals.clone();
