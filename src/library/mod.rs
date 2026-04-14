@@ -10,8 +10,6 @@ pub mod factory;
 pub mod format;
 pub mod immich_client;
 pub mod immich_importer;
-pub mod import;
-pub mod importer;
 pub mod keyring;
 pub mod media;
 pub mod metadata;
@@ -24,7 +22,6 @@ pub mod viewer;
 use album::LibraryAlbums;
 use editing::LibraryEditing;
 use faces::LibraryFaces;
-use import::LibraryImport;
 use media::LibraryMedia;
 use metadata::LibraryMetadata;
 use storage::LibraryStorage;
@@ -37,20 +34,20 @@ use viewer::LibraryViewer;
 /// application holds a `Box<dyn Library>` and calls methods on it directly.
 /// It never imports or references concrete backend types.
 ///
-/// New capabilities are added as additional sub-traits per feature issue:
+/// Import is handled by the top-level `importer` pipeline (not a library
+/// concern). See `src/importer/` and `src/client/import_client.rs`.
+///
+/// Sub-traits:
 /// - [`LibraryStorage`]   — lifecycle (open / close)
-/// - [`LibraryImport`]    — photo / video import (issue #5)
 /// - [`LibraryMedia`]     — media asset persistence (issue #25)
-/// - [`LibraryThumbnail`] — thumbnail generation and path resolution (issue #6)
+/// - [`LibraryMetadata`]  — EXIF / media metadata (issue #25)
+/// - [`LibraryThumbnail`] — thumbnail path resolution and status (issue #6)
 /// - [`LibraryViewer`]    — detail-view data access (issue #10)
 /// - [`LibraryAlbums`]    — album management (issue #11)
 /// - [`LibraryFaces`]     — face/people management (issue #178)
 /// - [`LibraryEditing`]   — non-destructive photo editing (issue #17)
-///
-/// `close()` is inherited from `LibraryStorage` and is not duplicated here.
 pub trait Library:
     LibraryStorage
-    + LibraryImport
     + LibraryMedia
     + LibraryMetadata
     + LibraryThumbnail
@@ -65,7 +62,6 @@ pub trait Library:
 
 impl<
         T: LibraryStorage
-            + LibraryImport
             + LibraryMedia
             + LibraryMetadata
             + LibraryThumbnail

@@ -7,10 +7,10 @@ use super::db::Database;
 use super::error::LibraryError;
 use super::format::{FormatRegistry, RawHandler, StandardHandler, VideoHandler};
 use super::immich_client::ImmichClient;
-use super::importer::collect_candidates;
 use super::media::{MediaId, MediaItem, MediaRecord, MediaType};
 use crate::app_event::AppEvent;
 use crate::event_bus::EventSender;
+use crate::importer::discovery::collect_candidates;
 use crate::importer::ImportSummary;
 
 /// Upload job for importing local files to the Immich server.

@@ -13,7 +13,6 @@ use crate::library::editing::{EditState, EditingService, LibraryEditing};
 use crate::library::error::LibraryError;
 use crate::library::faces::{FacesService, LibraryFaces, Person, PersonId};
 use crate::library::immich_client::ImmichClient;
-use crate::library::import::LibraryImport;
 use crate::library::media::{
     LibraryMedia, MediaCursor, MediaFilter, MediaId, MediaItem, MediaRecord, MediaService,
 };
@@ -41,6 +40,7 @@ pub struct ImmichLibrary {
     metadata: MetadataService,
     thumbnails: ThumbnailService,
     events: EventSender,
+    #[allow(dead_code)] // used during construction; will be removed when sync is promoted
     tokio: Handle,
     sync_handle: SyncHandle,
     cache_limit_tx: tokio::sync::watch::Sender<u32>,
@@ -315,21 +315,6 @@ impl LibraryMetadata for ImmichLibrary {
         id: &MediaId,
     ) -> Result<Option<MediaMetadataRecord>, LibraryError> {
         self.metadata.media_metadata(id).await
-    }
-}
-
-#[async_trait]
-impl LibraryImport for ImmichLibrary {
-    #[instrument(skip(self), fields(source_count = sources.len()))]
-    async fn import(&self, sources: Vec<PathBuf>) -> Result<(), LibraryError> {
-        info!("starting Immich upload");
-        let job = crate::library::immich_importer::ImmichImportJob {
-            client: self.client.clone(),
-            db: self.db.clone(),
-            events: self.events.clone(),
-        };
-        self.tokio.spawn(async move { job.run(sources).await });
-        Ok(())
     }
 }
 

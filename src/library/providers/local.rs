@@ -15,8 +15,6 @@ use crate::library::editing::{EditState, EditingService, LibraryEditing};
 use crate::library::error::LibraryError;
 use crate::library::faces::{FacesService, LibraryFaces, Person, PersonId};
 use crate::library::format::{FormatRegistry, RawHandler, StandardHandler, VideoHandler};
-use crate::library::import::LibraryImport;
-use crate::library::importer::ImportJob;
 use crate::library::media::{
     LibraryMedia, MediaCursor, MediaFilter, MediaId, MediaItem, MediaRecord, MediaService,
 };
@@ -42,6 +40,7 @@ pub struct LocalLibrary {
     metadata: MetadataService,
     thumbnails: ThumbnailService,
     tokio: Handle,
+    #[allow(dead_code)] // will be removed when import is fully decoupled from providers
     formats: Arc<FormatRegistry>,
 }
 
@@ -170,24 +169,6 @@ impl LibraryStorage for LocalLibrary {
     async fn close(&self) -> Result<(), LibraryError> {
         info!("closing local library");
         self.events.send(AppEvent::ShutdownComplete);
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl LibraryImport for LocalLibrary {
-    #[instrument(skip(self), fields(source_count = sources.len()))]
-    async fn import(&self, sources: Vec<PathBuf>) -> Result<(), LibraryError> {
-        info!("starting import");
-        let job = ImportJob::new(
-            self.bundle.originals.clone(),
-            self.bundle.thumbnails.clone(),
-            self.db.clone(),
-            self.events.clone(),
-            Arc::clone(&self.formats),
-            self.mode.clone(),
-        );
-        self.tokio.spawn(async move { job.run(sources).await });
         Ok(())
     }
 }
@@ -507,39 +488,5 @@ mod tests {
         library.close().await.unwrap();
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, AppEvent::ShutdownComplete));
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn import_emits_complete_event() {
-        let dir = tempdir().unwrap();
-        let bundle_path = dir.path().join("Test.library");
-        let bundle = Bundle::create(
-            &bundle_path,
-            &LibraryConfig::Local {
-                mode: LocalStorageMode::Managed,
-            },
-        )
-        .unwrap();
-
-        let src_dir = tempdir().unwrap();
-        std::fs::write(src_dir.path().join("img.jpg"), b"fake").unwrap();
-
-        let (tx, rx) = EventSender::test_channel();
-        let library = open_test_library(bundle, tx).await;
-        rx.try_recv().unwrap(); // consume Ready
-
-        library
-            .import(vec![src_dir.path().to_path_buf()])
-            .await
-            .unwrap();
-
-        // import() spawns on Tokio; drain events until ImportComplete arrives.
-        let has_complete = loop {
-            match rx.recv().unwrap() {
-                AppEvent::ImportComplete { .. } => break true,
-                _ => continue,
-            }
-        };
-        assert!(has_complete);
     }
 }

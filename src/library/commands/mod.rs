@@ -222,7 +222,6 @@ mod tests {
     use crate::library::editing::{EditState, LibraryEditing};
     use crate::library::error::LibraryError;
     use crate::library::faces::{LibraryFaces, Person, PersonId};
-    use crate::library::import::LibraryImport;
     use crate::library::media::{
         LibraryMedia, MediaCursor, MediaFilter, MediaId, MediaItem, MediaRecord, MediaType,
     };
@@ -293,13 +292,6 @@ mod tests {
         }
         async fn close(&self) -> Result<(), LibraryError> {
             Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl LibraryImport for MockLibrary {
-        async fn import(&self, _sources: Vec<PathBuf>) -> Result<(), LibraryError> {
-            unimplemented!()
         }
     }
 

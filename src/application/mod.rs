@@ -46,6 +46,7 @@ mod imp {
         pub settings: OnceCell<gio::Settings>,
         pub tokio: OnceCell<tokio::runtime::Handle>,
         pub library: RefCell<Option<Arc<dyn Library>>>,
+        pub import_client: RefCell<Option<crate::client::ImportClient>>,
         pub is_immich: Cell<bool>,
         pub immich_server_url: RefCell<Option<String>>,
         /// Centralised event bus for fan-out event delivery.
@@ -417,17 +418,12 @@ impl MomentsApplication {
     /// returns. Using `gio::File::enumerate_children` on the original object
     /// respects the portal grant.
     fn run_import(&self, folder: gio::File) {
-        let library = match self.imp().library.borrow().clone() {
-            Some(l) => l,
+        let import_client = match self.imp().import_client.borrow().clone() {
+            Some(c) => c,
             None => {
                 error!("import requested but no library is open");
                 return;
             }
-        };
-        let tokio = self.imp().tokio.get().expect("tokio handle set").clone();
-        let window = match self.active_window() {
-            Some(w) => w,
-            None => return,
         };
 
         let display_path = folder
@@ -444,19 +440,7 @@ impl MomentsApplication {
         }
         debug!(count = sources.len(), "resolved import sources via GIO");
 
-        let win_weak = window.downgrade();
-        glib::MainContext::default().spawn_local(async move {
-            let result = tokio
-                .spawn(async move { library.import(sources).await })
-                .await;
-            if let Ok(Err(e)) = result {
-                error!("import pipeline error: {e}");
-                if let Some(win) = win_weak.upgrade() {
-                    let _ =
-                        win.activate_action("win.show-toast", Some(&"Import failed".to_variant()));
-                }
-            }
-        });
+        import_client.import(sources);
     }
 
     /// Spawn the async factory call on the glib main context.
@@ -472,6 +456,15 @@ impl MomentsApplication {
             *self.imp().immich_server_url.borrow_mut() = Some(server_url.clone());
         }
 
+        // Extract paths and mode for the ImportClient before the factory
+        // consumes the bundle and config.
+        let originals_dir = bundle.originals.clone();
+        let thumbnails_dir = bundle.thumbnails.clone();
+        let storage_mode = match &config {
+            LibraryConfig::Local { mode } => mode.clone(),
+            LibraryConfig::Immich { .. } => crate::library::config::LocalStorageMode::Managed,
+        };
+
         glib::MainContext::default().spawn_local(glib::clone!(
             #[weak(rename_to = app)]
             self,
@@ -485,12 +478,33 @@ impl MomentsApplication {
                 let bus = EventBus::new();
                 let bus_tx = bus.sender();
 
-                match LibraryFactory::create(bundle, config, bus_tx, tokio.clone()).await {
+                match LibraryFactory::create(bundle, config, bus_tx.clone(), tokio.clone()).await {
                     Ok(library) => {
                         info!("library ready");
 
                         // Store library on the application.
                         *app.imp().library.borrow_mut() = Some(Arc::clone(&library));
+
+                        // Create the import client.
+                        {
+                            use crate::library::format::{
+                                FormatRegistry, RawHandler, StandardHandler, VideoHandler,
+                            };
+                            let mut registry = FormatRegistry::new();
+                            registry.register(std::sync::Arc::new(StandardHandler));
+                            registry.register(std::sync::Arc::new(RawHandler));
+                            registry.register(std::sync::Arc::new(VideoHandler));
+                            let import_client = crate::client::ImportClient::new(
+                                Arc::clone(&library),
+                                originals_dir,
+                                thumbnails_dir,
+                                std::sync::Arc::new(registry),
+                                storage_mode,
+                                bus_tx.clone(),
+                                tokio.clone(),
+                            );
+                            *app.imp().import_client.borrow_mut() = Some(import_client);
+                        }
 
                         // Wire the shell: builds sidebar, registers views,
                         // and switches to the content page. All components
