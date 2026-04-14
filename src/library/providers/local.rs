@@ -7,13 +7,13 @@ use tracing::{debug, info, instrument};
 
 use crate::app_event::AppEvent;
 use crate::event_bus::EventSender;
-use crate::library::album::{Album, AlbumId, LibraryAlbums};
+use crate::library::album::{Album, AlbumId, AlbumService, LibraryAlbums};
 use crate::library::bundle::Bundle;
 use crate::library::config::LocalStorageMode;
 use crate::library::db::Database;
-use crate::library::editing::{EditState, LibraryEditing};
+use crate::library::editing::{EditState, EditingService, LibraryEditing};
 use crate::library::error::LibraryError;
-use crate::library::faces::{LibraryFaces, Person, PersonId};
+use crate::library::faces::{FacesService, LibraryFaces, Person, PersonId};
 use crate::library::format::{FormatRegistry, RawHandler, StandardHandler, VideoHandler};
 use crate::library::import::LibraryImport;
 use crate::library::importer::ImportJob;
@@ -34,6 +34,9 @@ pub struct LocalLibrary {
     mode: LocalStorageMode,
     events: EventSender,
     db: Database,
+    albums: AlbumService,
+    faces: FacesService,
+    editing: EditingService,
     tokio: Handle,
     formats: Arc<FormatRegistry>,
 }
@@ -66,11 +69,18 @@ impl LocalLibrary {
         registry.register(Arc::new(VideoHandler));
         let formats = Arc::new(registry);
 
+        let albums = AlbumService::new(db.clone());
+        let faces = FacesService::new(db.clone(), None); // local backend: no face thumbnails
+        let editing = EditingService::new(db.clone());
+
         let library = Self {
             bundle,
             mode,
             events,
             db,
+            albums,
+            faces,
+            editing,
             tokio,
             formats,
         };
@@ -308,19 +318,19 @@ impl LibraryThumbnail for LocalLibrary {
 #[async_trait]
 impl LibraryAlbums for LocalLibrary {
     async fn list_albums(&self) -> Result<Vec<Album>, LibraryError> {
-        self.db.list_albums().await
+        self.albums.list_albums().await
     }
 
     async fn create_album(&self, name: &str) -> Result<AlbumId, LibraryError> {
-        self.db.create_album(name).await
+        self.albums.create_album(name).await
     }
 
     async fn rename_album(&self, id: &AlbumId, name: &str) -> Result<(), LibraryError> {
-        self.db.rename_album(id, name).await
+        self.albums.rename_album(id, name).await
     }
 
     async fn delete_album(&self, id: &AlbumId) -> Result<(), LibraryError> {
-        self.db.delete_album(id).await
+        self.albums.delete_album(id).await
     }
 
     async fn add_to_album(
@@ -328,7 +338,7 @@ impl LibraryAlbums for LocalLibrary {
         album_id: &AlbumId,
         media_ids: &[MediaId],
     ) -> Result<(), LibraryError> {
-        self.db.add_to_album(album_id, media_ids).await
+        self.albums.add_to_album(album_id, media_ids).await
     }
 
     async fn remove_from_album(
@@ -336,7 +346,7 @@ impl LibraryAlbums for LocalLibrary {
         album_id: &AlbumId,
         media_ids: &[MediaId],
     ) -> Result<(), LibraryError> {
-        self.db.remove_from_album(album_id, media_ids).await
+        self.albums.remove_from_album(album_id, media_ids).await
     }
 
     async fn list_album_media(
@@ -345,14 +355,14 @@ impl LibraryAlbums for LocalLibrary {
         cursor: Option<&MediaCursor>,
         limit: u32,
     ) -> Result<Vec<MediaItem>, LibraryError> {
-        self.db.list_album_media(album_id, cursor, limit).await
+        self.albums.list_album_media(album_id, cursor, limit).await
     }
 
     async fn albums_containing_media(
         &self,
         media_ids: &[MediaId],
     ) -> Result<std::collections::HashMap<AlbumId, usize>, LibraryError> {
-        self.db.albums_containing_media(media_ids).await
+        self.albums.albums_containing_media(media_ids).await
     }
 
     async fn album_cover_media_ids(
@@ -360,7 +370,7 @@ impl LibraryAlbums for LocalLibrary {
         album_id: &AlbumId,
         limit: u32,
     ) -> Result<Vec<MediaId>, LibraryError> {
-        self.db.album_cover_media_ids(album_id, limit).await
+        self.albums.album_cover_media_ids(album_id, limit).await
     }
 }
 
@@ -368,65 +378,64 @@ impl LibraryAlbums for LocalLibrary {
 impl LibraryFaces for LocalLibrary {
     async fn list_people(
         &self,
-        _include_hidden: bool,
-        _include_unnamed: bool,
+        include_hidden: bool,
+        include_unnamed: bool,
     ) -> Result<Vec<Person>, LibraryError> {
-        Ok(Vec::new())
+        self.faces.list_people(include_hidden, include_unnamed).await
     }
 
     async fn list_media_for_person(
         &self,
-        _person_id: &PersonId,
+        person_id: &PersonId,
     ) -> Result<Vec<MediaId>, LibraryError> {
-        Ok(Vec::new())
+        self.faces.list_media_for_person(person_id).await
     }
 
-    async fn rename_person(&self, _person_id: &PersonId, _name: &str) -> Result<(), LibraryError> {
-        Ok(())
+    async fn rename_person(&self, person_id: &PersonId, name: &str) -> Result<(), LibraryError> {
+        self.faces.rename_person(person_id, name).await
     }
 
     async fn set_person_hidden(
         &self,
-        _person_id: &PersonId,
-        _hidden: bool,
+        person_id: &PersonId,
+        hidden: bool,
     ) -> Result<(), LibraryError> {
-        Ok(())
+        self.faces.set_person_hidden(person_id, hidden).await
     }
 
     async fn merge_people(
         &self,
-        _target: &PersonId,
-        _sources: &[PersonId],
+        target: &PersonId,
+        sources: &[PersonId],
     ) -> Result<(), LibraryError> {
-        Ok(())
+        self.faces.merge_people(target, sources).await
     }
 
-    fn person_thumbnail_path(&self, _person_id: &PersonId) -> Option<std::path::PathBuf> {
-        None
+    fn person_thumbnail_path(&self, person_id: &PersonId) -> Option<std::path::PathBuf> {
+        self.faces.person_thumbnail_path(person_id)
     }
 }
 
 #[async_trait]
 impl LibraryEditing for LocalLibrary {
     async fn get_edit_state(&self, id: &MediaId) -> Result<Option<EditState>, LibraryError> {
-        self.db.get_edit_state(id).await
+        self.editing.get_edit_state(id).await
     }
 
     async fn save_edit_state(&self, id: &MediaId, state: &EditState) -> Result<(), LibraryError> {
-        self.db.upsert_edit_state(id, state).await
+        self.editing.save_edit_state(id, state).await
     }
 
     async fn revert_edits(&self, id: &MediaId) -> Result<(), LibraryError> {
-        self.db.delete_edit_state(id).await
+        self.editing.revert_edits(id).await
     }
 
-    async fn render_and_save(&self, _id: &MediaId) -> Result<(), LibraryError> {
-        // Local backend applies edits on the fly during viewing.
-        Ok(())
+    async fn render_and_save(&self, id: &MediaId) -> Result<(), LibraryError> {
+        self.editing.render_and_save(id).await
     }
 
     async fn has_pending_edits(&self, id: &MediaId) -> Result<bool, LibraryError> {
-        self.db.has_pending_edits(id).await
+        self.editing.has_pending_edits(id).await
     }
 }
 

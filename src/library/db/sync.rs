@@ -66,27 +66,6 @@ impl Database {
         Ok(())
     }
 
-    /// Upsert an album record from the sync stream.
-    pub async fn upsert_album(
-        &self,
-        id: &str,
-        name: &str,
-        created_at: i64,
-        updated_at: i64,
-    ) -> Result<(), LibraryError> {
-        sqlx::query(
-            "INSERT OR REPLACE INTO albums (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-        )
-        .bind(id)
-        .bind(name)
-        .bind(created_at)
-        .bind(updated_at)
-        .execute(&self.pool)
-        .await
-        .map_err(LibraryError::Db)?;
-        Ok(())
-    }
-
     /// Upsert an album-media association from the sync stream.
     pub async fn upsert_album_media(
         &self,

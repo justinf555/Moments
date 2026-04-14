@@ -78,9 +78,13 @@ impl SyncHandle {
         });
 
         // Spawn the sync manager.
+        let albums = super::album::repository::AlbumRepository::new(db.clone());
+        let faces = super::faces::repository::FacesRepository::new(db.clone());
         let manager = SyncManager {
             client,
             db,
+            albums,
+            faces,
             events,
             shutdown_rx,
             thumbnail_tx: thumb_tx,

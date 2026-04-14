@@ -10,7 +10,7 @@ use super::error::LibraryError;
 mod albums;
 mod edits;
 pub(crate) mod faces;
-mod media;
+pub(crate) mod media;
 mod media_write;
 mod stats;
 mod sync;
@@ -58,7 +58,7 @@ pub struct ServerStats {
 /// and runs all outstanding migrations before returning.
 #[derive(Clone)]
 pub struct Database {
-    pool: SqlitePool,
+    pub(crate) pool: SqlitePool,
 }
 
 impl Database {
@@ -99,7 +99,7 @@ impl Database {
 }
 
 /// Build a comma-separated list of `?` placeholders for an `IN (...)` clause.
-fn id_placeholders(count: usize) -> String {
+pub(crate) fn id_placeholders(count: usize) -> String {
     let mut s = String::with_capacity(count * 3);
     for i in 0..count {
         if i > 0 {

@@ -6,7 +6,9 @@ use super::types::*;
 use super::SyncCounters;
 use crate::app_event::AppEvent;
 use crate::event_bus::EventSender;
-use crate::library::album::{AlbumId, LibraryAlbums};
+use crate::library::album::repository::AlbumRepository;
+use crate::library::album::AlbumId;
+use crate::library::faces::repository::FacesRepository;
 use crate::library::db::test_helpers::{get_audit_record, open_test_db};
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
@@ -27,9 +29,13 @@ async fn test_sync_manager(db: Database) -> (SyncManager, std::sync::mpsc::Recei
     std::mem::forget(interval_tx);
 
     let client = ImmichClient::new("http://localhost:9999", "test-token").unwrap();
+    let albums = AlbumRepository::new(db.clone());
+    let faces = FacesRepository::new(db.clone());
     let manager = SyncManager {
         client,
         db,
+        albums,
+        faces,
         events: event_tx,
         shutdown_rx,
         thumbnail_tx,
@@ -224,7 +230,8 @@ async fn handle_album_upserts_album() {
 
     mgr.handle_album(album).await.unwrap();
 
-    let albums = db.list_albums().await.unwrap();
+    let repo = AlbumRepository::new(db.clone());
+    let albums = repo.list().await.unwrap();
     assert_eq!(albums.len(), 1);
     assert_eq!(albums[0].name, "Holiday 2024");
     assert_eq!(albums[0].id.as_str(), "album-001");
@@ -247,10 +254,11 @@ async fn handle_album_delete_removes_album() {
         updated_at: "2024-01-01T00:00:00.000Z".to_string(),
     };
     mgr.handle_album(album).await.unwrap();
-    assert_eq!(db.list_albums().await.unwrap().len(), 1);
+    let repo = AlbumRepository::new(db.clone());
+    assert_eq!(repo.list().await.unwrap().len(), 1);
 
     mgr.handle_album_delete("album-del").await.unwrap();
-    assert!(db.list_albums().await.unwrap().is_empty());
+    assert!(repo.list().await.unwrap().is_empty());
 }
 
 // ── handle_asset_face tests ─────────────────────────────────────────
@@ -277,7 +285,9 @@ async fn handle_asset_face_upserts_face_and_updates_count() {
     mgr.handle_asset(asset).await.unwrap();
 
     // Create the person.
-    db.upsert_person("person-001", "Alice", None, false, false, None, None)
+    let faces_repo = FacesRepository::new(db.clone());
+    faces_repo
+        .upsert_person("person-001", "Alice", None, false, false, None, None)
         .await
         .unwrap();
 
@@ -297,7 +307,7 @@ async fn handle_asset_face_upserts_face_and_updates_count() {
     mgr.handle_asset_face(face).await.unwrap();
 
     // Verify face count on person was updated.
-    let people = db.list_people(false, false).await.unwrap();
+    let people = faces_repo.list_people(false, false).await.unwrap();
     assert_eq!(people.len(), 1);
     assert_eq!(people[0].face_count, 1);
 }
@@ -340,7 +350,8 @@ async fn handle_album_asset_links_media_to_album() {
     mgr.handle_album_asset(assoc).await.unwrap();
 
     let aid = AlbumId::from_raw("link-album".to_string());
-    let items = db.list_album_media(&aid, None, 50).await.unwrap();
+    let repo = AlbumRepository::new(db.clone());
+    let items = repo.list_media(&aid, None, 50).await.unwrap();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].id.as_str(), "link-asset");
 }
@@ -545,7 +556,9 @@ async fn handle_sync_reset_clears_faces_people_checkpoints() {
     };
     mgr.handle_asset(asset).await.unwrap();
 
-    db.upsert_person("p1", "Alice", None, false, false, None, None)
+    let faces_repo = FacesRepository::new(db.clone());
+    faces_repo
+        .upsert_person("p1", "Alice", None, false, false, None, None)
         .await
         .unwrap();
     db.save_sync_checkpoints(&[("AssetV1".to_string(), "ack-1".to_string())])
@@ -568,7 +581,7 @@ async fn handle_sync_reset_clears_faces_people_checkpoints() {
     );
 
     // People and checkpoints should be cleared.
-    let people = db.list_people(false, false).await.unwrap();
+    let people = faces_repo.list_people(false, false).await.unwrap();
     assert!(people.is_empty(), "people should be cleared after reset");
 }
 

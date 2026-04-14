@@ -22,9 +22,12 @@ pub(super) struct MetadataRow {
     color_space: Option<String>,
 }
 
-/// Internal row type for `list_media` — maps SQLite columns to Rust types.
+/// Row type for `list_media` — maps SQLite columns to Rust types.
+///
+/// `pub(crate)` so that per-concept repository modules can reuse the
+/// same row mapping and `into_item()` conversion.
 #[derive(sqlx::FromRow)]
-pub(super) struct MediaRow {
+pub(crate) struct MediaRow {
     id: String,
     taken_at: Option<i64>,
     imported_at: i64,
@@ -40,7 +43,7 @@ pub(super) struct MediaRow {
 }
 
 impl MediaRow {
-    pub(super) fn into_item(self) -> MediaItem {
+    pub(crate) fn into_item(self) -> MediaItem {
         MediaItem {
             id: MediaId::new(self.id),
             taken_at: self.taken_at,

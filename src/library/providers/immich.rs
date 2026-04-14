@@ -6,12 +6,12 @@ use tracing::{debug, info, instrument};
 
 use crate::app_event::AppEvent;
 use crate::event_bus::EventSender;
-use crate::library::album::{Album, AlbumId, LibraryAlbums};
+use crate::library::album::{Album, AlbumId, AlbumService, LibraryAlbums};
 use crate::library::bundle::Bundle;
 use crate::library::db::Database;
-use crate::library::editing::{EditState, LibraryEditing};
+use crate::library::editing::{EditState, EditingService, LibraryEditing};
 use crate::library::error::LibraryError;
-use crate::library::faces::{LibraryFaces, Person, PersonId};
+use crate::library::faces::{FacesService, LibraryFaces, Person, PersonId};
 use crate::library::immich_client::ImmichClient;
 use crate::library::import::LibraryImport;
 use crate::library::media::{
@@ -33,6 +33,9 @@ pub struct ImmichLibrary {
     bundle: Bundle,
     client: ImmichClient,
     db: Database,
+    albums: AlbumService,
+    faces: FacesService,
+    editing: EditingService,
     events: EventSender,
     tokio: Handle,
     sync_handle: SyncHandle,
@@ -92,10 +95,17 @@ impl ImmichLibrary {
             sync_interval_secs,
         );
 
+        let albums = AlbumService::new(db.clone());
+        let faces = FacesService::new(db.clone(), Some(bundle.thumbnails.clone()));
+        let editing = EditingService::new(db.clone());
+
         let library = Self {
             bundle,
             client,
             db,
+            albums,
+            faces,
+            editing,
             events,
             tokio,
             sync_handle,
@@ -602,7 +612,7 @@ async fn delete_oldest_entries(
 #[async_trait]
 impl LibraryAlbums for ImmichLibrary {
     async fn list_albums(&self) -> Result<Vec<Album>, LibraryError> {
-        self.db.list_albums().await
+        self.albums.list_albums().await
     }
 
     async fn create_album(&self, name: &str) -> Result<AlbumId, LibraryError> {
@@ -618,7 +628,7 @@ impl LibraryAlbums for ImmichLibrary {
 
         // Cache locally with the server-generated ID.
         let now = chrono::Utc::now().timestamp();
-        self.db.upsert_album(&server_id, name, now, now).await?;
+        self.albums.repo.upsert(&server_id, name, now, now).await?;
 
         Ok(AlbumId::from_raw(server_id))
     }
@@ -628,13 +638,13 @@ impl LibraryAlbums for ImmichLibrary {
         self.client
             .patch_no_content(&path, &serde_json::json!({ "albumName": name }))
             .await?;
-        self.db.rename_album(id, name).await
+        self.albums.repo.rename(id, name).await
     }
 
     async fn delete_album(&self, id: &AlbumId) -> Result<(), LibraryError> {
         let path = format!("/albums/{}", id.as_str());
         self.client.delete_no_content(&path).await?;
-        self.db.delete_album(id).await
+        self.albums.repo.delete(id).await
     }
 
     async fn add_to_album(
@@ -647,7 +657,7 @@ impl LibraryAlbums for ImmichLibrary {
         self.client
             .put_no_content(&path, &serde_json::json!({ "ids": ids }))
             .await?;
-        self.db.add_to_album(album_id, media_ids).await
+        self.albums.repo.add_media(album_id, media_ids).await
     }
 
     async fn remove_from_album(
@@ -660,7 +670,7 @@ impl LibraryAlbums for ImmichLibrary {
         self.client
             .delete_with_body(&path, &serde_json::json!({ "ids": ids }))
             .await?;
-        self.db.remove_from_album(album_id, media_ids).await
+        self.albums.repo.remove_media(album_id, media_ids).await
     }
 
     async fn list_album_media(
@@ -669,14 +679,14 @@ impl LibraryAlbums for ImmichLibrary {
         cursor: Option<&MediaCursor>,
         limit: u32,
     ) -> Result<Vec<MediaItem>, LibraryError> {
-        self.db.list_album_media(album_id, cursor, limit).await
+        self.albums.list_album_media(album_id, cursor, limit).await
     }
 
     async fn albums_containing_media(
         &self,
         media_ids: &[MediaId],
     ) -> Result<std::collections::HashMap<AlbumId, usize>, LibraryError> {
-        self.db.albums_containing_media(media_ids).await
+        self.albums.albums_containing_media(media_ids).await
     }
 
     async fn album_cover_media_ids(
@@ -684,7 +694,7 @@ impl LibraryAlbums for ImmichLibrary {
         album_id: &AlbumId,
         limit: u32,
     ) -> Result<Vec<MediaId>, LibraryError> {
-        self.db.album_cover_media_ids(album_id, limit).await
+        self.albums.album_cover_media_ids(album_id, limit).await
     }
 }
 
@@ -695,22 +705,21 @@ impl LibraryFaces for ImmichLibrary {
         include_hidden: bool,
         include_unnamed: bool,
     ) -> Result<Vec<Person>, LibraryError> {
-        self.db.list_people(include_hidden, include_unnamed).await
+        self.faces.list_people(include_hidden, include_unnamed).await
     }
 
     async fn list_media_for_person(
         &self,
         person_id: &PersonId,
     ) -> Result<Vec<MediaId>, LibraryError> {
-        let ids = self.db.list_media_for_person(person_id.as_str()).await?;
-        Ok(ids.into_iter().map(MediaId::new).collect())
+        self.faces.list_media_for_person(person_id).await
     }
 
     async fn rename_person(&self, person_id: &PersonId, name: &str) -> Result<(), LibraryError> {
         let path = format!("/people/{}", person_id.as_str());
         let body = serde_json::json!({ "name": name });
         self.client.put_no_content(&path, &body).await?;
-        self.db.rename_person(person_id.as_str(), name).await
+        self.faces.repo.rename_person(person_id.as_str(), name).await
     }
 
     async fn set_person_hidden(
@@ -721,7 +730,7 @@ impl LibraryFaces for ImmichLibrary {
         let path = format!("/people/{}", person_id.as_str());
         let body = serde_json::json!({ "isHidden": hidden });
         self.client.put_no_content(&path, &body).await?;
-        self.db.set_person_hidden(person_id.as_str(), hidden).await
+        self.faces.repo.set_person_hidden(person_id.as_str(), hidden).await
     }
 
     async fn merge_people(
@@ -734,32 +743,23 @@ impl LibraryFaces for ImmichLibrary {
     }
 
     fn person_thumbnail_path(&self, person_id: &PersonId) -> Option<std::path::PathBuf> {
-        let path = self
-            .bundle
-            .thumbnails
-            .join("people")
-            .join(format!("{}.jpg", person_id.as_str()));
-        if path.exists() {
-            Some(path)
-        } else {
-            None
-        }
+        self.faces.person_thumbnail_path(person_id)
     }
 }
 
 #[async_trait]
 impl LibraryEditing for ImmichLibrary {
     async fn get_edit_state(&self, id: &MediaId) -> Result<Option<EditState>, LibraryError> {
-        self.db.get_edit_state(id).await
+        self.editing.get_edit_state(id).await
     }
 
     async fn save_edit_state(&self, id: &MediaId, state: &EditState) -> Result<(), LibraryError> {
-        self.db.upsert_edit_state(id, state).await
+        self.editing.save_edit_state(id, state).await
     }
 
     async fn revert_edits(&self, id: &MediaId) -> Result<(), LibraryError> {
         // TODO: wire to Immich API to remove edited version (#224)
-        self.db.delete_edit_state(id).await
+        self.editing.repo.delete_edit_state(id).await
     }
 
     async fn render_and_save(&self, _id: &MediaId) -> Result<(), LibraryError> {
@@ -768,6 +768,6 @@ impl LibraryEditing for ImmichLibrary {
     }
 
     async fn has_pending_edits(&self, id: &MediaId) -> Result<bool, LibraryError> {
-        self.db.has_pending_edits(id).await
+        self.editing.has_pending_edits(id).await
     }
 }

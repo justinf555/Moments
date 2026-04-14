@@ -5,9 +5,10 @@ use futures_util::TryStreamExt;
 use tokio::io::AsyncBufReadExt;
 use tracing::{debug, error, info, instrument, warn};
 
-use super::super::album::{AlbumId, LibraryAlbums};
-use super::super::db::faces::AssetFaceRow;
+use super::super::album::repository::AlbumRepository;
+use super::super::album::AlbumId;
 use super::super::db::Database;
+use super::super::faces::repository::{AssetFaceRow, FacesRepository};
 use super::super::error::LibraryError;
 use super::super::immich_client::ImmichClient;
 use super::super::media::{
@@ -26,6 +27,8 @@ use crate::event_bus::EventSender;
 pub(crate) struct SyncManager {
     pub client: ImmichClient,
     pub db: Database,
+    pub albums: AlbumRepository,
+    pub faces: FacesRepository,
     /// Event sender for push-based delivery to the GTK event bus.
     pub events: EventSender,
     pub shutdown_rx: tokio::sync::watch::Receiver<bool>,
@@ -294,7 +297,7 @@ impl SyncManager {
                         &sync_cycle,
                         "delete",
                         sync_line.ack,
-                        self.db.delete_person(&id),
+                        self.faces.delete_person(&id),
                         &mut acks,
                         &mut counters.deletes,
                         &mut counters.errors,
@@ -328,7 +331,7 @@ impl SyncManager {
                         &sync_cycle,
                         "delete",
                         sync_line.ack,
-                        self.db.delete_asset_face(&id),
+                        self.faces.delete_asset_face(&id),
                         &mut acks,
                         &mut counters.deletes,
                         &mut counters.errors,
@@ -386,8 +389,8 @@ impl SyncManager {
             "loaded existing media IDs for reset tracking"
         );
         *existing_ids = Some(ids);
-        self.db.clear_asset_faces().await?;
-        self.db.clear_people().await?;
+        self.faces.clear_asset_faces().await?;
+        self.faces.clear_people().await?;
         self.db.clear_sync_checkpoints().await?;
         Ok(())
     }
@@ -627,8 +630,8 @@ impl SyncManager {
         let created_at = parse_datetime(&Some(album.created_at)).unwrap_or(0);
         let updated_at = parse_datetime(&Some(album.updated_at)).unwrap_or(0);
 
-        self.db
-            .upsert_album(&album.id, &album.name, created_at, updated_at)
+        self.albums
+            .upsert(&album.id, &album.name, created_at, updated_at)
             .await?;
 
         self.events.send(AppEvent::AlbumCreated {
@@ -643,7 +646,7 @@ impl SyncManager {
     #[instrument(skip(self))]
     pub(crate) async fn handle_album_delete(&self, album_id: &str) -> Result<(), LibraryError> {
         let id = AlbumId::from_raw(album_id.to_owned());
-        self.db.delete_album(&id).await?;
+        self.albums.delete(&id).await?;
 
         self.events.send(AppEvent::AlbumDeleted { id });
 
@@ -670,7 +673,7 @@ impl SyncManager {
     /// Upsert a person from the sync stream and download their face thumbnail.
     #[instrument(skip(self, person), fields(person_id = %person.id, name = %person.name))]
     pub(crate) async fn handle_person(&self, person: SyncPersonV1) -> Result<(), LibraryError> {
-        self.db
+        self.faces
             .upsert_person(
                 &person.id,
                 &person.name,
@@ -727,11 +730,11 @@ impl SyncManager {
                 .unwrap_or_else(|| "MachineLearning".to_string()),
         };
 
-        self.db.upsert_asset_face(&row).await?;
+        self.faces.upsert_asset_face(&row).await?;
 
         // Update denormalised face count on the person.
         if let Some(ref person_id) = face.person_id {
-            self.db.update_face_count(person_id).await?;
+            self.faces.update_face_count(person_id).await?;
         }
 
         Ok(())
