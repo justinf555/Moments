@@ -3,7 +3,7 @@ use gtk::{glib, prelude::*};
 use crate::application::MomentsApplication;
 
 use super::cell::PeopleGridCell;
-use super::item::PersonItemObject;
+use crate::client::PersonItemObject;
 
 /// Build a `SignalListItemFactory` for the people grid.
 pub fn build_factory(cell_size: i32) -> gtk::SignalListItemFactory {
@@ -31,7 +31,7 @@ pub fn build_factory(cell_size: i32) -> gtk::SignalListItemFactory {
 
         // Decode thumbnail off the main thread to avoid scroll jank.
         if item.texture().is_none() {
-            if let Some(path) = item.data().thumbnail_path.clone() {
+            if let Some(path) = item.thumbnail_path() {
                 let item_weak = item.downgrade();
                 let tokio = MomentsApplication::default().tokio_handle();
                 glib::MainContext::default().spawn_local(async move {

@@ -47,6 +47,7 @@ mod imp {
         pub library: RefCell<Option<Arc<Library>>>,
         pub import_client: RefCell<Option<crate::client::import_client::ImportClient>>,
         pub album_client: RefCell<Option<crate::client::AlbumClient>>,
+        pub people_client: RefCell<Option<crate::client::PeopleClient>>,
         pub is_immich: Cell<bool>,
         pub immich_server_url: RefCell<Option<String>>,
         /// Centralised event bus for fan-out event delivery.
@@ -91,6 +92,7 @@ mod imp {
             // in main() tries to shut down the runtime.
             self.event_bus.borrow_mut().take();
             self.album_client.borrow_mut().take();
+            self.people_client.borrow_mut().take();
             self.library.borrow_mut().take();
 
             self.parent_shutdown();
@@ -188,6 +190,14 @@ impl MomentsApplication {
     /// Returns `None` if no library is open yet.
     pub fn album_client(&self) -> Option<crate::client::AlbumClient> {
         self.imp().album_client.borrow().clone()
+    }
+
+    /// Access the people client singleton.
+    ///
+    /// Available from anywhere via `MomentsApplication::default().people_client()`.
+    /// Returns `None` if no library is open yet.
+    pub fn people_client(&self) -> Option<crate::client::PeopleClient> {
+        self.imp().people_client.borrow().clone()
     }
 
     /// Get the singleton application instance.
@@ -539,6 +549,13 @@ impl MomentsApplication {
                                 bus.sender(),
                             );
                             *app.imp().album_client.borrow_mut() = Some(album_client);
+                        }
+
+                        // Create the people client (GObject singleton).
+                        {
+                            let people_client = crate::client::PeopleClient::new();
+                            people_client.configure(Arc::clone(&library), tokio.clone());
+                            *app.imp().people_client.borrow_mut() = Some(people_client);
                         }
 
                         // Wire the shell: builds sidebar, registers views,

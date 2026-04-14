@@ -1,16 +1,9 @@
-use std::cell::{OnceCell, RefCell};
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 
 use gtk::{gdk, glib, prelude::*, subclass::prelude::*};
 
-/// Data for a single person in the people grid.
-#[derive(Debug, Clone)]
-pub struct PersonItemData {
-    pub id: String,
-    pub name: String,
-    pub thumbnail_path: Option<PathBuf>,
-    pub is_hidden: bool,
-}
+use crate::library::faces::Person;
 
 mod imp {
     use super::*;
@@ -18,7 +11,15 @@ mod imp {
     #[derive(Default, glib::Properties)]
     #[properties(wrapper_type = super::PersonItemObject)]
     pub struct PersonItemObject {
-        pub data: OnceCell<PersonItemData>,
+        #[property(get, set)]
+        pub id: RefCell<String>,
+        #[property(get, set)]
+        pub name: RefCell<String>,
+        #[property(get, set)]
+        pub is_hidden: Cell<bool>,
+
+        /// File path to the person's face thumbnail (if available).
+        pub thumbnail_path: RefCell<Option<PathBuf>>,
 
         /// The decoded thumbnail texture, `None` until ready.
         #[property(get, set, nullable)]
@@ -40,13 +41,18 @@ glib::wrapper! {
 }
 
 impl PersonItemObject {
-    pub fn new(data: PersonItemData) -> Self {
+    pub fn new(person: &Person, thumbnail_path: Option<PathBuf>) -> Self {
         let obj: Self = glib::Object::new();
-        obj.imp().data.set(data).expect("data set once");
+        let imp = obj.imp();
+        imp.id.replace(person.id.as_str().to_string());
+        imp.name.replace(person.name.clone());
+        imp.is_hidden.set(person.is_hidden);
+        imp.thumbnail_path.replace(thumbnail_path);
         obj
     }
 
-    pub fn data(&self) -> &PersonItemData {
-        self.imp().data.get().expect("data initialised")
+    /// The file path to this person's face thumbnail.
+    pub fn thumbnail_path(&self) -> Option<PathBuf> {
+        self.imp().thumbnail_path.borrow().clone()
     }
 }
