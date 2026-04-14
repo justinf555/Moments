@@ -57,7 +57,7 @@ use crate::ui::coordinator::ContentCoordinator;
 use crate::ui::empty_library::EmptyLibraryView;
 use crate::ui::people_grid::PeopleGridView;
 use crate::ui::photo_grid::texture_cache::TextureCache;
-use crate::ui::photo_grid::{PhotoGridModel, PhotoGridView};
+use crate::ui::photo_grid::PhotoGridView;
 use crate::ui::sidebar::MomentsSidebar;
 
 mod imp {
@@ -367,8 +367,12 @@ impl MomentsWindow {
         settings: &gio::Settings,
         texture_cache: &Rc<TextureCache>,
         bus_sender: &crate::event_bus::EventSender,
-    ) -> (gtk::Stack, Rc<RefCell<ContentCoordinator>>, PhotoGridModel) {
+    ) -> (gtk::Stack, Rc<RefCell<ContentCoordinator>>, gio::ListStore) {
         use crate::library::media::MediaFilter;
+
+        let media_client = crate::application::MomentsApplication::default()
+            .media_client()
+            .expect("media client available");
 
         let content_stack = gtk::Stack::new();
         content_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
@@ -377,12 +381,7 @@ impl MomentsWindow {
         let empty = EmptyLibraryView::new();
         coordinator.register("empty", empty.widget());
 
-        let photos_model = PhotoGridModel::new(
-            Arc::clone(library),
-            tokio.clone(),
-            MediaFilter::All,
-            bus_sender.clone(),
-        );
+        let photos_store = media_client.create_model(MediaFilter::All);
         let photos_view = PhotoGridView::new();
         photos_view.setup(
             Arc::clone(library),
@@ -391,13 +390,13 @@ impl MomentsWindow {
             Rc::clone(texture_cache),
             bus_sender.clone(),
         );
-        photos_view.set_model(photos_model.clone());
+        photos_view.set_store(photos_store.clone(), MediaFilter::All);
         coordinator.register("photos", &photos_view);
 
         (
             content_stack,
             Rc::new(RefCell::new(coordinator)),
-            photos_model,
+            photos_store,
         )
     }
 
@@ -419,15 +418,13 @@ impl MomentsWindow {
             let tc = Rc::clone(texture_cache);
             let bs = bus_sender.clone();
             coordinator.register_lazy("favorites", move || {
-                let model = PhotoGridModel::new(
-                    Arc::clone(&lib),
-                    tk.clone(),
-                    MediaFilter::Favorites,
-                    bs.clone(),
-                );
+                let mc = crate::application::MomentsApplication::default()
+                    .media_client()
+                    .expect("media client available");
+                let store = mc.create_model(MediaFilter::Favorites);
                 let view = PhotoGridView::new();
                 view.setup(lib, tk, s, tc, bs);
-                view.set_model(model.clone());
+                view.set_store(store, MediaFilter::Favorites);
                 view.upcast()
             });
         }
@@ -441,15 +438,14 @@ impl MomentsWindow {
             coordinator.register_lazy("recent", move || {
                 let days = s.uint("recent-imports-days") as i64;
                 let since = chrono::Utc::now().timestamp() - days * 86400;
-                let model = PhotoGridModel::new(
-                    Arc::clone(&lib),
-                    tk.clone(),
-                    MediaFilter::RecentImports { since },
-                    bs.clone(),
-                );
+                let filter = MediaFilter::RecentImports { since };
+                let mc = crate::application::MomentsApplication::default()
+                    .media_client()
+                    .expect("media client available");
+                let store = mc.create_model(filter.clone());
                 let view = PhotoGridView::new();
                 view.setup(lib, tk, s, tc, bs);
-                view.set_model(model.clone());
+                view.set_store(store, filter);
                 view.upcast()
             });
         }
@@ -461,15 +457,13 @@ impl MomentsWindow {
             let tc = Rc::clone(texture_cache);
             let bs = bus_sender.clone();
             coordinator.register_lazy("trash", move || {
-                let model = PhotoGridModel::new(
-                    Arc::clone(&lib),
-                    tk.clone(),
-                    MediaFilter::Trashed,
-                    bs.clone(),
-                );
+                let mc = crate::application::MomentsApplication::default()
+                    .media_client()
+                    .expect("media client available");
+                let store = mc.create_model(MediaFilter::Trashed);
                 let view = PhotoGridView::new();
                 view.setup(lib, tk, s, tc, bs);
-                view.set_model(model.clone());
+                view.set_store(store, MediaFilter::Trashed);
                 view.upcast()
             });
         }
@@ -513,21 +507,19 @@ impl MomentsWindow {
     /// Only switches on empty ↔ non-empty transitions — deliberately does NOT
     /// override the visible child if the user has navigated away from Photos
     /// (e.g. to Trash).
-    fn connect_empty_toggle(content_stack: &gtk::Stack, photos_model: &PhotoGridModel) {
+    fn connect_empty_toggle(content_stack: &gtk::Stack, photos_store: &gio::ListStore) {
         let stack = content_stack.clone();
         let was_empty = std::cell::Cell::new(true);
-        photos_model
-            .store()
-            .connect_items_changed(move |store, _, _, _| {
-                let is_empty = store.n_items() == 0;
-                if is_empty && !was_empty.get() {
-                    stack.set_visible_child_name("empty");
-                    was_empty.set(true);
-                } else if !is_empty && was_empty.get() {
-                    stack.set_visible_child_name("photos");
-                    was_empty.set(false);
-                }
-            });
+        photos_store.connect_items_changed(move |store, _, _, _| {
+            let is_empty = store.n_items() == 0;
+            if is_empty && !was_empty.get() {
+                stack.set_visible_child_name("empty");
+                was_empty.set(true);
+            } else if !is_empty && was_empty.get() {
+                stack.set_visible_child_name("photos");
+                was_empty.set(false);
+            }
+        });
     }
 
     fn connect_sidebar_navigation(
@@ -559,12 +551,11 @@ impl MomentsWindow {
                     use crate::library::album::AlbumId;
                     use crate::library::media::MediaFilter;
                     let album_id = AlbumId::from_raw(album_id_str.to_owned());
-                    let model = PhotoGridModel::new(
-                        Arc::clone(&lib),
-                        tk.clone(),
-                        MediaFilter::Album { album_id },
-                        bs.clone(),
-                    );
+                    let filter = MediaFilter::Album { album_id };
+                    let mc = crate::application::MomentsApplication::default()
+                        .media_client()
+                        .expect("media client available");
+                    let store = mc.create_model(filter.clone());
                     let view = PhotoGridView::new();
                     view.setup(
                         Arc::clone(&lib),
@@ -573,7 +564,7 @@ impl MomentsWindow {
                         Rc::clone(&tc),
                         bs.clone(),
                     );
-                    view.set_model(model.clone());
+                    view.set_store(store, filter);
                     coord.register(id, &view);
                 }
                 coord.navigate(id);

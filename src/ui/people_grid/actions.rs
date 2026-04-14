@@ -10,7 +10,6 @@ use crate::client::{PeopleClient, PersonItemObject};
 use crate::library::faces::PersonId;
 use crate::library::media::MediaFilter;
 use crate::library::Library;
-use crate::ui::photo_grid::model::PhotoGridModel;
 use crate::ui::photo_grid::texture_cache::TextureCache;
 use crate::ui::photo_grid::PhotoGridView;
 
@@ -49,7 +48,10 @@ pub(super) fn wire_activation(
         let filter = MediaFilter::Person {
             person_id: person_id.clone(),
         };
-        let model = PhotoGridModel::new(Arc::clone(&lib), tk.clone(), filter, bs.clone());
+        let mc = crate::application::MomentsApplication::default()
+            .media_client()
+            .expect("media client available");
+        let store = mc.create_model(filter.clone());
         let view = PhotoGridView::new();
         view.setup(
             Arc::clone(&lib),
@@ -58,7 +60,7 @@ pub(super) fn wire_activation(
             Rc::clone(&tc),
             bs.clone(),
         );
-        view.set_model(model.clone());
+        view.set_store(store, filter);
 
         let display_name = if name.is_empty() {
             gettext("Unnamed")

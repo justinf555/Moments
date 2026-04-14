@@ -48,6 +48,7 @@ mod imp {
         pub import_client: RefCell<Option<crate::client::import_client::ImportClient>>,
         pub album_client: RefCell<Option<crate::client::AlbumClient>>,
         pub people_client: RefCell<Option<crate::client::PeopleClient>>,
+        pub media_client: RefCell<Option<crate::client::MediaClient>>,
         pub is_immich: Cell<bool>,
         pub immich_server_url: RefCell<Option<String>>,
         /// Centralised event bus for fan-out event delivery.
@@ -93,6 +94,7 @@ mod imp {
             self.event_bus.borrow_mut().take();
             self.album_client.borrow_mut().take();
             self.people_client.borrow_mut().take();
+            self.media_client.borrow_mut().take();
             self.library.borrow_mut().take();
 
             self.parent_shutdown();
@@ -198,6 +200,14 @@ impl MomentsApplication {
     /// Returns `None` if no library is open yet.
     pub fn people_client(&self) -> Option<crate::client::PeopleClient> {
         self.imp().people_client.borrow().clone()
+    }
+
+    /// Access the media client singleton.
+    ///
+    /// Available from anywhere via `MomentsApplication::default().media_client()`.
+    /// Returns `None` if no library is open yet.
+    pub fn media_client(&self) -> Option<crate::client::MediaClient> {
+        self.imp().media_client.borrow().clone()
     }
 
     /// Get the singleton application instance.
@@ -556,6 +566,17 @@ impl MomentsApplication {
                             let people_client = crate::client::PeopleClient::new();
                             people_client.configure(Arc::clone(&library), tokio.clone());
                             *app.imp().people_client.borrow_mut() = Some(people_client);
+                        }
+
+                        // Create the media client (GObject singleton).
+                        {
+                            let media_client = crate::client::MediaClient::new();
+                            media_client.configure(
+                                Arc::clone(&library),
+                                tokio.clone(),
+                                bus.sender(),
+                            );
+                            *app.imp().media_client.borrow_mut() = Some(media_client);
                         }
 
                         // Wire the shell: builds sidebar, registers views,

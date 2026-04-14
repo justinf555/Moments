@@ -11,7 +11,6 @@ use crate::library::album::AlbumId;
 use crate::library::media::MediaFilter;
 use crate::library::Library;
 use crate::ui::album_dialogs;
-use crate::ui::photo_grid::model::PhotoGridModel;
 use crate::ui::photo_grid::texture_cache::TextureCache;
 use crate::ui::photo_grid::PhotoGridView;
 
@@ -32,12 +31,11 @@ pub(crate) fn open_album_drilldown(
     album_id: AlbumId,
     album_name: &str,
 ) {
-    let model = PhotoGridModel::new(
-        Arc::clone(library),
-        tokio.clone(),
-        MediaFilter::Album { album_id },
-        bus_sender.clone(),
-    );
+    let filter = MediaFilter::Album { album_id };
+    let media_client = crate::application::MomentsApplication::default()
+        .media_client()
+        .expect("media client available");
+    let store = media_client.create_model(filter.clone());
     let view = PhotoGridView::new();
     view.setup(
         Arc::clone(library),
@@ -46,7 +44,7 @@ pub(crate) fn open_album_drilldown(
         Rc::clone(texture_cache),
         bus_sender.clone(),
     );
-    view.set_model(model.clone());
+    view.set_store(store, filter);
 
     let page = adw::NavigationPage::builder()
         .tag("album-detail")
