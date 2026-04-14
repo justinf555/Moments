@@ -26,7 +26,7 @@ pub use state::{AlbumEntry, AlbumPickerData};
 pub fn show_album_picker_dialog(
     parent: &impl IsA<gtk::Widget>,
     ids: Vec<MediaId>,
-    library: Arc<dyn Library>,
+    library: Arc<Library>,
     tokio: tokio::runtime::Handle,
     bus_sender: EventSender,
 ) {

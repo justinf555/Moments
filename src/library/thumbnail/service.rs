@@ -1,45 +1,10 @@
 use std::path::PathBuf;
 
-use async_trait::async_trait;
-
 use super::model::ThumbnailStatus;
 use super::repository::ThumbnailRepository;
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
 use crate::library::media::MediaId;
-
-/// Feature trait for thumbnail path resolution and persistence.
-///
-/// Implemented by every backend that manages thumbnails. The GTK layer
-/// calls `thumbnail_path` to obtain the filesystem path for an asset's
-/// thumbnail image without touching the database.
-#[async_trait]
-pub trait LibraryThumbnail: Send + Sync {
-    /// Compute the path for an asset's thumbnail without hitting the DB.
-    ///
-    /// Layout: `<thumbnails_dir>/{shard1}/{shard2}/{media_id}.webp`
-    /// where `shard1 = id[..2]` and `shard2 = id[2..4]`.
-    fn thumbnail_path(&self, id: &MediaId) -> PathBuf;
-
-    /// Insert a `Pending` row for `id`. No-op if a row already exists.
-    async fn insert_thumbnail_pending(&self, id: &MediaId) -> Result<(), LibraryError>;
-
-    /// Mark a thumbnail `Ready` and record its `file_path` relative to the
-    /// bundle's `thumbnails/` directory.
-    async fn set_thumbnail_ready(
-        &self,
-        id: &MediaId,
-        file_path: &str,
-        generated_at: i64,
-    ) -> Result<(), LibraryError>;
-
-    /// Mark a thumbnail `Failed`.
-    async fn set_thumbnail_failed(&self, id: &MediaId) -> Result<(), LibraryError>;
-
-    /// Return the stored [`ThumbnailStatus`] for `id`, or `None` if no row exists.
-    async fn thumbnail_status(&self, id: &MediaId)
-        -> Result<Option<ThumbnailStatus>, LibraryError>;
-}
 
 /// Compute the two-level sharded thumbnail path.
 ///
@@ -56,10 +21,7 @@ pub fn sharded_thumbnail_path(thumbnails_dir: &std::path::Path, id: &MediaId) ->
         .join(format!("{hex}.webp"))
 }
 
-/// Local-first thumbnail service.
-///
-/// Implements [`LibraryThumbnail`] by delegating DB ops to
-/// [`ThumbnailRepository`] and path resolution to [`sharded_thumbnail_path`].
+/// Thumbnail path resolution and persistence service.
 #[derive(Clone)]
 pub struct ThumbnailService {
     pub(crate) repo: ThumbnailRepository,
@@ -73,19 +35,16 @@ impl ThumbnailService {
             thumbnails_dir,
         }
     }
-}
 
-#[async_trait]
-impl LibraryThumbnail for ThumbnailService {
-    fn thumbnail_path(&self, id: &MediaId) -> PathBuf {
+    pub fn thumbnail_path(&self, id: &MediaId) -> PathBuf {
         sharded_thumbnail_path(&self.thumbnails_dir, id)
     }
 
-    async fn insert_thumbnail_pending(&self, id: &MediaId) -> Result<(), LibraryError> {
+    pub async fn insert_thumbnail_pending(&self, id: &MediaId) -> Result<(), LibraryError> {
         self.repo.insert_pending(id).await
     }
 
-    async fn set_thumbnail_ready(
+    pub async fn set_thumbnail_ready(
         &self,
         id: &MediaId,
         file_path: &str,
@@ -94,11 +53,11 @@ impl LibraryThumbnail for ThumbnailService {
         self.repo.set_ready(id, file_path, generated_at).await
     }
 
-    async fn set_thumbnail_failed(&self, id: &MediaId) -> Result<(), LibraryError> {
+    pub async fn set_thumbnail_failed(&self, id: &MediaId) -> Result<(), LibraryError> {
         self.repo.set_failed(id).await
     }
 
-    async fn thumbnail_status(
+    pub async fn thumbnail_status(
         &self,
         id: &MediaId,
     ) -> Result<Option<ThumbnailStatus>, LibraryError> {

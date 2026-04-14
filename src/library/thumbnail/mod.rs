@@ -4,4 +4,4 @@ mod service;
 pub mod thumbnailer;
 
 pub use model::ThumbnailStatus;
-pub use service::{sharded_thumbnail_path, LibraryThumbnail, ThumbnailService};
+pub use service::{sharded_thumbnail_path, ThumbnailService};

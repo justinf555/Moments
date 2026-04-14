@@ -59,7 +59,7 @@ mod imp {
         pub action_bar: TemplateChild<gtk::ActionBar>,
 
         // Service dependencies
-        pub library: OnceCell<Arc<dyn Library>>,
+        pub library: OnceCell<Arc<Library>>,
         pub tokio: OnceCell<tokio::runtime::Handle>,
 
         // State
@@ -150,7 +150,7 @@ impl AlbumGridView {
 
     pub fn setup(
         &self,
-        library: Arc<dyn Library>,
+        library: Arc<Library>,
         tokio: tokio::runtime::Handle,
         settings: gio::Settings,
         texture_cache: Rc<TextureCache>,
@@ -391,7 +391,7 @@ fn sort_store(store: &gio::ListStore, order: u32) {
 /// Async-load all albums into the store, then sort.
 fn reload_albums(
     store: &gio::ListStore,
-    library: &Arc<dyn Library>,
+    library: &Arc<Library>,
     tokio: &tokio::runtime::Handle,
     sort_order: Rc<Cell<u32>>,
 ) {

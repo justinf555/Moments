@@ -19,7 +19,7 @@ use super::item::MediaItemObject;
 /// read-only queries (e.g. list_albums for the album popover).
 pub(super) struct ActionContext {
     pub selection: gtk::MultiSelection,
-    pub library: Arc<dyn Library>,
+    pub library: Arc<Library>,
     pub tokio: tokio::runtime::Handle,
     pub filter: MediaFilter,
     pub grid_view: gtk::GridView,

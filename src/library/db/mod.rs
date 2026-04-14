@@ -162,6 +162,7 @@ pub(crate) mod test_helpers {
     }
 
     /// Query the audit action and error_msg for a given entity_id (test helper).
+    #[allow(dead_code)] // used by sync tests, will return in phase 4
     pub async fn get_audit_record(
         db: &Database,
         entity_id: &str,

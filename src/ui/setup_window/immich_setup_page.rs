@@ -8,7 +8,6 @@ use tracing::{debug, error, instrument};
 
 use crate::library::bundle::Bundle;
 use crate::library::config::LibraryConfig;
-use crate::library::immich_client::ImmichClient;
 use crate::library::keyring;
 
 mod imp {
@@ -110,101 +109,16 @@ impl MomentsImmichSetupPage {
     }
 
     /// Test the connection by logging in to the Immich server.
+    ///
+    /// TODO: Immich login will be restored when `src/sync/immich/` is wired
+    /// up (phase 4 of the library refactor). For now this shows an error.
     #[instrument(skip(self))]
     fn test_connection(&self) {
         let imp = self.imp();
-        let server_url = imp.server_url_row.text().to_string();
-        let email = imp.email_row.text().to_string();
-        let password = imp.password_row.text().to_string();
-
-        if server_url.is_empty() || email.is_empty() || password.is_empty() {
-            imp.status_label.set_text("Please fill in all fields.");
-            imp.status_label.remove_css_class("success");
-            imp.status_label.add_css_class("error");
-            return;
-        }
-
-        imp.test_btn.set_sensitive(false);
-        imp.status_label.set_text("Connecting...");
-        imp.status_label.remove_css_class("error");
+        imp.status_label
+            .set_text("Immich login is not yet available.");
         imp.status_label.remove_css_class("success");
-        imp.connect_btn.set_sensitive(false);
-
-        let tokio = crate::application::MomentsApplication::default().tokio_handle();
-
-        let obj_weak = self.downgrade();
-        glib::MainContext::default().spawn_local(async move {
-            // Step 1: Login to get a session token.
-            let login_result = tokio
-                .spawn(async move { ImmichClient::login(&server_url, &email, &password).await })
-                .await;
-
-            let Some(obj) = obj_weak.upgrade() else {
-                return;
-            };
-            let imp = obj.imp();
-
-            let login = match login_result {
-                Ok(Ok(login)) => login,
-                Ok(Err(e)) => {
-                    error!("login failed: {e}");
-                    imp.status_label.set_text(&format!("Login failed: {e}"));
-                    imp.status_label.add_css_class("error");
-                    imp.test_btn.set_sensitive(true);
-                    return;
-                }
-                Err(e) => {
-                    error!("tokio join error: {e}");
-                    imp.status_label.set_text(&format!("Internal error: {e}"));
-                    imp.status_label.add_css_class("error");
-                    imp.test_btn.set_sensitive(true);
-                    return;
-                }
-            };
-
-            // Step 2: Use the token to validate and get server version.
-            let token = login.access_token.clone();
-            let user_name = login.name.clone();
-            let server_url = imp.server_url_row.text().to_string();
-
-            let client = match ImmichClient::new(&server_url, &token) {
-                Ok(c) => c,
-                Err(e) => {
-                    imp.status_label.set_text(&format!("Error: {e}"));
-                    imp.status_label.add_css_class("error");
-                    imp.test_btn.set_sensitive(true);
-                    return;
-                }
-            };
-
-            let validate_result = tokio
-                .spawn(async move { client.server_about().await })
-                .await;
-
-            imp.test_btn.set_sensitive(true);
-
-            match validate_result {
-                Ok(Ok(about)) => {
-                    debug!(version = %about.version, user = %user_name, "connection successful");
-                    imp.status_label
-                        .set_text(&format!("Connected as {user_name} — {about}"));
-                    imp.status_label.remove_css_class("error");
-                    imp.status_label.add_css_class("success");
-                    imp.connect_btn.set_sensitive(true);
-                    *imp.access_token.borrow_mut() = Some(token);
-                }
-                Ok(Err(e)) => {
-                    error!("server validation failed: {e}");
-                    imp.status_label.set_text(&format!("Failed: {e}"));
-                    imp.status_label.add_css_class("error");
-                }
-                Err(e) => {
-                    error!("tokio join error: {e}");
-                    imp.status_label.set_text(&format!("Internal error: {e}"));
-                    imp.status_label.add_css_class("error");
-                }
-            }
-        });
+        imp.status_label.add_css_class("error");
     }
 
     /// Called when the user clicks "Connect" after a successful test.

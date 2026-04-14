@@ -8,7 +8,7 @@ use super::error::ImportError;
 use crate::library::format::FormatRegistry;
 use crate::library::media::MediaId;
 use crate::library::metadata::exif::extract_exif;
-use crate::library::thumbnail::{sharded_thumbnail_path, LibraryThumbnail};
+use crate::library::thumbnail::{sharded_thumbnail_path, ThumbnailService};
 
 /// Longest edge in pixels for the grid thumbnail.
 const GRID_SIZE: u32 = 360;
@@ -29,7 +29,7 @@ pub async fn generate_thumbnail(
     media_id: &MediaId,
     source: &Path,
     thumbnails_dir: &Path,
-    thumbnail_svc: &dyn LibraryThumbnail,
+    thumbnail_svc: &ThumbnailService,
     formats: &Arc<FormatRegistry>,
 ) {
     if let Err(e) = try_generate(media_id, source, thumbnails_dir, thumbnail_svc, formats).await {
@@ -42,7 +42,7 @@ async fn try_generate(
     media_id: &MediaId,
     source: &Path,
     thumbnails_dir: &Path,
-    thumbnail_svc: &dyn LibraryThumbnail,
+    thumbnail_svc: &ThumbnailService,
     formats: &Arc<FormatRegistry>,
 ) -> Result<(), ImportError> {
     // ── 1. Mark pending ───────────────────────────────────────────────

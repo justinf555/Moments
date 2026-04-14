@@ -45,7 +45,7 @@ mod photo_grid_imp {
         pub model: RefCell<Option<PhotoGridModel>>,
         pub zoom_level: Cell<usize>,
         /// Library reference for the factory (star button persist).
-        pub library: OnceCell<Arc<dyn Library>>,
+        pub library: OnceCell<Arc<Library>>,
         pub tokio: OnceCell<tokio::runtime::Handle>,
         pub bus_sender: OnceCell<crate::event_bus::EventSender>,
         pub filter: RefCell<crate::library::media::MediaFilter>,
@@ -104,7 +104,7 @@ mod photo_grid_imp {
                 .get()
                 .expect("content_stack not initialized")
         }
-        pub fn library(&self) -> &Arc<dyn Library> {
+        pub fn library(&self) -> &Arc<Library> {
             self.library.get().expect("library not initialized")
         }
         pub fn tokio(&self) -> &tokio::runtime::Handle {
@@ -245,7 +245,7 @@ impl PhotoGrid {
     pub fn set_model(
         &self,
         model: PhotoGridModel,
-        library: Arc<dyn Library>,
+        library: Arc<Library>,
         tokio: tokio::runtime::Handle,
         bus_sender: crate::event_bus::EventSender,
         filter: crate::library::media::MediaFilter,
@@ -382,7 +382,7 @@ mod view_imp {
         pub empty_trash_btn: TemplateChild<gtk::Button>,
 
         // Service dependencies
-        pub library: OnceCell<Arc<dyn Library>>,
+        pub library: OnceCell<Arc<Library>>,
         pub tokio: OnceCell<tokio::runtime::Handle>,
         pub bus_sender: OnceCell<crate::event_bus::EventSender>,
         pub texture_cache: OnceCell<Rc<texture_cache::TextureCache>>,
@@ -402,7 +402,7 @@ mod view_imp {
     }
 
     impl PhotoGridView {
-        pub fn library(&self) -> &Arc<dyn Library> {
+        pub fn library(&self) -> &Arc<Library> {
             self.library.get().expect("library not initialized")
         }
         pub fn tokio(&self) -> &tokio::runtime::Handle {
@@ -522,7 +522,7 @@ impl PhotoGridView {
 
     pub fn setup(
         &self,
-        library: Arc<dyn Library>,
+        library: Arc<Library>,
         tokio: tokio::runtime::Handle,
         settings: gio::Settings,
         texture_cache: Rc<texture_cache::TextureCache>,

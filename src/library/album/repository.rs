@@ -307,20 +307,22 @@ impl AlbumRepository {
 mod tests {
     use super::*;
     use crate::library::db::test_helpers::*;
-    use crate::library::media::{LibraryMedia, MediaCursor, MediaId};
+    use crate::library::media::repository::MediaRepository;
+    use crate::library::media::{MediaCursor, MediaId};
     use tempfile::tempdir;
 
     /// Create an `AlbumRepository` backed by a test database.
-    async fn test_repo(dir: &std::path::Path) -> (AlbumRepository, Database) {
+    async fn test_repo(dir: &std::path::Path) -> (AlbumRepository, MediaRepository, Database) {
         let db = open_test_db(dir).await;
         let repo = AlbumRepository::new(db.clone());
-        (repo, db)
+        let media = MediaRepository::new(db.clone());
+        (repo, media, db)
     }
 
     #[tokio::test]
     async fn create_album_and_list() {
         let dir = tempdir().unwrap();
-        let (repo, _db) = test_repo(dir.path()).await;
+        let (repo, _media, _db) = test_repo(dir.path()).await;
         let id = repo.create("Vacation").await.unwrap();
         let albums = repo.list().await.unwrap();
         assert_eq!(albums.len(), 1);
@@ -332,7 +334,7 @@ mod tests {
     #[tokio::test]
     async fn create_album_generates_unique_ids() {
         let dir = tempdir().unwrap();
-        let (repo, _db) = test_repo(dir.path()).await;
+        let (repo, _media, _db) = test_repo(dir.path()).await;
         let id1 = repo.create("Album 1").await.unwrap();
         let id2 = repo.create("Album 2").await.unwrap();
         assert_ne!(id1, id2);
@@ -341,7 +343,7 @@ mod tests {
     #[tokio::test]
     async fn rename_album_updates_name() {
         let dir = tempdir().unwrap();
-        let (repo, _db) = test_repo(dir.path()).await;
+        let (repo, _media, _db) = test_repo(dir.path()).await;
         let id = repo.create("Old Name").await.unwrap();
         repo.rename(&id, "New Name").await.unwrap();
         assert_eq!(repo.list().await.unwrap()[0].name, "New Name");
@@ -350,31 +352,31 @@ mod tests {
     #[tokio::test]
     async fn delete_album_removes_album_and_media_links() {
         let dir = tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media, _db) = test_repo(dir.path()).await;
         let album_id = repo.create("To Delete").await.unwrap();
         let media_id = MediaId::new("d".repeat(64));
-        db.insert_media(&test_record(media_id.clone()))
-            .await
-            .unwrap();
+        media.insert(&test_record(media_id.clone())).await.unwrap();
         repo.add_media(&album_id, std::slice::from_ref(&media_id))
             .await
             .unwrap();
         repo.delete(&album_id).await.unwrap();
         assert!(repo.list().await.unwrap().is_empty());
-        assert!(db.media_exists(&media_id).await.unwrap());
+        assert!(media.exists(&media_id).await.unwrap());
     }
 
     #[tokio::test]
     async fn add_to_album_and_list_media() {
         let dir = tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media, _db) = test_repo(dir.path()).await;
         let album_id = repo.create("My Album").await.unwrap();
         let id_a = MediaId::new("a".repeat(64));
         let id_b = MediaId::new("b".repeat(64));
-        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000)))
+        media
+            .insert(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000)))
             .await
             .unwrap();
-        db.insert_media(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000)))
+        media
+            .insert(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000)))
             .await
             .unwrap();
         repo.add_media(&album_id, &[id_a.clone(), id_b.clone()])
@@ -389,12 +391,10 @@ mod tests {
     #[tokio::test]
     async fn add_duplicate_to_album_is_idempotent() {
         let dir = tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media, _db) = test_repo(dir.path()).await;
         let album_id = repo.create("Dupes").await.unwrap();
         let media_id = MediaId::new("e".repeat(64));
-        db.insert_media(&test_record(media_id.clone()))
-            .await
-            .unwrap();
+        media.insert(&test_record(media_id.clone())).await.unwrap();
         repo.add_media(&album_id, std::slice::from_ref(&media_id))
             .await
             .unwrap();
@@ -407,14 +407,16 @@ mod tests {
     #[tokio::test]
     async fn remove_from_album() {
         let dir = tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media, _db) = test_repo(dir.path()).await;
         let album_id = repo.create("Remove Test").await.unwrap();
         let id_a = MediaId::new("a".repeat(64));
         let id_b = MediaId::new("b".repeat(64));
-        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000)))
+        media
+            .insert(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000)))
             .await
             .unwrap();
-        db.insert_media(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000)))
+        media
+            .insert(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000)))
             .await
             .unwrap();
         repo.add_media(&album_id, &[id_a.clone(), id_b.clone()])
@@ -429,14 +431,16 @@ mod tests {
     #[tokio::test]
     async fn list_albums_includes_media_count() {
         let dir = tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media, _db) = test_repo(dir.path()).await;
         let album_id = repo.create("Counting").await.unwrap();
         let id_a = MediaId::new("a".repeat(64));
         let id_b = MediaId::new("b".repeat(64));
-        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000)))
+        media
+            .insert(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000)))
             .await
             .unwrap();
-        db.insert_media(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000)))
+        media
+            .insert(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000)))
             .await
             .unwrap();
         repo.add_media(&album_id, &[id_a, id_b]).await.unwrap();
@@ -446,10 +450,11 @@ mod tests {
     #[tokio::test]
     async fn list_albums_includes_cover_media_id() {
         let dir = tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media, _db) = test_repo(dir.path()).await;
         let album_id = repo.create("Cover").await.unwrap();
         let id_a = MediaId::new("a".repeat(64));
-        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000)))
+        media
+            .insert(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000)))
             .await
             .unwrap();
         repo.add_media(&album_id, std::slice::from_ref(&id_a))
@@ -461,16 +466,14 @@ mod tests {
     #[tokio::test]
     async fn list_album_media_excludes_trashed() {
         let dir = tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media, _db) = test_repo(dir.path()).await;
         let album_id = repo.create("Trash Test").await.unwrap();
         let media_id = MediaId::new("t".repeat(64));
-        db.insert_media(&test_record(media_id.clone()))
-            .await
-            .unwrap();
+        media.insert(&test_record(media_id.clone())).await.unwrap();
         repo.add_media(&album_id, std::slice::from_ref(&media_id))
             .await
             .unwrap();
-        db.trash(&[media_id]).await.unwrap();
+        media.trash(&[media_id]).await.unwrap();
         assert!(repo
             .list_media(&album_id, None, 50)
             .await
@@ -481,20 +484,21 @@ mod tests {
     #[tokio::test]
     async fn list_album_media_cursor_pagination() {
         let dir = tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media, _db) = test_repo(dir.path()).await;
         let album_id = repo.create("Paging").await.unwrap();
         let ids: Vec<MediaId> = (1..=5)
             .map(|i| MediaId::new(format!("{:0>64}", i)))
             .collect();
         for (i, id) in ids.iter().enumerate() {
             let ts = (5 - i as i64) * 1000;
-            db.insert_media(&record_with_taken_at(
-                id.clone(),
-                &format!("{i}.jpg"),
-                Some(ts),
-            ))
-            .await
-            .unwrap();
+            media
+                .insert(&record_with_taken_at(
+                    id.clone(),
+                    &format!("{i}.jpg"),
+                    Some(ts),
+                ))
+                .await
+                .unwrap();
         }
         repo.add_media(&album_id, &ids).await.unwrap();
         let page1 = repo.list_media(&album_id, None, 3).await.unwrap();
@@ -511,7 +515,7 @@ mod tests {
     #[tokio::test]
     async fn albums_containing_media_empty_input() {
         let dir = tempdir().unwrap();
-        let (repo, _db) = test_repo(dir.path()).await;
+        let (repo, _media, _db) = test_repo(dir.path()).await;
         let result = repo.containing_media(&[]).await.unwrap();
         assert!(result.is_empty());
     }
@@ -519,14 +523,16 @@ mod tests {
     #[tokio::test]
     async fn albums_containing_media_single_album() {
         let dir = tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media, _db) = test_repo(dir.path()).await;
         let album_id = repo.create("Test").await.unwrap();
         let id_a = MediaId::new("a".repeat(64));
         let id_b = MediaId::new("b".repeat(64));
-        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000)))
+        media
+            .insert(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000)))
             .await
             .unwrap();
-        db.insert_media(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000)))
+        media
+            .insert(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000)))
             .await
             .unwrap();
         repo.add_media(&album_id, &[id_a.clone(), id_b.clone()])
@@ -541,15 +547,17 @@ mod tests {
     #[tokio::test]
     async fn albums_containing_media_multiple_albums() {
         let dir = tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media, _db) = test_repo(dir.path()).await;
         let album1 = repo.create("Album 1").await.unwrap();
         let album2 = repo.create("Album 2").await.unwrap();
         let id_a = MediaId::new("a".repeat(64));
         let id_b = MediaId::new("b".repeat(64));
-        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000)))
+        media
+            .insert(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000)))
             .await
             .unwrap();
-        db.insert_media(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000)))
+        media
+            .insert(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000)))
             .await
             .unwrap();
         repo.add_media(&album1, std::slice::from_ref(&id_a))
@@ -568,14 +576,16 @@ mod tests {
     #[tokio::test]
     async fn albums_containing_media_partial_membership() {
         let dir = tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media, _db) = test_repo(dir.path()).await;
         let album_id = repo.create("Partial").await.unwrap();
         let id_a = MediaId::new("a".repeat(64));
         let id_b = MediaId::new("b".repeat(64));
-        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000)))
+        media
+            .insert(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000)))
             .await
             .unwrap();
-        db.insert_media(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000)))
+        media
+            .insert(&record_with_taken_at(id_b.clone(), "b.jpg", Some(2000)))
             .await
             .unwrap();
         repo.add_media(&album_id, std::slice::from_ref(&id_a))
@@ -590,10 +600,11 @@ mod tests {
     #[tokio::test]
     async fn albums_containing_media_no_matches() {
         let dir = tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media, _db) = test_repo(dir.path()).await;
         repo.create("Empty Album").await.unwrap();
         let id_a = MediaId::new("a".repeat(64));
-        db.insert_media(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000)))
+        media
+            .insert(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000)))
             .await
             .unwrap();
 
@@ -604,16 +615,14 @@ mod tests {
     #[tokio::test]
     async fn delete_media_removes_from_album() {
         let dir = tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media, _db) = test_repo(dir.path()).await;
         let album_id = repo.create("Cascade").await.unwrap();
         let media_id = MediaId::new("c".repeat(64));
-        db.insert_media(&test_record(media_id.clone()))
-            .await
-            .unwrap();
+        media.insert(&test_record(media_id.clone())).await.unwrap();
         repo.add_media(&album_id, std::slice::from_ref(&media_id))
             .await
             .unwrap();
-        db.delete_permanently(&[media_id]).await.unwrap();
+        media.delete_permanently(&[media_id]).await.unwrap();
         assert!(repo
             .list_media(&album_id, None, 50)
             .await

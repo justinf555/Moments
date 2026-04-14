@@ -5,9 +5,9 @@ use tracing::instrument;
 
 use super::error::ImportError;
 use crate::library::config::LocalStorageMode;
-use crate::library::media::{LibraryMedia, MediaId, MediaRecord, MediaType};
+use crate::library::media::{MediaId, MediaRecord, MediaService, MediaType};
 use crate::library::metadata::exif::ExifInfo;
-use crate::library::metadata::{LibraryMetadata, MediaMetadataRecord};
+use crate::library::metadata::{MediaMetadataRecord, MetadataService};
 
 /// Input parameters for the persist step.
 pub struct PersistParams<'a> {
@@ -18,8 +18,8 @@ pub struct PersistParams<'a> {
     pub duration_ms: Option<u64>,
     pub originals_dir: &'a Path,
     pub mode: &'a LocalStorageMode,
-    pub media: &'a dyn LibraryMedia,
-    pub metadata: &'a dyn LibraryMetadata,
+    pub media: &'a MediaService,
+    pub metadata: &'a MetadataService,
 }
 
 /// Result of persisting a single file to the library.

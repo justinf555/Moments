@@ -65,7 +65,7 @@ pub enum MediaType {
     Video = 1,
 }
 
-/// The read model returned by [`super::service::LibraryMedia::list_media`].
+/// The read model returned by [`super::service::MediaService::list_media`].
 ///
 /// Contains everything the photo grid needs to display a cell — id for
 /// thumbnail lookup, dimensions for aspect-ratio placeholder, and capture
@@ -91,7 +91,7 @@ pub struct MediaItem {
     pub duration_ms: Option<u64>,
 }
 
-/// Filter for [`super::service::LibraryMedia::list_media`] queries.
+/// Filter for [`super::service::MediaService::list_media`] queries.
 ///
 /// Not `Copy` because `Album` holds an `AlbumId` (heap-allocated String).
 /// Use `RefCell<MediaFilter>` instead of `Cell<MediaFilter>` in UI models.
@@ -142,7 +142,7 @@ impl MediaFilter {
     }
 }
 
-/// Opaque cursor for keyset pagination in [`super::service::LibraryMedia::list_media`].
+/// Opaque cursor for keyset pagination in [`super::service::MediaService::list_media`].
 ///
 /// Encodes the position of the last item seen so the next page continues
 /// exactly where the previous one left off — no `OFFSET` scans.

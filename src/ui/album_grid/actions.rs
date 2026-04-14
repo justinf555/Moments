@@ -22,7 +22,7 @@ use super::item::AlbumItemObject;
 /// eliminating previously duplicated drill-down logic.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn open_album_drilldown(
-    library: &Arc<dyn Library>,
+    library: &Arc<Library>,
     tokio: &tokio::runtime::Handle,
     settings: &gtk::gio::Settings,
     texture_cache: &Rc<TextureCache>,
@@ -79,7 +79,7 @@ fn find_clicked_item(grid_view: &gtk::GridView, x: f64, y: f64) -> Option<AlbumI
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn show_context_menu(
     grid_view: &gtk::GridView,
-    library: &Arc<dyn Library>,
+    library: &Arc<Library>,
     tokio: &tokio::runtime::Handle,
     settings: &gtk::gio::Settings,
     texture_cache: &Rc<TextureCache>,
@@ -243,7 +243,7 @@ fn wire_pin_button(
 fn wire_open_button(
     open_btn: &gtk::Button,
     popover: &gtk::Popover,
-    library: &Arc<dyn Library>,
+    library: &Arc<Library>,
     tokio: &tokio::runtime::Handle,
     settings: &gtk::gio::Settings,
     texture_cache: &Rc<TextureCache>,
@@ -275,7 +275,7 @@ fn wire_open_button(
 fn wire_rename_button(
     rename_btn: &gtk::Button,
     popover: &gtk::Popover,
-    library: &Arc<dyn Library>,
+    library: &Arc<Library>,
     tokio: &tokio::runtime::Handle,
     bus_sender: &crate::event_bus::EventSender,
     grid_view: &gtk::GridView,

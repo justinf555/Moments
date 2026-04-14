@@ -58,7 +58,7 @@ mod imp {
         pub menu_btn: TemplateChild<gtk::MenuButton>,
 
         // Service dependencies (set once in setup)
-        pub library: OnceCell<Arc<dyn Library>>,
+        pub library: OnceCell<Arc<Library>>,
         pub tokio: OnceCell<tokio::runtime::Handle>,
         pub bus_sender: OnceCell<EventSender>,
 
@@ -86,7 +86,7 @@ mod imp {
     }
 
     impl PhotoViewer {
-        pub fn library(&self) -> &Arc<dyn Library> {
+        pub fn library(&self) -> &Arc<Library> {
             self.library.get().expect("library not initialized")
         }
         pub fn tokio(&self) -> &tokio::runtime::Handle {
@@ -167,7 +167,7 @@ impl PhotoViewer {
     /// Inject service dependencies, build sub-panels, and wire signal handlers.
     pub fn setup(
         &self,
-        library: Arc<dyn Library>,
+        library: Arc<Library>,
         tokio: tokio::runtime::Handle,
         bus_sender: EventSender,
     ) {

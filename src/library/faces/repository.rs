@@ -257,19 +257,21 @@ impl FacesRepository {
 mod tests {
     use super::*;
     use crate::library::db::test_helpers::{open_test_db, record_with_taken_at, test_record};
-    use crate::library::media::{LibraryMedia, MediaId};
+    use crate::library::media::repository::MediaRepository;
+    use crate::library::media::MediaId;
     use tempfile::tempdir;
 
-    async fn test_repo(dir: &std::path::Path) -> (FacesRepository, Database) {
+    async fn test_repo(dir: &std::path::Path) -> (FacesRepository, MediaRepository, Database) {
         let db = open_test_db(dir).await;
         let repo = FacesRepository::new(db.clone());
-        (repo, db)
+        let media = MediaRepository::new(db.clone());
+        (repo, media, db)
     }
 
     #[tokio::test]
     async fn upsert_and_list_people() {
         let dir = tempdir().unwrap();
-        let (repo, _db) = test_repo(dir.path()).await;
+        let (repo, _media, _db) = test_repo(dir.path()).await;
 
         repo.upsert_person("p1", "Alice", None, false, false, None, None)
             .await
@@ -285,7 +287,7 @@ mod tests {
     #[tokio::test]
     async fn upsert_person_updates_on_conflict() {
         let dir = tempdir().unwrap();
-        let (repo, _db) = test_repo(dir.path()).await;
+        let (repo, _media, _db) = test_repo(dir.path()).await;
 
         repo.upsert_person("p1", "Alice", None, false, false, None, None)
             .await
@@ -302,7 +304,7 @@ mod tests {
     #[tokio::test]
     async fn list_people_excludes_hidden() {
         let dir = tempdir().unwrap();
-        let (repo, _db) = test_repo(dir.path()).await;
+        let (repo, _media, _db) = test_repo(dir.path()).await;
 
         repo.upsert_person("p1", "Alice", None, false, false, None, None)
             .await
@@ -322,7 +324,7 @@ mod tests {
     #[tokio::test]
     async fn list_people_excludes_unnamed() {
         let dir = tempdir().unwrap();
-        let (repo, _db) = test_repo(dir.path()).await;
+        let (repo, _media, _db) = test_repo(dir.path()).await;
 
         repo.upsert_person("p1", "Alice", None, false, false, None, None)
             .await
@@ -342,7 +344,7 @@ mod tests {
     #[tokio::test]
     async fn list_people_sorted_by_face_count() {
         let dir = tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media, _db) = test_repo(dir.path()).await;
 
         repo.upsert_person("p1", "Alice", None, false, false, None, None)
             .await
@@ -353,8 +355,8 @@ mod tests {
 
         let rec1 = record_with_taken_at(MediaId::new("m1".to_string()), "a/photo1.jpg", Some(1000));
         let rec2 = record_with_taken_at(MediaId::new("m2".to_string()), "a/photo2.jpg", Some(2000));
-        db.insert_media(&rec1).await.unwrap();
-        db.insert_media(&rec2).await.unwrap();
+        media.insert(&rec1).await.unwrap();
+        media.insert(&rec2).await.unwrap();
 
         let face1 = AssetFaceRow {
             id: "f1".to_string(),
@@ -409,7 +411,7 @@ mod tests {
     #[tokio::test]
     async fn delete_person() {
         let dir = tempdir().unwrap();
-        let (repo, _db) = test_repo(dir.path()).await;
+        let (repo, _media, _db) = test_repo(dir.path()).await;
 
         repo.upsert_person("p1", "Alice", None, false, false, None, None)
             .await
@@ -423,7 +425,7 @@ mod tests {
     #[tokio::test]
     async fn rename_person() {
         let dir = tempdir().unwrap();
-        let (repo, _db) = test_repo(dir.path()).await;
+        let (repo, _media, _db) = test_repo(dir.path()).await;
 
         repo.upsert_person("p1", "Alice", None, false, false, None, None)
             .await
@@ -437,7 +439,7 @@ mod tests {
     #[tokio::test]
     async fn set_person_hidden() {
         let dir = tempdir().unwrap();
-        let (repo, _db) = test_repo(dir.path()).await;
+        let (repo, _media, _db) = test_repo(dir.path()).await;
 
         repo.upsert_person("p1", "Alice", None, false, false, None, None)
             .await
@@ -455,13 +457,13 @@ mod tests {
     #[tokio::test]
     async fn upsert_and_delete_asset_face() {
         let dir = tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media, _db) = test_repo(dir.path()).await;
 
         repo.upsert_person("p1", "Alice", None, false, false, None, None)
             .await
             .unwrap();
         let rec = test_record(MediaId::new("m1".to_string()));
-        db.insert_media(&rec).await.unwrap();
+        media.insert(&rec).await.unwrap();
 
         let face = AssetFaceRow {
             id: "f1".to_string(),
@@ -494,7 +496,7 @@ mod tests {
     #[tokio::test]
     async fn list_media_for_person_excludes_trashed() {
         let dir = tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media, _db) = test_repo(dir.path()).await;
 
         repo.upsert_person("p1", "Alice", None, false, false, None, None)
             .await
@@ -505,8 +507,8 @@ mod tests {
             record_with_taken_at(MediaId::new("m2".to_string()), "a/photo2.jpg", Some(2000));
         rec2.is_trashed = true;
         rec2.trashed_at = Some(chrono::Utc::now().timestamp());
-        db.insert_media(&rec1).await.unwrap();
-        db.insert_media(&rec2).await.unwrap();
+        media.insert(&rec1).await.unwrap();
+        media.insert(&rec2).await.unwrap();
 
         let face1 = AssetFaceRow {
             id: "f1".to_string(),
@@ -542,13 +544,13 @@ mod tests {
     #[tokio::test]
     async fn clear_people_and_faces() {
         let dir = tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media, _db) = test_repo(dir.path()).await;
 
         repo.upsert_person("p1", "Alice", None, false, false, None, None)
             .await
             .unwrap();
         let rec = test_record(MediaId::new("m1".to_string()));
-        db.insert_media(&rec).await.unwrap();
+        media.insert(&rec).await.unwrap();
 
         let face = AssetFaceRow {
             id: "f1".to_string(),
@@ -577,13 +579,13 @@ mod tests {
     #[tokio::test]
     async fn delete_person_nullifies_face_person_id() {
         let dir = tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media, _db) = test_repo(dir.path()).await;
 
         repo.upsert_person("p1", "Alice", None, false, false, None, None)
             .await
             .unwrap();
         let rec = test_record(MediaId::new("m1".to_string()));
-        db.insert_media(&rec).await.unwrap();
+        media.insert(&rec).await.unwrap();
 
         let face = AssetFaceRow {
             id: "f1".to_string(),

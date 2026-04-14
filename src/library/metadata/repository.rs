@@ -146,14 +146,16 @@ impl MetadataRepository {
 mod tests {
     use super::*;
     use crate::library::db::test_helpers::*;
-    use crate::library::media::{LibraryMedia, MediaId};
+    use crate::library::media::repository::MediaRepository;
+    use crate::library::media::MediaId;
     use tempfile::tempdir;
 
     /// Create a `MetadataRepository` backed by a test database.
-    async fn test_repo(dir: &std::path::Path) -> (MetadataRepository, Database) {
+    async fn test_repo(dir: &std::path::Path) -> (MetadataRepository, MediaRepository) {
         let db = open_test_db(dir).await;
         let repo = MetadataRepository::new(db.clone());
-        (repo, db)
+        let media = MediaRepository::new(db);
+        (repo, media)
     }
 
     fn sample_record(media_id: MediaId) -> MediaMetadataRecord {
@@ -176,18 +178,18 @@ mod tests {
     #[tokio::test]
     async fn get_returns_none_when_no_metadata() {
         let dir = tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media) = test_repo(dir.path()).await;
         let id = MediaId::new("a".repeat(64));
-        db.insert_media(&test_record(id.clone())).await.unwrap();
+        media.insert(&test_record(id.clone())).await.unwrap();
         assert!(repo.get(&id).await.unwrap().is_none());
     }
 
     #[tokio::test]
     async fn insert_and_get_roundtrip() {
         let dir = tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media) = test_repo(dir.path()).await;
         let id = MediaId::new("b".repeat(64));
-        db.insert_media(&test_record(id.clone())).await.unwrap();
+        media.insert(&test_record(id.clone())).await.unwrap();
 
         let record = sample_record(id.clone());
         repo.insert(&record).await.unwrap();
@@ -202,9 +204,9 @@ mod tests {
     #[tokio::test]
     async fn insert_skips_empty_record() {
         let dir = tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media) = test_repo(dir.path()).await;
         let id = MediaId::new("c".repeat(64));
-        db.insert_media(&test_record(id.clone())).await.unwrap();
+        media.insert(&test_record(id.clone())).await.unwrap();
 
         let empty = MediaMetadataRecord {
             media_id: id.clone(),
@@ -227,9 +229,9 @@ mod tests {
     #[tokio::test]
     async fn insert_updates_on_conflict() {
         let dir = tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media) = test_repo(dir.path()).await;
         let id = MediaId::new("d".repeat(64));
-        db.insert_media(&test_record(id.clone())).await.unwrap();
+        media.insert(&test_record(id.clone())).await.unwrap();
 
         repo.insert(&sample_record(id.clone())).await.unwrap();
 
@@ -258,9 +260,9 @@ mod tests {
     #[tokio::test]
     async fn upsert_inserts_new_record() {
         let dir = tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media) = test_repo(dir.path()).await;
         let id = MediaId::new("e".repeat(64));
-        db.insert_media(&test_record(id.clone())).await.unwrap();
+        media.insert(&test_record(id.clone())).await.unwrap();
 
         repo.upsert(&sample_record(id.clone())).await.unwrap();
 
@@ -271,9 +273,9 @@ mod tests {
     #[tokio::test]
     async fn upsert_replaces_existing_record() {
         let dir = tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media) = test_repo(dir.path()).await;
         let id = MediaId::new("f".repeat(64));
-        db.insert_media(&test_record(id.clone())).await.unwrap();
+        media.insert(&test_record(id.clone())).await.unwrap();
 
         repo.insert(&sample_record(id.clone())).await.unwrap();
 

@@ -64,7 +64,7 @@ mod imp {
 
         // Service dependencies (set once in setup)
         pub picture: OnceCell<gtk::Picture>,
-        pub library: OnceCell<Arc<dyn Library>>,
+        pub library: OnceCell<Arc<Library>>,
         pub tokio: OnceCell<tokio::runtime::Handle>,
         pub bus_sender: OnceCell<crate::event_bus::EventSender>,
 
@@ -81,7 +81,7 @@ mod imp {
         pub fn picture(&self) -> &gtk::Picture {
             self.picture.get().expect("picture not initialized")
         }
-        pub fn library(&self) -> &Arc<dyn Library> {
+        pub fn library(&self) -> &Arc<Library> {
             self.library.get().expect("library not initialized")
         }
         pub fn tokio(&self) -> &tokio::runtime::Handle {
@@ -144,7 +144,7 @@ impl EditPanel {
     pub fn setup(
         &self,
         picture: gtk::Picture,
-        library: Arc<dyn Library>,
+        library: Arc<Library>,
         tokio: tokio::runtime::Handle,
         bus_sender: crate::event_bus::EventSender,
     ) {

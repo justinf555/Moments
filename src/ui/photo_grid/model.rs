@@ -24,7 +24,7 @@ mod imp {
 
     pub struct PhotoGridModel {
         pub store: gio::ListStore,
-        pub library: OnceCell<Arc<dyn Library>>,
+        pub library: OnceCell<Arc<Library>>,
         pub tokio: OnceCell<tokio::runtime::Handle>,
         pub bus_sender: OnceCell<EventSender>,
         pub filter: RefCell<MediaFilter>,
@@ -59,7 +59,7 @@ mod imp {
     }
 
     impl PhotoGridModel {
-        pub fn library(&self) -> &Arc<dyn Library> {
+        pub fn library(&self) -> &Arc<Library> {
             self.library.get().expect("library not initialized")
         }
         pub fn tokio(&self) -> &tokio::runtime::Handle {
@@ -86,7 +86,7 @@ glib::wrapper! {
 
 impl PhotoGridModel {
     pub fn new(
-        library: Arc<dyn Library>,
+        library: Arc<Library>,
         tokio: tokio::runtime::Handle,
         filter: MediaFilter,
         bus_sender: EventSender,

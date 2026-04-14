@@ -24,7 +24,7 @@ pub enum ImportState {
 
 /// Non-GObject dependencies for building import pipelines.
 struct ImportDeps {
-    library: Arc<dyn Library>,
+    library: Arc<Library>,
     originals_dir: PathBuf,
     thumbnails_dir: PathBuf,
     formats: Arc<FormatRegistry>,
@@ -135,7 +135,7 @@ impl ImportClient {
     /// Must be called once after construction, before the first `import()` call.
     pub fn configure(
         &self,
-        library: Arc<dyn Library>,
+        library: Arc<Library>,
         originals_dir: PathBuf,
         thumbnails_dir: PathBuf,
         formats: Arc<FormatRegistry>,

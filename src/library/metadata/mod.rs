@@ -5,4 +5,4 @@ mod service;
 pub mod video_meta;
 
 pub use model::MediaMetadataRecord;
-pub use service::{LibraryMetadata, MetadataService};
+pub use service::MetadataService;

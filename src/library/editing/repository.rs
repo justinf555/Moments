@@ -109,18 +109,20 @@ impl EditingRepository {
 mod tests {
     use super::*;
     use crate::library::db::test_helpers::{open_test_db, test_record};
-    use crate::library::media::LibraryMedia;
+    use crate::library::media::repository::MediaRepository;
+    use crate::library::media::MediaId;
 
-    async fn test_repo(dir: &std::path::Path) -> (EditingRepository, Database) {
+    async fn test_repo(dir: &std::path::Path) -> (EditingRepository, MediaRepository) {
         let db = open_test_db(dir).await;
         let repo = EditingRepository::new(db.clone());
-        (repo, db)
+        let media = MediaRepository::new(db);
+        (repo, media)
     }
 
     #[tokio::test]
     async fn get_nonexistent_returns_none() {
         let dir = tempfile::tempdir().unwrap();
-        let (repo, _db) = test_repo(dir.path()).await;
+        let (repo, _media) = test_repo(dir.path()).await;
         let id = MediaId::new("abc123".to_string());
         let result = repo.get_edit_state(&id).await.unwrap();
         assert!(result.is_none());
@@ -129,9 +131,9 @@ mod tests {
     #[tokio::test]
     async fn upsert_and_get_round_trip() {
         let dir = tempfile::tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media) = test_repo(dir.path()).await;
         let id = MediaId::new("abc123".to_string());
-        db.insert_media(&test_record(id.clone())).await.unwrap();
+        media.insert(&test_record(id.clone())).await.unwrap();
 
         let mut state = EditState::default();
         state.exposure.brightness = 0.5;
@@ -145,9 +147,9 @@ mod tests {
     #[tokio::test]
     async fn upsert_overwrites_and_clears_rendered() {
         let dir = tempfile::tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media) = test_repo(dir.path()).await;
         let id = MediaId::new("abc123".to_string());
-        db.insert_media(&test_record(id.clone())).await.unwrap();
+        media.insert(&test_record(id.clone())).await.unwrap();
 
         let state = EditState::default();
         repo.upsert_edit_state(&id, &state).await.unwrap();
@@ -166,9 +168,9 @@ mod tests {
     #[tokio::test]
     async fn delete_removes_edit_state() {
         let dir = tempfile::tempdir().unwrap();
-        let (repo, db) = test_repo(dir.path()).await;
+        let (repo, media) = test_repo(dir.path()).await;
         let id = MediaId::new("abc123".to_string());
-        db.insert_media(&test_record(id.clone())).await.unwrap();
+        media.insert(&test_record(id.clone())).await.unwrap();
 
         let state = EditState::default();
         repo.upsert_edit_state(&id, &state).await.unwrap();
@@ -181,7 +183,7 @@ mod tests {
     #[tokio::test]
     async fn has_pending_edits_returns_false_when_no_edits() {
         let dir = tempfile::tempdir().unwrap();
-        let (repo, _db) = test_repo(dir.path()).await;
+        let (repo, _media) = test_repo(dir.path()).await;
         let id = MediaId::new("abc123".to_string());
         assert!(!repo.has_pending_edits(&id).await.unwrap());
     }

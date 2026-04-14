@@ -187,7 +187,7 @@ impl MomentsWindow {
     /// self-contained.
     pub fn setup(
         &self,
-        library: Arc<dyn Library>,
+        library: Arc<Library>,
         tokio: tokio::runtime::Handle,
         settings: gio::Settings,
         bus: &crate::event_bus::EventBus,
@@ -305,7 +305,7 @@ impl MomentsWindow {
 
     fn setup_sidebar(
         &self,
-        library: &Arc<dyn Library>,
+        library: &Arc<Library>,
         tokio: &tokio::runtime::Handle,
         settings: &gio::Settings,
     ) -> MomentsSidebar {
@@ -364,7 +364,7 @@ impl MomentsWindow {
     #[allow(clippy::type_complexity)]
     fn build_coordinator(
         &self,
-        library: &Arc<dyn Library>,
+        library: &Arc<Library>,
         tokio: &tokio::runtime::Handle,
         settings: &gio::Settings,
         texture_cache: &Rc<TextureCache>,
@@ -406,7 +406,7 @@ impl MomentsWindow {
     fn register_lazy_views(
         &self,
         coordinator: &mut ContentCoordinator,
-        library: &Arc<dyn Library>,
+        library: &Arc<Library>,
         tokio: &tokio::runtime::Handle,
         settings: &gio::Settings,
         texture_cache: &Rc<TextureCache>,
@@ -535,7 +535,7 @@ impl MomentsWindow {
     fn connect_sidebar_navigation(
         &self,
         sidebar: &MomentsSidebar,
-        library: &Arc<dyn Library>,
+        library: &Arc<Library>,
         tokio: &tokio::runtime::Handle,
         settings: &gio::Settings,
         texture_cache: &Rc<TextureCache>,

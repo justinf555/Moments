@@ -15,7 +15,7 @@ use crate::library::Library;
 pub struct ImportPipelineBuilder {
     originals_dir: Option<PathBuf>,
     thumbnails_dir: Option<PathBuf>,
-    library: Option<Arc<dyn Library>>,
+    library: Option<Arc<Library>>,
     formats: Option<Arc<FormatRegistry>>,
     mode: Option<LocalStorageMode>,
     on_progress: Option<ProgressFn>,
@@ -45,10 +45,10 @@ impl ImportPipelineBuilder {
 
     /// Set the library backend providing media, metadata, and thumbnail services.
     ///
-    /// Temporary: accepts `Arc<dyn Library>` because Rust cannot upcast trait
+    /// Temporary: accepts `Arc<Library>` because Rust cannot upcast trait
     /// objects. Will switch to individual services (MediaService, MetadataService,
     /// ThumbnailService) once the full refactor gives the caller direct access.
-    pub fn library(mut self, lib: Arc<dyn Library>) -> Self {
+    pub fn library(mut self, lib: Arc<Library>) -> Self {
         self.library = Some(lib);
         self
     }

@@ -33,7 +33,6 @@ use crate::config::{APP_ID, PROFILE, VERSION};
 use crate::event_bus::EventBus;
 use crate::library::bundle::Bundle;
 use crate::library::config::LibraryConfig;
-use crate::library::factory::LibraryFactory;
 use crate::library::Library;
 use crate::ui::MomentsSetupWindow;
 use crate::ui::MomentsWindow;
@@ -45,7 +44,7 @@ mod imp {
     pub struct MomentsApplication {
         pub settings: OnceCell<gio::Settings>,
         pub tokio: OnceCell<tokio::runtime::Handle>,
-        pub library: RefCell<Option<Arc<dyn Library>>>,
+        pub library: RefCell<Option<Arc<Library>>>,
         pub import_client: RefCell<Option<crate::client::import_client::ImportClient>>,
         pub is_immich: Cell<bool>,
         pub immich_server_url: RefCell<Option<String>>,
@@ -86,7 +85,7 @@ mod imp {
         fn shutdown(&self) {
             info!("application shutting down");
 
-            // Drop all library-related state so the Arc<dyn Library>
+            // Drop all library-related state so the Arc<Library>
             // (and the SqlitePool it wraps) is freed before drop(tokio)
             // in main() tries to shut down the runtime.
             self.event_bus.borrow_mut().take();
@@ -481,17 +480,24 @@ impl MomentsApplication {
             async move {
                 let tokio = app.imp().tokio.get().expect("tokio handle set").clone();
 
-                // Create the event bus early so LibraryFactory can pass
-                // its sender into the backend for direct event delivery.
                 let bus = EventBus::new();
-                let bus_tx = bus.sender();
 
-                match LibraryFactory::create(bundle, config, bus_tx.clone(), tokio.clone()).await {
+                let import_mode = storage_mode.clone();
+                let open_result = tokio
+                    .spawn(async move { Library::open(bundle, storage_mode).await })
+                    .await
+                    .map_err(|e| crate::library::error::LibraryError::Runtime(e.to_string()));
+                let storage_mode = import_mode;
+                match open_result.and_then(|r| r) {
                     Ok(library) => {
+                        let library = Arc::new(library);
                         info!("library ready");
 
                         // Store library on the application.
                         *app.imp().library.borrow_mut() = Some(Arc::clone(&library));
+
+                        // Notify the UI that the library is ready.
+                        bus.sender().send(AppEvent::Ready);
 
                         // Create the import client (GObject singleton).
                         {

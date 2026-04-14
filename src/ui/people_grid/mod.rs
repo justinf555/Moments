@@ -44,7 +44,7 @@ mod imp {
         pub hidden_toggle: TemplateChild<gtk::ToggleButton>,
 
         // Service dependencies
-        pub library: OnceCell<Arc<dyn Library>>,
+        pub library: OnceCell<Arc<Library>>,
 
         // State
         pub(super) store: OnceCell<gio::ListStore>,
@@ -98,7 +98,7 @@ impl PeopleGridView {
     /// Set up the People collection grid view.
     pub fn setup_people(
         &self,
-        library: Arc<dyn Library>,
+        library: Arc<Library>,
         tokio: tokio::runtime::Handle,
         settings: gio::Settings,
         texture_cache: Rc<TextureCache>,
@@ -178,7 +178,7 @@ impl PeopleGridView {
 // ── Free functions ───────────────────────────────────────────────────────────
 
 /// Load people from the library and populate the store (initial load).
-fn load_people(store: &gio::ListStore, library: &Arc<dyn Library>, filter: &Rc<PeopleFilter>) {
+fn load_people(store: &gio::ListStore, library: &Arc<Library>, filter: &Rc<PeopleFilter>) {
     let lib = Arc::clone(library);
     let store = store.clone();
     let lib_thumb = Arc::clone(library);
@@ -248,7 +248,7 @@ fn replace_item(store: &gio::ListStore, person_id: &str, data: PersonItemData) {
 }
 
 /// Full reload: clear store and re-populate (used when filter toggles change).
-fn full_reload(store: &gio::ListStore, library: &Arc<dyn Library>, filter: &Rc<PeopleFilter>) {
+fn full_reload(store: &gio::ListStore, library: &Arc<Library>, filter: &Rc<PeopleFilter>) {
     store.remove_all();
     load_people(store, library, filter);
 }
@@ -256,7 +256,7 @@ fn full_reload(store: &gio::ListStore, library: &Arc<dyn Library>, filter: &Rc<P
 /// Incremental update: insert new, remove deleted (used for sync refresh).
 fn incremental_reload(
     store: &gio::ListStore,
-    library: &Arc<dyn Library>,
+    library: &Arc<Library>,
     filter: &Rc<PeopleFilter>,
 ) {
     use std::collections::HashMap;

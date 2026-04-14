@@ -15,7 +15,7 @@ pub fn show_preferences(
     window: &impl IsA<gtk::Widget>,
     settings: &gio::Settings,
     is_immich: bool,
-    library: Option<Arc<dyn Library>>,
+    library: Option<Arc<Library>>,
     immich_server_url: Option<String>,
 ) {
     let dialog = adw::PreferencesDialog::new();
@@ -131,7 +131,7 @@ struct LibraryStatsRows {
 fn build_library_page(
     settings: &gio::Settings,
     is_immich: bool,
-    library: &Option<Arc<dyn Library>>,
+    library: &Option<Arc<Library>>,
 ) -> (adw::PreferencesPage, LibraryStatsRows) {
     let page = adw::PreferencesPage::new();
     page.set_title("Library");
@@ -190,7 +190,7 @@ fn build_overview_group() -> (
 fn build_storage_group(
     settings: &gio::Settings,
     is_immich: bool,
-    library: &Option<Arc<dyn Library>>,
+    library: &Option<Arc<Library>>,
 ) -> (adw::PreferencesGroup, Option<adw::ActionRow>) {
     let group = adw::PreferencesGroup::new();
     group.set_title("Storage");
@@ -209,9 +209,8 @@ fn build_storage_group(
         cache_row.connect_changed(move |row| {
             let mb = row.value() as u32;
             let _ = settings_cache.set_uint("originals-cache-max-mb", mb);
-            if let Some(ref lib) = lib_cache {
-                lib.set_cache_limit(mb);
-            }
+            // TODO: Cache limit live-update will be restored with sync (phase 4).
+            let _ = &lib_cache;
         });
         group.add(&cache_row);
 
@@ -227,7 +226,7 @@ fn build_storage_group(
     (group, cache_usage_row)
 }
 
-fn spawn_library_stats(library: Option<Arc<dyn Library>>, rows: LibraryStatsRows) {
+fn spawn_library_stats(library: Option<Arc<Library>>, rows: LibraryStatsRows) {
     let Some(lib) = library else { return };
     let tokio = crate::application::MomentsApplication::default().tokio_handle();
     let photos_weak = rows.photos.downgrade();
@@ -288,7 +287,7 @@ struct ServerStatsRows {
 
 fn build_immich_page(
     settings: &gio::Settings,
-    library: &Option<Arc<dyn Library>>,
+    library: &Option<Arc<Library>>,
     immich_server_url: &Option<String>,
 ) -> (adw::PreferencesPage, ServerStatsRows) {
     let page = adw::PreferencesPage::new();
@@ -331,7 +330,7 @@ fn build_connection_group(immich_server_url: &Option<String>) -> adw::Preference
 
 fn build_sync_group(
     settings: &gio::Settings,
-    library: &Option<Arc<dyn Library>>,
+    library: &Option<Arc<Library>>,
 ) -> adw::PreferencesGroup {
     let group = adw::PreferencesGroup::new();
     group.set_title("Sync");
@@ -349,9 +348,8 @@ fn build_sync_group(
     interval_row.connect_changed(move |row| {
         let secs = row.value() as u32;
         let _ = settings_sync.set_uint("sync-interval-seconds", secs);
-        if let Some(ref lib) = lib_sync {
-            lib.set_sync_interval(secs as u64);
-        }
+        // TODO: Sync interval live-update will be restored with sync (phase 4).
+        let _ = &lib_sync;
     });
     group.add(&interval_row);
 
@@ -386,7 +384,7 @@ fn build_server_stats_group() -> (adw::PreferencesGroup, ServerStatsRows) {
     (group, rows)
 }
 
-fn spawn_server_stats(library: Option<Arc<dyn Library>>, rows: ServerStatsRows) {
+fn spawn_server_stats(library: Option<Arc<Library>>, rows: ServerStatsRows) {
     let Some(lib) = library else { return };
     let tokio = crate::application::MomentsApplication::default().tokio_handle();
     let sp_weak = rows.photos.downgrade();

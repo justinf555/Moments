@@ -26,13 +26,7 @@ pub struct ImportPipeline {
     pub(super) originals_dir: PathBuf,
     pub(super) thumbnails_dir: PathBuf,
     /// Provides media, metadata, and thumbnail services.
-    ///
-    /// Uses `Arc<dyn Library>` as a temporary workaround because Rust does not
-    /// support upcasting `Arc<dyn Library>` to `Arc<dyn LibraryMedia>` etc.
-    /// Once the full refactor is complete and the `ImportClient` has direct
-    /// access to individual services (MediaService, MetadataService,
-    /// ThumbnailService), this should be replaced with those concrete types.
-    pub(super) library: Arc<dyn Library>,
+    pub(super) library: Arc<Library>,
     pub(super) formats: Arc<FormatRegistry>,
     pub(super) mode: LocalStorageMode,
     pub(super) on_progress: Option<ProgressFn>,
@@ -141,8 +135,8 @@ impl ImportPipeline {
             duration_ms: extracted.duration_ms,
             originals_dir: &self.originals_dir,
             mode: &self.mode,
-            media: &*self.library,
-            metadata: &*self.library,
+            media: self.library.media(),
+            metadata: self.library.metadata(),
         })
         .await?;
 
@@ -151,7 +145,7 @@ impl ImportPipeline {
             &media_id,
             &result.thumbnail_source,
             &self.thumbnails_dir,
-            &*self.library,
+            self.library.thumbnails(),
             &self.formats,
         )
         .await;

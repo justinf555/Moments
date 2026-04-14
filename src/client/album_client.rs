@@ -5,10 +5,10 @@ use tracing::{debug, error};
 
 use crate::app_event::AppEvent;
 use crate::event_bus::{self, EventSender, Subscription};
-use crate::library::album::{AlbumId, LibraryAlbums};
+use crate::library::album::AlbumId;
 use crate::library::error::LibraryError;
 use crate::library::media::MediaId;
-use crate::library::thumbnail::LibraryThumbnail;
+use crate::library::Library;
 use crate::ui::album_grid::item::AlbumItemObject;
 use crate::ui::album_picker_dialog::{AlbumEntry, AlbumPickerData};
 
@@ -18,27 +18,21 @@ use crate::ui::album_picker_dialog::{AlbumEntry, AlbumPickerData};
 /// 1. **Threading** — spawns service calls onto Tokio, delivers results on the GTK thread
 /// 2. **Conversion** — transforms plain `Album` structs into `AlbumItemObject` GObjects
 /// 3. **Reactivity** — subscribes to bus events and triggers UI refreshes
-///
-/// Lives in `ui/` — it depends on GTK types and GObjects, so it is not
-/// part of the library layer.
 #[derive(Clone)]
 pub struct AlbumClient {
-    service: Arc<dyn LibraryAlbums>,
-    thumbnails: Arc<dyn LibraryThumbnail>,
+    library: Arc<Library>,
     tokio: tokio::runtime::Handle,
     bus: EventSender,
 }
 
 impl AlbumClient {
     pub fn new(
-        service: Arc<dyn LibraryAlbums>,
-        thumbnails: Arc<dyn LibraryThumbnail>,
+        library: Arc<Library>,
         tokio: tokio::runtime::Handle,
         bus: EventSender,
     ) -> Self {
         Self {
-            service,
-            thumbnails,
+            library,
             tokio,
             bus,
         }
@@ -51,7 +45,7 @@ impl AlbumClient {
         &self,
         callback: impl FnOnce(Result<Vec<AlbumItemObject>, LibraryError>) + 'static,
     ) {
-        let service = self.service.clone();
+        let service = self.library.clone();
         let tokio = self.tokio.clone();
 
         glib::MainContext::default().spawn_local(async move {
@@ -86,13 +80,12 @@ impl AlbumClient {
         media_ids: Vec<MediaId>,
         callback: impl FnOnce(Result<AlbumPickerData, LibraryError>) + 'static,
     ) {
-        let service = self.service.clone();
-        let thumbnails = self.thumbnails.clone();
+        let library = self.library.clone();
         let tokio = self.tokio.clone();
 
         glib::MainContext::default().spawn_local(async move {
             // Step 1: fetch albums + membership on Tokio.
-            let svc = service.clone();
+            let svc = library.clone();
             let ids_q = media_ids.clone();
             let query_result = tokio
                 .spawn(async move {
@@ -124,7 +117,7 @@ impl AlbumClient {
                     let path = a
                         .cover_media_id
                         .as_ref()
-                        .map(|mid| thumbnails.thumbnail_path(mid));
+                        .map(|mid| library.thumbnail_path(mid));
                     (a.id.clone(), path)
                 })
                 .collect();
@@ -184,7 +177,7 @@ impl AlbumClient {
 
     /// Create a new album. On success, sends `AlbumCreated` on the bus.
     pub fn create_album(&self, name: String) {
-        let service = self.service.clone();
+        let service = self.library.clone();
         let tokio = self.tokio.clone();
         let bus = self.bus.clone();
 
@@ -213,7 +206,7 @@ impl AlbumClient {
 
     /// Rename an album. On success, sends `AlbumRenamed` on the bus.
     pub fn rename_album(&self, id: AlbumId, name: String) {
-        let service = self.service.clone();
+        let service = self.library.clone();
         let tokio = self.tokio.clone();
         let bus = self.bus.clone();
 

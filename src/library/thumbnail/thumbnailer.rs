@@ -185,7 +185,8 @@ mod tests {
     use crate::event_bus::EventSender;
     use crate::library::db::Database;
     use crate::library::format::StandardHandler;
-    use crate::library::media::{LibraryMedia, MediaRecord, MediaType};
+    use crate::library::media::repository::MediaRepository;
+    use crate::library::media::{MediaRecord, MediaType};
     use tempfile::tempdir;
 
     async fn open_test_db(dir: &Path) -> Database {
@@ -231,6 +232,7 @@ mod tests {
     async fn generate_creates_webp_thumbnail() {
         let dir = tempdir().unwrap();
         let db = open_test_db(dir.path()).await;
+        let media = MediaRepository::new(db.clone());
         let thumbnails_dir = dir.path().join("thumbnails");
         let src_path = dir.path().join("photo.jpg");
         write_test_jpeg(&src_path);
@@ -238,7 +240,8 @@ mod tests {
         let id = MediaId::from_file(&src_path).await.unwrap();
 
         // Insert media record so FK constraint is satisfied.
-        db.insert_media(&test_record(id.clone(), "photo.jpg"))
+        media
+            .insert(&test_record(id.clone(), "photo.jpg"))
             .await
             .unwrap();
 
@@ -296,13 +299,15 @@ mod tests {
     async fn generate_marks_failed_on_corrupt_source() {
         let dir = tempdir().unwrap();
         let db = open_test_db(dir.path()).await;
+        let media = MediaRepository::new(db.clone());
         let thumbnails_dir = dir.path().join("thumbnails");
         let src_path = dir.path().join("bad.jpg");
         std::fs::write(&src_path, b"not an image").unwrap();
 
         let id = MediaId::from_file(&src_path).await.unwrap();
 
-        db.insert_media(&test_record(id.clone(), "bad.jpg"))
+        media
+            .insert(&test_record(id.clone(), "bad.jpg"))
             .await
             .unwrap();
 

@@ -14,7 +14,7 @@ use super::item::AlbumItemObject;
 
 /// Build a `SignalListItemFactory` for the album grid.
 pub fn build_factory(
-    library: Arc<dyn Library>,
+    library: Arc<Library>,
     tokio: tokio::runtime::Handle,
     selection_mode: Rc<Cell<bool>>,
     selection: gtk::MultiSelection,

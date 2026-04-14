@@ -45,7 +45,7 @@ fn max_decode_workers() -> usize {
 #[allow(clippy::too_many_arguments)]
 pub fn build_factory(
     cell_size: i32,
-    library: Arc<dyn Library>,
+    library: Arc<Library>,
     tokio: tokio::runtime::Handle,
     bus_sender: EventSender,
     filter: MediaFilter,
