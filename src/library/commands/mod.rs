@@ -231,7 +231,11 @@ mod tests {
         )
         .unwrap();
         std::mem::forget(dir);
-        Arc::new(Library::open(bundle, LocalStorageMode::Managed).await.unwrap())
+        Arc::new(
+            Library::open(bundle, LocalStorageMode::Managed)
+                .await
+                .unwrap(),
+        )
     }
 
     fn test_record(id: MediaId) -> MediaRecord {
@@ -259,7 +263,14 @@ mod tests {
         let id = MediaId::new("a".repeat(64));
         lib.insert_media(&test_record(id.clone())).await.unwrap();
         let (bus, rx) = EventSender::test_channel();
-        handle_command(AppEvent::TrashRequested { ids: vec![id.clone()] }, &lib, &bus).await;
+        handle_command(
+            AppEvent::TrashRequested {
+                ids: vec![id.clone()],
+            },
+            &lib,
+            &bus,
+        )
+        .await;
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, AppEvent::Trashed { ids: ref got } if got == &[id]));
     }
@@ -271,7 +282,14 @@ mod tests {
         lib.insert_media(&test_record(id.clone())).await.unwrap();
         lib.trash(std::slice::from_ref(&id)).await.unwrap();
         let (bus, rx) = EventSender::test_channel();
-        handle_command(AppEvent::RestoreRequested { ids: vec![id.clone()] }, &lib, &bus).await;
+        handle_command(
+            AppEvent::RestoreRequested {
+                ids: vec![id.clone()],
+            },
+            &lib,
+            &bus,
+        )
+        .await;
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, AppEvent::Restored { ids: ref got } if got == &[id]));
     }
@@ -282,7 +300,14 @@ mod tests {
         let id = MediaId::new("c".repeat(64));
         lib.insert_media(&test_record(id.clone())).await.unwrap();
         let (bus, rx) = EventSender::test_channel();
-        handle_command(AppEvent::DeleteRequested { ids: vec![id.clone()] }, &lib, &bus).await;
+        handle_command(
+            AppEvent::DeleteRequested {
+                ids: vec![id.clone()],
+            },
+            &lib,
+            &bus,
+        )
+        .await;
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, AppEvent::Deleted { ids: ref got } if got == &[id]));
     }
@@ -294,7 +319,10 @@ mod tests {
         lib.insert_media(&test_record(id.clone())).await.unwrap();
         let (bus, rx) = EventSender::test_channel();
         handle_command(
-            AppEvent::FavoriteRequested { ids: vec![id.clone()], state: true },
+            AppEvent::FavoriteRequested {
+                ids: vec![id.clone()],
+                state: true,
+            },
             &lib,
             &bus,
         )
@@ -310,7 +338,10 @@ mod tests {
         let lib = test_library().await;
         let (bus, rx) = EventSender::test_channel();
         handle_command(
-            AppEvent::CreateAlbumRequested { name: "Vacation".into(), ids: vec![] },
+            AppEvent::CreateAlbumRequested {
+                name: "Vacation".into(),
+                ids: vec![],
+            },
             &lib,
             &bus,
         )
@@ -327,7 +358,10 @@ mod tests {
         lib.insert_media(&test_record(id.clone())).await.unwrap();
         let (bus, rx) = EventSender::test_channel();
         handle_command(
-            AppEvent::CreateAlbumRequested { name: "Trip".into(), ids: vec![id] },
+            AppEvent::CreateAlbumRequested {
+                name: "Trip".into(),
+                ids: vec![id],
+            },
             &lib,
             &bus,
         )

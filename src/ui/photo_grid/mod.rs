@@ -783,8 +783,6 @@ impl PhotoGridView {
 
         let ctx = actions::ActionContext {
             selection: selection.clone(),
-            library: Arc::clone(&library),
-            tokio,
             filter: filter.clone(),
             grid_view,
             bus_sender: bus_sender.clone(),

@@ -46,6 +46,7 @@ mod imp {
         pub tokio: OnceCell<tokio::runtime::Handle>,
         pub library: RefCell<Option<Arc<Library>>>,
         pub import_client: RefCell<Option<crate::client::import_client::ImportClient>>,
+        pub album_client: RefCell<Option<crate::client::AlbumClient>>,
         pub is_immich: Cell<bool>,
         pub immich_server_url: RefCell<Option<String>>,
         /// Centralised event bus for fan-out event delivery.
@@ -89,6 +90,7 @@ mod imp {
             // (and the SqlitePool it wraps) is freed before drop(tokio)
             // in main() tries to shut down the runtime.
             self.event_bus.borrow_mut().take();
+            self.album_client.borrow_mut().take();
             self.library.borrow_mut().take();
 
             self.parent_shutdown();
@@ -178,6 +180,14 @@ impl MomentsApplication {
     /// Returns `None` if no library is open yet.
     pub fn import_client(&self) -> Option<crate::client::import_client::ImportClient> {
         self.imp().import_client.borrow().clone()
+    }
+
+    /// Access the album client singleton.
+    ///
+    /// Available from anywhere via `MomentsApplication::default().album_client()`.
+    /// Returns `None` if no library is open yet.
+    pub fn album_client(&self) -> Option<crate::client::AlbumClient> {
+        self.imp().album_client.borrow().clone()
     }
 
     /// Get the singleton application instance.
@@ -518,6 +528,17 @@ impl MomentsApplication {
                                 tokio.clone(),
                             );
                             *app.imp().import_client.borrow_mut() = Some(import_client);
+                        }
+
+                        // Create the album client (GObject singleton).
+                        {
+                            let album_client = crate::client::AlbumClient::new();
+                            album_client.configure(
+                                Arc::clone(&library),
+                                tokio.clone(),
+                                bus.sender(),
+                            );
+                            *app.imp().album_client.borrow_mut() = Some(album_client);
                         }
 
                         // Wire the shell: builds sidebar, registers views,

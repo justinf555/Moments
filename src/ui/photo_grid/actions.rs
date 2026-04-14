@@ -1,7 +1,5 @@
 //! Context menu and album popover wiring for the photo grid.
 
-use std::sync::Arc;
-
 use adw::prelude::*;
 use gtk::glib;
 use tracing::debug;
@@ -9,18 +7,15 @@ use tracing::debug;
 use crate::app_event::AppEvent;
 use crate::event_bus::EventSender;
 use crate::library::media::MediaFilter;
-use crate::library::Library;
 
 use super::item::MediaItemObject;
 
 /// Context passed to wiring functions.
 ///
-/// Carries the bus sender for commands and the library/tokio for
-/// read-only queries (e.g. list_albums for the album popover).
+/// Carries the bus sender for commands and view references for
+/// context menus and action bar actions.
 pub(super) struct ActionContext {
     pub selection: gtk::MultiSelection,
-    pub library: Arc<Library>,
-    pub tokio: tokio::runtime::Handle,
     pub filter: MediaFilter,
     pub grid_view: gtk::GridView,
     pub bus_sender: EventSender,
@@ -28,8 +23,6 @@ pub(super) struct ActionContext {
 
 /// Wire the "Add to Album" button to open the album picker dialog.
 pub(super) fn wire_album_controls(ctx: &ActionContext, album_btn: &gtk::Button) {
-    let lib = Arc::clone(&ctx.library);
-    let tk = ctx.tokio.clone();
     let selection = ctx.selection.clone();
     let bus_tx = ctx.bus_sender.clone();
 
@@ -39,13 +32,7 @@ pub(super) fn wire_album_controls(ctx: &ActionContext, album_btn: &gtk::Button) 
         if ids.is_empty() {
             return;
         }
-        crate::ui::album_picker_dialog::show_album_picker_dialog(
-            btn,
-            ids,
-            Arc::clone(&lib),
-            tk.clone(),
-            bus_tx.clone(),
-        );
+        crate::ui::album_picker_dialog::show_album_picker_dialog(btn, ids, bus_tx.clone());
     });
 }
 

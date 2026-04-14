@@ -516,8 +516,6 @@ fn wire_overflow_menu(
             crate::ui::album_picker_dialog::show_album_picker_dialog(
                 viewer.upcast_ref::<gtk::Widget>(),
                 vec![id],
-                Arc::clone(imp.library()),
-                imp.tokio().clone(),
                 imp.bus_sender().clone(),
             );
         });

@@ -8,7 +8,8 @@ use gettextrs::gettext;
 use gtk::{gio, glib};
 use tracing::debug;
 
-use crate::library::album::{Album, AlbumId};
+use crate::client::AlbumClient;
+use crate::library::album::AlbumId;
 use crate::library::Library;
 use crate::ui::album_dialogs;
 use crate::ui::photo_grid::texture_cache::TextureCache;
@@ -16,10 +17,9 @@ use crate::ui::photo_grid::texture_cache::TextureCache;
 mod actions;
 pub mod card;
 pub mod factory;
-pub mod item;
 mod selection;
 
-use item::AlbumItemObject;
+use crate::client::AlbumItemObject;
 
 /// Sort order for the album grid.
 /// Values match the GSettings `album-sort-order` key.
@@ -30,7 +30,7 @@ const SORT_CREATED: u32 = 2;
 
 mod imp {
     use super::*;
-    use std::cell::{OnceCell, RefCell};
+    use std::cell::OnceCell;
 
     use gtk::CompositeTemplate;
 
@@ -59,14 +59,14 @@ mod imp {
         pub action_bar: TemplateChild<gtk::ActionBar>,
 
         // Service dependencies
+        pub album_client: OnceCell<AlbumClient>,
+        /// Library + tokio kept temporarily for drill-down into photo grids.
         pub library: OnceCell<Arc<Library>>,
         pub tokio: OnceCell<tokio::runtime::Handle>,
 
         // State
         pub(super) store: OnceCell<gio::ListStore>,
         pub(super) sort_order: OnceCell<Rc<Cell<u32>>>,
-        /// Keeps the event bus subscription alive for this view's lifetime.
-        pub _subscription: RefCell<Option<crate::event_bus::Subscription>>,
     }
 
     #[glib::object_subclass]
@@ -97,36 +97,13 @@ mod imp {
         fn realize(&self) {
             self.parent_realize();
 
-            let (Some(store), Some(library), Some(tokio), Some(sort_order)) = (
-                self.store.get(),
-                self.library.get(),
-                self.tokio.get(),
-                self.sort_order.get(),
-            ) else {
+            let (Some(store), Some(album_client)) = (self.store.get(), self.album_client.get())
+            else {
                 tracing::warn!("AlbumGridView realized before setup()");
                 return;
             };
 
-            super::reload_albums(store, library, tokio, Rc::clone(sort_order));
-
-            let st = store.clone();
-            let lib = Arc::clone(library);
-            let tk = tokio.clone();
-            let so = Rc::clone(sort_order);
-            let sub = crate::event_bus::subscribe(move |event| match event {
-                crate::app_event::AppEvent::AlbumCreated { .. }
-                | crate::app_event::AppEvent::AlbumRenamed { .. }
-                | crate::app_event::AppEvent::AlbumDeleted { .. } => {
-                    super::reload_albums(&st, &lib, &tk, Rc::clone(&so));
-                }
-                _ => {}
-            });
-            *self._subscription.borrow_mut() = Some(sub);
-        }
-
-        fn unrealize(&self) {
-            self._subscription.borrow_mut().take();
-            self.parent_unrealize();
+            album_client.populate(store);
         }
     }
 }
@@ -157,6 +134,17 @@ impl AlbumGridView {
         bus_sender: crate::event_bus::EventSender,
     ) {
         let imp = self.imp();
+
+        let album_client = crate::application::MomentsApplication::default()
+            .album_client()
+            .expect("album client available after library load");
+        assert!(
+            imp.album_client.set(album_client.clone()).is_ok(),
+            "setup called twice"
+        );
+
+        // Library + tokio kept temporarily for drill-down into photo grids
+        // and factory thumbnail loading. Will be removed when MediaClient exists.
         assert!(
             imp.library.set(Arc::clone(&library)).is_ok(),
             "setup called twice"
@@ -190,13 +178,12 @@ impl AlbumGridView {
         let enter_selection = gio::SimpleAction::new("select", None);
 
         // ── Grid ────────────────────────────────────────────────────────
-        let store = gio::ListStore::new::<AlbumItemObject>();
+        let store = album_client.create_model();
         let multi_selection = gtk::MultiSelection::new(Some(store.clone()));
 
         imp.grid_view.set_model(Some(&multi_selection));
         imp.grid_view.set_factory(Some(&factory::build_factory(
-            Arc::clone(&library),
-            tokio.clone(),
+            album_client.clone(),
             Rc::clone(&selection_mode),
             multi_selection.clone(),
             enter_selection.clone(),
@@ -247,33 +234,11 @@ impl AlbumGridView {
 
         // ── Wire "New Album" buttons ────────────────────────────────────
         {
-            let lib = Arc::clone(&library);
-            let tk = tokio.clone();
-            let bs = bus_sender.clone();
+            let ac = album_client.clone();
             let connect_create = move |btn: &gtk::Button| {
-                let lib = Arc::clone(&lib);
-                let tk = tk.clone();
-                let bs = bs.clone();
+                let ac = ac.clone();
                 album_dialogs::show_create_album_dialog(btn, move |name| {
-                    let lib = Arc::clone(&lib);
-                    let tk = tk.clone();
-                    let bs = bs.clone();
-                    glib::MainContext::default().spawn_local(async move {
-                            let n = name.clone();
-                            match tk.spawn(async move { lib.create_album(&n).await }).await {
-                                Ok(Ok(id)) => {
-                                    debug!(album_id = %id, name = %name, "album created from albums view");
-                                    bs.send(crate::app_event::AppEvent::AlbumCreated {
-                                        id,
-                                        name,
-                                    });
-                                }
-                                Ok(Err(e)) => {
-                                    tracing::error!("failed to create album: {e}");
-                                }
-                                Err(e) => tracing::error!("tokio join error: {e}"),
-                            }
-                        });
+                    ac.create_album(name);
                 });
             };
 
@@ -298,11 +263,11 @@ impl AlbumGridView {
                 let Some(item) = obj.downcast_ref::<AlbumItemObject>() else {
                     return;
                 };
-                let album = item.album();
-                let album_id = AlbumId::from_raw(album.id.as_str().to_owned());
-                let album_name = album.name.clone();
+                let album_id_str = item.id();
+                let album_name = item.name();
+                let album_id = AlbumId::from_raw(album_id_str.clone());
 
-                debug!(album_id = %album.id, name = %album_name, "album activated");
+                debug!(album_id = %album_id_str, name = %album_name, "album activated");
 
                 actions::open_album_drilldown(&lib, &tk, &s, &tc, &bs, &nav, album_id, &album_name);
             });
@@ -340,13 +305,8 @@ impl AlbumGridView {
 
     pub fn reload(&self) {
         let imp = self.imp();
-        if let (Some(store), Some(library), Some(tokio), Some(sort_order)) = (
-            imp.store.get(),
-            imp.library.get(),
-            imp.tokio.get(),
-            imp.sort_order.get(),
-        ) {
-            reload_albums(store, library, tokio, Rc::clone(sort_order));
+        if let (Some(store), Some(album_client)) = (imp.store.get(), imp.album_client.get()) {
+            album_client.populate(store);
         }
     }
 }
@@ -378,53 +338,19 @@ fn sort_store(store: &gio::ListStore, order: u32) {
     store.sort(|a, b| {
         let a = a
             .downcast_ref::<AlbumItemObject>()
-            .expect("store holds AlbumItemObject")
-            .album();
+            .expect("store holds AlbumItemObject");
         let b = b
             .downcast_ref::<AlbumItemObject>()
-            .expect("store holds AlbumItemObject")
-            .album();
-        sort_albums(a, b, order)
+            .expect("store holds AlbumItemObject");
+        sort_album_items(a, b, order)
     });
 }
 
-/// Async-load all albums into the store, then sort.
-fn reload_albums(
-    store: &gio::ListStore,
-    library: &Arc<Library>,
-    tokio: &tokio::runtime::Handle,
-    sort_order: Rc<Cell<u32>>,
-) {
-    let lib = Arc::clone(library);
-    let tk = tokio.clone();
-    let store = store.clone();
-
-    glib::MainContext::default().spawn_local(async move {
-        let result = tk.spawn(async move { lib.list_albums().await }).await;
-        match result {
-            Ok(Ok(mut albums)) => {
-                // Sort before building objects.
-                let order = sort_order.get();
-                albums.sort_by(|a, b| sort_albums(a, b, order));
-
-                let objects: Vec<glib::Object> = albums
-                    .into_iter()
-                    .map(|a| AlbumItemObject::new(a).upcast())
-                    .collect();
-                store.splice(0, store.n_items(), &objects);
-                debug!(count = store.n_items(), sort_order = order, "albums loaded");
-            }
-            Ok(Err(e)) => tracing::error!("failed to load albums: {e}"),
-            Err(e) => tracing::error!("tokio join error loading albums: {e}"),
-        }
-    });
-}
-
-/// Compare two albums for sorting.
-fn sort_albums(a: &Album, b: &Album, order: u32) -> std::cmp::Ordering {
+/// Compare two album items for sorting.
+fn sort_album_items(a: &AlbumItemObject, b: &AlbumItemObject, order: u32) -> std::cmp::Ordering {
     match order {
-        SORT_NAME => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-        SORT_CREATED => b.created_at.cmp(&a.created_at),
-        _ => b.updated_at.cmp(&a.updated_at),
+        SORT_NAME => a.name().to_lowercase().cmp(&b.name().to_lowercase()),
+        SORT_CREATED => b.created_at().cmp(&a.created_at()),
+        _ => b.updated_at().cmp(&a.updated_at()),
     }
 }

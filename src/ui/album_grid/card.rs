@@ -3,7 +3,7 @@ use std::cell::{Cell, RefCell};
 use gettextrs::ngettext;
 use gtk::{glib, prelude::*, subclass::prelude::*};
 
-use super::item::AlbumItemObject;
+use crate::client::AlbumItemObject;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DisplayMode {
@@ -15,7 +15,7 @@ enum DisplayMode {
 /// Signal handler IDs stored between `bind` and `unbind`.
 pub struct CardBindings {
     item: glib::WeakRef<AlbumItemObject>,
-    texture_handlers: Vec<glib::SignalHandlerId>,
+    handlers: Vec<glib::SignalHandlerId>,
 }
 
 mod imp {
@@ -142,20 +142,37 @@ impl AlbumCard {
     /// Bind the card to an album item.
     pub fn bind(&self, item: &AlbumItemObject) {
         let imp = self.imp();
-        let album = item.album();
 
-        imp.name_label.set_text(&album.name);
-        let count_text = ngettext("{} photo", "{} photos", album.media_count)
-            .replace("{}", &album.media_count.to_string());
-        imp.count_label.set_text(&count_text);
+        // Set initial values from properties.
+        self.update_name(&item.name());
+        self.update_count(item.media_count());
 
         // Apply any already-decoded mosaic textures.
         self.apply_mosaic_textures(item);
 
-        // Watch for texture changes on all 4 slots.
+        // Watch for property changes.
         let mut handlers = Vec::new();
-        let props = ["texture0", "texture1", "texture2", "texture3"];
-        for prop in &props {
+
+        // Name changes.
+        {
+            let card = self.clone();
+            let handler = item.connect_notify_local(Some("name"), move |item, _| {
+                card.update_name(&item.name());
+            });
+            handlers.push(handler);
+        }
+
+        // Media count changes.
+        {
+            let card = self.clone();
+            let handler = item.connect_notify_local(Some("media-count"), move |item, _| {
+                card.update_count(item.media_count());
+            });
+            handlers.push(handler);
+        }
+
+        // Texture changes on all 4 slots.
+        for prop in &["texture0", "texture1", "texture2", "texture3"] {
             let card = self.clone();
             let item_weak = item.downgrade();
             let handler = item.connect_notify_local(Some(prop), move |_, _| {
@@ -168,7 +185,7 @@ impl AlbumCard {
 
         *imp.bindings.borrow_mut() = Some(CardBindings {
             item: item.downgrade(),
-            texture_handlers: handlers,
+            handlers,
         });
     }
 
@@ -182,7 +199,7 @@ impl AlbumCard {
         let imp = self.imp();
         if let Some(b) = imp.bindings.borrow_mut().take() {
             if let Some(item) = b.item.upgrade() {
-                for handler in b.texture_handlers {
+                for handler in b.handlers {
                     item.disconnect(handler);
                 }
             }
@@ -197,6 +214,15 @@ impl AlbumCard {
         imp.name_label.set_text("");
         imp.count_label.set_text("");
         self.set_display_mode(DisplayMode::Placeholder);
+    }
+
+    fn update_name(&self, name: &str) {
+        self.imp().name_label.set_text(name);
+    }
+
+    fn update_count(&self, count: u32) {
+        let text = ngettext("{} photo", "{} photos", count).replace("{}", &count.to_string());
+        self.imp().count_label.set_text(&text);
     }
 
     /// Apply mosaic textures from the item to the card.

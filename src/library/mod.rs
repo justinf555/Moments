@@ -125,11 +125,7 @@ impl Library {
         self.media.list_media(filter, cursor, limit).await
     }
 
-    pub async fn set_favorite(
-        &self,
-        ids: &[MediaId],
-        favorite: bool,
-    ) -> Result<(), LibraryError> {
+    pub async fn set_favorite(&self, ids: &[MediaId], favorite: bool) -> Result<(), LibraryError> {
         self.media.set_favorite(ids, favorite).await
     }
 
@@ -153,10 +149,7 @@ impl Library {
         self.media.delete_permanently(ids).await
     }
 
-    pub async fn expired_trash(
-        &self,
-        max_age_secs: i64,
-    ) -> Result<Vec<MediaId>, LibraryError> {
+    pub async fn expired_trash(&self, max_age_secs: i64) -> Result<Vec<MediaId>, LibraryError> {
         self.media.expired_trash(max_age_secs).await
     }
 
@@ -166,10 +159,7 @@ impl Library {
 
     // ── Viewer ──────────────────────────────────────────────────────
 
-    pub async fn original_path(
-        &self,
-        id: &MediaId,
-    ) -> Result<Option<PathBuf>, LibraryError> {
+    pub async fn original_path(&self, id: &MediaId) -> Result<Option<PathBuf>, LibraryError> {
         self.media.original_path(id).await
     }
 
@@ -205,11 +195,7 @@ impl Library {
         self.albums.create_album(name).await
     }
 
-    pub async fn rename_album(
-        &self,
-        id: &album::AlbumId,
-        name: &str,
-    ) -> Result<(), LibraryError> {
+    pub async fn rename_album(&self, id: &album::AlbumId, name: &str) -> Result<(), LibraryError> {
         self.albums.rename_album(id, name).await
     }
 
@@ -300,10 +286,7 @@ impl Library {
         self.faces.merge_people(target, sources).await
     }
 
-    pub fn person_thumbnail_path(
-        &self,
-        person_id: &faces::PersonId,
-    ) -> Option<PathBuf> {
+    pub fn person_thumbnail_path(&self, person_id: &faces::PersonId) -> Option<PathBuf> {
         self.faces.person_thumbnail_path(person_id)
     }
 
@@ -337,14 +320,15 @@ impl Library {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::library::config::LibraryConfig;
 
     async fn open_test_library(bundle: Bundle) -> Library {
-        Library::open(bundle, LocalStorageMode::Managed).await.unwrap()
+        Library::open(bundle, LocalStorageMode::Managed)
+            .await
+            .unwrap()
     }
 
     #[tokio::test]

@@ -339,22 +339,20 @@ impl MomentsWindow {
         }
 
         {
-            let lib = Arc::clone(library);
-            let tk = tokio.clone();
             let sb = sidebar.clone();
             let s = settings.clone();
-            glib::MainContext::default().spawn_local(async move {
-                match tk.spawn(async move { lib.list_albums().await }).await {
-                    Ok(Ok(albums)) => {
-                        let pairs: Vec<(String, String)> = albums
-                            .into_iter()
-                            .map(|a| (a.id.as_str().to_owned(), a.name))
-                            .collect();
-                        sb.load_pinned_albums(&s, &pairs);
-                    }
-                    Ok(Err(e)) => warn!("failed to load albums for sidebar: {e}"),
-                    Err(e) => error!("album load task panicked: {e}"),
+            let album_client = crate::application::MomentsApplication::default()
+                .album_client()
+                .expect("album client available after library load");
+            album_client.list_albums(move |result| match result {
+                Ok(albums) => {
+                    let pairs: Vec<(String, String)> = albums
+                        .into_iter()
+                        .map(|a| (a.id.as_str().to_owned(), a.name))
+                        .collect();
+                    sb.load_pinned_albums(&s, &pairs);
                 }
+                Err(e) => warn!("failed to load albums for sidebar: {e}"),
             });
         }
 

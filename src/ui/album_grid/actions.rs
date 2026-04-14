@@ -3,9 +3,10 @@ use std::sync::Arc;
 
 use adw::prelude::*;
 use gettextrs::gettext;
-use gtk::{glib, subclass::prelude::*};
-use tracing::debug;
+use gtk::subclass::prelude::*;
 
+use crate::application::MomentsApplication;
+use crate::client::AlbumClient;
 use crate::library::album::AlbumId;
 use crate::library::media::MediaFilter;
 use crate::library::Library;
@@ -14,7 +15,7 @@ use crate::ui::photo_grid::model::PhotoGridModel;
 use crate::ui::photo_grid::texture_cache::TextureCache;
 use crate::ui::photo_grid::PhotoGridView;
 
-use super::item::AlbumItemObject;
+use crate::client::AlbumItemObject;
 
 /// Push an album detail photo grid onto the navigation view.
 ///
@@ -94,9 +95,8 @@ pub(crate) fn show_context_menu(
         return;
     };
 
-    let album = obj.album();
-    let album_id_str = album.id.as_str().to_owned();
-    let album_name = album.name.clone();
+    let album_id_str = obj.id();
+    let album_name = obj.name();
 
     // Build popover menu.
     let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -164,12 +164,13 @@ pub(crate) fn show_context_menu(
     );
 
     // Wire Rename.
+    let album_client = MomentsApplication::default()
+        .album_client()
+        .expect("album client available");
     wire_rename_button(
         &rename_btn,
         &popover,
-        library,
-        tokio,
-        bus_sender,
+        &album_client,
         grid_view,
         &album_id_str,
         &album_name,
@@ -271,21 +272,16 @@ fn wire_open_button(
 }
 
 /// Wire the Rename button to show a rename dialog.
-#[allow(clippy::too_many_arguments)]
 fn wire_rename_button(
     rename_btn: &gtk::Button,
     popover: &gtk::Popover,
-    library: &Arc<Library>,
-    tokio: &tokio::runtime::Handle,
-    bus_sender: &crate::event_bus::EventSender,
+    album_client: &AlbumClient,
     grid_view: &gtk::GridView,
     album_id_str: &str,
     album_name: &str,
 ) {
     let pop = popover.downgrade();
-    let lib = Arc::clone(library);
-    let tk = tokio.clone();
-    let bs = bus_sender.clone();
+    let ac = album_client.clone();
     let aid = album_id_str.to_owned();
     let aname = album_name.to_owned();
     let gv_ref = grid_view.clone();
@@ -293,44 +289,11 @@ fn wire_rename_button(
         if let Some(p) = pop.upgrade() {
             p.popdown();
         }
-        let lib = Arc::clone(&lib);
-        let tk = tk.clone();
-        let bs = bs.clone();
+        let ac = ac.clone();
         let aid = aid.clone();
         if let Some(win) = gv_ref.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
             album_dialogs::show_rename_album_dialog(&win, &aname, move |new_name| {
-                let lib = Arc::clone(&lib);
-                let tk = tk.clone();
-                let bs = bs.clone();
-                let aid = aid.clone();
-                glib::MainContext::default().spawn_local(async move {
-                    let n = new_name.clone();
-                    let id = AlbumId::from_raw(aid.clone());
-                    match tk
-                        .spawn(async move { lib.rename_album(&id, &n).await })
-                        .await
-                    {
-                        Ok(Ok(())) => {
-                            debug!(album_id = %aid, name = %new_name, "album renamed");
-                            bs.send(crate::app_event::AppEvent::AlbumRenamed {
-                                id: AlbumId::from_raw(aid),
-                                name: new_name,
-                            });
-                        }
-                        Ok(Err(e)) => {
-                            tracing::error!("failed to rename album: {e}");
-                            bs.send(crate::app_event::AppEvent::Error(format!(
-                                "Failed to rename album: {e}"
-                            )));
-                        }
-                        Err(e) => {
-                            tracing::error!("tokio join error: {e}");
-                            bs.send(crate::app_event::AppEvent::Error(format!(
-                                "Failed to rename album: {e}"
-                            )));
-                        }
-                    }
-                });
+                ac.rename_album(AlbumId::from_raw(aid.clone()), new_name);
             });
         }
     });

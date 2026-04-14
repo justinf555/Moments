@@ -254,11 +254,7 @@ fn full_reload(store: &gio::ListStore, library: &Arc<Library>, filter: &Rc<Peopl
 }
 
 /// Incremental update: insert new, remove deleted (used for sync refresh).
-fn incremental_reload(
-    store: &gio::ListStore,
-    library: &Arc<Library>,
-    filter: &Rc<PeopleFilter>,
-) {
+fn incremental_reload(store: &gio::ListStore, library: &Arc<Library>, filter: &Rc<PeopleFilter>) {
     use std::collections::HashMap;
 
     let lib = Arc::clone(library);

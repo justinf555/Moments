@@ -7,7 +7,7 @@ use gtk::gio;
 use crate::library::album::AlbumId;
 
 use super::card;
-use super::item::AlbumItemObject;
+use crate::client::AlbumItemObject;
 
 /// Wire up selection mode UI transitions and batch-delete button.
 ///
@@ -149,7 +149,7 @@ fn wire_batch_delete(
                     .item(i)
                     .and_then(|o| o.downcast::<AlbumItemObject>().ok())
                 {
-                    ids.push(AlbumId::from_raw(obj.album().id.as_str().to_owned()));
+                    ids.push(AlbumId::from_raw(obj.id()));
                 }
             }
         }
