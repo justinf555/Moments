@@ -35,6 +35,8 @@ mod imp {
         pub on_page_ready: RefCell<Option<Box<dyn Fn()>>>,
         /// Keeps the event bus subscription alive for this model's lifetime.
         pub _subscription: RefCell<Option<crate::event_bus::Subscription>>,
+        /// Signal handler ID for ImportClient state notifications.
+        pub _import_handler: RefCell<Option<glib::SignalHandlerId>>,
     }
 
     impl Default for PhotoGridModel {
@@ -51,6 +53,7 @@ mod imp {
                 id_index: RefCell::new(HashMap::new()),
                 on_page_ready: RefCell::new(None),
                 _subscription: RefCell::new(None),
+                _import_handler: RefCell::new(None),
             }
         }
     }
@@ -114,6 +117,21 @@ impl PhotoGridModel {
             }
         });
         *self.imp()._subscription.borrow_mut() = Some(sub);
+
+        // Connect to ImportClient for import completion → reload.
+        if let Some(import_client) =
+            crate::application::MomentsApplication::default().import_client()
+        {
+            let weak = self.downgrade();
+            let handler = import_client.connect_notify_local(Some("state"), move |client, _| {
+                if client.state() == crate::client::import_client::ImportState::Complete {
+                    if let Some(model) = weak.upgrade() {
+                        model.reload();
+                    }
+                }
+            });
+            *self.imp()._import_handler.borrow_mut() = Some(handler);
+        }
     }
 
     /// Deactivate this model: drop the event bus subscription.
@@ -121,6 +139,14 @@ impl PhotoGridModel {
     /// Called by `PhotoGridView::unrealize`.
     pub fn deactivate(&self) {
         self.imp()._subscription.borrow_mut().take();
+        // Disconnect ImportClient signal handler.
+        if let Some(handler) = self.imp()._import_handler.borrow_mut().take() {
+            if let Some(import_client) =
+                crate::application::MomentsApplication::default().import_client()
+            {
+                import_client.disconnect(handler);
+            }
+        }
     }
 
     /// Dispatch a bus event to the appropriate handler.
@@ -169,9 +195,6 @@ impl PhotoGridModel {
                         self.reload();
                     }
                 }
-            }
-            AppEvent::ImportComplete { .. } => {
-                self.reload();
             }
             _ => {}
         }

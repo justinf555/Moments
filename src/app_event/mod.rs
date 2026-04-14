@@ -1,4 +1,3 @@
-use crate::importer::ImportSummary;
 use crate::library::album::AlbumId;
 use crate::library::media::{MediaId, MediaItem};
 
@@ -23,7 +22,8 @@ pub enum AppEvent {
     ShutdownComplete,
     Error(String),
 
-    // ── Import ───────────────────────────────────────────────────────────────
+    // ── Import (legacy — used by ImmichImportJob, will be removed when
+    //    Immich import moves to sync) ─────────────────────────────────────────
     ImportProgress {
         current: usize,
         total: usize,
@@ -32,7 +32,7 @@ pub enum AppEvent {
         failed: usize,
     },
     ImportComplete {
-        summary: ImportSummary,
+        summary: crate::importer::ImportSummary,
     },
 
     // ── Thumbnails ───────────────────────────────────────────────────────────

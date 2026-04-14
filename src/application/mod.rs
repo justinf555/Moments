@@ -46,7 +46,7 @@ mod imp {
         pub settings: OnceCell<gio::Settings>,
         pub tokio: OnceCell<tokio::runtime::Handle>,
         pub library: RefCell<Option<Arc<dyn Library>>>,
-        pub import_client: RefCell<Option<crate::client::ImportClient>>,
+        pub import_client: RefCell<Option<crate::client::import_client::ImportClient>>,
         pub is_immich: Cell<bool>,
         pub immich_server_url: RefCell<Option<String>>,
         /// Centralised event bus for fan-out event delivery.
@@ -171,6 +171,14 @@ impl MomentsApplication {
     /// Available from anywhere via `MomentsApplication::default().tokio_handle()`.
     pub fn tokio_handle(&self) -> tokio::runtime::Handle {
         self.imp().tokio.get().expect("tokio handle set").clone()
+    }
+
+    /// Access the import client singleton.
+    ///
+    /// Available from anywhere via `MomentsApplication::default().import_client()`.
+    /// Returns `None` if no library is open yet.
+    pub fn import_client(&self) -> Option<crate::client::import_client::ImportClient> {
+        self.imp().import_client.borrow().clone()
     }
 
     /// Get the singleton application instance.
@@ -485,7 +493,7 @@ impl MomentsApplication {
                         // Store library on the application.
                         *app.imp().library.borrow_mut() = Some(Arc::clone(&library));
 
-                        // Create the import client.
+                        // Create the import client (GObject singleton).
                         {
                             use crate::library::format::{
                                 FormatRegistry, RawHandler, StandardHandler, VideoHandler,
@@ -494,13 +502,13 @@ impl MomentsApplication {
                             registry.register(std::sync::Arc::new(StandardHandler));
                             registry.register(std::sync::Arc::new(RawHandler));
                             registry.register(std::sync::Arc::new(VideoHandler));
-                            let import_client = crate::client::ImportClient::new(
+                            let import_client = crate::client::import_client::ImportClient::new();
+                            import_client.configure(
                                 Arc::clone(&library),
                                 originals_dir,
                                 thumbnails_dir,
                                 std::sync::Arc::new(registry),
                                 storage_mode,
-                                bus_tx.clone(),
                                 tokio.clone(),
                             );
                             *app.imp().import_client.borrow_mut() = Some(import_client);

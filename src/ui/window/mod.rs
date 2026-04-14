@@ -257,19 +257,22 @@ impl MomentsWindow {
 
         // Navigate to Recent Imports when an import completes.
         // Deferred via idle_add_local_once because navigate() can materialise
-        // a lazy view, which triggers realize → subscribe() on the new widget,
-        // and the bus's subscriber list is borrowed during dispatch.
-        let weak = self.downgrade();
-        subs.push(bus.subscribe(move |event| {
-            if matches!(event, AppEvent::ImportComplete { .. }) {
-                let weak = weak.clone();
-                glib::idle_add_local_once(move || {
-                    if let Some(win) = weak.upgrade() {
-                        win.navigate("recent");
-                    }
-                });
-            }
-        }));
+        // a lazy view, which triggers realize → subscribe() on the new widget.
+        if let Some(import_client) =
+            crate::application::MomentsApplication::default().import_client()
+        {
+            let weak = self.downgrade();
+            import_client.connect_notify_local(Some("state"), move |client, _| {
+                if client.state() == crate::client::import_client::ImportState::Complete {
+                    let weak = weak.clone();
+                    glib::idle_add_local_once(move || {
+                        if let Some(win) = weak.upgrade() {
+                            win.navigate("recent");
+                        }
+                    });
+                }
+            });
+        }
 
         // Unregister deleted album routes from the coordinator before
         // AlbumGridView processes the event (avoids a navigation race).

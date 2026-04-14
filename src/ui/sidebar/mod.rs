@@ -49,6 +49,8 @@ mod imp {
         pub current_state: Cell<StatusState>,
         /// Keeps the event bus subscription alive for this sidebar's lifetime.
         pub _subscription: RefCell<Option<crate::event_bus::Subscription>>,
+        /// Signal handler IDs for ImportClient property notifications.
+        pub _import_handlers: RefCell<Vec<glib::SignalHandlerId>>,
     }
 
     /// Tracks the active bottom bar state for priority-based switching.
@@ -86,6 +88,7 @@ mod imp {
                 sync_timer: RefCell::new(None),
                 current_state: Cell::new(StatusState::Idle),
                 _subscription: RefCell::new(None),
+                _import_handlers: RefCell::new(Vec::new()),
             }
         }
     }
@@ -507,19 +510,6 @@ mod imp {
                     crate::app_event::AppEvent::ThumbnailDownloadsComplete { total } => {
                         sidebar.show_thumbnails_complete(*total);
                     }
-                    crate::app_event::AppEvent::ImportProgress {
-                        current,
-                        total,
-                        imported,
-                        skipped,
-                        failed,
-                    } => {
-                        sidebar
-                            .show_upload_progress(*current, *total, *imported, *skipped, *failed);
-                    }
-                    crate::app_event::AppEvent::ImportComplete { summary } => {
-                        sidebar.show_upload_complete(summary);
-                    }
                     crate::app_event::AppEvent::Trashed { ids } => {
                         sidebar.adjust_trash_count(ids.len() as i32);
                     }
@@ -533,10 +523,64 @@ mod imp {
                 }
             });
             *self._subscription.borrow_mut() = Some(sub);
+
+            // Connect to ImportClient property notifications.
+            if let Some(import_client) =
+                crate::application::MomentsApplication::default().import_client()
+            {
+                let mut handlers = self._import_handlers.borrow_mut();
+                let obj = self.obj().clone();
+
+                // Progress updates.
+                let weak = obj.downgrade();
+                handlers.push(import_client.connect_notify_local(
+                    Some("current"),
+                    move |client, _| {
+                        if let Some(sidebar) = weak.upgrade() {
+                            sidebar.show_upload_progress(
+                                client.current() as usize,
+                                client.total() as usize,
+                                client.imported() as usize,
+                                client.skipped() as usize,
+                                client.failed() as usize,
+                            );
+                        }
+                    },
+                ));
+
+                // State changes (completion).
+                let weak = obj.downgrade();
+                handlers.push(import_client.connect_notify_local(
+                    Some("state"),
+                    move |client, _| {
+                        if let Some(sidebar) = weak.upgrade() {
+                            if client.state() == crate::client::import_client::ImportState::Complete
+                            {
+                                let summary = crate::importer::ImportSummary {
+                                    imported: client.imported() as usize,
+                                    skipped_duplicates: client.skipped() as usize,
+                                    skipped_unsupported: 0,
+                                    failed: client.failed() as usize,
+                                    elapsed_secs: client.elapsed_secs(),
+                                };
+                                sidebar.show_upload_complete(&summary);
+                            }
+                        }
+                    },
+                ));
+            }
         }
 
         fn unrealize(&self) {
             self._subscription.borrow_mut().take();
+            // Disconnect ImportClient signal handlers.
+            if let Some(import_client) =
+                crate::application::MomentsApplication::default().import_client()
+            {
+                for handler_id in self._import_handlers.borrow_mut().drain(..) {
+                    import_client.disconnect(handler_id);
+                }
+            }
             self.parent_unrealize();
         }
     }
