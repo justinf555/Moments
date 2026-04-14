@@ -21,7 +21,7 @@ use crate::library::media::{
     LibraryMedia, MediaCursor, MediaFilter, MediaId, MediaItem, MediaMetadataRecord, MediaRecord,
 };
 use crate::library::storage::LibraryStorage;
-use crate::library::thumbnail::{sharded_thumbnail_path, LibraryThumbnail};
+use crate::library::thumbnail::{LibraryThumbnail, ThumbnailService};
 use crate::library::viewer::LibraryViewer;
 
 /// Local filesystem backend.
@@ -37,6 +37,7 @@ pub struct LocalLibrary {
     albums: AlbumService,
     faces: FacesService,
     editing: EditingService,
+    thumbnails: ThumbnailService,
     tokio: Handle,
     formats: Arc<FormatRegistry>,
 }
@@ -72,6 +73,7 @@ impl LocalLibrary {
         let albums = AlbumService::new(db.clone());
         let faces = FacesService::new(db.clone(), None); // local backend: no face thumbnails
         let editing = EditingService::new(db.clone());
+        let thumbnails = ThumbnailService::new(db.clone(), bundle.thumbnails.clone());
 
         let library = Self {
             bundle,
@@ -81,6 +83,7 @@ impl LocalLibrary {
             albums,
             faces,
             editing,
+            thumbnails,
             tokio,
             formats,
         };
@@ -285,11 +288,11 @@ impl LibraryViewer for LocalLibrary {
 #[async_trait]
 impl LibraryThumbnail for LocalLibrary {
     fn thumbnail_path(&self, id: &MediaId) -> std::path::PathBuf {
-        sharded_thumbnail_path(&self.bundle.thumbnails, id)
+        self.thumbnails.thumbnail_path(id)
     }
 
     async fn insert_thumbnail_pending(&self, id: &MediaId) -> Result<(), LibraryError> {
-        self.db.insert_thumbnail_pending(id).await
+        self.thumbnails.insert_thumbnail_pending(id).await
     }
 
     async fn set_thumbnail_ready(
@@ -298,20 +301,20 @@ impl LibraryThumbnail for LocalLibrary {
         file_path: &str,
         generated_at: i64,
     ) -> Result<(), LibraryError> {
-        self.db
+        self.thumbnails
             .set_thumbnail_ready(id, file_path, generated_at)
             .await
     }
 
     async fn set_thumbnail_failed(&self, id: &MediaId) -> Result<(), LibraryError> {
-        self.db.set_thumbnail_failed(id).await
+        self.thumbnails.set_thumbnail_failed(id).await
     }
 
     async fn thumbnail_status(
         &self,
         id: &MediaId,
     ) -> Result<Option<crate::library::thumbnail::ThumbnailStatus>, LibraryError> {
-        self.db.thumbnail_status(id).await
+        self.thumbnails.thumbnail_status(id).await
     }
 }
 
