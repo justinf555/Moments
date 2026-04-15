@@ -598,6 +598,7 @@ impl MomentsApplication {
                                 std::sync::Arc::new(registry),
                                 storage_mode,
                                 tokio.clone(),
+                                bus.sender(),
                             );
                             *app.imp().import_client.borrow_mut() = Some(import_client);
                         }

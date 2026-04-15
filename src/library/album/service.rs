@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use tracing::warn;
+
 use super::model::{Album, AlbumId};
 use super::repository::AlbumRepository;
 use crate::library::db::Database;
@@ -12,7 +14,7 @@ use crate::library::recorder::MutationRecorder;
 /// Album management service.
 #[derive(Clone)]
 pub struct AlbumService {
-    pub(crate) repo: AlbumRepository,
+    repo: AlbumRepository,
     recorder: Arc<dyn MutationRecorder>,
 }
 
@@ -48,30 +50,44 @@ impl AlbumService {
 
     pub async fn create_album(&self, name: &str) -> Result<AlbumId, LibraryError> {
         let id = self.repo.create(name).await?;
-        self.recorder
+        if let Err(e) = self
+            .recorder
             .record(&Mutation::AlbumCreated {
                 id: id.clone(),
                 name: name.to_string(),
             })
-            .await?;
+            .await
+        {
+            warn!(error = %e, "failed to record AlbumCreated mutation");
+        }
         Ok(id)
     }
 
     pub async fn rename_album(&self, id: &AlbumId, name: &str) -> Result<(), LibraryError> {
         self.repo.rename(id, name).await?;
-        self.recorder
+        if let Err(e) = self
+            .recorder
             .record(&Mutation::AlbumRenamed {
                 id: id.clone(),
                 name: name.to_string(),
             })
             .await
+        {
+            warn!(error = %e, "failed to record AlbumRenamed mutation");
+        }
+        Ok(())
     }
 
     pub async fn delete_album(&self, id: &AlbumId) -> Result<(), LibraryError> {
         self.repo.delete(id).await?;
-        self.recorder
+        if let Err(e) = self
+            .recorder
             .record(&Mutation::AlbumDeleted { id: id.clone() })
             .await
+        {
+            warn!(error = %e, "failed to record AlbumDeleted mutation");
+        }
+        Ok(())
     }
 
     pub async fn add_to_album(
@@ -80,12 +96,17 @@ impl AlbumService {
         media_ids: &[MediaId],
     ) -> Result<(), LibraryError> {
         self.repo.add_media(album_id, media_ids).await?;
-        self.recorder
+        if let Err(e) = self
+            .recorder
             .record(&Mutation::AlbumMediaAdded {
                 album_id: album_id.clone(),
                 media_ids: media_ids.to_vec(),
             })
             .await
+        {
+            warn!(error = %e, "failed to record AlbumMediaAdded mutation");
+        }
+        Ok(())
     }
 
     pub async fn remove_from_album(
@@ -94,12 +115,17 @@ impl AlbumService {
         media_ids: &[MediaId],
     ) -> Result<(), LibraryError> {
         self.repo.remove_media(album_id, media_ids).await?;
-        self.recorder
+        if let Err(e) = self
+            .recorder
             .record(&Mutation::AlbumMediaRemoved {
                 album_id: album_id.clone(),
                 media_ids: media_ids.to_vec(),
             })
             .await
+        {
+            warn!(error = %e, "failed to record AlbumMediaRemoved mutation");
+        }
+        Ok(())
     }
 
     pub async fn list_album_media(

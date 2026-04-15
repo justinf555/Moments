@@ -62,6 +62,271 @@ pub enum Mutation {
     PersonHidden { id: PersonId, hidden: bool },
 }
 
+// ── Outbox serialization ─────────────────────────────────────────────
+
+/// One row in the `sync_outbox` table.
+///
+/// Multi-ID mutations (e.g. `AssetTrashed { ids: [a, b] }`) expand into
+/// multiple rows — one per entity. The Mutation type owns both the
+/// serialization ([`Mutation::to_outbox_rows`]) and deserialization
+/// ([`Mutation::from_outbox_row`]) so the format is defined in one place.
+#[derive(Debug, Clone)]
+pub struct OutboxRow {
+    pub entity_type: String,
+    pub entity_id: String,
+    pub action: String,
+    pub payload: Option<String>,
+}
+
+impl Mutation {
+    /// Serialize this mutation into outbox rows.
+    pub fn to_outbox_rows(&self) -> Vec<OutboxRow> {
+        match self {
+            Mutation::AssetImported { id, file_path } => {
+                let payload = serde_json::json!({
+                    "file_path": file_path.to_string_lossy(),
+                })
+                .to_string();
+                vec![OutboxRow {
+                    entity_type: "asset".into(),
+                    entity_id: id.as_str().into(),
+                    action: "import".into(),
+                    payload: Some(payload),
+                }]
+            }
+
+            Mutation::AssetFavorited { ids, favorite } => {
+                let action = if *favorite { "favorite" } else { "unfavorite" };
+                ids.iter()
+                    .map(|id| OutboxRow {
+                        entity_type: "asset".into(),
+                        entity_id: id.as_str().into(),
+                        action: action.into(),
+                        payload: None,
+                    })
+                    .collect()
+            }
+
+            Mutation::AssetTrashed { ids } => ids
+                .iter()
+                .map(|id| OutboxRow {
+                    entity_type: "asset".into(),
+                    entity_id: id.as_str().into(),
+                    action: "trash".into(),
+                    payload: None,
+                })
+                .collect(),
+
+            Mutation::AssetRestored { ids } => ids
+                .iter()
+                .map(|id| OutboxRow {
+                    entity_type: "asset".into(),
+                    entity_id: id.as_str().into(),
+                    action: "restore".into(),
+                    payload: None,
+                })
+                .collect(),
+
+            Mutation::AssetDeleted { ids } => ids
+                .iter()
+                .map(|id| OutboxRow {
+                    entity_type: "asset".into(),
+                    entity_id: id.as_str().into(),
+                    action: "delete".into(),
+                    payload: None,
+                })
+                .collect(),
+
+            Mutation::AlbumCreated { id, name } => {
+                let payload = serde_json::json!({ "name": name }).to_string();
+                vec![OutboxRow {
+                    entity_type: "album".into(),
+                    entity_id: id.as_str().into(),
+                    action: "create".into(),
+                    payload: Some(payload),
+                }]
+            }
+
+            Mutation::AlbumRenamed { id, name } => {
+                let payload = serde_json::json!({ "name": name }).to_string();
+                vec![OutboxRow {
+                    entity_type: "album".into(),
+                    entity_id: id.as_str().into(),
+                    action: "rename".into(),
+                    payload: Some(payload),
+                }]
+            }
+
+            Mutation::AlbumDeleted { id } => vec![OutboxRow {
+                entity_type: "album".into(),
+                entity_id: id.as_str().into(),
+                action: "delete".into(),
+                payload: None,
+            }],
+
+            Mutation::AlbumMediaAdded {
+                album_id,
+                media_ids,
+            } => {
+                let payload = serde_json::json!({
+                    "media_ids": media_ids.iter().map(|id| id.as_str()).collect::<Vec<_>>(),
+                })
+                .to_string();
+                vec![OutboxRow {
+                    entity_type: "album".into(),
+                    entity_id: album_id.as_str().into(),
+                    action: "add_media".into(),
+                    payload: Some(payload),
+                }]
+            }
+
+            Mutation::AlbumMediaRemoved {
+                album_id,
+                media_ids,
+            } => {
+                let payload = serde_json::json!({
+                    "media_ids": media_ids.iter().map(|id| id.as_str()).collect::<Vec<_>>(),
+                })
+                .to_string();
+                vec![OutboxRow {
+                    entity_type: "album".into(),
+                    entity_id: album_id.as_str().into(),
+                    action: "remove_media".into(),
+                    payload: Some(payload),
+                }]
+            }
+
+            Mutation::PersonRenamed { id, name } => {
+                let payload = serde_json::json!({ "name": name }).to_string();
+                vec![OutboxRow {
+                    entity_type: "person".into(),
+                    entity_id: id.as_str().into(),
+                    action: "rename".into(),
+                    payload: Some(payload),
+                }]
+            }
+
+            Mutation::PersonHidden { id, hidden } => {
+                let payload = serde_json::json!({ "hidden": hidden }).to_string();
+                vec![OutboxRow {
+                    entity_type: "person".into(),
+                    entity_id: id.as_str().into(),
+                    action: "hide".into(),
+                    payload: Some(payload),
+                }]
+            }
+        }
+    }
+
+    /// Reconstruct a `Mutation` from an outbox row.
+    ///
+    /// Each outbox row stores one entity, so multi-ID variants (e.g.
+    /// `AssetTrashed`) are reconstructed with a single-element `ids` vec.
+    /// Returns `None` if the entity_type/action pair is unrecognised.
+    pub fn from_outbox_row(row: &OutboxRow) -> Option<Self> {
+        let json = || -> serde_json::Value {
+            row.payload
+                .as_deref()
+                .and_then(|s| serde_json::from_str(s).ok())
+                .unwrap_or(serde_json::Value::Object(Default::default()))
+        };
+
+        match (row.entity_type.as_str(), row.action.as_str()) {
+            ("asset", "import") => {
+                let p = json();
+                let path = p["file_path"].as_str().unwrap_or("");
+                Some(Mutation::AssetImported {
+                    id: MediaId::new(row.entity_id.clone()),
+                    file_path: PathBuf::from(path),
+                })
+            }
+            ("asset", "favorite") => Some(Mutation::AssetFavorited {
+                ids: vec![MediaId::new(row.entity_id.clone())],
+                favorite: true,
+            }),
+            ("asset", "unfavorite") => Some(Mutation::AssetFavorited {
+                ids: vec![MediaId::new(row.entity_id.clone())],
+                favorite: false,
+            }),
+            ("asset", "trash") => Some(Mutation::AssetTrashed {
+                ids: vec![MediaId::new(row.entity_id.clone())],
+            }),
+            ("asset", "restore") => Some(Mutation::AssetRestored {
+                ids: vec![MediaId::new(row.entity_id.clone())],
+            }),
+            ("asset", "delete") => Some(Mutation::AssetDeleted {
+                ids: vec![MediaId::new(row.entity_id.clone())],
+            }),
+            ("album", "create") => {
+                let p = json();
+                let name = p["name"].as_str().unwrap_or("").to_string();
+                Some(Mutation::AlbumCreated {
+                    id: AlbumId::from_raw(row.entity_id.clone()),
+                    name,
+                })
+            }
+            ("album", "rename") => {
+                let p = json();
+                let name = p["name"].as_str().unwrap_or("").to_string();
+                Some(Mutation::AlbumRenamed {
+                    id: AlbumId::from_raw(row.entity_id.clone()),
+                    name,
+                })
+            }
+            ("album", "delete") => Some(Mutation::AlbumDeleted {
+                id: AlbumId::from_raw(row.entity_id.clone()),
+            }),
+            ("album", "add_media") => {
+                let p = json();
+                let media_ids = p["media_ids"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| MediaId::new(s.to_string())))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some(Mutation::AlbumMediaAdded {
+                    album_id: AlbumId::from_raw(row.entity_id.clone()),
+                    media_ids,
+                })
+            }
+            ("album", "remove_media") => {
+                let p = json();
+                let media_ids = p["media_ids"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| MediaId::new(s.to_string())))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some(Mutation::AlbumMediaRemoved {
+                    album_id: AlbumId::from_raw(row.entity_id.clone()),
+                    media_ids,
+                })
+            }
+            ("person", "rename") => {
+                let p = json();
+                let name = p["name"].as_str().unwrap_or("").to_string();
+                Some(Mutation::PersonRenamed {
+                    id: PersonId::from_raw(row.entity_id.clone()),
+                    name,
+                })
+            }
+            ("person", "hide") => {
+                let p = json();
+                let hidden = p["hidden"].as_bool().unwrap_or(false);
+                Some(Mutation::PersonHidden {
+                    id: PersonId::from_raw(row.entity_id.clone()),
+                    hidden,
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,6 +410,104 @@ mod tests {
             // Ensure Debug doesn't panic.
             let _ = format!("{m:?}");
         }
+    }
+
+    /// Every single-entity mutation survives a round-trip through the
+    /// outbox serialization format. Multi-ID mutations expand to one row
+    /// per ID, so the round-trip produces a single-element vec.
+    #[test]
+    fn outbox_round_trip_all_variants() {
+        let cases: Vec<Mutation> = vec![
+            Mutation::AssetImported {
+                id: MediaId::new("id1".into()),
+                file_path: PathBuf::from("/photos/test.jpg"),
+            },
+            Mutation::AssetFavorited {
+                ids: vec![MediaId::new("id2".into())],
+                favorite: true,
+            },
+            Mutation::AssetFavorited {
+                ids: vec![MediaId::new("id2b".into())],
+                favorite: false,
+            },
+            Mutation::AssetTrashed {
+                ids: vec![MediaId::new("id3".into())],
+            },
+            Mutation::AssetRestored {
+                ids: vec![MediaId::new("id4".into())],
+            },
+            Mutation::AssetDeleted {
+                ids: vec![MediaId::new("id5".into())],
+            },
+            Mutation::AlbumCreated {
+                id: AlbumId::from_raw("a1".into()),
+                name: "Vacation".into(),
+            },
+            Mutation::AlbumRenamed {
+                id: AlbumId::from_raw("a2".into()),
+                name: "Trip".into(),
+            },
+            Mutation::AlbumDeleted {
+                id: AlbumId::from_raw("a3".into()),
+            },
+            Mutation::AlbumMediaAdded {
+                album_id: AlbumId::from_raw("a4".into()),
+                media_ids: vec![MediaId::new("m1".into()), MediaId::new("m2".into())],
+            },
+            Mutation::AlbumMediaRemoved {
+                album_id: AlbumId::from_raw("a5".into()),
+                media_ids: vec![MediaId::new("m3".into())],
+            },
+            Mutation::PersonRenamed {
+                id: PersonId::from_raw("p1".into()),
+                name: "Alice".into(),
+            },
+            Mutation::PersonHidden {
+                id: PersonId::from_raw("p2".into()),
+                hidden: true,
+            },
+        ];
+
+        for mutation in &cases {
+            let rows = mutation.to_outbox_rows();
+            assert!(!rows.is_empty(), "no rows for {mutation:?}");
+
+            // Each row must deserialize back to Some.
+            for row in &rows {
+                let back = Mutation::from_outbox_row(row);
+                assert!(
+                    back.is_some(),
+                    "round-trip failed for {mutation:?} -> {row:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn outbox_unknown_action_returns_none() {
+        let row = OutboxRow {
+            entity_type: "unknown".into(),
+            entity_id: "x".into(),
+            action: "nope".into(),
+            payload: None,
+        };
+        assert!(Mutation::from_outbox_row(&row).is_none());
+    }
+
+    #[test]
+    fn outbox_multi_id_expands_to_multiple_rows() {
+        let m = Mutation::AssetTrashed {
+            ids: vec![
+                MediaId::new("a".into()),
+                MediaId::new("b".into()),
+                MediaId::new("c".into()),
+            ],
+        };
+        let rows = m.to_outbox_rows();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].entity_id, "a");
+        assert_eq!(rows[1].entity_id, "b");
+        assert_eq!(rows[2].entity_id, "c");
     }
 
     #[test]

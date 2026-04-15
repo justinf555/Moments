@@ -7,8 +7,18 @@ use tracing::{debug, error, info, instrument, warn};
 
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
+use crate::library::mutation::Mutation;
 
 use super::client::ImmichClient;
+
+/// Outbox entry lifecycle status stored in the `status` column.
+#[repr(i64)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutboxStatus {
+    Pending = 0,
+    Done = 1,
+    Failed = 2,
+}
 
 /// A pending outbox entry read from the database.
 #[derive(Debug)]
@@ -111,26 +121,41 @@ impl PushManager {
 
     /// Map a single outbox entry to an Immich API call.
     async fn push_entry(&self, entry: &OutboxEntry) -> Result<(), LibraryError> {
-        match (entry.entity_type.as_str(), entry.action.as_str()) {
+        let outbox_row = crate::library::mutation::OutboxRow {
+            entity_type: entry.entity_type.clone(),
+            entity_id: entry.entity_id.clone(),
+            action: entry.action.clone(),
+            payload: entry.payload.clone(),
+        };
+        let mutation = Mutation::from_outbox_row(&outbox_row);
+        let Some(mutation) = mutation else {
+            warn!(
+                entity_type = %entry.entity_type,
+                action = %entry.action,
+                "unknown outbox action, skipping"
+            );
+            return Ok(());
+        };
+
+        match mutation {
             // ── Asset mutations ──────────────────────────────────────
-            ("asset", "import") => {
-                self.push_asset_import(entry).await
-            }
-            ("asset", "favorite") | ("asset", "unfavorite") => {
-                let external_id = self.lookup_media_external_id(&entry.entity_id).await?;
-                let is_favorite = entry.action == "favorite";
+            Mutation::AssetImported { .. } => self.push_asset_import(entry).await,
+
+            Mutation::AssetFavorited { ids, favorite } => {
+                let external_id = self.lookup_media_external_id(ids[0].as_str()).await?;
                 self.client
                     .put_no_content(
                         "/assets",
                         &serde_json::json!({
                             "ids": [external_id],
-                            "isFavorite": is_favorite,
+                            "isFavorite": favorite,
                         }),
                     )
                     .await
             }
-            ("asset", "trash") => {
-                let external_id = self.lookup_media_external_id(&entry.entity_id).await?;
+
+            Mutation::AssetTrashed { ids } => {
+                let external_id = self.lookup_media_external_id(ids[0].as_str()).await?;
                 self.client
                     .delete_with_body(
                         "/assets",
@@ -138,8 +163,9 @@ impl PushManager {
                     )
                     .await
             }
-            ("asset", "restore") => {
-                let external_id = self.lookup_media_external_id(&entry.entity_id).await?;
+
+            Mutation::AssetRestored { ids } => {
+                let external_id = self.lookup_media_external_id(ids[0].as_str()).await?;
                 self.client
                     .post_no_content(
                         "/trash/restore/assets",
@@ -147,11 +173,12 @@ impl PushManager {
                     )
                     .await
             }
-            ("asset", "delete") => {
-                let external_id = match self.lookup_media_external_id(&entry.entity_id).await {
+
+            Mutation::AssetDeleted { ids } => {
+                let external_id = match self.lookup_media_external_id(ids[0].as_str()).await {
                     Ok(eid) => eid,
                     Err(_) => {
-                        debug!(id = %entry.entity_id, "asset already deleted, skipping push");
+                        debug!(id = %ids[0], "asset already deleted, skipping push");
                         return Ok(());
                     }
                 };
@@ -167,24 +194,19 @@ impl PushManager {
             }
 
             // ── Album mutations ─────────────────────────────────────
-            ("album", "create") => {
-                let payload = self.parse_payload(entry)?;
-                let name = payload["name"].as_str().unwrap_or("");
+            Mutation::AlbumCreated { id, name } => {
                 let resp: serde_json::Value = self
                     .client
                     .post("/albums", &serde_json::json!({ "albumName": name }))
                     .await?;
-                // Store the server-assigned album ID as external_id.
                 if let Some(server_id) = resp["id"].as_str() {
-                    self.set_album_external_id(&entry.entity_id, server_id)
-                        .await?;
+                    self.set_album_external_id(id.as_str(), server_id).await?;
                 }
                 Ok(())
             }
-            ("album", "rename") => {
-                let external_id = self.lookup_album_external_id(&entry.entity_id).await?;
-                let payload = self.parse_payload(entry)?;
-                let name = payload["name"].as_str().unwrap_or("");
+
+            Mutation::AlbumRenamed { id, name } => {
+                let external_id = self.lookup_album_external_id(id.as_str()).await?;
                 self.client
                     .patch_no_content(
                         &format!("/albums/{external_id}"),
@@ -192,11 +214,12 @@ impl PushManager {
                     )
                     .await
             }
-            ("album", "delete") => {
-                let external_id = match self.lookup_album_external_id(&entry.entity_id).await {
+
+            Mutation::AlbumDeleted { id } => {
+                let external_id = match self.lookup_album_external_id(id.as_str()).await {
                     Ok(eid) => eid,
                     Err(_) => {
-                        debug!(id = %entry.entity_id, "album already deleted, skipping push");
+                        debug!(id = %id, "album already deleted, skipping push");
                         return Ok(());
                     }
                 };
@@ -204,34 +227,40 @@ impl PushManager {
                     .delete_no_content(&format!("/albums/{external_id}"))
                     .await
             }
-            ("album", "add_media") => {
-                let external_id = self.lookup_album_external_id(&entry.entity_id).await?;
-                let payload = self.parse_payload(entry)?;
-                let media_ids = self.resolve_media_external_ids(&payload).await?;
+
+            Mutation::AlbumMediaAdded {
+                album_id,
+                media_ids,
+            } => {
+                let external_id = self.lookup_album_external_id(album_id.as_str()).await?;
+                let external_media_ids =
+                    self.resolve_media_external_ids_list(&media_ids).await?;
                 self.client
                     .put_no_content(
                         &format!("/albums/{external_id}/assets"),
-                        &serde_json::json!({ "ids": media_ids }),
+                        &serde_json::json!({ "ids": external_media_ids }),
                     )
                     .await
             }
-            ("album", "remove_media") => {
-                let external_id = self.lookup_album_external_id(&entry.entity_id).await?;
-                let payload = self.parse_payload(entry)?;
-                let media_ids = self.resolve_media_external_ids(&payload).await?;
+
+            Mutation::AlbumMediaRemoved {
+                album_id,
+                media_ids,
+            } => {
+                let external_id = self.lookup_album_external_id(album_id.as_str()).await?;
+                let external_media_ids =
+                    self.resolve_media_external_ids_list(&media_ids).await?;
                 self.client
                     .delete_with_body(
                         &format!("/albums/{external_id}/assets"),
-                        &serde_json::json!({ "ids": media_ids }),
+                        &serde_json::json!({ "ids": external_media_ids }),
                     )
                     .await
             }
 
             // ── People mutations ────────────────────────────────────
-            ("person", "rename") => {
-                let external_id = self.lookup_person_external_id(&entry.entity_id).await?;
-                let payload = self.parse_payload(entry)?;
-                let name = payload["name"].as_str().unwrap_or("");
+            Mutation::PersonRenamed { id, name } => {
+                let external_id = self.lookup_person_external_id(id.as_str()).await?;
                 self.client
                     .put_no_content(
                         &format!("/people/{external_id}"),
@@ -239,25 +268,15 @@ impl PushManager {
                     )
                     .await
             }
-            ("person", "hide") => {
-                let external_id = self.lookup_person_external_id(&entry.entity_id).await?;
-                let payload = self.parse_payload(entry)?;
-                let hidden = payload["hidden"].as_bool().unwrap_or(false);
+
+            Mutation::PersonHidden { id, hidden } => {
+                let external_id = self.lookup_person_external_id(id.as_str()).await?;
                 self.client
                     .put_no_content(
                         &format!("/people/{external_id}"),
                         &serde_json::json!({ "isHidden": hidden }),
                     )
                     .await
-            }
-
-            _ => {
-                warn!(
-                    entity_type = %entry.entity_type,
-                    action = %entry.action,
-                    "unknown outbox action, skipping"
-                );
-                Ok(())
             }
         }
     }
@@ -283,10 +302,14 @@ impl PushManager {
             .await?;
 
         // Store the server-assigned ID as external_id.
-        if !resp.id.is_empty() {
-            self.set_media_external_id(&entry.entity_id, &resp.id)
-                .await?;
+        if resp.id.is_empty() {
+            return Err(LibraryError::Immich(format!(
+                "upload returned empty id for media {}",
+                entry.entity_id
+            )));
         }
+        self.set_media_external_id(&entry.entity_id, &resp.id)
+            .await?;
 
         debug!(
             media_id = %entry.entity_id,
@@ -302,9 +325,11 @@ impl PushManager {
     async fn fetch_pending(&self) -> Result<Vec<OutboxEntry>, LibraryError> {
         let rows: Vec<(i64, String, String, String, Option<String>)> = sqlx::query_as(
             "SELECT id, entity_type, entity_id, action, payload
-             FROM sync_outbox WHERE status = 0
+             FROM sync_outbox WHERE status IN (?, ?)
              ORDER BY id ASC LIMIT ?",
         )
+        .bind(OutboxStatus::Pending as i64)
+        .bind(OutboxStatus::Failed as i64)
         .bind(BATCH_SIZE)
         .fetch_all(self.db.pool())
         .await
@@ -323,7 +348,8 @@ impl PushManager {
     }
 
     async fn mark_done(&self, id: i64) -> Result<(), LibraryError> {
-        sqlx::query("UPDATE sync_outbox SET status = 1 WHERE id = ?")
+        sqlx::query("UPDATE sync_outbox SET status = ? WHERE id = ?")
+            .bind(OutboxStatus::Done as i64)
             .bind(id)
             .execute(self.db.pool())
             .await
@@ -331,9 +357,9 @@ impl PushManager {
         Ok(())
     }
 
-    async fn mark_failed(&self, id: i64, error: &str) -> Result<(), LibraryError> {
-        sqlx::query("UPDATE sync_outbox SET status = 2, payload = ? WHERE id = ?")
-            .bind(error)
+    async fn mark_failed(&self, id: i64, _error: &str) -> Result<(), LibraryError> {
+        sqlx::query("UPDATE sync_outbox SET status = ? WHERE id = ?")
+            .bind(OutboxStatus::Failed as i64)
             .bind(id)
             .execute(self.db.pool())
             .await
@@ -342,7 +368,8 @@ impl PushManager {
     }
 
     async fn purge_completed(&self) -> Result<(), LibraryError> {
-        sqlx::query("DELETE FROM sync_outbox WHERE status IN (1, 2)")
+        sqlx::query("DELETE FROM sync_outbox WHERE status = ?")
+            .bind(OutboxStatus::Done as i64)
             .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
@@ -439,7 +466,8 @@ impl PushManager {
         })
     }
 
-    /// Resolve local media IDs in a payload to their Immich external IDs.
+    /// Resolve local media IDs in a JSON payload to their Immich external IDs.
+    #[cfg(test)]
     async fn resolve_media_external_ids(
         &self,
         payload: &serde_json::Value,
@@ -456,6 +484,18 @@ impl PushManager {
         let mut external_ids = Vec::with_capacity(local_ids.len());
         for local_id in local_ids {
             external_ids.push(self.lookup_media_external_id(local_id).await?);
+        }
+        Ok(external_ids)
+    }
+
+    /// Resolve typed media IDs to their Immich external IDs.
+    async fn resolve_media_external_ids_list(
+        &self,
+        ids: &[crate::library::media::MediaId],
+    ) -> Result<Vec<String>, LibraryError> {
+        let mut external_ids = Vec::with_capacity(ids.len());
+        for id in ids {
+            external_ids.push(self.lookup_media_external_id(id.as_str()).await?);
         }
         Ok(external_ids)
     }
@@ -538,7 +578,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_pending_skips_done_and_failed() {
+    async fn fetch_pending_returns_pending_and_failed_skips_done() {
         let (_dir, db) = setup_push_db().await;
         insert_outbox_entry(&db, "asset", "pending", "trash", None).await;
         insert_outbox_entry(&db, "asset", "done", "trash", None).await;
@@ -556,8 +596,10 @@ mod tests {
 
         let push = make_push_manager(db).await;
         let entries = push.fetch_pending().await.unwrap();
-        assert_eq!(entries.len(), 1);
+        // Both pending (status=0) and failed (status=2) are retried.
+        assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].entity_id, "pending");
+        assert_eq!(entries[1].entity_id, "failed");
     }
 
     #[tokio::test]
@@ -576,9 +618,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mark_failed_sets_status_and_error() {
+    async fn mark_failed_sets_status_preserves_payload() {
         let (_dir, db) = setup_push_db().await;
-        insert_outbox_entry(&db, "asset", "a1", "trash", None).await;
+        insert_outbox_entry(&db, "asset", "a1", "trash", Some("original")).await;
 
         let push = make_push_manager(db.clone()).await;
         push.mark_failed(1, "connection timeout").await.unwrap();
@@ -589,18 +631,23 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(row.0, 2);
-        assert_eq!(row.1.as_deref(), Some("connection timeout"));
+        // Payload is preserved for retry — error is only in the logs.
+        assert_eq!(row.1.as_deref(), Some("original"));
     }
 
     #[tokio::test]
-    async fn purge_completed_removes_done_entries() {
+    async fn purge_completed_keeps_failed_entries() {
         let (_dir, db) = setup_push_db().await;
         insert_outbox_entry(&db, "asset", "a1", "trash", None).await;
         insert_outbox_entry(&db, "asset", "a2", "trash", None).await;
         insert_outbox_entry(&db, "asset", "a3", "trash", None).await;
 
-        // Mark a1 and a2 as done.
-        sqlx::query("UPDATE sync_outbox SET status = 1 WHERE entity_id IN ('a1', 'a2')")
+        // a1 = done, a2 = failed, a3 = pending.
+        sqlx::query("UPDATE sync_outbox SET status = 1 WHERE entity_id = 'a1'")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        sqlx::query("UPDATE sync_outbox SET status = 2 WHERE entity_id = 'a2'")
             .execute(db.pool())
             .await
             .unwrap();
@@ -612,7 +659,8 @@ mod tests {
             .fetch_one(db.pool())
             .await
             .unwrap();
-        assert_eq!(count.0, 1); // only a3 remains
+        // a2 (failed) and a3 (pending) remain — only a1 (done) was purged.
+        assert_eq!(count.0, 2);
     }
 
     #[tokio::test]

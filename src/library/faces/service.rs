@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use tracing::warn;
+
 use super::model::{Person, PersonId};
 use super::repository::FacesRepository;
 use crate::library::db::Database;
@@ -11,7 +13,7 @@ use crate::library::recorder::MutationRecorder;
 /// Face/people management service.
 #[derive(Clone)]
 pub struct FacesService {
-    pub(crate) repo: FacesRepository,
+    repo: FacesRepository,
     thumbnails_dir: Option<std::path::PathBuf>,
     recorder: Arc<dyn MutationRecorder>,
 }
@@ -119,12 +121,17 @@ impl FacesService {
         name: &str,
     ) -> Result<(), LibraryError> {
         self.repo.rename_person(person_id.as_str(), name).await?;
-        self.recorder
+        if let Err(e) = self
+            .recorder
             .record(&Mutation::PersonRenamed {
                 id: person_id.clone(),
                 name: name.to_string(),
             })
             .await
+        {
+            warn!(error = %e, "failed to record PersonRenamed mutation");
+        }
+        Ok(())
     }
 
     pub async fn set_person_hidden(
@@ -135,12 +142,17 @@ impl FacesService {
         self.repo
             .set_person_hidden(person_id.as_str(), hidden)
             .await?;
-        self.recorder
+        if let Err(e) = self
+            .recorder
             .record(&Mutation::PersonHidden {
                 id: person_id.clone(),
                 hidden,
             })
             .await
+        {
+            warn!(error = %e, "failed to record PersonHidden mutation");
+        }
+        Ok(())
     }
 
     pub async fn merge_people(

@@ -10,10 +10,19 @@ use super::types::{ImportProgress, ImportSummary};
 use super::{discovery, filter, hasher, metadata, persistence, thumbnail, types::SkipReason};
 use crate::library::config::LocalStorageMode;
 use crate::library::format::FormatRegistry;
+use crate::library::media::MediaId;
 use crate::library::Library;
 
 /// Progress callback type — invoked after each file is processed.
 pub type ProgressFn = Box<dyn Fn(ImportProgress) + Send + Sync>;
+
+/// Result of processing a single file through the import pipeline.
+enum ImportOneResult {
+    /// File was imported successfully — contains the assigned MediaId.
+    Imported(MediaId),
+    /// File was skipped for the given reason.
+    Skipped(SkipReason),
+}
 
 /// Import pipeline for local media files.
 ///
@@ -57,30 +66,50 @@ impl ImportPipeline {
         for (idx, path) in candidates.into_iter().enumerate() {
             let current = idx + 1;
 
-            if let Some(ref callback) = self.on_progress {
-                callback(ImportProgress {
-                    current,
-                    total,
-                    imported: summary.imported,
-                    skipped: summary.skipped_duplicates + summary.skipped_unsupported,
-                    failed: summary.failed,
-                });
-            }
-
             match self.import_one(&path).await {
-                Ok(Some(skip)) => {
+                Ok(ImportOneResult::Imported(media_id)) => {
+                    summary.imported += 1;
+                    if let Some(ref callback) = self.on_progress {
+                        callback(ImportProgress {
+                            current,
+                            total,
+                            imported: summary.imported,
+                            skipped: summary.skipped_duplicates + summary.skipped_unsupported,
+                            failed: summary.failed,
+                            imported_id: Some(media_id),
+                        });
+                    }
+                }
+                Ok(ImportOneResult::Skipped(skip)) => {
                     debug!(?path, ?skip, "skipped");
                     match skip {
                         SkipReason::Duplicate => summary.skipped_duplicates += 1,
                         SkipReason::UnsupportedFormat => summary.skipped_unsupported += 1,
                     }
-                }
-                Ok(None) => {
-                    summary.imported += 1;
+                    if let Some(ref callback) = self.on_progress {
+                        callback(ImportProgress {
+                            current,
+                            total,
+                            imported: summary.imported,
+                            skipped: summary.skipped_duplicates + summary.skipped_unsupported,
+                            failed: summary.failed,
+                            imported_id: None,
+                        });
+                    }
                 }
                 Err(e) => {
                     warn!(?path, error = %e, "failed to import file");
                     summary.failed += 1;
+                    if let Some(ref callback) = self.on_progress {
+                        callback(ImportProgress {
+                            current,
+                            total,
+                            imported: summary.imported,
+                            skipped: summary.skipped_duplicates + summary.skipped_unsupported,
+                            failed: summary.failed,
+                            imported_id: None,
+                        });
+                    }
                 }
             }
         }
@@ -99,10 +128,8 @@ impl ImportPipeline {
     }
 
     /// Process a single file through all pipeline steps.
-    ///
-    /// Returns `Ok(Some(reason))` if skipped, `Ok(None)` on success, or `Err` on failure.
     #[instrument(skip(self), fields(path = %source.display()))]
-    async fn import_one(&self, source: &Path) -> Result<Option<SkipReason>, ImportError> {
+    async fn import_one(&self, source: &Path) -> Result<ImportOneResult, ImportError> {
         // Step 1: Filter — check format support
         let (media_type, extension) = match filter::filter(source, &self.formats) {
             filter::FilterResult::Accepted {
@@ -110,7 +137,7 @@ impl ImportPipeline {
                 extension,
             } => (media_type, extension),
             filter::FilterResult::Unsupported => {
-                return Ok(Some(SkipReason::UnsupportedFormat));
+                return Ok(ImportOneResult::Skipped(SkipReason::UnsupportedFormat));
             }
         };
 
@@ -125,11 +152,11 @@ impl ImportPipeline {
             .await?
         {
             debug!(%content_hash, "duplicate detected via content hash");
-            return Ok(Some(SkipReason::Duplicate));
+            return Ok(ImportOneResult::Skipped(SkipReason::Duplicate));
         }
 
         // Step 4: Generate UUID identity
-        let media_id = crate::library::media::MediaId::generate();
+        let media_id = MediaId::generate();
 
         // Step 5: Metadata — extract EXIF / video duration
         let extracted = metadata::extract_metadata(source, media_type, &extension).await?;
@@ -159,6 +186,6 @@ impl ImportPipeline {
         )
         .await;
 
-        Ok(None)
+        Ok(ImportOneResult::Imported(media_id))
     }
 }

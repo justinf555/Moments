@@ -1,3 +1,5 @@
+use crate::library::media::MediaId;
+
 /// Reason a source file was skipped without being imported.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SkipReason {
@@ -21,6 +23,8 @@ pub struct ImportProgress {
     pub skipped: usize,
     /// Files that failed so far.
     pub failed: usize,
+    /// The ID of the just-imported asset (set on successful import).
+    pub imported_id: Option<MediaId>,
 }
 
 /// Summary of a completed import run, returned by [`super::ImportPipeline::run`].

@@ -24,7 +24,7 @@ pub fn sharded_thumbnail_path(thumbnails_dir: &std::path::Path, id: &MediaId) ->
 /// Thumbnail path resolution and persistence service.
 #[derive(Clone)]
 pub struct ThumbnailService {
-    pub(crate) repo: ThumbnailRepository,
+    repo: ThumbnailRepository,
     thumbnails_dir: PathBuf,
 }
 

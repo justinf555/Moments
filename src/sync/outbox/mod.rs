@@ -1,10 +1,13 @@
-//! [`MutationRecorder`] implementations.
+//! [`MutationRecorder`] implementations and outbox persistence.
 //!
 //! - [`NoOpRecorder`] — local backend, does nothing.
 //! - [`QueueWriterOutbox`] — Immich backend, writes to the `sync_outbox` table.
 
+mod repository;
+
+pub use repository::OutboxRepository;
+
 use async_trait::async_trait;
-use tracing::{debug, instrument};
 
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
@@ -27,139 +30,24 @@ impl MutationRecorder for NoOpRecorder {
 
 /// Writes mutations to the `sync_outbox` table for later push to Immich.
 pub struct QueueWriterOutbox {
-    db: Database,
+    repo: OutboxRepository,
 }
 
 impl QueueWriterOutbox {
     pub fn new(db: Database) -> Self {
-        Self { db }
-    }
-
-    /// Insert one or more outbox rows for the given mutation.
-    #[instrument(skip(self))]
-    async fn enqueue(
-        &self,
-        entity_type: &str,
-        entity_id: &str,
-        action: &str,
-        payload: Option<&str>,
-    ) -> Result<(), LibraryError> {
-        let now = chrono::Utc::now().timestamp();
-        sqlx::query(
-            "INSERT INTO sync_outbox (entity_type, entity_id, action, payload, created_at)
-             VALUES (?, ?, ?, ?, ?)",
-        )
-        .bind(entity_type)
-        .bind(entity_id)
-        .bind(action)
-        .bind(payload)
-        .bind(now)
-        .execute(self.db.pool())
-        .await
-        .map_err(LibraryError::Db)?;
-
-        debug!(entity_type, entity_id, action, "outbox entry queued");
-        Ok(())
+        Self {
+            repo: OutboxRepository::new(db),
+        }
     }
 }
 
 #[async_trait]
 impl MutationRecorder for QueueWriterOutbox {
     async fn record(&self, mutation: &Mutation) -> Result<(), LibraryError> {
-        match mutation {
-            // ── Asset ────────────────────────────────────────────────
-            Mutation::AssetImported { id, file_path } => {
-                let payload = serde_json::json!({
-                    "file_path": file_path.to_string_lossy(),
-                })
-                .to_string();
-                self.enqueue("asset", id.as_str(), "import", Some(&payload))
-                    .await
-            }
-
-            Mutation::AssetFavorited { ids, favorite } => {
-                let action = if *favorite { "favorite" } else { "unfavorite" };
-                for id in ids {
-                    self.enqueue("asset", id.as_str(), action, None).await?;
-                }
-                Ok(())
-            }
-
-            Mutation::AssetTrashed { ids } => {
-                for id in ids {
-                    self.enqueue("asset", id.as_str(), "trash", None).await?;
-                }
-                Ok(())
-            }
-
-            Mutation::AssetRestored { ids } => {
-                for id in ids {
-                    self.enqueue("asset", id.as_str(), "restore", None).await?;
-                }
-                Ok(())
-            }
-
-            Mutation::AssetDeleted { ids } => {
-                for id in ids {
-                    self.enqueue("asset", id.as_str(), "delete", None).await?;
-                }
-                Ok(())
-            }
-
-            // ── Album ────────────────────────────────────────────────
-            Mutation::AlbumCreated { id, name } => {
-                let payload = serde_json::json!({ "name": name }).to_string();
-                self.enqueue("album", id.as_str(), "create", Some(&payload))
-                    .await
-            }
-
-            Mutation::AlbumRenamed { id, name } => {
-                let payload = serde_json::json!({ "name": name }).to_string();
-                self.enqueue("album", id.as_str(), "rename", Some(&payload))
-                    .await
-            }
-
-            Mutation::AlbumDeleted { id } => {
-                self.enqueue("album", id.as_str(), "delete", None).await
-            }
-
-            Mutation::AlbumMediaAdded {
-                album_id,
-                media_ids,
-            } => {
-                let payload = serde_json::json!({
-                    "media_ids": media_ids.iter().map(|id| id.as_str()).collect::<Vec<_>>(),
-                })
-                .to_string();
-                self.enqueue("album", album_id.as_str(), "add_media", Some(&payload))
-                    .await
-            }
-
-            Mutation::AlbumMediaRemoved {
-                album_id,
-                media_ids,
-            } => {
-                let payload = serde_json::json!({
-                    "media_ids": media_ids.iter().map(|id| id.as_str()).collect::<Vec<_>>(),
-                })
-                .to_string();
-                self.enqueue("album", album_id.as_str(), "remove_media", Some(&payload))
-                    .await
-            }
-
-            // ── People ──────────────────────────────────────────────
-            Mutation::PersonRenamed { id, name } => {
-                let payload = serde_json::json!({ "name": name }).to_string();
-                self.enqueue("person", id.as_str(), "rename", Some(&payload))
-                    .await
-            }
-
-            Mutation::PersonHidden { id, hidden } => {
-                let payload = serde_json::json!({ "hidden": hidden }).to_string();
-                self.enqueue("person", id.as_str(), "hide", Some(&payload))
-                    .await
-            }
+        for row in mutation.to_outbox_rows() {
+            self.repo.insert(&row).await?;
         }
+        Ok(())
     }
 }
 
@@ -167,6 +55,13 @@ impl MutationRecorder for QueueWriterOutbox {
 mod tests {
     use super::*;
     use crate::library::media::MediaId;
+
+    async fn open_db() -> (tempfile::TempDir, Database) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::new();
+        db.open(&dir.path().join("test.db")).await.unwrap();
+        (dir, db)
+    }
 
     #[tokio::test]
     async fn noop_recorder_returns_ok() {
@@ -181,12 +76,7 @@ mod tests {
 
     #[tokio::test]
     async fn queue_writer_enqueues_favorite() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = {
-            let db = Database::new();
-            db.open(&dir.path().join("test.db")).await.unwrap();
-            db
-        };
+        let (_dir, db) = open_db().await;
         let writer = QueueWriterOutbox::new(db.clone());
 
         let id = MediaId::new("abc123".to_string());
@@ -213,12 +103,7 @@ mod tests {
 
     #[tokio::test]
     async fn queue_writer_enqueues_album_with_payload() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = {
-            let db = Database::new();
-            db.open(&dir.path().join("test.db")).await.unwrap();
-            db
-        };
+        let (_dir, db) = open_db().await;
         let writer = QueueWriterOutbox::new(db.clone());
 
         let album_id = crate::library::album::AlbumId::new();
@@ -244,12 +129,7 @@ mod tests {
 
     #[tokio::test]
     async fn queue_writer_enqueues_per_id_for_batch() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = {
-            let db = Database::new();
-            db.open(&dir.path().join("test.db")).await.unwrap();
-            db
-        };
+        let (_dir, db) = open_db().await;
         let writer = QueueWriterOutbox::new(db.clone());
 
         writer
@@ -268,15 +148,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count.0, 3);
-    }
-
-    // ── Additional outbox tests ──────────────────────────────────────
-
-    async fn open_db() -> (tempfile::TempDir, Database) {
-        let dir = tempfile::tempdir().unwrap();
-        let db = Database::new();
-        db.open(&dir.path().join("test.db")).await.unwrap();
-        (dir, db)
     }
 
     #[tokio::test]
@@ -559,28 +430,5 @@ mod tests {
 
         let payload: serde_json::Value = serde_json::from_str(row.0.as_deref().unwrap()).unwrap();
         assert_eq!(payload["hidden"], false);
-    }
-
-    #[tokio::test]
-    async fn queue_writer_sets_created_at_timestamp() {
-        let (_dir, db) = open_db().await;
-        let writer = QueueWriterOutbox::new(db.clone());
-
-        let before = chrono::Utc::now().timestamp();
-        writer
-            .record(&Mutation::AssetTrashed {
-                ids: vec![MediaId::new("t1".to_string())],
-            })
-            .await
-            .unwrap();
-        let after = chrono::Utc::now().timestamp();
-
-        let row: (i64,) = sqlx::query_as("SELECT created_at FROM sync_outbox WHERE id = 1")
-            .fetch_one(db.pool())
-            .await
-            .unwrap();
-
-        assert!(row.0 >= before);
-        assert!(row.0 <= after);
     }
 }

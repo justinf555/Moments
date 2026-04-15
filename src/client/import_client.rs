@@ -7,6 +7,7 @@ use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use tracing::{error, info};
 
+use crate::event_bus::EventSender;
 use crate::importer::ImportPipeline;
 use crate::library::config::LocalStorageMode;
 use crate::library::format::FormatRegistry;
@@ -30,6 +31,7 @@ struct ImportDeps {
     formats: Arc<FormatRegistry>,
     mode: LocalStorageMode,
     tokio: tokio::runtime::Handle,
+    bus: EventSender,
 }
 
 mod imp {
@@ -141,6 +143,7 @@ impl ImportClient {
         formats: Arc<FormatRegistry>,
         mode: LocalStorageMode,
         tokio: tokio::runtime::Handle,
+        bus: EventSender,
     ) {
         *self.imp().deps.borrow_mut() = Some(ImportDeps {
             library,
@@ -149,6 +152,7 @@ impl ImportClient {
             formats,
             mode,
             tokio,
+            bus,
         });
     }
 
@@ -235,7 +239,7 @@ impl ImportClient {
     /// GTK main thread via `glib::idle_add_once`).
     pub fn import(&self, sources: Vec<PathBuf>) {
         // Extract dependencies (clone under borrow, then release).
-        let (library, originals_dir, thumbnails_dir, formats, mode, tokio) = {
+        let (library, originals_dir, thumbnails_dir, formats, mode, tokio, bus) = {
             let deps = self.imp().deps.borrow();
             let deps = match deps.as_ref() {
                 Some(d) => d,
@@ -251,6 +255,7 @@ impl ImportClient {
                 deps.formats.clone(),
                 deps.mode.clone(),
                 deps.tokio.clone(),
+                deps.bus.clone(),
             )
         };
 
@@ -275,6 +280,8 @@ impl ImportClient {
             .mode(mode)
             .on_progress(move |p| {
                 let weak = progress_weak.clone();
+                let imported_id = p.imported_id.clone();
+                let bus = bus.clone();
                 glib::idle_add_once(move || {
                     if let Some(client) = weak.upgrade() {
                         client.set_current(p.current as u32);
@@ -282,6 +289,9 @@ impl ImportClient {
                         client.set_imported(p.imported as u32);
                         client.set_skipped(p.skipped as u32);
                         client.set_failed(p.failed as u32);
+                    }
+                    if let Some(id) = imported_id {
+                        bus.send(crate::app_event::AppEvent::AssetImported { id });
                     }
                 });
             })

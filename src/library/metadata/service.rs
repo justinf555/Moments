@@ -7,7 +7,7 @@ use crate::library::media::MediaId;
 /// Media metadata (EXIF detail) service.
 #[derive(Clone)]
 pub struct MetadataService {
-    pub(crate) repo: MetadataRepository,
+    repo: MetadataRepository,
 }
 
 impl MetadataService {

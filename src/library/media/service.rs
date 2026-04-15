@@ -18,7 +18,7 @@ use crate::library::resolver::OriginalResolver;
 /// to resolve original-file paths and clean up files on deletion.
 #[derive(Clone)]
 pub struct MediaService {
-    pub(crate) repo: MediaRepository,
+    repo: MediaRepository,
     originals_dir: PathBuf,
     mode: LocalStorageMode,
     recorder: Arc<dyn MutationRecorder>,
@@ -61,18 +61,21 @@ impl MediaService {
         }
     }
 
-    /// Remove the original file from disk (managed mode only).
+    /// Collect original file paths for a batch of IDs (managed mode only).
     ///
-    /// In referenced mode the file belongs to the user — never deleted.
-    pub async fn remove_original(&self, id: &MediaId) {
-        if let LocalStorageMode::Managed = self.mode {
+    /// Must be called **before** the DB delete — after deletion the
+    /// `relative_path` lookup would return `None`.
+    pub async fn collect_original_paths(&self, ids: &[MediaId]) -> Vec<(MediaId, PathBuf)> {
+        if !matches!(self.mode, LocalStorageMode::Managed) {
+            return Vec::new();
+        }
+        let mut paths = Vec::new();
+        for id in ids {
             if let Ok(Some(rel)) = self.repo.relative_path(id).await {
-                let full = self.originals_dir.join(&rel);
-                if let Err(e) = tokio::fs::remove_file(&full).await {
-                    warn!(id = %id, path = %full.display(), "failed to remove original: {e}");
-                }
+                paths.push((id.clone(), self.originals_dir.join(&rel)));
             }
         }
+        paths
     }
 
     // ── Sync upsert (pull from server, no outbox recording) ────────
@@ -98,7 +101,22 @@ impl MediaService {
     }
 
     pub async fn insert_media(&self, record: &MediaRecord) -> Result<(), LibraryError> {
-        self.repo.insert(record).await
+        self.repo.insert(record).await?;
+        let file_path = match self.mode {
+            LocalStorageMode::Managed => self.originals_dir.join(&record.relative_path),
+            LocalStorageMode::Referenced => PathBuf::from(&record.relative_path),
+        };
+        if let Err(e) = self
+            .recorder
+            .record(&Mutation::AssetImported {
+                id: record.id.clone(),
+                file_path,
+            })
+            .await
+        {
+            warn!(id = %record.id, error = %e, "failed to record AssetImported mutation");
+        }
+        Ok(())
     }
 
     pub async fn list_media(
@@ -112,39 +130,67 @@ impl MediaService {
 
     pub async fn set_favorite(&self, ids: &[MediaId], favorite: bool) -> Result<(), LibraryError> {
         self.repo.set_favorite(ids, favorite).await?;
-        self.recorder
+        if let Err(e) = self
+            .recorder
             .record(&Mutation::AssetFavorited {
                 ids: ids.to_vec(),
                 favorite,
             })
             .await
+        {
+            warn!(error = %e, "failed to record AssetFavorited mutation");
+        }
+        Ok(())
     }
 
     pub async fn trash(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
         self.repo.trash(ids).await?;
-        self.recorder
+        if let Err(e) = self
+            .recorder
             .record(&Mutation::AssetTrashed {
                 ids: ids.to_vec(),
             })
             .await
+        {
+            warn!(error = %e, "failed to record AssetTrashed mutation");
+        }
+        Ok(())
     }
 
     pub async fn restore(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
         self.repo.restore(ids).await?;
-        self.recorder
+        if let Err(e) = self
+            .recorder
             .record(&Mutation::AssetRestored {
                 ids: ids.to_vec(),
             })
             .await
+        {
+            warn!(error = %e, "failed to record AssetRestored mutation");
+        }
+        Ok(())
     }
 
     pub async fn delete_permanently(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
         self.repo.delete_permanently(ids).await?;
-        self.recorder
+        if let Err(e) = self
+            .recorder
             .record(&Mutation::AssetDeleted {
                 ids: ids.to_vec(),
             })
             .await
+        {
+            warn!(error = %e, "failed to record AssetDeleted mutation");
+        }
+        Ok(())
+    }
+
+    /// Permanently delete without outbox recording (used by pull sync).
+    pub async fn delete_permanently_no_record(
+        &self,
+        ids: &[MediaId],
+    ) -> Result<(), LibraryError> {
+        self.repo.delete_permanently(ids).await
     }
 
     pub async fn expired_trash(&self, max_age_secs: i64) -> Result<Vec<MediaId>, LibraryError> {

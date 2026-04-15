@@ -121,16 +121,18 @@ impl AlbumRepository {
 
     /// Delete an album and all its media associations.
     pub async fn delete(&self, id: &AlbumId) -> Result<(), LibraryError> {
+        let mut tx = self.db.pool().begin().await.map_err(LibraryError::Db)?;
         sqlx::query("DELETE FROM album_media WHERE album_id = ?")
             .bind(id.as_str())
-            .execute(self.db.pool())
+            .execute(&mut *tx)
             .await
             .map_err(LibraryError::Db)?;
         sqlx::query("DELETE FROM albums WHERE id = ?")
             .bind(id.as_str())
-            .execute(self.db.pool())
+            .execute(&mut *tx)
             .await
             .map_err(LibraryError::Db)?;
+        tx.commit().await.map_err(LibraryError::Db)?;
         Ok(())
     }
 

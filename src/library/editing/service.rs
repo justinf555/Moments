@@ -7,7 +7,7 @@ use crate::library::media::MediaId;
 /// Non-destructive photo editing service.
 #[derive(Clone)]
 pub struct EditingService {
-    pub(crate) repo: EditingRepository,
+    repo: EditingRepository,
 }
 
 impl EditingService {

@@ -728,18 +728,19 @@ impl PullManager {
             self.client
                 .post_no_content("/sync/ack", &ack_request)
                 .await?;
-        }
 
-        // Persist checkpoints — keep only the latest ack per entity type.
-        let mut checkpoints: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        for ack in acks.iter() {
-            if let Some(entity_type) = ack.split('|').next() {
-                checkpoints.insert(entity_type.to_string(), ack.clone());
+            // Save checkpoints after each successful chunk so that a
+            // failure in a later chunk doesn't lose already-acked progress.
+            let mut checkpoints: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            for ack in chunk {
+                if let Some(entity_type) = ack.split('|').next() {
+                    checkpoints.insert(entity_type.to_string(), ack.clone());
+                }
             }
+            let pairs: Vec<(String, String)> = checkpoints.into_iter().collect();
+            self.db.save_sync_checkpoints(&pairs).await?;
         }
-        let pairs: Vec<(String, String)> = checkpoints.into_iter().collect();
-        self.db.save_sync_checkpoints(&pairs).await?;
 
         acks.clear();
         Ok(())

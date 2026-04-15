@@ -394,6 +394,9 @@ impl MediaClient {
                     self.on_deleted(id);
                 }
             }
+            AppEvent::AssetImported { id } => {
+                self.on_asset_imported(id);
+            }
             AppEvent::AssetSynced { item } => {
                 self.on_asset_synced(item);
             }
@@ -463,9 +466,20 @@ impl MediaClient {
                 }
                 MediaFilter::Favorites => {
                     if is_favorite {
-                        drop(models);
-                        self.fetch_and_insert_sorted(&store, id);
-                        return;
+                        let already_present = tracked
+                            .id_index
+                            .borrow()
+                            .get(id)
+                            .and_then(|w| w.upgrade())
+                            .is_some();
+                        if already_present {
+                            // Already in the Favorites model — nothing to do.
+                        } else {
+                            // Not yet in the Favorites model — fetch and insert.
+                            drop(models);
+                            self.fetch_and_insert_sorted(&store, id);
+                            return;
+                        }
                     } else {
                         remove_item_from_tracked(tracked, &store, id);
                     }
@@ -519,6 +533,26 @@ impl MediaClient {
         };
         for store in stores {
             self.remove_item(&store, id);
+        }
+    }
+
+    fn on_asset_imported(&self, id: &MediaId) {
+        // Collect stores for filters that should show newly imported items.
+        let stores: Vec<gio::ListStore> = {
+            let models = self.imp().models.borrow();
+            models
+                .iter()
+                .filter_map(|t| {
+                    match t.filter {
+                        MediaFilter::All | MediaFilter::RecentImports { .. } => {}
+                        _ => return None,
+                    }
+                    t.store.upgrade()
+                })
+                .collect()
+        };
+        for store in stores {
+            self.fetch_and_insert_sorted(&store, id);
         }
     }
 
