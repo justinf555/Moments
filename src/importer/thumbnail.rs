@@ -116,7 +116,7 @@ fn encode_thumbnail(
         img
     } else {
         let orientation = extract_exif(source).orientation.unwrap_or(1);
-        apply_orientation(img, orientation)
+        crate::renderer::orientation::apply_orientation(img, orientation)
     };
 
     let thumb = img.thumbnail(max_edge, max_edge);
@@ -126,50 +126,4 @@ fn encode_thumbnail(
     Ok(())
 }
 
-/// Rotate/flip `img` to match the EXIF orientation tag value (1–8).
-pub(crate) fn apply_orientation(img: image::DynamicImage, orientation: u8) -> image::DynamicImage {
-    use image::imageops;
-    match orientation {
-        2 => image::DynamicImage::from(imageops::flip_horizontal(&img)),
-        3 => image::DynamicImage::from(imageops::rotate180(&img)),
-        4 => image::DynamicImage::from(imageops::flip_vertical(&img)),
-        5 => image::DynamicImage::from(imageops::flip_horizontal(&imageops::rotate90(&img))),
-        6 => image::DynamicImage::from(imageops::rotate90(&img)),
-        7 => image::DynamicImage::from(imageops::flip_horizontal(&imageops::rotate270(&img))),
-        8 => image::DynamicImage::from(imageops::rotate270(&img)),
-        _ => img, // 1 or unknown — already upright
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn apply_orientation_1_is_identity() {
-        let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(4, 2));
-        let out = apply_orientation(img, 1);
-        assert_eq!((out.width(), out.height()), (4, 2));
-    }
-
-    #[test]
-    fn apply_orientation_6_swaps_dimensions() {
-        let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(4, 2));
-        let out = apply_orientation(img, 6);
-        assert_eq!((out.width(), out.height()), (2, 4));
-    }
-
-    #[test]
-    fn apply_orientation_8_swaps_dimensions() {
-        let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(4, 2));
-        let out = apply_orientation(img, 8);
-        assert_eq!((out.width(), out.height()), (2, 4));
-    }
-
-    #[test]
-    fn apply_orientation_3_preserves_dimensions() {
-        let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(4, 2));
-        let out = apply_orientation(img, 3);
-        assert_eq!((out.width(), out.height()), (4, 2));
-    }
-}
+// apply_orientation moved to crate::renderer::orientation
