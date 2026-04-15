@@ -1,9 +1,31 @@
 //! EXIF orientation correction.
 //!
-//! Applies the rotation/flip indicated by EXIF orientation tag (1–8).
-//! Used as a pipeline step after decode, before resize and edits.
+//! Pipeline step: reads the EXIF orientation tag from the source file
+//! and rotates/flips the image to match. Skips video files (no EXIF)
+//! and HEIC/HEIF (libheif applies orientation during decode).
+
+use std::path::Path;
+use std::sync::Arc;
 
 use image::DynamicImage;
+
+use crate::library::format::FormatRegistry;
+use crate::library::metadata::exif::extract_exif;
+
+/// Full orientation pipeline step: read EXIF, skip when inappropriate, apply.
+///
+/// Skips for:
+/// - Video files (no EXIF orientation)
+/// - HEIC/HEIF (libheif applies orientation during decode — applying
+///   again would double-rotate)
+pub fn orient(path: &Path, img: DynamicImage, formats: &Arc<FormatRegistry>) -> DynamicImage {
+    if formats.is_video_by_magic(path) || formats.is_heif_by_magic(path) {
+        return img;
+    }
+
+    let orientation = extract_exif(path).orientation.unwrap_or(1);
+    apply_orientation(img, orientation)
+}
 
 /// Rotate/flip `img` to match the EXIF orientation tag value (1–8).
 pub fn apply_orientation(img: DynamicImage, orientation: u8) -> DynamicImage {

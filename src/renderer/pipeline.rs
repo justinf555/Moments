@@ -9,7 +9,7 @@
 //!
 //! The caller converts the output using [`super::output`] helpers.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use image::DynamicImage;
@@ -18,8 +18,6 @@ use tracing::instrument;
 use crate::library::editing::EditState;
 use crate::library::error::LibraryError;
 use crate::library::format::FormatRegistry;
-use crate::library::media::MediaId;
-use crate::library::thumbnail::{sharded_original_path, sharded_thumbnail_path};
 
 /// What size to render.
 #[derive(Debug, Clone)]
@@ -43,31 +41,11 @@ pub struct RenderOptions<'a> {
 /// One instance per application, created at startup.
 pub struct RenderPipeline {
     formats: Arc<FormatRegistry>,
-    originals_dir: PathBuf,
-    thumbnails_dir: PathBuf,
 }
 
 impl RenderPipeline {
-    pub fn new(
-        formats: Arc<FormatRegistry>,
-        originals_dir: PathBuf,
-        thumbnails_dir: PathBuf,
-    ) -> Self {
-        Self {
-            formats,
-            originals_dir,
-            thumbnails_dir,
-        }
-    }
-
-    /// Resolve the original file path for a media ID.
-    pub fn original_path(&self, id: &MediaId) -> PathBuf {
-        sharded_original_path(&self.originals_dir, id)
-    }
-
-    /// Resolve the thumbnail file path for a media ID.
-    pub fn thumbnail_path(&self, id: &MediaId) -> PathBuf {
-        sharded_thumbnail_path(&self.thumbnails_dir, id)
+    pub fn new(formats: Arc<FormatRegistry>) -> Self {
+        Self { formats }
     }
 
     /// Full render pipeline: decode → orient → resize → edit → DynamicImage.
@@ -84,7 +62,7 @@ impl RenderPipeline {
         let img = super::decode::decode(path, &self.formats)?;
 
         // Step 2: Orient — apply EXIF rotation/flip (skips video and HEIF).
-        let img = self.apply_exif_orientation(path, img);
+        let img = super::orientation::orient(path, img, &self.formats);
 
         // Step 3: Resize — scale to thumbnail size if requested.
         let img = match options.size {
@@ -102,21 +80,6 @@ impl RenderPipeline {
         Ok(img)
     }
 
-    /// Apply EXIF orientation correction.
-    ///
-    /// Skips for video files and HEIC/HEIF (libheif applies orientation
-    /// during decode — applying again would double-rotate).
-    fn apply_exif_orientation(&self, path: &Path, img: DynamicImage) -> DynamicImage {
-        if self.formats.is_video_by_magic(path) || self.formats.is_heif_by_magic(path) {
-            return img;
-        }
-
-        let orientation = crate::library::metadata::exif::extract_exif(path)
-            .orientation
-            .unwrap_or(1);
-
-        super::orientation::apply_orientation(img, orientation)
-    }
 }
 
 #[cfg(test)]
@@ -124,6 +87,7 @@ mod tests {
     use super::*;
     use crate::library::format::standard::StandardHandler;
     use image::{GenericImageView, ImageFormat, RgbaImage};
+    use std::path::PathBuf;
     use std::io::Cursor;
 
     fn test_formats() -> Arc<FormatRegistry> {
@@ -142,19 +106,15 @@ mod tests {
         path
     }
 
-    fn test_pipeline(dir: &Path) -> RenderPipeline {
-        RenderPipeline::new(
-            test_formats(),
-            dir.to_path_buf(),
-            dir.to_path_buf(),
-        )
+    fn test_pipeline() -> RenderPipeline {
+        RenderPipeline::new(test_formats())
     }
 
     #[test]
     fn render_fullres_returns_correct_dimensions() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_test_jpeg(dir.path(), "photo");
-        let pipeline = test_pipeline(dir.path());
+        let pipeline = test_pipeline();
 
         let img = pipeline
             .render(&path, &RenderOptions { size: RenderSize::FullRes, edits: None })
@@ -166,7 +126,7 @@ mod tests {
     fn render_thumbnail_resizes() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_test_jpeg(dir.path(), "photo");
-        let pipeline = test_pipeline(dir.path());
+        let pipeline = test_pipeline();
 
         let img = pipeline
             .render(&path, &RenderOptions { size: RenderSize::Thumbnail(20), edits: None })
@@ -190,7 +150,7 @@ mod tests {
             .unwrap();
         std::fs::write(&path, &buf).unwrap();
 
-        let pipeline = test_pipeline(dir.path());
+        let pipeline = test_pipeline();
         let mut edits = EditState::default();
         edits.exposure.brightness = 0.5;
 
@@ -206,7 +166,7 @@ mod tests {
     fn render_extensionless_file_works() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_test_jpeg(dir.path(), "no_extension");
-        let pipeline = test_pipeline(dir.path());
+        let pipeline = test_pipeline();
 
         let img = pipeline
             .render(&path, &RenderOptions { size: RenderSize::FullRes, edits: None })
@@ -218,7 +178,7 @@ mod tests {
     fn output_helpers_work_with_pipeline_result() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_test_jpeg(dir.path(), "photo");
-        let pipeline = test_pipeline(dir.path());
+        let pipeline = test_pipeline();
 
         let img = pipeline
             .render(&path, &RenderOptions { size: RenderSize::FullRes, edits: None })
