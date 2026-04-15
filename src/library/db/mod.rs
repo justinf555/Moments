@@ -142,6 +142,8 @@ pub(crate) mod test_helpers {
     pub fn test_record(id: MediaId) -> MediaRecord {
         MediaRecord {
             id,
+            content_hash: None,
+            external_id: None,
             relative_path: "2025/01/15/photo.jpg".to_string(),
             original_filename: "photo.jpg".to_string(),
             file_size: 1024,
@@ -161,6 +163,8 @@ pub(crate) mod test_helpers {
     pub fn record_with_taken_at(id: MediaId, path: &str, taken_at: Option<i64>) -> MediaRecord {
         MediaRecord {
             id,
+            content_hash: None,
+            external_id: None,
             relative_path: path.to_string(),
             original_filename: path
                 .split('/')
@@ -200,6 +204,8 @@ pub(crate) mod test_helpers {
     pub fn record_with_imported_at(id: MediaId, path: &str, imported_at: i64) -> MediaRecord {
         MediaRecord {
             id,
+            content_hash: None,
+            external_id: None,
             relative_path: path.to_string(),
             original_filename: path
                 .split('/')

@@ -251,6 +251,8 @@ mod tests {
     fn test_record(id: MediaId) -> MediaRecord {
         MediaRecord {
             id,
+            content_hash: None,
+            external_id: None,
             relative_path: "test.jpg".to_string(),
             original_filename: "test.jpg".to_string(),
             file_size: 1000,

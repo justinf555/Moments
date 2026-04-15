@@ -198,6 +198,8 @@ mod tests {
     fn test_record(id: MediaId, filename: &str) -> MediaRecord {
         MediaRecord {
             id,
+            content_hash: None,
+            external_id: None,
             relative_path: format!("2025/01/01/{filename}"),
             original_filename: filename.to_string(),
             file_size: 100,
@@ -237,7 +239,7 @@ mod tests {
         let src_path = dir.path().join("photo.jpg");
         write_test_jpeg(&src_path);
 
-        let id = MediaId::from_file(&src_path).await.unwrap();
+        let id = MediaId::generate();
 
         // Insert media record so FK constraint is satisfied.
         media
@@ -304,7 +306,7 @@ mod tests {
         let src_path = dir.path().join("bad.jpg");
         std::fs::write(&src_path, b"not an image").unwrap();
 
-        let id = MediaId::from_file(&src_path).await.unwrap();
+        let id = MediaId::generate();
 
         media
             .insert(&test_record(id.clone(), "bad.jpg"))

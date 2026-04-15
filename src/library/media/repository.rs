@@ -71,6 +71,17 @@ impl MediaRepository {
         Ok(row.is_some())
     }
 
+    /// Return `true` if an asset with this content hash already exists (dedup check).
+    pub async fn exists_by_content_hash(&self, hash: &str) -> Result<bool, LibraryError> {
+        let row: Option<(i64,)> =
+            sqlx::query_as("SELECT 1 FROM media WHERE content_hash = ?")
+                .bind(hash)
+                .fetch_optional(self.db.pool())
+                .await
+                .map_err(LibraryError::Db)?;
+        Ok(row.is_some())
+    }
+
     /// Fetch a single media item by ID.
     pub async fn get(&self, id: &MediaId) -> Result<Option<MediaItem>, LibraryError> {
         let row: Option<MediaRow> = sqlx::query_as(
@@ -247,13 +258,15 @@ impl MediaRepository {
     /// Persist a newly imported media asset record.
     pub async fn insert(&self, record: &MediaRecord) -> Result<(), LibraryError> {
         sqlx::query(
-            "INSERT INTO media (id, relative_path, original_filename, file_size,
-                                imported_at, media_type, taken_at, width, height,
-                                orientation, duration_ms, is_favorite, is_trashed,
-                                trashed_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO media (id, content_hash, external_id, relative_path,
+                                original_filename, file_size, imported_at, media_type,
+                                taken_at, width, height, orientation, duration_ms,
+                                is_favorite, is_trashed, trashed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(record.id.as_str())
+        .bind(&record.content_hash)
+        .bind(&record.external_id)
         .bind(&record.relative_path)
         .bind(&record.original_filename)
         .bind(record.file_size)
@@ -278,13 +291,16 @@ impl MediaRepository {
     /// Uses `INSERT OR REPLACE` so existing records are fully overwritten.
     pub async fn upsert(&self, record: &MediaRecord) -> Result<(), LibraryError> {
         sqlx::query(
-            "INSERT OR REPLACE INTO media (id, relative_path, original_filename, file_size,
-                                           imported_at, media_type, taken_at, width, height,
-                                           orientation, duration_ms, is_favorite, is_trashed,
-                                           trashed_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO media (id, content_hash, external_id, relative_path,
+                                           original_filename, file_size, imported_at,
+                                           media_type, taken_at, width, height,
+                                           orientation, duration_ms, is_favorite,
+                                           is_trashed, trashed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(record.id.as_str())
+        .bind(&record.content_hash)
+        .bind(&record.external_id)
         .bind(&record.relative_path)
         .bind(&record.original_filename)
         .bind(record.file_size)

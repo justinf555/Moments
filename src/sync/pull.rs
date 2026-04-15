@@ -408,7 +408,9 @@ impl PullManager {
 
         let id_str = asset.id.clone();
         let record = MediaRecord {
-            id: MediaId::new(asset.id),
+            id: MediaId::new(id_str.clone()),
+            content_hash: None,
+            external_id: Some(id_str.clone()),
             relative_path: format!("immich/{id_str}"),
             original_filename: asset.original_file_name,
             file_size: 0,

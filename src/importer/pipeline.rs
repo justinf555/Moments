@@ -114,22 +114,31 @@ impl ImportPipeline {
             }
         };
 
-        // Step 2: Hash — compute BLAKE3 content hash
-        let media_id = hasher::hash_file(source).await?;
+        // Step 2: Hash — compute BLAKE3 content hash for dedup
+        let content_hash = hasher::hash_file(source).await?;
 
-        // Step 3: Deduplicate — check if hash already exists
-        if self.library.media().media_exists(&media_id).await? {
-            debug!(%media_id, "duplicate detected via hash");
+        // Step 3: Deduplicate — check if content hash already exists
+        if self
+            .library
+            .media()
+            .exists_by_content_hash(&content_hash)
+            .await?
+        {
+            debug!(%content_hash, "duplicate detected via content hash");
             return Ok(Some(SkipReason::Duplicate));
         }
 
-        // Step 4: Metadata — extract EXIF / video duration
+        // Step 4: Generate UUID identity
+        let media_id = crate::library::media::MediaId::generate();
+
+        // Step 5: Metadata — extract EXIF / video duration
         let extracted = metadata::extract_metadata(source, media_type, &extension).await?;
 
-        // Step 5–6: Persist — copy/link file + insert DB records
+        // Step 6–7: Persist — copy/link file + insert DB records
         let result = persistence::persist(persistence::PersistParams {
             source,
             media_id: &media_id,
+            content_hash: Some(&content_hash),
             media_type,
             exif: extracted.exif,
             duration_ms: extracted.duration_ms,
@@ -140,7 +149,7 @@ impl ImportPipeline {
         })
         .await?;
 
-        // Step 7: Thumbnail — decode, resize, encode, write (inline)
+        // Step 8: Thumbnail — decode, resize, encode, write (inline)
         thumbnail::generate_thumbnail(
             &media_id,
             &result.thumbnail_source,

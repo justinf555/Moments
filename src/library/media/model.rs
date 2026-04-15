@@ -1,53 +1,27 @@
-use std::path::Path;
-
-use tracing::instrument;
-
-use crate::library::error::LibraryError;
-
 /// Opaque identity for every media asset in the library.
 ///
-/// The format depends on the backend:
-/// - **Local**: 64-char lowercase hex BLAKE3 hash of the file's raw bytes.
-///   Stable across renames and re-imports of the same content.
-/// - **Immich**: server-assigned UUID (e.g. `"a1b2c3d4-..."`).
+/// A UUID v4 stored as a 32-char lowercase hex string (no dashes).
+/// Generated via [`MediaId::generate`] for local imports; loaded from
+/// the database via [`MediaId::new`] for existing records and sync.
 ///
-/// Consumers should treat the value as an opaque string — never parse or
-/// validate the format. Serves as the primary key in the `media` database
-/// table and the thumbnail filename.
+/// Content-based deduplication uses the separate `content_hash` field
+/// on [`MediaRecord`], not the ID itself.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MediaId(String);
 
 impl MediaId {
-    /// Hash `path` and return its [`MediaId`].
-    ///
-    /// Uses [`tokio::task::spawn_blocking`] with a streaming [`blake3::Hasher`]
-    /// so that large video files are never fully loaded into memory.
-    #[instrument(skip_all, fields(path = %path.display()))]
-    pub async fn from_file(path: &Path) -> Result<Self, LibraryError> {
-        let path = path.to_path_buf();
-        let hex = tokio::task::spawn_blocking(move || -> Result<String, LibraryError> {
-            let file = std::fs::File::open(&path).map_err(LibraryError::Io)?;
-            let mut reader = std::io::BufReader::new(file);
-            let mut hasher = blake3::Hasher::new();
-            std::io::copy(&mut reader, &mut hasher).map_err(LibraryError::Io)?;
-            Ok(hasher.finalize().to_hex().to_string())
-        })
-        .await
-        .map_err(|e| LibraryError::Runtime(e.to_string()))??;
+    /// Generate a new random UUID v4 identity (32-char hex, no dashes).
+    pub fn generate() -> Self {
+        Self(uuid::Uuid::new_v4().simple().to_string())
+    }
 
-        Ok(Self(hex))
+    /// Wrap an existing ID string (from database or sync stream).
+    pub fn new(id: String) -> Self {
+        Self(id)
     }
 
     pub fn as_str(&self) -> &str {
         &self.0
-    }
-
-    /// Construct a `MediaId` from a pre-computed hex string.
-    ///
-    /// Use this inside a `spawn_blocking` closure where hashing is done
-    /// manually with `blake3::Hasher`. For general use, prefer [`MediaId::from_file`].
-    pub fn new(hex: String) -> Self {
-        Self(hex)
     }
 }
 
@@ -161,6 +135,10 @@ pub struct MediaCursor {
 #[derive(Debug, Clone)]
 pub struct MediaRecord {
     pub id: MediaId,
+    /// BLAKE3 content hash (64-char hex). Used for dedup, not identity.
+    pub content_hash: Option<String>,
+    /// Immich server UUID. Set when synced with an Immich server.
+    pub external_id: Option<String>,
     /// Path relative to the bundle's `originals/` directory.
     pub relative_path: String,
     pub original_filename: String,
@@ -187,39 +165,24 @@ pub struct MediaRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
-    #[tokio::test]
-    async fn same_content_produces_same_id() {
-        let mut f1 = NamedTempFile::new().unwrap();
-        let mut f2 = NamedTempFile::new().unwrap();
-        f1.write_all(b"hello moments").unwrap();
-        f2.write_all(b"hello moments").unwrap();
-
-        let id1 = MediaId::from_file(f1.path()).await.unwrap();
-        let id2 = MediaId::from_file(f2.path()).await.unwrap();
-        assert_eq!(id1, id2);
+    #[test]
+    fn generate_produces_32_char_hex() {
+        let id = MediaId::generate();
+        assert_eq!(id.as_str().len(), 32);
+        assert!(id.as_str().chars().all(|c| c.is_ascii_hexdigit()));
     }
 
-    #[tokio::test]
-    async fn different_content_produces_different_id() {
-        let mut f1 = NamedTempFile::new().unwrap();
-        let mut f2 = NamedTempFile::new().unwrap();
-        f1.write_all(b"photo a").unwrap();
-        f2.write_all(b"photo b").unwrap();
-
-        let id1 = MediaId::from_file(f1.path()).await.unwrap();
-        let id2 = MediaId::from_file(f2.path()).await.unwrap();
+    #[test]
+    fn generated_ids_are_unique() {
+        let id1 = MediaId::generate();
+        let id2 = MediaId::generate();
         assert_ne!(id1, id2);
     }
 
-    #[tokio::test]
-    async fn id_is_64_char_hex() {
-        let mut f = NamedTempFile::new().unwrap();
-        f.write_all(b"test").unwrap();
-        let id = MediaId::from_file(f.path()).await.unwrap();
-        assert_eq!(id.as_str().len(), 64);
-        assert!(id.as_str().chars().all(|c| c.is_ascii_hexdigit()));
+    #[test]
+    fn new_wraps_existing_string() {
+        let id = MediaId::new("abc123".to_string());
+        assert_eq!(id.as_str(), "abc123");
     }
 }

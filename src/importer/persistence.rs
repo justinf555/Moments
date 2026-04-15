@@ -13,6 +13,7 @@ use crate::library::metadata::{MediaMetadataRecord, MetadataService};
 pub struct PersistParams<'a> {
     pub source: &'a Path,
     pub media_id: &'a MediaId,
+    pub content_hash: Option<&'a str>,
     pub media_type: MediaType,
     pub exif: ExifInfo,
     pub duration_ms: Option<u64>,
@@ -40,6 +41,7 @@ pub async fn persist(params: PersistParams<'_>) -> Result<PersistResult, ImportE
     let PersistParams {
         source,
         media_id,
+        content_hash,
         media_type,
         exif,
         duration_ms,
@@ -96,6 +98,8 @@ pub async fn persist(params: PersistParams<'_>) -> Result<PersistResult, ImportE
     media
         .insert_media(&MediaRecord {
             id: media_id.clone(),
+            content_hash: params.content_hash.map(|s| s.to_string()),
+            external_id: None,
             relative_path,
             original_filename,
             file_size,
