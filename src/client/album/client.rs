@@ -100,6 +100,17 @@ impl AlbumClient {
                 return;
             };
             match event {
+                AppEvent::AlbumCreated { ref id, ref name } => {
+                    let album = crate::library::album::Album {
+                        id: id.clone(),
+                        name: name.clone(),
+                        created_at: chrono::Utc::now().timestamp(),
+                        updated_at: chrono::Utc::now().timestamp(),
+                        media_count: 0,
+                        cover_media_id: None,
+                    };
+                    client.insert_into_models(album);
+                }
                 AppEvent::AlbumDeleted { ref id } => {
                     client.remove_from_models(id);
                 }
