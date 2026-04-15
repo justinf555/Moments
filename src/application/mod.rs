@@ -58,6 +58,8 @@ mod imp {
         pub event_bus: RefCell<Option<EventBus>>,
         /// App-lifetime event bus subscriptions (error toasts, etc.).
         pub subscriptions: RefCell<Vec<crate::event_bus::Subscription>>,
+        /// Background task handle for periodic trash purge.
+        pub purge_handle: RefCell<Option<tokio::task::JoinHandle<()>>>,
     }
 
     #[glib::object_subclass]
@@ -616,6 +618,25 @@ impl MomentsApplication {
                                 }
                             });
                             app.imp().subscriptions.borrow_mut().push(sub);
+                        }
+
+                        // Start periodic trash purge task.
+                        {
+                            let lib = Arc::clone(
+                                app.imp().library.borrow().as_ref().expect("library set"),
+                            );
+                            let retention_days = app
+                                .imp()
+                                .settings
+                                .get()
+                                .expect("settings initialised")
+                                .uint("trash-retention-days");
+                            let handle = crate::tasks::purge_trash::start(
+                                lib,
+                                bus.sender(),
+                                retention_days,
+                            );
+                            *app.imp().purge_handle.borrow_mut() = Some(handle);
                         }
 
                         // Store bus for shutdown cleanup.
