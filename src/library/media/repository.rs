@@ -121,6 +121,21 @@ impl MediaRepository {
         Ok(row)
     }
 
+    /// Return path resolution fields for a single asset in one query.
+    pub async fn resolve_info(
+        &self,
+        id: &MediaId,
+    ) -> Result<Option<(String, String, Option<String>)>, LibraryError> {
+        let row: Option<(String, String, Option<String>)> = sqlx::query_as(
+            "SELECT relative_path, original_filename, external_id FROM media WHERE id = ?",
+        )
+        .bind(id.as_str())
+        .fetch_optional(self.db.pool())
+        .await
+        .map_err(LibraryError::Db)?;
+        Ok(row)
+    }
+
     /// Return a page of [`MediaItem`]s in reverse chronological order.
     pub async fn list(
         &self,

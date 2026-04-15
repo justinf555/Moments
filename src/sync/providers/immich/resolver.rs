@@ -53,6 +53,7 @@ impl OriginalResolver for CachedResolver {
         id: &MediaId,
         _relative_path: &str,
         original_filename: Option<&str>,
+        external_id: Option<&str>,
     ) -> Result<Option<PathBuf>, LibraryError> {
         let ext = original_filename
             .and_then(|f| std::path::Path::new(f).extension())
@@ -69,9 +70,12 @@ impl OriginalResolver for CachedResolver {
         // Cache miss — fetch from Immich.
         debug!("original cache miss, fetching from server");
 
-        // Use external_id if the ID format is a local UUID; for Immich-synced
-        // assets the id IS the Immich UUID so we can use it directly.
-        let api_path = format!("/assets/{}/original", id.as_str());
+        // Prefer external_id (the Immich server UUID) for the API call.
+        // For assets synced from Immich, id == external_id. For locally
+        // imported assets, id is a local UUID and external_id is the
+        // server-assigned UUID after upload.
+        let server_id = external_id.unwrap_or_else(|| id.as_str());
+        let api_path = format!("/assets/{server_id}/original");
         let bytes = match self.client.get_bytes(&api_path).await {
             Ok(b) => b,
             Err(e) => {
@@ -163,7 +167,7 @@ mod tests {
             .unwrap();
 
         let result = resolver
-            .resolve(&id, "irrelevant/path", Some("photo.jpeg"))
+            .resolve(&id, "irrelevant/path", Some("photo.jpeg"), None)
             .await
             .unwrap();
         assert_eq!(result, Some(cache_path));
@@ -179,7 +183,7 @@ mod tests {
         let id = MediaId::new("aabbccdd11223344".to_string());
 
         let result = resolver
-            .resolve(&id, "some/path", Some("photo.jpg"))
+            .resolve(&id, "some/path", Some("photo.jpg"), None)
             .await
             .unwrap();
         assert!(result.is_none());
