@@ -32,16 +32,16 @@ impl CachedResolver {
 
     /// Compute the local cache path for an asset.
     ///
-    /// Uses two-level sharding: `originals/{hex[0..2]}/{hex[2..4]}/{id}.bin`
-    fn cache_path(&self, id: &MediaId) -> PathBuf {
+    /// Uses two-level sharding: `originals/{hex[0..2]}/{hex[2..4]}/{id}.{ext}`
+    fn cache_path(&self, id: &MediaId, ext: &str) -> PathBuf {
         let hex = id.as_str();
         if hex.len() < 4 {
-            return self.originals_dir.join(format!("{hex}.bin"));
+            return self.originals_dir.join(format!("{hex}.{ext}"));
         }
         self.originals_dir
             .join(&hex[..2])
             .join(&hex[2..4])
-            .join(format!("{hex}.bin"))
+            .join(format!("{hex}.{ext}"))
     }
 }
 
@@ -52,8 +52,13 @@ impl OriginalResolver for CachedResolver {
         &self,
         id: &MediaId,
         _relative_path: &str,
+        original_filename: Option<&str>,
     ) -> Result<Option<PathBuf>, LibraryError> {
-        let path = self.cache_path(id);
+        let ext = original_filename
+            .and_then(|f| std::path::Path::new(f).extension())
+            .and_then(|e| e.to_str())
+            .unwrap_or("bin");
+        let path = self.cache_path(id, ext);
 
         // Cache hit — return immediately.
         if path.exists() {
@@ -105,10 +110,10 @@ mod tests {
     fn cache_path_uses_two_level_sharding() {
         let resolver = make_resolver(PathBuf::from("/data/originals"));
         let id = MediaId::new("abcdef1234567890".to_string());
-        let path = resolver.cache_path(&id);
+        let path = resolver.cache_path(&id, "jpeg");
         assert_eq!(
             path,
-            PathBuf::from("/data/originals/ab/cd/abcdef1234567890.bin")
+            PathBuf::from("/data/originals/ab/cd/abcdef1234567890.jpeg")
         );
     }
 
@@ -116,30 +121,29 @@ mod tests {
     fn cache_path_short_id_falls_back_to_flat() {
         let resolver = make_resolver(PathBuf::from("/data/originals"));
         let id = MediaId::new("abc".to_string());
-        let path = resolver.cache_path(&id);
-        assert_eq!(path, PathBuf::from("/data/originals/abc.bin"));
+        let path = resolver.cache_path(&id, "png");
+        assert_eq!(path, PathBuf::from("/data/originals/abc.png"));
     }
 
     #[test]
     fn cache_path_exactly_four_chars() {
         let resolver = make_resolver(PathBuf::from("/data/originals"));
         let id = MediaId::new("abcd".to_string());
-        let path = resolver.cache_path(&id);
+        let path = resolver.cache_path(&id, "jpg");
         assert_eq!(
             path,
-            PathBuf::from("/data/originals/ab/cd/abcd.bin")
+            PathBuf::from("/data/originals/ab/cd/abcd.jpg")
         );
     }
 
     #[test]
     fn cache_path_uuid_format() {
         let resolver = make_resolver(PathBuf::from("/cache"));
-        // Typical Immich UUID (with dashes).
         let id = MediaId::new("550e8400-e29b-41d4-a716-446655440000".to_string());
-        let path = resolver.cache_path(&id);
+        let path = resolver.cache_path(&id, "heic");
         assert_eq!(
             path,
-            PathBuf::from("/cache/55/0e/550e8400-e29b-41d4-a716-446655440000.bin")
+            PathBuf::from("/cache/55/0e/550e8400-e29b-41d4-a716-446655440000.heic")
         );
     }
 
@@ -149,8 +153,8 @@ mod tests {
         let resolver = make_resolver(dir.path().to_path_buf());
         let id = MediaId::new("aabbccdd11223344".to_string());
 
-        // Pre-populate cache.
-        let cache_path = resolver.cache_path(&id);
+        // Pre-populate cache with correct extension.
+        let cache_path = resolver.cache_path(&id, "jpeg");
         tokio::fs::create_dir_all(cache_path.parent().unwrap())
             .await
             .unwrap();
@@ -158,21 +162,26 @@ mod tests {
             .await
             .unwrap();
 
-        let result = resolver.resolve(&id, "irrelevant/path").await.unwrap();
+        let result = resolver
+            .resolve(&id, "irrelevant/path", Some("photo.jpeg"))
+            .await
+            .unwrap();
         assert_eq!(result, Some(cache_path));
     }
 
     #[tokio::test]
     async fn resolve_cache_miss_with_unreachable_server_returns_none() {
         let dir = tempfile::tempdir().unwrap();
-        // Client points to a server that won't respond (localhost with bad port).
         let client = Arc::new(
             ImmichClient::new("http://127.0.0.1:1", "fake-token").unwrap(),
         );
         let resolver = CachedResolver::new(client, dir.path().to_path_buf());
         let id = MediaId::new("aabbccdd11223344".to_string());
 
-        let result = resolver.resolve(&id, "some/path").await.unwrap();
+        let result = resolver
+            .resolve(&id, "some/path", Some("photo.jpg"))
+            .await
+            .unwrap();
         assert!(result.is_none());
     }
 }

@@ -50,8 +50,13 @@ impl MediaService {
     /// return a filesystem path directly; remote backends may fetch first.
     pub async fn original_path(&self, id: &MediaId) -> Result<Option<PathBuf>, LibraryError> {
         let stored = self.repo.relative_path(id).await?;
+        let filename = self.repo.original_filename(id).await?;
         match stored {
-            Some(rel) => self.resolver.resolve(id, &rel).await,
+            Some(rel) => {
+                self.resolver
+                    .resolve(id, &rel, filename.as_deref())
+                    .await
+            }
             None => Ok(None),
         }
     }

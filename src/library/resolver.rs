@@ -24,6 +24,7 @@ pub trait OriginalResolver: Send + Sync {
         &self,
         id: &MediaId,
         relative_path: &str,
+        original_filename: Option<&str>,
     ) -> Result<Option<PathBuf>, LibraryError>;
 }
 
@@ -48,6 +49,7 @@ impl OriginalResolver for LocalResolver {
         &self,
         _id: &MediaId,
         relative_path: &str,
+        _original_filename: Option<&str>,
     ) -> Result<Option<PathBuf>, LibraryError> {
         let path = match self.mode {
             super::config::LocalStorageMode::Referenced => PathBuf::from(relative_path),
@@ -83,7 +85,7 @@ mod tests {
         );
         let id = super::super::media::MediaId::new("test-id".to_string());
 
-        let result = resolver.resolve(&id, "2025/01/photo.jpg").await.unwrap();
+        let result = resolver.resolve(&id,"2025/01/photo.jpg", None).await.unwrap();
         assert_eq!(result, Some(photo_path));
     }
 
@@ -96,7 +98,7 @@ mod tests {
         );
         let id = super::super::media::MediaId::new("test-id".to_string());
 
-        let result = resolver.resolve(&id, "nonexistent/photo.jpg").await.unwrap();
+        let result = resolver.resolve(&id,"nonexistent/photo.jpg", None).await.unwrap();
         assert!(result.is_none());
     }
 
@@ -114,7 +116,7 @@ mod tests {
 
         // In referenced mode, relative_path is actually the absolute path.
         let result = resolver
-            .resolve(&id, photo_path.to_str().unwrap())
+            .resolve(&id, photo_path.to_str().unwrap(), None)
             .await
             .unwrap();
         assert_eq!(result, Some(photo_path));
@@ -129,7 +131,7 @@ mod tests {
         let id = super::super::media::MediaId::new("test-id".to_string());
 
         let result = resolver
-            .resolve(&id, "/absolutely/nonexistent/photo.jpg")
+            .resolve(&id, "/absolutely/nonexistent/photo.jpg", None)
             .await
             .unwrap();
         assert!(result.is_none());
@@ -150,8 +152,8 @@ mod tests {
         let id1 = super::super::media::MediaId::new("id-a".to_string());
         let id2 = super::super::media::MediaId::new("id-b".to_string());
 
-        let r1 = resolver.resolve(&id1, "photo.jpg").await.unwrap();
-        let r2 = resolver.resolve(&id2, "photo.jpg").await.unwrap();
+        let r1 = resolver.resolve(&id1, "photo.jpg", None).await.unwrap();
+        let r2 = resolver.resolve(&id2, "photo.jpg", None).await.unwrap();
         assert_eq!(r1, r2);
     }
 }
