@@ -536,7 +536,7 @@ impl MomentsApplication {
 
                 // Build Immich client + recorder + resolver based on config.
                 let immich_client = immich_info.as_ref().and_then(|(url, token)| {
-                    crate::sync::client::ImmichClient::new(url, token).ok()
+                    crate::sync::providers::immich::client::ImmichClient::new(url, token).ok()
                 });
 
                 let recorder: std::sync::Arc<dyn crate::library::recorder::MutationRecorder> =
@@ -550,7 +550,7 @@ impl MomentsApplication {
 
                 let resolver: std::sync::Arc<dyn crate::library::resolver::OriginalResolver> =
                     if let Some(ref client) = immich_client {
-                        std::sync::Arc::new(crate::sync::resolver::CachedResolver::new(
+                        std::sync::Arc::new(crate::sync::providers::immich::resolver::CachedResolver::new(
                             std::sync::Arc::new(client.clone()),
                             originals_dir.clone(),
                         ))

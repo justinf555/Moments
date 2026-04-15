@@ -1,14 +1,13 @@
-//! Bidirectional Immich sync engine.
+//! Bidirectional sync engine.
 //!
-//! - **Pull**: Immich → Moments via `/sync/stream`
-//! - **Push**: Moments → Immich via outbox pattern
+//! Backend-agnostic orchestration lives here (`SyncHandle`, `outbox/`).
+//! Provider-specific protocol code lives under `providers/`.
 //!
 //! Start with [`SyncHandle::start`], which spawns three background tasks:
 //! pull manager, push manager, and thumbnail downloader.
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use tokio::sync::{mpsc, watch, Semaphore};
 use tracing::{error, info};
@@ -17,22 +16,8 @@ use crate::event_bus::EventSender;
 use crate::library::db::Database;
 use crate::library::Library;
 
-pub(crate) mod client;
-pub(crate) mod downloader;
 pub mod outbox;
-pub(crate) mod pull;
-pub(crate) mod push;
-pub mod resolver;
-pub(crate) mod types;
-
-/// Maximum concurrent thumbnail downloads.
-const MAX_THUMBNAIL_WORKERS: usize = 4;
-/// Bounded channel capacity for thumbnail download requests.
-const THUMBNAIL_QUEUE_SIZE: usize = 1000;
-/// Delay between dispatching thumbnail downloads to avoid server overload.
-const THUMBNAIL_THROTTLE: Duration = Duration::from_millis(5);
-/// Flush acks to the database after this many processed entities.
-const ACK_FLUSH_THRESHOLD: usize = 500;
+pub mod providers;
 
 /// Handle to the running sync engine.
 ///
@@ -53,7 +38,7 @@ impl SyncHandle {
     ///
     /// Returns a handle for shutdown and interval control.
     pub fn start(
-        client: client::ImmichClient,
+        client: providers::immich::client::ImmichClient,
         library: Arc<Library>,
         db: Database,
         events: EventSender,
@@ -61,13 +46,16 @@ impl SyncHandle {
         initial_interval_secs: u64,
         tokio: tokio::runtime::Handle,
     ) -> Self {
+        use providers::immich::{
+            downloader, pull, push, MAX_THUMBNAIL_WORKERS, THUMBNAIL_QUEUE_SIZE,
+        };
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let (interval_tx, interval_rx) = watch::channel(initial_interval_secs);
         let (thumbnail_tx, thumbnail_rx) = mpsc::channel(THUMBNAIL_QUEUE_SIZE);
 
         // Spawn thumbnail downloader.
-        let downloader = downloader::ThumbnailDownloader {
+        let dl = downloader::ThumbnailDownloader {
             client: client.clone(),
             library: Arc::clone(&library),
             events: events.clone(),
@@ -76,11 +64,11 @@ impl SyncHandle {
             semaphore: Arc::new(Semaphore::new(MAX_THUMBNAIL_WORKERS)),
         };
         tokio.spawn(async move {
-            downloader.run().await;
+            dl.run().await;
         });
 
         // Spawn pull manager.
-        let pull = pull::PullManager {
+        let pull_mgr = pull::PullManager {
             client: client.clone(),
             library: Arc::clone(&library),
             db: db.clone(),
@@ -91,20 +79,20 @@ impl SyncHandle {
             interval_rx: tokio::sync::Mutex::new(interval_rx.clone()),
         };
         tokio.spawn(async move {
-            if let Err(e) = pull.run().await {
+            if let Err(e) = pull_mgr.run().await {
                 error!("pull manager exited with error: {e}");
             }
         });
 
         // Spawn push manager.
-        let push = push::PushManager {
+        let push_mgr = push::PushManager {
             client,
             db,
             shutdown_rx,
             interval_rx: tokio::sync::Mutex::new(interval_rx),
         };
         tokio.spawn(async move {
-            if let Err(e) = push.run().await {
+            if let Err(e) = push_mgr.run().await {
                 error!("push manager exited with error: {e}");
             }
         });
@@ -135,6 +123,7 @@ mod tests {
 
     #[test]
     fn constants_are_sensible() {
+        use providers::immich::*;
         assert!(MAX_THUMBNAIL_WORKERS > 0);
         assert!(THUMBNAIL_QUEUE_SIZE > 0);
         assert!(ACK_FLUSH_THRESHOLD > 0);

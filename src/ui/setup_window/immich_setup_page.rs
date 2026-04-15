@@ -9,7 +9,7 @@ use tracing::{debug, error, instrument};
 use crate::application::keyring;
 use crate::library::bundle::Bundle;
 use crate::library::config::LibraryConfig;
-use crate::sync::client::ImmichClient;
+use crate::sync::providers::immich::client::ImmichClient;
 
 mod imp {
     use super::*;
