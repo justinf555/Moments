@@ -75,7 +75,18 @@ impl FormatRegistry {
     pub fn decode(&self, path: &Path) -> Result<image::DynamicImage, LibraryError> {
         // Try magic-byte detection first (works for extensionless files).
         if let Some(handler) = self.handler_by_magic(path) {
-            return handler.decode(path);
+            match handler.decode(path) {
+                Ok(img) => return Ok(img),
+                Err(_) => {
+                    // Magic-byte match failed (e.g. TIFF header but actually
+                    // a RAW format). Try all other handlers.
+                    for other in self.handlers.values() {
+                        if let Ok(img) = other.decode(path) {
+                            return Ok(img);
+                        }
+                    }
+                }
+            }
         }
 
         // Fall back to extension-based lookup.
