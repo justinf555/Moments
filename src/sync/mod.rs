@@ -9,6 +9,7 @@ pub(crate) mod client;
 pub(crate) mod downloader;
 pub mod outbox;
 pub(crate) mod pull;
+pub(crate) mod push;
 pub(crate) mod types;
 
 /// How often to check for expired trash items.
