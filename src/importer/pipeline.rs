@@ -11,7 +11,6 @@ use super::{discovery, filter, hasher, metadata, persistence, thumbnail, types::
 use crate::library::config::LocalStorageMode;
 use crate::library::media::MediaId;
 use crate::library::Library;
-use crate::renderer::format::FormatRegistry;
 use crate::renderer::pipeline::RenderPipeline;
 
 /// Progress callback type — invoked after each file is processed.
@@ -37,7 +36,6 @@ pub struct ImportPipeline {
     pub(super) thumbnails_dir: PathBuf,
     /// Provides media, metadata, and thumbnail services.
     pub(super) library: Arc<Library>,
-    pub(super) formats: Arc<FormatRegistry>,
     pub(super) render_pipeline: Arc<RenderPipeline>,
     pub(super) mode: LocalStorageMode,
     pub(super) on_progress: Option<ProgressFn>,
@@ -133,7 +131,7 @@ impl ImportPipeline {
     #[instrument(skip(self), fields(path = %source.display()))]
     async fn import_one(&self, source: &Path) -> Result<ImportOneResult, ImportError> {
         // Step 1: Filter — check format support
-        let (media_type, extension) = match filter::filter(source, &self.formats) {
+        let (media_type, extension) = match filter::filter(source, &self.render_pipeline) {
             filter::FilterResult::Accepted {
                 media_type,
                 extension,

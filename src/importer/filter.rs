@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use crate::renderer::format::FormatRegistry;
 use crate::library::media::MediaType;
+use crate::renderer::pipeline::RenderPipeline;
 
 /// Result of the filter step: either a recognised media type or a skip.
 pub enum FilterResult {
@@ -16,17 +16,18 @@ pub enum FilterResult {
 
 /// Check whether `source` is a supported media file.
 ///
-/// Uses the format registry for extension matching with magic-byte sniffing
-/// fallback. Returns the detected [`MediaType`] and normalised extension,
-/// or [`FilterResult::Unsupported`] if the file is not recognised.
-pub fn filter(source: &Path, formats: &FormatRegistry) -> FilterResult {
+/// Uses the render pipeline's format detection (magic-byte sniffing
+/// with extension fallback). Returns the detected [`MediaType`] and
+/// normalised extension, or [`FilterResult::Unsupported`] if the file
+/// is not recognised.
+pub fn filter(source: &Path, pipeline: &RenderPipeline) -> FilterResult {
     let ext = source
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
         .unwrap_or_default();
 
-    match formats.media_type_with_sniff(source, &ext) {
+    match pipeline.media_type(source, &ext) {
         Some(media_type) => FilterResult::Accepted {
             media_type,
             extension: ext,
@@ -38,14 +39,11 @@ pub fn filter(source: &Path, formats: &FormatRegistry) -> FilterResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::renderer::format::StandardHandler;
     use std::sync::Arc;
     use tempfile::tempdir;
 
-    fn test_registry() -> FormatRegistry {
-        let mut reg = FormatRegistry::new();
-        reg.register(Arc::new(StandardHandler));
-        reg
+    fn test_pipeline() -> Arc<RenderPipeline> {
+        Arc::new(RenderPipeline::new())
     }
 
     #[test]
@@ -54,8 +52,8 @@ mod tests {
         let file = dir.path().join("photo.jpg");
         std::fs::write(&file, b"fake jpeg").unwrap();
 
-        let reg = test_registry();
-        match filter(&file, &reg) {
+        let pipeline = test_pipeline();
+        match filter(&file, &pipeline) {
             FilterResult::Accepted { media_type, .. } => {
                 assert_eq!(media_type, MediaType::Image);
             }
@@ -69,8 +67,8 @@ mod tests {
         let file = dir.path().join("doc.pdf");
         std::fs::write(&file, b"not a photo").unwrap();
 
-        let reg = test_registry();
-        assert!(matches!(filter(&file, &reg), FilterResult::Unsupported));
+        let pipeline = test_pipeline();
+        assert!(matches!(filter(&file, &pipeline), FilterResult::Unsupported));
     }
 
     #[test]
@@ -79,7 +77,7 @@ mod tests {
         let file = dir.path().join("noext");
         std::fs::write(&file, b"mystery").unwrap();
 
-        let reg = test_registry();
-        assert!(matches!(filter(&file, &reg), FilterResult::Unsupported));
+        let pipeline = test_pipeline();
+        assert!(matches!(filter(&file, &pipeline), FilterResult::Unsupported));
     }
 }

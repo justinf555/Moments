@@ -70,6 +70,10 @@ impl FormatHandler for RawHandler {
 impl RawHandler {
     /// Decode at the highest available resolution for full-res viewing.
     ///
+    /// TODO: Wire into pipeline for FullRes renders — currently the pipeline
+    /// uses FormatHandler::decode which optimises for thumbnail speed.
+    #[allow(dead_code)]
+    ///
     /// Tries full demosaicing first (actual sensor data), falls back to the
     /// largest embedded preview, then the smallest thumbnail as a last resort.
     /// This is the reverse order of [`FormatHandler::decode`] which optimises

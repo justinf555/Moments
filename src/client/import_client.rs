@@ -10,8 +10,8 @@ use tracing::{error, info};
 use crate::event_bus::EventSender;
 use crate::importer::ImportPipeline;
 use crate::library::config::LocalStorageMode;
-use crate::renderer::format::FormatRegistry;
 use crate::library::Library;
+use crate::renderer::pipeline::RenderPipeline;
 
 /// Import lifecycle state exposed as a GObject property.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, glib::Enum)]
@@ -28,7 +28,7 @@ struct ImportDeps {
     library: Arc<Library>,
     originals_dir: PathBuf,
     thumbnails_dir: PathBuf,
-    formats: Arc<FormatRegistry>,
+    render_pipeline: Arc<RenderPipeline>,
     mode: LocalStorageMode,
     tokio: tokio::runtime::Handle,
     bus: EventSender,
@@ -140,7 +140,7 @@ impl ImportClient {
         library: Arc<Library>,
         originals_dir: PathBuf,
         thumbnails_dir: PathBuf,
-        formats: Arc<FormatRegistry>,
+        render_pipeline: Arc<RenderPipeline>,
         mode: LocalStorageMode,
         tokio: tokio::runtime::Handle,
         bus: EventSender,
@@ -149,7 +149,7 @@ impl ImportClient {
             library,
             originals_dir,
             thumbnails_dir,
-            formats,
+            render_pipeline,
             mode,
             tokio,
             bus,
@@ -239,7 +239,7 @@ impl ImportClient {
     /// GTK main thread via `glib::idle_add_once`).
     pub fn import(&self, sources: Vec<PathBuf>) {
         // Extract dependencies (clone under borrow, then release).
-        let (library, originals_dir, thumbnails_dir, formats, mode, tokio, bus) = {
+        let (library, originals_dir, thumbnails_dir, render_pipeline, mode, tokio, bus) = {
             let deps = self.imp().deps.borrow();
             let deps = match deps.as_ref() {
                 Some(d) => d,
@@ -252,7 +252,7 @@ impl ImportClient {
                 deps.library.clone(),
                 deps.originals_dir.clone(),
                 deps.thumbnails_dir.clone(),
-                deps.formats.clone(),
+                deps.render_pipeline.clone(),
                 deps.mode.clone(),
                 deps.tokio.clone(),
                 deps.bus.clone(),
@@ -272,15 +272,10 @@ impl ImportClient {
         let progress_weak: glib::SendWeakRef<ImportClient> = self.downgrade().into();
         let complete_weak: glib::SendWeakRef<ImportClient> = self.downgrade().into();
 
-        let render_pipeline = std::sync::Arc::new(
-            crate::renderer::pipeline::RenderPipeline::new(formats.clone()),
-        );
-
         let pipeline = match ImportPipeline::builder()
             .originals_dir(originals_dir)
             .thumbnails_dir(thumbnails_dir)
             .library(library)
-            .formats(formats)
             .render_pipeline(render_pipeline)
             .mode(mode)
             .on_progress(move |p| {

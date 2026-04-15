@@ -16,6 +16,7 @@ use image::DynamicImage;
 use tracing::instrument;
 
 use crate::library::editing::EditState;
+use crate::library::media::MediaType;
 use crate::renderer::error::RenderError;
 use crate::renderer::format::FormatRegistry;
 
@@ -44,8 +45,23 @@ pub struct RenderPipeline {
 }
 
 impl RenderPipeline {
-    pub fn new(formats: Arc<FormatRegistry>) -> Self {
-        Self { formats }
+    /// Create a pipeline with all supported format handlers registered.
+    pub fn new() -> Self {
+        use super::format::{raw::RawHandler, standard::StandardHandler, video::VideoHandler};
+        let mut registry = FormatRegistry::new();
+        registry.register(Arc::new(StandardHandler));
+        registry.register(Arc::new(RawHandler));
+        registry.register(Arc::new(VideoHandler));
+        Self {
+            formats: Arc::new(registry),
+        }
+    }
+
+    /// Detect the media type of a file using magic bytes + extension fallback.
+    ///
+    /// Used by the import filter to decide whether to accept a file.
+    pub fn media_type(&self, path: &Path, ext: &str) -> Option<MediaType> {
+        self.formats.media_type_with_sniff(path, ext)
     }
 
     /// Full render pipeline: decode → orient → resize → edit → DynamicImage.
@@ -85,16 +101,9 @@ impl RenderPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::renderer::format::standard::StandardHandler;
     use image::{GenericImageView, ImageFormat, RgbaImage};
     use std::path::PathBuf;
     use std::io::Cursor;
-
-    fn test_formats() -> Arc<FormatRegistry> {
-        let mut reg = FormatRegistry::new();
-        reg.register(Arc::new(StandardHandler));
-        Arc::new(reg)
-    }
 
     fn write_test_jpeg(dir: &Path, name: &str) -> PathBuf {
         let img = DynamicImage::ImageRgba8(RgbaImage::new(100, 50));
@@ -107,7 +116,7 @@ mod tests {
     }
 
     fn test_pipeline() -> RenderPipeline {
-        RenderPipeline::new(test_formats())
+        RenderPipeline::new()
     }
 
     #[test]

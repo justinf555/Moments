@@ -592,18 +592,8 @@ impl MomentsApplication {
                         // Create the import client (GObject singleton).
                         let sync_thumbnails_dir = thumbnails_dir.clone();
                         {
-                            use crate::renderer::format::{
-                                FormatRegistry, RawHandler, StandardHandler, VideoHandler,
-                            };
-                            let mut registry = FormatRegistry::new();
-                            registry.register(std::sync::Arc::new(StandardHandler));
-                            registry.register(std::sync::Arc::new(RawHandler));
-                            registry.register(std::sync::Arc::new(VideoHandler));
-                            let formats = std::sync::Arc::new(registry);
                             let render_pipeline = std::sync::Arc::new(
-                                crate::renderer::pipeline::RenderPipeline::new(
-                                    Arc::clone(&formats),
-                                ),
+                                crate::renderer::pipeline::RenderPipeline::new(),
                             );
                             *app.imp().render_pipeline.borrow_mut() =
                                 Some(Arc::clone(&render_pipeline));
@@ -613,7 +603,7 @@ impl MomentsApplication {
                                 Arc::clone(&library),
                                 originals_dir,
                                 thumbnails_dir,
-                                formats,
+                                Arc::clone(&render_pipeline),
                                 storage_mode,
                                 tokio.clone(),
                                 bus.sender(),

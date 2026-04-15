@@ -10,7 +10,7 @@ use crate::library::media::MediaType;
 /// Videos are recognised by extension but not decoded by `FormatHandler`
 /// (that trait returns `DynamicImage`). Thumbnail generation for videos
 /// requires a separate pipeline (Phase 2 — GStreamer).
-pub(crate) const VIDEO_EXTENSIONS: &[&str] = &[
+pub const VIDEO_EXTENSIONS: &[&str] = &[
     "mp4", "mov", "m4v", "mkv", "webm", "avi", "mts", "m2ts", "3gp",
 ];
 
