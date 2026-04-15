@@ -111,12 +111,7 @@ fn encode_thumbnail(
     // Apply EXIF orientation for standard image formats only.
     // Skip for: videos (no EXIF), HEIC/HEIF (libheif applies orientation
     // automatically during decode — applying it again would double-rotate).
-    let ext = source
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
-        .unwrap_or_default();
-    let skip_orientation = formats.is_video(&ext) || matches!(ext.as_str(), "heic" | "heif");
+    let skip_orientation = formats.is_video_by_magic(source) || formats.is_heif_by_magic(source);
     let img = if skip_orientation {
         img
     } else {

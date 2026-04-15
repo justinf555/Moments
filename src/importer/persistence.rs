@@ -69,10 +69,7 @@ pub async fn persist(params: PersistParams<'_>) -> Result<PersistResult, ImportE
                 .await
                 .map_err(ImportError::Io)? as i64;
 
-            // Use the original source (with extension) for thumbnail generation,
-            // not the extensionless stored copy. Decoders need the extension to
-            // pick the right handler.
-            (rel, size, source.to_path_buf())
+            (rel, size, target)
         }
         LocalStorageMode::Referenced => {
             let abs = source.to_string_lossy().into_owned();

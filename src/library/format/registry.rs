@@ -73,6 +73,12 @@ impl FormatRegistry {
     /// Returns [`LibraryError::Thumbnail`] if no handler is registered or
     /// decoding fails.
     pub fn decode(&self, path: &Path) -> Result<image::DynamicImage, LibraryError> {
+        // Try magic-byte detection first (works for extensionless files).
+        if let Some(handler) = self.handler_by_magic(path) {
+            return handler.decode(path);
+        }
+
+        // Fall back to extension-based lookup.
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
@@ -87,9 +93,42 @@ impl FormatRegistry {
         handler.decode(path)
     }
 
+    /// Try to find a handler by reading magic bytes from the file.
+    fn handler_by_magic(&self, path: &Path) -> Option<Arc<dyn FormatHandler>> {
+        use super::detect::{detect_format, DetectedFormat, ImageFormat, VideoFormat};
+
+        let detected = detect_format(path).ok()?;
+        let ext = match detected {
+            DetectedFormat::Image(ImageFormat::Jpeg) => "jpg",
+            DetectedFormat::Image(ImageFormat::Png) => "png",
+            DetectedFormat::Image(ImageFormat::WebP) => "webp",
+            DetectedFormat::Image(ImageFormat::Gif) => "gif",
+            DetectedFormat::Image(ImageFormat::Tiff) => "tiff",
+            DetectedFormat::Image(ImageFormat::Heif) => "heic",
+            DetectedFormat::Video(VideoFormat::Mp4) => "mp4",
+            DetectedFormat::Video(VideoFormat::Mov) => "mov",
+            DetectedFormat::Video(VideoFormat::Mkv) => "mkv",
+            DetectedFormat::Video(VideoFormat::Avi) => "avi",
+            DetectedFormat::Unknown => return None,
+        };
+        self.handlers.get(ext).cloned()
+    }
+
     /// Returns `true` if `ext` is a recognised video format (case-insensitive).
     pub fn is_video(&self, ext: &str) -> bool {
         VIDEO_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
+    }
+
+    /// Returns `true` if the file at `path` is a video (by magic bytes).
+    pub fn is_video_by_magic(&self, path: &Path) -> bool {
+        use super::detect::{detect_format, DetectedFormat};
+        matches!(detect_format(path), Ok(DetectedFormat::Video(_)))
+    }
+
+    /// Returns `true` if the file at `path` is HEIC/HEIF (by magic bytes).
+    pub fn is_heif_by_magic(&self, path: &Path) -> bool {
+        use super::detect::{detect_format, DetectedFormat, ImageFormat};
+        matches!(detect_format(path), Ok(DetectedFormat::Image(ImageFormat::Heif)))
     }
 
     /// Determine the [`MediaType`] using content sniffing with extension fallback.
