@@ -39,13 +39,6 @@ pub enum AppEvent {
     ThumbnailReady {
         media_id: MediaId,
     },
-    ThumbnailDownloadProgress {
-        completed: usize,
-        total: usize,
-    },
-    ThumbnailDownloadsComplete {
-        total: usize,
-    },
 
     // ── Commands (UI intent → library command handler) ────────────────────────
     TrashRequested {

@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, watch, Semaphore};
+use tokio::sync::watch;
 use tracing::{error, info};
 
 use crate::event_bus::EventSender;
@@ -31,10 +31,10 @@ pub struct SyncHandle {
 impl SyncHandle {
     /// Start the bidirectional sync engine.
     ///
-    /// Spawns three Tokio tasks:
-    /// - **PullManager**: streams changes from Immich, upserts locally
+    /// Spawns two Tokio tasks:
+    /// - **PullManager**: streams changes from Immich, upserts locally,
+    ///   downloads thumbnails inline
     /// - **PushManager**: drains the outbox, pushes local mutations to Immich
-    /// - **ThumbnailDownloader**: bounded worker pool for thumbnail fetching
     ///
     /// Returns a handle for shutdown and interval control.
     pub fn start(
@@ -46,35 +46,18 @@ impl SyncHandle {
         initial_interval_secs: u64,
         tokio: tokio::runtime::Handle,
     ) -> Self {
-        use providers::immich::{
-            downloader, pull, push, MAX_THUMBNAIL_WORKERS, THUMBNAIL_QUEUE_SIZE,
-        };
+        use providers::immich::{pull, push};
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let (interval_tx, interval_rx) = watch::channel(initial_interval_secs);
-        let (thumbnail_tx, thumbnail_rx) = mpsc::channel(THUMBNAIL_QUEUE_SIZE);
 
-        // Spawn thumbnail downloader.
-        let dl = downloader::ThumbnailDownloader {
-            client: client.clone(),
-            library: Arc::clone(&library),
-            events: events.clone(),
-            thumbnails_dir: thumbnails_dir.clone(),
-            rx: thumbnail_rx,
-            semaphore: Arc::new(Semaphore::new(MAX_THUMBNAIL_WORKERS)),
-        };
-        tokio.spawn(async move {
-            dl.run().await;
-        });
-
-        // Spawn pull manager.
+        // Spawn pull manager (thumbnails downloaded inline per asset).
         let pull_mgr = pull::PullManager {
             client: client.clone(),
             library: Arc::clone(&library),
             db: db.clone(),
             events: events.clone(),
             shutdown_rx: shutdown_rx.clone(),
-            thumbnail_tx,
             thumbnails_dir,
             interval_rx: tokio::sync::Mutex::new(interval_rx.clone()),
         };
@@ -122,12 +105,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn constants_are_sensible() {
-        use providers::immich::*;
-        assert!(MAX_THUMBNAIL_WORKERS > 0);
-        assert!(THUMBNAIL_QUEUE_SIZE > 0);
-        assert!(ACK_FLUSH_THRESHOLD > 0);
-        assert!(THUMBNAIL_THROTTLE.as_millis() > 0);
+    fn immich_constants_are_sensible() {
+        assert!(providers::immich::ACK_FLUSH_THRESHOLD > 0);
     }
 
     #[test]

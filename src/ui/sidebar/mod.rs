@@ -504,12 +504,6 @@ mod imp {
                     crate::app_event::AppEvent::SyncComplete { assets, .. } => {
                         sidebar.show_sync_complete(*assets);
                     }
-                    crate::app_event::AppEvent::ThumbnailDownloadProgress { completed, total } => {
-                        sidebar.show_thumbnail_progress(*completed, *total);
-                    }
-                    crate::app_event::AppEvent::ThumbnailDownloadsComplete { total } => {
-                        sidebar.show_thumbnails_complete(*total);
-                    }
                     crate::app_event::AppEvent::Trashed { ids } => {
                         sidebar.adjust_trash_count(ids.len() as i32);
                     }
@@ -858,20 +852,6 @@ impl MomentsSidebar {
                 }
             });
         }
-    }
-
-    pub fn show_thumbnail_progress(&self, completed: usize, total: usize) {
-        let imp = self.imp();
-        if imp.current_state.get() == imp::StatusState::Idle {
-            return;
-        }
-        imp.thumb_label()
-            .set_text(&format!("Thumbnails {completed}/{total}"));
-        self.set_status(imp::StatusState::Thumbnails, "thumbnails");
-    }
-
-    pub fn show_thumbnails_complete(&self, _total: usize) {
-        self.set_idle();
     }
 
     pub fn show_upload_progress(

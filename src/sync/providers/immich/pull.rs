@@ -19,6 +19,7 @@ use crate::library::error::LibraryError;
 use crate::library::faces::repository::AssetFaceRow;
 use crate::library::media::{MediaId, MediaItem, MediaRecord, MediaType};
 use crate::library::metadata::MediaMetadataRecord;
+use crate::library::thumbnail::sharded_thumbnail_path;
 use crate::library::Library;
 
 use super::client::ImmichClient;
@@ -45,7 +46,6 @@ pub(crate) struct PullManager {
     pub db: Database,
     pub events: EventSender,
     pub shutdown_rx: tokio::sync::watch::Receiver<bool>,
-    pub thumbnail_tx: tokio::sync::mpsc::Sender<MediaId>,
     pub thumbnails_dir: PathBuf,
     pub interval_rx: tokio::sync::Mutex<tokio::sync::watch::Receiver<u64>>,
 }
@@ -446,13 +446,9 @@ impl PullManager {
         };
         self.events.send(AppEvent::AssetSynced { item });
 
-        // Queue thumbnail download.
-        self.library
-            .thumbnails()
-            .insert_thumbnail_pending(&media_id)
-            .await?;
-        if self.thumbnail_tx.send(media_id).await.is_err() {
-            debug!("thumbnail channel closed, skipping download");
+        // Download thumbnail inline.
+        if let Err(e) = self.download_thumbnail(&media_id).await {
+            debug!(id = %media_id, "thumbnail download failed: {e}");
         }
 
         Ok(())
@@ -743,6 +739,52 @@ impl PullManager {
         }
 
         acks.clear();
+        Ok(())
+    }
+
+    /// Download a single thumbnail from Immich and write it to the local cache.
+    #[instrument(skip(self))]
+    async fn download_thumbnail(&self, media_id: &MediaId) -> Result<(), LibraryError> {
+        let path = sharded_thumbnail_path(&self.thumbnails_dir, media_id);
+
+        // Skip if already cached on disk.
+        if path.exists() {
+            debug!("thumbnail already cached, skipping download");
+            let now = chrono::Utc::now().timestamp();
+            self.library
+                .thumbnails()
+                .set_thumbnail_ready(media_id, &path.to_string_lossy(), now)
+                .await?;
+            self.events.send(AppEvent::ThumbnailReady {
+                media_id: media_id.clone(),
+            });
+            return Ok(());
+        }
+
+        // Download from Immich.
+        let api_path = format!("/assets/{}/thumbnail?size=thumbnail", media_id.as_str());
+        let bytes = self.client.get_bytes(&api_path).await?;
+
+        // Create shard directories and write file.
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(LibraryError::Io)?;
+        }
+        tokio::fs::write(&path, &bytes)
+            .await
+            .map_err(LibraryError::Io)?;
+
+        // Update DB status and emit event.
+        let now = chrono::Utc::now().timestamp();
+        self.library
+            .thumbnails()
+            .set_thumbnail_ready(media_id, &path.to_string_lossy(), now)
+            .await?;
+        self.events.send(AppEvent::ThumbnailReady {
+            media_id: media_id.clone(),
+        });
+
         Ok(())
     }
 }
