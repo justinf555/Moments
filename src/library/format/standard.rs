@@ -19,7 +19,7 @@ impl FormatHandler for StandardHandler {
         // Use Reader with format guessing instead of image::open() so that
         // extensionless files (UUID-sharded originals) are decoded via magic
         // bytes rather than relying on the file extension.
-        image::io::Reader::open(path)
+        image::ImageReader::open(path)
             .map_err(|e| LibraryError::Thumbnail(e.to_string()))?
             .with_guessed_format()
             .map_err(|e| LibraryError::Thumbnail(e.to_string()))?

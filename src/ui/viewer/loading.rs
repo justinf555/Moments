@@ -42,20 +42,30 @@ impl PhotoViewer {
                 return;
             }
 
-            // Guard: skip decode for video files.
-            let ext = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.to_lowercase())
-                .unwrap_or_default();
-            if crate::library::format::registry::VIDEO_EXTENSIONS.contains(&ext.as_str()) {
+            // Guard: skip decode for video files (detect by magic bytes).
+            let is_video = {
+                use crate::library::format::detect::{detect_format, DetectedFormat};
+                matches!(detect_format(&path), Ok(DetectedFormat::Video(_)))
+            };
+            if is_video {
                 imp.spinner.set_spinning(false);
                 imp.spinner.set_visible(false);
                 return;
             }
 
-            // Decode full-res image on a blocking thread.
-            let is_raw = crate::library::format::registry::RAW_EXTENSIONS.contains(&ext.as_str());
+            // Detect RAW files by trying magic bytes — TIFF header that isn't
+            // a standard TIFF often indicates a RAW format (CR2, DNG, NEF, etc.).
+            // The RAW handler will confirm during decode.
+            let is_raw = {
+                use crate::library::format::detect::{detect_format, DetectedFormat, ImageFormat};
+                // If magic bytes say Unknown, it's likely a RAW format that
+                // rawler can handle. If TIFF, it could be either — try RAW first.
+                match detect_format(&path) {
+                    Ok(DetectedFormat::Image(ImageFormat::Tiff)) => true,
+                    Ok(DetectedFormat::Unknown) => true,
+                    _ => false,
+                }
+            };
             let weak2 = viewer.downgrade();
             drop(viewer);
             glib::MainContext::default().spawn_local(async move {
@@ -64,21 +74,32 @@ impl PhotoViewer {
                         tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, i32, i32)> {
                             let img = if is_raw {
                                 use crate::library::format::raw::RawHandler;
+                                // Try RAW decoder first; fall back to standard.
                                 RawHandler
                                     .decode_full_res(&path)
-                                    .map_err(|e| debug!("RAW full-res decode failed: {e}"))
-                                    .ok()?
-                            } else {
-                                image::open(&path)
+                                    .or_else(|_| {
+                                        image::ImageReader::open(&path)
+                                            .and_then(|r| r.with_guessed_format())
+                                            .map_err(|e| crate::library::error::LibraryError::Thumbnail(e.to_string()))
+                                            .and_then(|r| r.decode().map_err(|e| crate::library::error::LibraryError::Thumbnail(e.to_string())))
+                                    })
                                     .map_err(|e| debug!("full-res decode failed: {e}"))
                                     .ok()?
+                            } else {
+                                image::ImageReader::open(&path)
+                                    .and_then(|r| r.with_guessed_format())
+                                    .ok()
+                                    .and_then(|r| r.decode().ok())
+                                    .or_else(|| {
+                                        debug!("full-res decode failed");
+                                        None
+                                    })?
                             };
-                            let ext = path
-                                .extension()
-                                .and_then(|e| e.to_str())
-                                .map(|e| e.to_lowercase())
-                                .unwrap_or_default();
-                            let img = if matches!(ext.as_str(), "heic" | "heif") || is_raw {
+                            let is_heif = {
+                                use crate::library::format::detect::{detect_format, DetectedFormat, ImageFormat};
+                                matches!(detect_format(&path), Ok(DetectedFormat::Image(ImageFormat::Heif)))
+                            };
+                            let img = if is_heif || is_raw {
                                 img
                             } else {
                                 let orientation =
