@@ -28,8 +28,7 @@ pub fn orient(path: &Path, img: DynamicImage, formats: &Arc<FormatRegistry>) -> 
 }
 
 /// Rotate/flip `img` to match the EXIF orientation tag value (1–8).
-// TODO: Make private once importer/thumbnail.rs uses the pipeline.
-pub fn apply_orientation(img: DynamicImage, orientation: u8) -> DynamicImage {
+pub(crate) fn apply_orientation(img: DynamicImage, orientation: u8) -> DynamicImage {
     use image::imageops;
     match orientation {
         2 => DynamicImage::from(imageops::flip_horizontal(&img)),
