@@ -17,5 +17,3 @@ pub mod output;
 pub mod pipeline;
 pub mod resize;
 
-// TODO: Remove once all callers use the pipeline directly.
-pub use edits::apply_edits;

@@ -22,7 +22,7 @@ use transform_section::EditTransformSection;
 
 use crate::library::editing::EditState;
 use crate::library::media::MediaId;
-use crate::renderer::apply_edits;
+use crate::renderer::edits::apply_edits;
 use crate::ui::widgets::wire_single_expansion;
 
 /// Delay before auto-saving edit state to DB after the last change (milliseconds).
