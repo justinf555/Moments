@@ -14,13 +14,6 @@ pub(crate) const VIDEO_EXTENSIONS: &[&str] = &[
     "mp4", "mov", "m4v", "mkv", "webm", "avi", "mts", "m2ts", "3gp",
 ];
 
-/// RAW formats that require `rawler` for decode. The `image` crate cannot
-/// decode these — the viewer and thumbnailer use `RawHandler` instead.
-pub(crate) const RAW_EXTENSIONS: &[&str] = &[
-    "ari", "arw", "cr2", "cr3", "crm", "crw", "dcr", "dcs", "dng", "erf", "iiq", "kdc", "mef",
-    "mos", "mrw", "nef", "nrw", "orf", "ori", "pef", "raf", "raw", "rw2", "rwl", "srw", "3fr",
-    "fff", "x3f", "qtk",
-];
 
 /// Decodes image files of a specific set of formats into a [`image::DynamicImage`].
 ///

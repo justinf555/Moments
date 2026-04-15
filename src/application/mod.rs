@@ -51,6 +51,7 @@ mod imp {
         pub album_client: RefCell<Option<crate::client::AlbumClient>>,
         pub people_client: RefCell<Option<crate::client::PeopleClient>>,
         pub media_client: RefCell<Option<crate::client::MediaClient>>,
+        pub render_pipeline: RefCell<Option<Arc<crate::renderer::pipeline::RenderPipeline>>>,
         pub is_immich: Cell<bool>,
         pub immich_server_url: RefCell<Option<String>>,
         /// Centralised event bus for fan-out event delivery.
@@ -190,6 +191,14 @@ impl MomentsApplication {
     /// Returns `None` if no library is open yet.
     pub fn import_client(&self) -> Option<crate::client::import_client::ImportClient> {
         self.imp().import_client.borrow().clone()
+    }
+
+    /// Access the shared render pipeline.
+    ///
+    /// Available from anywhere via `MomentsApplication::default().render_pipeline()`.
+    /// Returns `None` if no library is open yet.
+    pub fn render_pipeline(&self) -> Option<Arc<crate::renderer::pipeline::RenderPipeline>> {
+        self.imp().render_pipeline.borrow().clone()
     }
 
     /// Access the album client singleton.
@@ -590,12 +599,21 @@ impl MomentsApplication {
                             registry.register(std::sync::Arc::new(StandardHandler));
                             registry.register(std::sync::Arc::new(RawHandler));
                             registry.register(std::sync::Arc::new(VideoHandler));
+                            let formats = std::sync::Arc::new(registry);
+                            let render_pipeline = std::sync::Arc::new(
+                                crate::renderer::pipeline::RenderPipeline::new(
+                                    Arc::clone(&formats),
+                                ),
+                            );
+                            *app.imp().render_pipeline.borrow_mut() =
+                                Some(Arc::clone(&render_pipeline));
+
                             let import_client = crate::client::import_client::ImportClient::new();
                             import_client.configure(
                                 Arc::clone(&library),
                                 originals_dir,
                                 thumbnails_dir,
-                                std::sync::Arc::new(registry),
+                                formats,
                                 storage_mode,
                                 tokio.clone(),
                                 bus.sender(),

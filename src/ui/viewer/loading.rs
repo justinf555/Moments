@@ -4,6 +4,8 @@ use gtk::{gdk, glib};
 use tracing::{debug, error};
 
 use crate::app_event::AppEvent;
+use crate::renderer::output;
+use crate::renderer::pipeline::{RenderOptions, RenderSize};
 
 use super::PhotoViewer;
 
@@ -20,6 +22,16 @@ impl PhotoViewer {
         let media_client = crate::application::MomentsApplication::default()
             .media_client()
             .expect("media client available");
+
+        let pipeline = match crate::application::MomentsApplication::default().render_pipeline() {
+            Some(p) => p,
+            None => {
+                error!("render pipeline not available");
+                imp.spinner.set_spinning(false);
+                imp.spinner.set_visible(false);
+                return;
+            }
+        };
 
         let weak = self.downgrade();
         media_client.original_path(&id, move |path| {
@@ -53,67 +65,24 @@ impl PhotoViewer {
                 return;
             }
 
-            // Detect RAW files by trying magic bytes — TIFF header that isn't
-            // a standard TIFF often indicates a RAW format (CR2, DNG, NEF, etc.).
-            // The RAW handler will confirm during decode.
-            let is_raw = {
-                use crate::renderer::format::detect::{detect_format, DetectedFormat, ImageFormat};
-                // If magic bytes say Unknown, it's likely a RAW format that
-                // rawler can handle. If TIFF, it could be either — try RAW first.
-                match detect_format(&path) {
-                    Ok(DetectedFormat::Image(ImageFormat::Tiff)) => true,
-                    Ok(DetectedFormat::Unknown) => true,
-                    _ => false,
-                }
-            };
             let weak2 = viewer.downgrade();
+            let bus = imp.bus_sender().clone();
             drop(viewer);
             glib::MainContext::default().spawn_local(async move {
-                let pixels: Option<(Vec<u8>, i32, i32)> = tokio
+                let pixels: Option<(Vec<u8>, u32, u32)> = tokio
                     .spawn(async move {
-                        tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, i32, i32)> {
-                            let img = if is_raw {
-                                use crate::renderer::format::raw::RawHandler;
-                                // Try RAW decoder first; fall back to standard.
-                                RawHandler
-                                    .decode_full_res(&path)
-                                    .or_else(|_| {
-                                        image::ImageReader::open(&path)
-                                            .and_then(|r| r.with_guessed_format())
-                                            .map_err(|e| crate::library::error::LibraryError::Thumbnail(e.to_string()))
-                                            .and_then(|r| r.decode().map_err(|e| crate::library::error::LibraryError::Thumbnail(e.to_string())))
-                                    })
-                                    .map_err(|e| debug!("full-res decode failed: {e}"))
-                                    .ok()?
-                            } else {
-                                image::ImageReader::open(&path)
-                                    .and_then(|r| r.with_guessed_format())
-                                    .ok()
-                                    .and_then(|r| r.decode().ok())
-                                    .or_else(|| {
-                                        debug!("full-res decode failed");
-                                        None
-                                    })?
+                        tokio::task::spawn_blocking(move || {
+                            let options = RenderOptions {
+                                size: RenderSize::FullRes,
+                                edits: None,
                             };
-                            let is_heif = {
-                                use crate::renderer::format::detect::{detect_format, DetectedFormat, ImageFormat};
-                                matches!(detect_format(&path), Ok(DetectedFormat::Image(ImageFormat::Heif)))
-                            };
-                            let img = if is_heif || is_raw {
-                                img
-                            } else {
-                                let orientation =
-                                    crate::library::metadata::exif::extract_exif(&path)
-                                        .orientation
-                                        .unwrap_or(1);
-                                crate::library::thumbnail::thumbnailer::apply_orientation(
-                                    img,
-                                    orientation,
-                                )
-                            };
-                            let rgba = img.into_rgba8();
-                            let (w, h) = rgba.dimensions();
-                            Some((rgba.into_raw(), w as i32, h as i32))
+                            match pipeline.render(&path, &options) {
+                                Ok(img) => Some(output::to_rgba(&img)),
+                                Err(e) => {
+                                    debug!("full-res decode failed: {e}");
+                                    None
+                                }
+                            }
                         })
                         .await
                         .ok()?
@@ -138,8 +107,8 @@ impl PhotoViewer {
                     Some((raw, width, height)) => {
                         let gbytes = glib::Bytes::from_owned(raw);
                         let texture = gdk::MemoryTexture::new(
-                            width,
-                            height,
+                            width as i32,
+                            height as i32,
                             gdk::MemoryFormat::R8g8b8a8,
                             &gbytes,
                             (width as usize) * 4,
@@ -151,7 +120,7 @@ impl PhotoViewer {
                     }
                     None => {
                         debug!("full-res decode failed, keeping thumbnail");
-                        imp.bus_sender().send(AppEvent::Error(
+                        bus.send(AppEvent::Error(
                             "Could not display full-resolution image".into(),
                         ));
                     }
@@ -176,6 +145,14 @@ impl PhotoViewer {
         let media_client = crate::application::MomentsApplication::default()
             .media_client()
             .expect("media client available");
+
+        let pipeline = match crate::application::MomentsApplication::default().render_pipeline() {
+            Some(p) => p,
+            None => {
+                error!("render pipeline not available for edit session");
+                return;
+            }
+        };
 
         // Fetch edit state and original path in parallel via two client calls.
         let weak = self.downgrade();
@@ -211,50 +188,21 @@ impl PhotoViewer {
 
                 let weak = weak.clone();
                 let tk = tokio.clone();
+                let pipeline = pipeline.clone();
                 glib::MainContext::default().spawn_local(async move {
                     let preview = tk
                         .spawn(async move {
                             tokio::task::spawn_blocking(
                                 move || -> Option<std::sync::Arc<image::DynamicImage>> {
-                                    let ext = path
-                                        .extension()
-                                        .and_then(|e| e.to_str())
-                                        .map(|e| e.to_lowercase())
-                                        .unwrap_or_default();
-                                    let is_raw = crate::renderer::format::registry::RAW_EXTENSIONS
-                                        .contains(&ext.as_str());
-                                    let img = if is_raw {
-                                        use crate::renderer::format::raw::RawHandler;
-                                        RawHandler
-                                            .decode_full_res(&path)
-                                            .map_err(|e| {
-                                                error!("edit session RAW decode failed: {e}")
-                                            })
-                                            .ok()?
-                                    } else {
-                                        image::open(&path)
-                                            .map_err(|e| error!("edit session decode failed: {e}"))
-                                            .ok()?
+                                    let options = RenderOptions {
+                                        size: RenderSize::Thumbnail(1200),
+                                        edits: None,
                                     };
-                                    let img = if matches!(ext.as_str(), "heic" | "heif") || is_raw {
-                                        img
-                                    } else {
-                                        let orientation =
-                                            crate::library::metadata::exif::extract_exif(&path)
-                                                .orientation
-                                                .unwrap_or(1);
-                                        crate::library::thumbnail::thumbnailer::apply_orientation(
-                                            img,
-                                            orientation,
-                                        )
-                                    };
-                                    let (w, h) = image::GenericImageView::dimensions(&img);
-                                    let preview = if w <= 1200 && h <= 1200 {
-                                        img
-                                    } else {
-                                        img.thumbnail(1200, 1200)
-                                    };
-                                    Some(std::sync::Arc::new(preview))
+                                    let img = pipeline
+                                        .render(&path, &options)
+                                        .map_err(|e| error!("edit session decode failed: {e}"))
+                                        .ok()?;
+                                    Some(std::sync::Arc::new(img))
                                 },
                             )
                             .await
@@ -302,7 +250,6 @@ impl PhotoViewer {
         }
     }
 
-    /// Asynchronously fetch EXIF metadata and cache it for the info panel.
     pub(super) fn load_metadata_async(&self, gen: u64, id: crate::library::media::MediaId) {
         let media_client = crate::application::MomentsApplication::default()
             .media_client()
