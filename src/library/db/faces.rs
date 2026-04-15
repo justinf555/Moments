@@ -45,6 +45,7 @@ impl Database {
         is_favorite: bool,
         color: Option<&str>,
         face_asset_id: Option<&str>,
+        external_id: Option<&str>,
     ) -> Result<(), LibraryError> {
         FacesRepository::new(self.clone())
             .upsert_person(
@@ -55,6 +56,7 @@ impl Database {
                 is_favorite,
                 color,
                 face_asset_id,
+                external_id,
             )
             .await
     }

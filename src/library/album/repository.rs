@@ -42,14 +42,17 @@ impl AlbumRepository {
         name: &str,
         created_at: i64,
         updated_at: i64,
+        external_id: Option<&str>,
     ) -> Result<(), LibraryError> {
         sqlx::query(
-            "INSERT OR REPLACE INTO albums (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO albums (id, name, created_at, updated_at, external_id)
+             VALUES (?, ?, ?, ?, ?)",
         )
         .bind(id)
         .bind(name)
         .bind(created_at)
         .bind(updated_at)
+        .bind(external_id)
         .execute(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;

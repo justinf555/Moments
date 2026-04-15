@@ -46,9 +46,19 @@ impl FacesService {
         is_favorite: bool,
         color: Option<&str>,
         face_asset_id: Option<&str>,
+        external_id: Option<&str>,
     ) -> Result<(), LibraryError> {
         self.repo
-            .upsert_person(id, name, birth_date, is_hidden, is_favorite, color, face_asset_id)
+            .upsert_person(
+                id,
+                name,
+                birth_date,
+                is_hidden,
+                is_favorite,
+                color,
+                face_asset_id,
+                external_id,
+            )
             .await
     }
 

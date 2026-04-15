@@ -33,8 +33,11 @@ impl AlbumService {
         name: &str,
         created_at: i64,
         updated_at: i64,
+        external_id: Option<&str>,
     ) -> Result<(), LibraryError> {
-        self.repo.upsert(id, name, created_at, updated_at).await
+        self.repo
+            .upsert(id, name, created_at, updated_at, external_id)
+            .await
     }
 
     // ── Query methods ───────────────────────────────────────────────

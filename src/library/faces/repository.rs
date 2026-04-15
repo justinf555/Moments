@@ -130,6 +130,7 @@ impl FacesRepository {
 
     /// Upsert a person record (from sync).
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub async fn upsert_person(
         &self,
         id: &str,
@@ -139,11 +140,12 @@ impl FacesRepository {
         is_favorite: bool,
         color: Option<&str>,
         face_asset_id: Option<&str>,
+        external_id: Option<&str>,
     ) -> Result<(), LibraryError> {
         let now = chrono::Utc::now().timestamp();
         sqlx::query(
-            "INSERT INTO people (id, name, birth_date, is_hidden, is_favorite, color, face_asset_id, synced_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO people (id, name, birth_date, is_hidden, is_favorite, color, face_asset_id, synced_at, external_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                  name = excluded.name,
                  birth_date = excluded.birth_date,
@@ -151,7 +153,8 @@ impl FacesRepository {
                  is_favorite = excluded.is_favorite,
                  color = excluded.color,
                  face_asset_id = excluded.face_asset_id,
-                 synced_at = excluded.synced_at",
+                 synced_at = excluded.synced_at,
+                 external_id = excluded.external_id",
         )
         .bind(id)
         .bind(name)
@@ -161,6 +164,7 @@ impl FacesRepository {
         .bind(color)
         .bind(face_asset_id)
         .bind(now)
+        .bind(external_id)
         .execute(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
@@ -273,10 +277,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let (repo, _media, _db) = test_repo(dir.path()).await;
 
-        repo.upsert_person("p1", "Alice", None, false, false, None, None)
+        repo.upsert_person("p1", "Alice", None, false, false, None, None, None)
             .await
             .unwrap();
-        repo.upsert_person("p2", "Bob", None, false, false, None, None)
+        repo.upsert_person("p2", "Bob", None, false, false, None, None, None)
             .await
             .unwrap();
 
@@ -289,10 +293,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let (repo, _media, _db) = test_repo(dir.path()).await;
 
-        repo.upsert_person("p1", "Alice", None, false, false, None, None)
+        repo.upsert_person("p1", "Alice", None, false, false, None, None, None)
             .await
             .unwrap();
-        repo.upsert_person("p1", "Alice Smith", None, false, false, None, None)
+        repo.upsert_person("p1", "Alice Smith", None, false, false, None, None, None)
             .await
             .unwrap();
 
@@ -306,10 +310,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let (repo, _media, _db) = test_repo(dir.path()).await;
 
-        repo.upsert_person("p1", "Alice", None, false, false, None, None)
+        repo.upsert_person("p1", "Alice", None, false, false, None, None, None)
             .await
             .unwrap();
-        repo.upsert_person("p2", "Hidden", None, true, false, None, None)
+        repo.upsert_person("p2", "Hidden", None, true, false, None, None, None)
             .await
             .unwrap();
 
@@ -326,10 +330,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let (repo, _media, _db) = test_repo(dir.path()).await;
 
-        repo.upsert_person("p1", "Alice", None, false, false, None, None)
+        repo.upsert_person("p1", "Alice", None, false, false, None, None, None)
             .await
             .unwrap();
-        repo.upsert_person("p2", "", None, false, false, None, None)
+        repo.upsert_person("p2", "", None, false, false, None, None, None)
             .await
             .unwrap();
 
@@ -346,10 +350,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let (repo, media, _db) = test_repo(dir.path()).await;
 
-        repo.upsert_person("p1", "Alice", None, false, false, None, None)
+        repo.upsert_person("p1", "Alice", None, false, false, None, None, None)
             .await
             .unwrap();
-        repo.upsert_person("p2", "Bob", None, false, false, None, None)
+        repo.upsert_person("p2", "Bob", None, false, false, None, None, None)
             .await
             .unwrap();
 
@@ -413,7 +417,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let (repo, _media, _db) = test_repo(dir.path()).await;
 
-        repo.upsert_person("p1", "Alice", None, false, false, None, None)
+        repo.upsert_person("p1", "Alice", None, false, false, None, None, None)
             .await
             .unwrap();
         repo.delete_person("p1").await.unwrap();
@@ -427,7 +431,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let (repo, _media, _db) = test_repo(dir.path()).await;
 
-        repo.upsert_person("p1", "Alice", None, false, false, None, None)
+        repo.upsert_person("p1", "Alice", None, false, false, None, None, None)
             .await
             .unwrap();
         repo.rename_person("p1", "Alice Smith").await.unwrap();
@@ -441,7 +445,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let (repo, _media, _db) = test_repo(dir.path()).await;
 
-        repo.upsert_person("p1", "Alice", None, false, false, None, None)
+        repo.upsert_person("p1", "Alice", None, false, false, None, None, None)
             .await
             .unwrap();
         repo.set_person_hidden("p1", true).await.unwrap();
@@ -459,7 +463,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let (repo, media, _db) = test_repo(dir.path()).await;
 
-        repo.upsert_person("p1", "Alice", None, false, false, None, None)
+        repo.upsert_person("p1", "Alice", None, false, false, None, None, None)
             .await
             .unwrap();
         let rec = test_record(MediaId::new("m1".to_string()));
@@ -498,7 +502,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let (repo, media, _db) = test_repo(dir.path()).await;
 
-        repo.upsert_person("p1", "Alice", None, false, false, None, None)
+        repo.upsert_person("p1", "Alice", None, false, false, None, None, None)
             .await
             .unwrap();
 
@@ -546,7 +550,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let (repo, media, _db) = test_repo(dir.path()).await;
 
-        repo.upsert_person("p1", "Alice", None, false, false, None, None)
+        repo.upsert_person("p1", "Alice", None, false, false, None, None, None)
             .await
             .unwrap();
         let rec = test_record(MediaId::new("m1".to_string()));
@@ -581,7 +585,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let (repo, media, _db) = test_repo(dir.path()).await;
 
-        repo.upsert_person("p1", "Alice", None, false, false, None, None)
+        repo.upsert_person("p1", "Alice", None, false, false, None, None, None)
             .await
             .unwrap();
         let rec = test_record(MediaId::new("m1".to_string()));

@@ -496,7 +496,13 @@ impl PullManager {
 
         self.library
             .albums()
-            .upsert_album(&album.id, &album.name, created_at, updated_at)
+            .upsert_album(
+                &album.id,
+                &album.name,
+                created_at,
+                updated_at,
+                Some(&album.id),
+            )
             .await?;
 
         self.events.send(AppEvent::AlbumCreated {
@@ -551,6 +557,7 @@ impl PullManager {
                 person.is_favorite,
                 person.color.as_deref(),
                 person.face_asset_id.as_deref(),
+                Some(&person.id),
             )
             .await?;
 
