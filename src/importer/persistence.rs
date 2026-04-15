@@ -8,6 +8,7 @@ use crate::library::config::LocalStorageMode;
 use crate::library::media::{MediaId, MediaRecord, MediaService, MediaType};
 use crate::library::metadata::exif::ExifInfo;
 use crate::library::metadata::{MediaMetadataRecord, MetadataService};
+use crate::library::thumbnail::sharded_original_relative;
 
 /// Input parameters for the persist step.
 pub struct PersistParams<'a> {
@@ -31,7 +32,9 @@ pub struct PersistResult {
 
 /// Persist a file and its records to the library.
 ///
-/// In **Managed** mode: copies the file into `originals/YYYY/MM/DD/filename.ext`.
+/// In **Managed** mode: copies the file into a UUID-sharded path under
+/// `originals/{id[0..2]}/{id[2..4]}/{id}` (no extension — decoders
+/// detect format from magic bytes).
 /// In **Referenced** mode: stores the absolute path without copying.
 ///
 /// Inserts both the `MediaRecord` (via MediaService) and the
@@ -54,13 +57,8 @@ pub async fn persist(params: PersistParams<'_>) -> Result<PersistResult, ImportE
     // ── Store or copy file ────────────────────────────────────────────
     let (relative_path, file_size, thumbnail_source) = match mode {
         LocalStorageMode::Managed => {
-            let base_target = compute_base_target(source, originals_dir, exif.captured_at).await?;
-            let target = resolve_collision(base_target);
-
-            let rel = target
-                .strip_prefix(originals_dir)
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_else(|_| target.to_string_lossy().into_owned());
+            let rel = sharded_original_relative(media_id);
+            let target = originals_dir.join(&rel);
 
             if let Some(parent) = target.parent() {
                 tokio::fs::create_dir_all(parent)
@@ -135,95 +133,4 @@ pub async fn persist(params: PersistParams<'_>) -> Result<PersistResult, ImportE
         .await?;
 
     Ok(PersistResult { thumbnail_source })
-}
-
-/// Compute the base destination path (`YYYY/MM/DD/filename.ext`) for `source`
-/// inside `originals_dir`.
-async fn compute_base_target(
-    source: &Path,
-    originals_dir: &Path,
-    exif_captured_at: Option<i64>,
-) -> Result<PathBuf, ImportError> {
-    let datetime: chrono::DateTime<chrono::Local> = if let Some(ts) = exif_captured_at {
-        chrono::DateTime::from_timestamp(ts, 0)
-            .map(|utc| utc.with_timezone(&chrono::Local))
-            .unwrap_or_else(chrono::Local::now)
-    } else {
-        let metadata = tokio::fs::metadata(source).await.map_err(ImportError::Io)?;
-        let modified = metadata.modified().map_err(ImportError::Io)?;
-        modified.into()
-    };
-
-    let date_dir = originals_dir
-        .join(datetime.format("%Y").to_string())
-        .join(datetime.format("%m").to_string())
-        .join(datetime.format("%d").to_string());
-
-    let file_name = source.file_name().ok_or_else(|| {
-        ImportError::InvalidSource(format!("source has no filename: {}", source.display()))
-    })?;
-
-    Ok(date_dir.join(file_name))
-}
-
-/// Resolve filename collisions by appending `_2`, `_3`, … suffixes.
-fn resolve_collision(base: PathBuf) -> PathBuf {
-    if !base.exists() {
-        return base;
-    }
-
-    let stem = base
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("file")
-        .to_string();
-    let ext = base
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| format!(".{e}"))
-        .unwrap_or_default();
-    let dir = base.parent().unwrap_or(Path::new(""));
-
-    let mut counter = 2u32;
-    loop {
-        let candidate = dir.join(format!("{stem}_{counter}{ext}"));
-        if !candidate.exists() {
-            return candidate;
-        }
-        counter += 1;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    #[test]
-    fn resolve_collision_returns_base_when_no_conflict() {
-        let dir = tempdir().unwrap();
-        let base = dir.path().join("photo.jpg");
-        assert_eq!(resolve_collision(base.clone()), base);
-    }
-
-    #[test]
-    fn resolve_collision_appends_suffix_on_conflict() {
-        let dir = tempdir().unwrap();
-        let base = dir.path().join("photo.jpg");
-        std::fs::write(&base, b"existing").unwrap();
-
-        let resolved = resolve_collision(base);
-        assert!(resolved.to_string_lossy().contains("photo_2.jpg"));
-    }
-
-    #[test]
-    fn resolve_collision_increments_suffix() {
-        let dir = tempdir().unwrap();
-        let base = dir.path().join("photo.jpg");
-        std::fs::write(&base, b"existing").unwrap();
-        std::fs::write(dir.path().join("photo_2.jpg"), b"existing").unwrap();
-
-        let resolved = resolve_collision(base);
-        assert!(resolved.to_string_lossy().contains("photo_3.jpg"));
-    }
 }

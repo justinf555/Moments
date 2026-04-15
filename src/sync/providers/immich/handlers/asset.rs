@@ -4,7 +4,7 @@ use tracing::{debug, instrument};
 use crate::app_event::AppEvent;
 use crate::library::error::LibraryError;
 use crate::library::media::{MediaId, MediaItem, MediaRecord, MediaType};
-use crate::library::thumbnail::sharded_thumbnail_path;
+use crate::library::thumbnail::{sharded_original_relative, sharded_thumbnail_path};
 
 use super::{CounterKind, HandlerResult, SyncContext, SyncEntityHandler};
 use crate::sync::providers::immich::types::*;
@@ -56,7 +56,7 @@ async fn handle_asset(asset: SyncAssetV1, ctx: &SyncContext) -> Result<(), Libra
         id: MediaId::new(id_str.clone()),
         content_hash: None,
         external_id: Some(id_str.clone()),
-        relative_path: format!("immich/{id_str}"),
+        relative_path: sharded_original_relative(&MediaId::new(id_str.clone())),
         original_filename: asset.original_file_name,
         file_size: 0,
         imported_at,

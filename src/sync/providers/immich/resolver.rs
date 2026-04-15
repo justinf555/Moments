@@ -13,6 +13,7 @@ use tracing::{debug, instrument};
 use crate::library::error::LibraryError;
 use crate::library::media::MediaId;
 use crate::library::resolver::OriginalResolver;
+use crate::library::thumbnail::sharded_original_path;
 
 use super::client::ImmichClient;
 
@@ -29,20 +30,6 @@ impl CachedResolver {
             originals_dir,
         }
     }
-
-    /// Compute the local cache path for an asset.
-    ///
-    /// Uses two-level sharding: `originals/{hex[0..2]}/{hex[2..4]}/{id}.{ext}`
-    fn cache_path(&self, id: &MediaId, ext: &str) -> PathBuf {
-        let hex = id.as_str();
-        if hex.len() < 4 {
-            return self.originals_dir.join(format!("{hex}.{ext}"));
-        }
-        self.originals_dir
-            .join(&hex[..2])
-            .join(&hex[2..4])
-            .join(format!("{hex}.{ext}"))
-    }
 }
 
 #[async_trait]
@@ -52,14 +39,10 @@ impl OriginalResolver for CachedResolver {
         &self,
         id: &MediaId,
         _relative_path: &str,
-        original_filename: Option<&str>,
+        _original_filename: Option<&str>,
         external_id: Option<&str>,
     ) -> Result<Option<PathBuf>, LibraryError> {
-        let ext = original_filename
-            .and_then(|f| std::path::Path::new(f).extension())
-            .and_then(|e| e.to_str())
-            .unwrap_or("bin");
-        let path = self.cache_path(id, ext);
+        let path = sharded_original_path(&self.originals_dir, id);
 
         // Cache hit — return immediately.
         if path.exists() {
@@ -102,6 +85,7 @@ impl OriginalResolver for CachedResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::library::thumbnail::sharded_original_path;
 
     fn make_resolver(originals_dir: PathBuf) -> CachedResolver {
         let client = Arc::new(
@@ -112,42 +96,42 @@ mod tests {
 
     #[test]
     fn cache_path_uses_two_level_sharding() {
-        let resolver = make_resolver(PathBuf::from("/data/originals"));
+        let dir = PathBuf::from("/data/originals");
         let id = MediaId::new("abcdef1234567890".to_string());
-        let path = resolver.cache_path(&id, "jpeg");
+        let path = sharded_original_path(&dir, &id);
         assert_eq!(
             path,
-            PathBuf::from("/data/originals/ab/cd/abcdef1234567890.jpeg")
+            PathBuf::from("/data/originals/ab/cd/abcdef1234567890")
         );
     }
 
     #[test]
     fn cache_path_short_id_falls_back_to_flat() {
-        let resolver = make_resolver(PathBuf::from("/data/originals"));
+        let dir = PathBuf::from("/data/originals");
         let id = MediaId::new("abc".to_string());
-        let path = resolver.cache_path(&id, "png");
-        assert_eq!(path, PathBuf::from("/data/originals/abc.png"));
+        let path = sharded_original_path(&dir, &id);
+        assert_eq!(path, PathBuf::from("/data/originals/abc"));
     }
 
     #[test]
     fn cache_path_exactly_four_chars() {
-        let resolver = make_resolver(PathBuf::from("/data/originals"));
+        let dir = PathBuf::from("/data/originals");
         let id = MediaId::new("abcd".to_string());
-        let path = resolver.cache_path(&id, "jpg");
+        let path = sharded_original_path(&dir, &id);
         assert_eq!(
             path,
-            PathBuf::from("/data/originals/ab/cd/abcd.jpg")
+            PathBuf::from("/data/originals/ab/cd/abcd")
         );
     }
 
     #[test]
     fn cache_path_uuid_format() {
-        let resolver = make_resolver(PathBuf::from("/cache"));
+        let dir = PathBuf::from("/cache");
         let id = MediaId::new("550e8400-e29b-41d4-a716-446655440000".to_string());
-        let path = resolver.cache_path(&id, "heic");
+        let path = sharded_original_path(&dir, &id);
         assert_eq!(
             path,
-            PathBuf::from("/cache/55/0e/550e8400-e29b-41d4-a716-446655440000.heic")
+            PathBuf::from("/cache/55/0e/550e8400-e29b-41d4-a716-446655440000")
         );
     }
 
@@ -157,8 +141,8 @@ mod tests {
         let resolver = make_resolver(dir.path().to_path_buf());
         let id = MediaId::new("aabbccdd11223344".to_string());
 
-        // Pre-populate cache with correct extension.
-        let cache_path = resolver.cache_path(&id, "jpeg");
+        // Pre-populate cache at the extensionless sharded path.
+        let cache_path = sharded_original_path(dir.path(), &id);
         tokio::fs::create_dir_all(cache_path.parent().unwrap())
             .await
             .unwrap();
