@@ -8,7 +8,7 @@ use tracing::{debug, error, instrument};
 
 use crate::library::bundle::Bundle;
 use crate::library::config::LibraryConfig;
-use crate::library::keyring;
+use crate::application::keyring;
 
 mod imp {
     use super::*;

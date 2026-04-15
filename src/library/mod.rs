@@ -7,7 +7,6 @@ pub mod editing;
 pub mod error;
 pub mod faces;
 pub mod format;
-pub mod keyring;
 pub mod media;
 pub mod metadata;
 pub mod thumbnail;

@@ -18,6 +18,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+pub mod keyring;
+
 use std::cell::{Cell, OnceCell, RefCell};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -339,7 +341,7 @@ impl MomentsApplication {
         // For Immich configs, inject the session token from the keyring.
         let config = match config {
             LibraryConfig::Immich { server_url, .. } => {
-                let access_token = crate::library::keyring::lookup_access_token(&server_url)
+                let access_token = keyring::lookup_access_token(&server_url)
                     .ok()
                     .flatten()
                     .unwrap_or_default();
@@ -399,7 +401,7 @@ impl MomentsApplication {
         // For Immich configs, inject the session token from the keyring.
         let config = match config {
             LibraryConfig::Immich { server_url, .. } => {
-                let access_token = crate::library::keyring::lookup_access_token(&server_url)
+                let access_token = keyring::lookup_access_token(&server_url)
                     .ok()
                     .flatten()
                     .unwrap_or_default();
