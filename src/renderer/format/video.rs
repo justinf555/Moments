@@ -6,7 +6,7 @@ use gstreamer_app as gst_app;
 use tracing::{debug, instrument, warn};
 
 use crate::renderer::error::RenderError;
-use crate::library::thumbnail::thumbnailer::apply_orientation;
+use crate::renderer::orientation::apply_orientation;
 
 use super::registry::{FormatHandler, VIDEO_EXTENSIONS};
 
