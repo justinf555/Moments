@@ -48,6 +48,10 @@ impl AlbumService {
         self.repo.list().await
     }
 
+    pub async fn get_album(&self, id: &AlbumId) -> Result<Option<Album>, LibraryError> {
+        self.repo.get(id).await
+    }
+
     pub async fn create_album(&self, name: &str) -> Result<AlbumId, LibraryError> {
         let id = self.repo.create(name).await?;
         if let Err(e) = self

@@ -91,6 +91,36 @@ impl AlbumRepository {
             .collect())
     }
 
+    /// Fetch a single album by ID, including media count and cover.
+    pub async fn get(&self, id: &AlbumId) -> Result<Option<Album>, LibraryError> {
+        let row: Option<AlbumRow> = sqlx::query_as(
+            "SELECT a.id, a.name, a.created_at, a.updated_at,
+                    COUNT(am.media_id) as media_count,
+                    (SELECT am2.media_id FROM album_media am2
+                     JOIN media m ON m.id = am2.media_id AND m.is_trashed = 0
+                     WHERE am2.album_id = a.id
+                     ORDER BY am2.added_at DESC LIMIT 1) as cover_media_id
+             FROM albums a
+             LEFT JOIN album_media am ON a.id = am.album_id
+                 LEFT JOIN media m2 ON am.media_id = m2.id AND m2.is_trashed = 0
+             WHERE a.id = ?
+             GROUP BY a.id",
+        )
+        .bind(id.as_str())
+        .fetch_optional(self.db.pool())
+        .await
+        .map_err(LibraryError::Db)?;
+
+        Ok(row.map(|r| Album {
+            id: AlbumId::from_raw(r.id),
+            name: r.name,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+            media_count: r.media_count as u32,
+            cover_media_id: r.cover_media_id.map(MediaId::new),
+        }))
+    }
+
     /// Create a new album with the given name. Returns the new album's ID.
     pub async fn create(&self, name: &str) -> Result<AlbumId, LibraryError> {
         let id = AlbumId::new();
@@ -345,6 +375,34 @@ mod tests {
         assert_eq!(albums[0].id, id);
         assert_eq!(albums[0].name, "Vacation");
         assert_eq!(albums[0].media_count, 0);
+    }
+
+    #[tokio::test]
+    async fn get_album_returns_none_for_missing() {
+        let dir = tempdir().unwrap();
+        let (repo, _media, _db) = test_repo(dir.path()).await;
+        let id = AlbumId::from_raw("nonexistent".to_string());
+        assert!(repo.get(&id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn get_album_returns_album_with_counts() {
+        let dir = tempdir().unwrap();
+        let (repo, media, _db) = test_repo(dir.path()).await;
+        let album_id = repo.create("Get Test").await.unwrap();
+        let id_a = MediaId::new("a".repeat(64));
+        media
+            .insert(&record_with_taken_at(id_a.clone(), "a.jpg", Some(1000)))
+            .await
+            .unwrap();
+        repo.add_media(&album_id, std::slice::from_ref(&id_a))
+            .await
+            .unwrap();
+
+        let album = repo.get(&album_id).await.unwrap().unwrap();
+        assert_eq!(album.name, "Get Test");
+        assert_eq!(album.media_count, 1);
+        assert_eq!(album.cover_media_id, Some(id_a));
     }
 
     #[tokio::test]

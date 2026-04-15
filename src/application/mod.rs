@@ -49,6 +49,7 @@ mod imp {
         pub library: RefCell<Option<Arc<Library>>>,
         pub import_client: RefCell<Option<crate::client::import_client::ImportClient>>,
         pub album_client: RefCell<Option<crate::client::AlbumClient>>,
+        pub album_client_v2: RefCell<Option<crate::client::AlbumClientV2>>,
         pub people_client: RefCell<Option<crate::client::PeopleClient>>,
         pub media_client: RefCell<Option<crate::client::MediaClient>>,
         pub render_pipeline: RefCell<Option<Arc<crate::renderer::pipeline::RenderPipeline>>>,
@@ -100,6 +101,7 @@ mod imp {
             // in main() tries to shut down the runtime.
             self.event_bus.borrow_mut().take();
             self.album_client.borrow_mut().take();
+            self.album_client_v2.borrow_mut().take();
             self.people_client.borrow_mut().take();
             self.media_client.borrow_mut().take();
             self.library.borrow_mut().take();
@@ -207,6 +209,14 @@ impl MomentsApplication {
     /// Returns `None` if no library is open yet.
     pub fn album_client(&self) -> Option<crate::client::AlbumClient> {
         self.imp().album_client.borrow().clone()
+    }
+
+    /// Access the album client v2 singleton.
+    ///
+    /// Available from anywhere via `MomentsApplication::default().album_client_v2()`.
+    /// Returns `None` if no library is open yet.
+    pub fn album_client_v2(&self) -> Option<crate::client::AlbumClientV2> {
+        self.imp().album_client_v2.borrow().clone()
     }
 
     /// Access the people client singleton.
@@ -620,6 +630,16 @@ impl MomentsApplication {
                                 bus.sender(),
                             );
                             *app.imp().album_client.borrow_mut() = Some(album_client);
+                        }
+
+                        // Create the album client v2 (GObject singleton).
+                        {
+                            let album_client_v2 = crate::client::AlbumClientV2::new();
+                            album_client_v2.configure(
+                                Arc::clone(&library),
+                                tokio.clone(),
+                            );
+                            *app.imp().album_client_v2.borrow_mut() = Some(album_client_v2);
                         }
 
                         // Create the people client (GObject singleton).
