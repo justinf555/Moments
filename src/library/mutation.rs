@@ -45,7 +45,13 @@ pub enum Mutation {
     AlbumRenamed { id: AlbumId, name: String },
 
     /// An album was deleted.
-    AlbumDeleted { id: AlbumId },
+    ///
+    /// `external_id` is captured before the DB delete so the push
+    /// manager can reference the server even though the local row is gone.
+    AlbumDeleted {
+        id: AlbumId,
+        external_id: Option<String>,
+    },
 
     /// Media items were added to an album.
     AlbumMediaAdded {
@@ -168,12 +174,17 @@ impl Mutation {
                 }]
             }
 
-            Mutation::AlbumDeleted { id } => vec![OutboxRow {
-                entity_type: "album".into(),
-                entity_id: id.as_str().into(),
-                action: "delete".into(),
-                payload: None,
-            }],
+            Mutation::AlbumDeleted { id, external_id } => {
+                let payload = external_id
+                    .as_deref()
+                    .map(|eid| serde_json::json!({ "external_id": eid }).to_string());
+                vec![OutboxRow {
+                    entity_type: "album".into(),
+                    entity_id: id.as_str().into(),
+                    action: "delete".into(),
+                    payload,
+                }]
+            }
 
             Mutation::AlbumMediaAdded {
                 album_id,
@@ -288,9 +299,14 @@ impl Mutation {
                     name,
                 })
             }
-            ("album", "delete") => Some(Mutation::AlbumDeleted {
-                id: AlbumId::from_raw(row.entity_id.clone()),
-            }),
+            ("album", "delete") => {
+                let p = json();
+                let external_id = p["external_id"].as_str().map(String::from);
+                Some(Mutation::AlbumDeleted {
+                    id: AlbumId::from_raw(row.entity_id.clone()),
+                    external_id,
+                })
+            }
             ("album", "add_media") => {
                 let p = json();
                 let media_ids = p["media_ids"]
@@ -401,6 +417,7 @@ mod tests {
             },
             Mutation::AlbumDeleted {
                 id: AlbumId::from_raw("a3".to_string()),
+                external_id: Some("ext-a3".to_string()),
             },
             Mutation::AlbumMediaAdded {
                 album_id: AlbumId::from_raw("a4".to_string()),
@@ -464,6 +481,7 @@ mod tests {
             },
             Mutation::AlbumDeleted {
                 id: AlbumId::from_raw("a3".into()),
+                external_id: Some("ext-a3".into()),
             },
             Mutation::AlbumMediaAdded {
                 album_id: AlbumId::from_raw("a4".into()),

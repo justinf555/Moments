@@ -283,7 +283,10 @@ mod tests {
         let album_id = crate::library::album::AlbumId::from_raw("album-del".to_string());
 
         writer
-            .record(&Mutation::AlbumDeleted { id: album_id })
+            .record(&Mutation::AlbumDeleted {
+                id: album_id,
+                external_id: Some("ext-del".to_string()),
+            })
             .await
             .unwrap();
 
@@ -297,7 +300,9 @@ mod tests {
         assert_eq!(row.0, "album");
         assert_eq!(row.1, "album-del");
         assert_eq!(row.2, "delete");
-        assert!(row.3.is_none());
+        let payload: serde_json::Value =
+            serde_json::from_str(row.3.as_deref().unwrap()).unwrap();
+        assert_eq!(payload["external_id"], "ext-del");
     }
 
     #[tokio::test]

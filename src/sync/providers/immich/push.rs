@@ -213,13 +213,10 @@ impl PushManager {
                     .await
             }
 
-            Mutation::AlbumDeleted { id } => {
-                let external_id = match self.lookup_album_external_id(id.as_str()).await {
-                    Ok(eid) => eid,
-                    Err(_) => {
-                        debug!(id = %id, "album already deleted, skipping push");
-                        return Ok(());
-                    }
+            Mutation::AlbumDeleted { id, external_id } => {
+                let Some(external_id) = external_id else {
+                    warn!(id = %id, "no external_id for deleted album, skipping push");
+                    return Ok(());
                 };
                 self.client
                     .delete_no_content(&format!("/albums/{external_id}"))

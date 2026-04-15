@@ -119,6 +119,17 @@ impl AlbumRepository {
         Ok(())
     }
 
+    /// Look up the external_id for an album.
+    pub async fn external_id(&self, id: &AlbumId) -> Result<Option<String>, LibraryError> {
+        let row: Option<(Option<String>,)> =
+            sqlx::query_as("SELECT external_id FROM albums WHERE id = ?")
+                .bind(id.as_str())
+                .fetch_optional(self.db.pool())
+                .await
+                .map_err(LibraryError::Db)?;
+        Ok(row.and_then(|(eid,)| eid))
+    }
+
     /// Delete an album and all its media associations.
     pub async fn delete(&self, id: &AlbumId) -> Result<(), LibraryError> {
         let mut tx = self.db.pool().begin().await.map_err(LibraryError::Db)?;

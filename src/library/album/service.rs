@@ -79,10 +79,14 @@ impl AlbumService {
     }
 
     pub async fn delete_album(&self, id: &AlbumId) -> Result<(), LibraryError> {
+        let external_id = self.repo.external_id(id).await.unwrap_or(None);
         self.repo.delete(id).await?;
         if let Err(e) = self
             .recorder
-            .record(&Mutation::AlbumDeleted { id: id.clone() })
+            .record(&Mutation::AlbumDeleted {
+                id: id.clone(),
+                external_id,
+            })
             .await
         {
             warn!(error = %e, "failed to record AlbumDeleted mutation");
