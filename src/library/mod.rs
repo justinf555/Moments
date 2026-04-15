@@ -11,6 +11,7 @@ pub mod media;
 pub mod metadata;
 pub mod mutation;
 pub mod recorder;
+pub mod resolver;
 pub mod thumbnail;
 
 use std::sync::Arc;
@@ -56,6 +57,7 @@ impl Library {
         mode: LocalStorageMode,
         db: Database,
         recorder: Arc<dyn MutationRecorder>,
+        resolver: Arc<dyn resolver::OriginalResolver>,
     ) -> Result<Self, LibraryError> {
         info!("opening library");
 
@@ -65,7 +67,13 @@ impl Library {
         let albums = AlbumService::new(db.clone(), Arc::clone(&recorder));
         let faces = FacesService::new(db.clone(), None, Arc::clone(&recorder));
         let editing = EditingService::new(db.clone());
-        let media = MediaService::new(db.clone(), bundle.originals.clone(), mode, recorder);
+        let media = MediaService::new(
+            db.clone(),
+            bundle.originals.clone(),
+            mode,
+            recorder,
+            resolver,
+        );
         let metadata = MetadataService::new(db.clone());
         let thumbnails = ThumbnailService::new(db, bundle.thumbnails.clone());
 
@@ -141,6 +149,10 @@ mod tests {
             LocalStorageMode::Managed,
             Database::new(),
             Arc::new(crate::sync::outbox::NoOpRecorder),
+            Arc::new(resolver::LocalResolver::new(
+                std::path::PathBuf::new(),
+                LocalStorageMode::Managed,
+            )),
         )
         .await
         .unwrap()

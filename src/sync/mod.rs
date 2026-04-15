@@ -23,6 +23,7 @@ pub(crate) mod downloader;
 pub mod outbox;
 pub(crate) mod pull;
 pub(crate) mod push;
+pub mod resolver;
 pub(crate) mod types;
 
 /// Maximum concurrent thumbnail downloads.
@@ -53,15 +54,13 @@ impl SyncHandle {
     ///
     /// Returns a handle for shutdown and interval control.
     pub fn start(
-        server_url: &str,
-        access_token: &str,
+        client: client::ImmichClient,
         library: Arc<Library>,
         db: Database,
         events: EventSender,
         thumbnails_dir: PathBuf,
         initial_interval_secs: u64,
-    ) -> Result<Self, LibraryError> {
-        let client = client::ImmichClient::new(server_url, access_token)?;
+    ) -> Self {
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let (interval_tx, interval_rx) = watch::channel(initial_interval_secs);
@@ -112,10 +111,10 @@ impl SyncHandle {
         });
 
         info!("sync engine started");
-        Ok(Self {
+        Self {
             shutdown_tx,
             interval_tx,
-        })
+        }
     }
 
     /// Signal all sync tasks to shut down gracefully.

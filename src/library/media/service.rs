@@ -10,6 +10,7 @@ use crate::library::db::{Database, LibraryStats};
 use crate::library::error::LibraryError;
 use crate::library::mutation::Mutation;
 use crate::library::recorder::MutationRecorder;
+use crate::library::resolver::OriginalResolver;
 
 /// Media asset service.
 ///
@@ -21,6 +22,7 @@ pub struct MediaService {
     originals_dir: PathBuf,
     mode: LocalStorageMode,
     recorder: Arc<dyn MutationRecorder>,
+    resolver: Arc<dyn OriginalResolver>,
 }
 
 impl MediaService {
@@ -29,27 +31,29 @@ impl MediaService {
         originals_dir: PathBuf,
         mode: LocalStorageMode,
         recorder: Arc<dyn MutationRecorder>,
+        resolver: Arc<dyn OriginalResolver>,
     ) -> Self {
         Self {
             repo: MediaRepository::new(db),
             originals_dir,
             mode,
             recorder,
+            resolver,
         }
     }
 
     // ── Path resolution ─────────────────────────────────────────────
 
-    /// Absolute filesystem path to the original file for `id`.
+    /// Resolve the original file path for `id`.
     ///
-    /// In **Referenced** mode the DB stores the absolute (portal) path.
-    /// In **Managed** mode the DB stores a path relative to `originals/`.
+    /// Delegates to the injected [`OriginalResolver`] — local backends
+    /// return a filesystem path directly; remote backends may fetch first.
     pub async fn original_path(&self, id: &MediaId) -> Result<Option<PathBuf>, LibraryError> {
         let stored = self.repo.relative_path(id).await?;
-        Ok(stored.map(|p| match self.mode {
-            LocalStorageMode::Referenced => PathBuf::from(p),
-            LocalStorageMode::Managed => self.originals_dir.join(p),
-        }))
+        match stored {
+            Some(rel) => self.resolver.resolve(id, &rel).await,
+            None => Ok(None),
+        }
     }
 
     /// Remove the original file from disk (managed mode only).

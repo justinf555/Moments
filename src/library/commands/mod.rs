@@ -242,6 +242,10 @@ mod tests {
                 LocalStorageMode::Managed,
                 crate::library::db::Database::new(),
                 std::sync::Arc::new(crate::sync::outbox::NoOpRecorder),
+                std::sync::Arc::new(crate::library::resolver::LocalResolver::new(
+                    std::path::PathBuf::new(),
+                    LocalStorageMode::Managed,
+                )),
             )
             .await
             .unwrap(),

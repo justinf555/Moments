@@ -533,17 +533,39 @@ impl MomentsApplication {
 
                 let import_mode = storage_mode.clone();
                 let db = crate::library::db::Database::new();
+
+                // Build Immich client + recorder + resolver based on config.
+                let immich_client = immich_info.as_ref().and_then(|(url, token)| {
+                    crate::sync::client::ImmichClient::new(url, token).ok()
+                });
+
                 let recorder: std::sync::Arc<dyn crate::library::recorder::MutationRecorder> =
-                    if immich_info.is_some() {
+                    if immich_client.is_some() {
                         std::sync::Arc::new(crate::sync::outbox::QueueWriterOutbox::new(
                             db.clone(),
                         ))
                     } else {
                         std::sync::Arc::new(crate::sync::outbox::NoOpRecorder)
                     };
+
+                let resolver: std::sync::Arc<dyn crate::library::resolver::OriginalResolver> =
+                    if let Some(ref client) = immich_client {
+                        std::sync::Arc::new(crate::sync::resolver::CachedResolver::new(
+                            std::sync::Arc::new(client.clone()),
+                            originals_dir.clone(),
+                        ))
+                    } else {
+                        std::sync::Arc::new(crate::library::resolver::LocalResolver::new(
+                            originals_dir.clone(),
+                            import_mode.clone(),
+                        ))
+                    };
+
                 let db_for_sync = db.clone();
                 let open_result = tokio
-                    .spawn(async move { Library::open(bundle, storage_mode, db, recorder).await })
+                    .spawn(async move {
+                        Library::open(bundle, storage_mode, db, recorder, resolver).await
+                    })
                     .await
                     .map_err(|e| crate::library::error::LibraryError::Runtime(e.to_string()));
                 let storage_mode = import_mode;
@@ -669,7 +691,7 @@ impl MomentsApplication {
                         }
 
                         // Start Immich sync engine if applicable.
-                        if let Some((server_url, access_token)) = &immich_info {
+                        if let Some(client) = immich_client {
                             let lib = Arc::clone(
                                 app.imp().library.borrow().as_ref().expect("library set"),
                             );
@@ -679,22 +701,15 @@ impl MomentsApplication {
                                 .get()
                                 .expect("settings initialised")
                                 .uint("sync-interval-seconds") as u64;
-                            match crate::sync::SyncHandle::start(
-                                server_url,
-                                access_token,
+                            let handle = crate::sync::SyncHandle::start(
+                                client,
                                 lib,
                                 db_for_sync,
                                 bus.sender(),
                                 sync_thumbnails_dir,
                                 sync_interval,
-                            ) {
-                                Ok(handle) => {
-                                    *app.imp().sync_handle.borrow_mut() = Some(handle);
-                                }
-                                Err(e) => {
-                                    error!("failed to start sync engine: {e}");
-                                }
-                            }
+                            );
+                            *app.imp().sync_handle.borrow_mut() = Some(handle);
                         }
 
                         // Store bus for shutdown cleanup.

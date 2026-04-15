@@ -32,6 +32,10 @@ pub fn stub_deps() -> (Arc<Library>, tokio::runtime::Handle) {
                 LocalStorageMode::Managed,
                 moments::library::db::Database::new(),
                 std::sync::Arc::new(moments::sync::outbox::NoOpRecorder),
+                std::sync::Arc::new(moments::library::resolver::LocalResolver::new(
+                    std::path::PathBuf::new(),
+                    LocalStorageMode::Managed,
+                )),
             )
             .await
             .unwrap(),
