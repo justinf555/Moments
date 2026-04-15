@@ -10,7 +10,7 @@ use crate::app_event::AppEvent;
 use crate::event_bus::EventSender;
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
-use crate::library::format::FormatRegistry;
+use crate::renderer::format::FormatRegistry;
 use crate::library::media::MediaId;
 
 /// Longest edge in pixels for the grid thumbnail.
@@ -184,7 +184,7 @@ mod tests {
     use super::*;
     use crate::event_bus::EventSender;
     use crate::library::db::Database;
-    use crate::library::format::StandardHandler;
+    use crate::renderer::format::StandardHandler;
     use crate::library::media::repository::MediaRepository;
     use crate::library::media::{MediaRecord, MediaType};
     use tempfile::tempdir;

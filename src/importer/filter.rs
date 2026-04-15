@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::library::format::FormatRegistry;
+use crate::renderer::format::FormatRegistry;
 use crate::library::media::MediaType;
 
 /// Result of the filter step: either a recognised media type or a skip.
@@ -38,7 +38,7 @@ pub fn filter(source: &Path, formats: &FormatRegistry) -> FilterResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::library::format::StandardHandler;
+    use crate::renderer::format::StandardHandler;
     use std::sync::Arc;
     use tempfile::tempdir;
 

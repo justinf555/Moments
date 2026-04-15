@@ -5,7 +5,7 @@ use super::error::ImportError;
 use super::pipeline::ProgressFn;
 use super::ImportPipeline;
 use crate::library::config::LocalStorageMode;
-use crate::library::format::FormatRegistry;
+use crate::renderer::format::FormatRegistry;
 use crate::library::Library;
 
 /// Builder for [`ImportPipeline`].

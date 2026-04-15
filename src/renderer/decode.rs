@@ -11,7 +11,7 @@ use image::DynamicImage;
 use tracing::instrument;
 
 use crate::library::error::LibraryError;
-use crate::library::format::FormatRegistry;
+use crate::renderer::format::FormatRegistry;
 
 /// Decode an image from a file path using magic-byte detection.
 #[instrument(skip(formats))]
@@ -22,7 +22,7 @@ pub fn decode(path: &Path, formats: &Arc<FormatRegistry>) -> Result<DynamicImage
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::library::format::standard::StandardHandler;
+    use crate::renderer::format::standard::StandardHandler;
     use image::{ImageFormat, RgbaImage};
     use std::io::Cursor;
 

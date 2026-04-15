@@ -3,7 +3,7 @@ use std::path::Path;
 use tracing::instrument;
 
 use super::error::ImportError;
-use crate::library::format::registry::VIDEO_EXTENSIONS;
+use crate::renderer::format::registry::VIDEO_EXTENSIONS;
 use crate::library::media::MediaType;
 use crate::library::metadata::exif::{extract_exif, ExifInfo};
 

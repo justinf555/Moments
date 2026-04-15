@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, instrument, warn};
 
 use super::error::ImportError;
-use crate::library::format::FormatRegistry;
+use crate::renderer::format::FormatRegistry;
 use crate::library::media::MediaId;
 use crate::library::metadata::exif::extract_exif;
 use crate::library::thumbnail::{sharded_thumbnail_path, ThumbnailService};

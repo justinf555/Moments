@@ -583,7 +583,7 @@ impl MomentsApplication {
                         // Create the import client (GObject singleton).
                         let sync_thumbnails_dir = thumbnails_dir.clone();
                         {
-                            use crate::library::format::{
+                            use crate::renderer::format::{
                                 FormatRegistry, RawHandler, StandardHandler, VideoHandler,
                             };
                             let mut registry = FormatRegistry::new();

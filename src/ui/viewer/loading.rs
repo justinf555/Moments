@@ -44,7 +44,7 @@ impl PhotoViewer {
 
             // Guard: skip decode for video files (detect by magic bytes).
             let is_video = {
-                use crate::library::format::detect::{detect_format, DetectedFormat};
+                use crate::renderer::format::detect::{detect_format, DetectedFormat};
                 matches!(detect_format(&path), Ok(DetectedFormat::Video(_)))
             };
             if is_video {
@@ -57,7 +57,7 @@ impl PhotoViewer {
             // a standard TIFF often indicates a RAW format (CR2, DNG, NEF, etc.).
             // The RAW handler will confirm during decode.
             let is_raw = {
-                use crate::library::format::detect::{detect_format, DetectedFormat, ImageFormat};
+                use crate::renderer::format::detect::{detect_format, DetectedFormat, ImageFormat};
                 // If magic bytes say Unknown, it's likely a RAW format that
                 // rawler can handle. If TIFF, it could be either — try RAW first.
                 match detect_format(&path) {
@@ -73,7 +73,7 @@ impl PhotoViewer {
                     .spawn(async move {
                         tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, i32, i32)> {
                             let img = if is_raw {
-                                use crate::library::format::raw::RawHandler;
+                                use crate::renderer::format::raw::RawHandler;
                                 // Try RAW decoder first; fall back to standard.
                                 RawHandler
                                     .decode_full_res(&path)
@@ -96,7 +96,7 @@ impl PhotoViewer {
                                     })?
                             };
                             let is_heif = {
-                                use crate::library::format::detect::{detect_format, DetectedFormat, ImageFormat};
+                                use crate::renderer::format::detect::{detect_format, DetectedFormat, ImageFormat};
                                 matches!(detect_format(&path), Ok(DetectedFormat::Image(ImageFormat::Heif)))
                             };
                             let img = if is_heif || is_raw {
@@ -221,10 +221,10 @@ impl PhotoViewer {
                                         .and_then(|e| e.to_str())
                                         .map(|e| e.to_lowercase())
                                         .unwrap_or_default();
-                                    let is_raw = crate::library::format::registry::RAW_EXTENSIONS
+                                    let is_raw = crate::renderer::format::registry::RAW_EXTENSIONS
                                         .contains(&ext.as_str());
                                     let img = if is_raw {
-                                        use crate::library::format::raw::RawHandler;
+                                        use crate::renderer::format::raw::RawHandler;
                                         RawHandler
                                             .decode_full_res(&path)
                                             .map_err(|e| {

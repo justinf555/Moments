@@ -10,7 +10,7 @@ use tracing::{error, info};
 use crate::event_bus::EventSender;
 use crate::importer::ImportPipeline;
 use crate::library::config::LocalStorageMode;
-use crate::library::format::FormatRegistry;
+use crate::renderer::format::FormatRegistry;
 use crate::library::Library;
 
 /// Import lifecycle state exposed as a GObject property.

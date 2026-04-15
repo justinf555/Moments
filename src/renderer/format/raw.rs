@@ -4,7 +4,7 @@ use rawler::decoders::RawDecodeParams;
 use rawler::rawsource::RawSource;
 
 use crate::library::error::LibraryError;
-use crate::library::format::registry::FormatHandler;
+use crate::renderer::format::registry::FormatHandler;
 
 /// Decodes RAW camera files via the `rawler` crate.
 ///

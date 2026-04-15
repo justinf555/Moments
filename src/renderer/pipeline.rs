@@ -17,7 +17,7 @@ use tracing::instrument;
 
 use crate::library::editing::EditState;
 use crate::library::error::LibraryError;
-use crate::library::format::FormatRegistry;
+use crate::renderer::format::FormatRegistry;
 
 /// What size to render.
 #[derive(Debug, Clone)]
@@ -85,7 +85,7 @@ impl RenderPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::library::format::standard::StandardHandler;
+    use crate::renderer::format::standard::StandardHandler;
     use image::{GenericImageView, ImageFormat, RgbaImage};
     use std::path::PathBuf;
     use std::io::Cursor;

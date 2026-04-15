@@ -9,7 +9,7 @@ use super::error::ImportError;
 use super::types::{ImportProgress, ImportSummary};
 use super::{discovery, filter, hasher, metadata, persistence, thumbnail, types::SkipReason};
 use crate::library::config::LocalStorageMode;
-use crate::library::format::FormatRegistry;
+use crate::renderer::format::FormatRegistry;
 use crate::library::media::MediaId;
 use crate::library::Library;
 

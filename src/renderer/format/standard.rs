@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::library::error::LibraryError;
-use crate::library::format::registry::FormatHandler;
+use crate::renderer::format::registry::FormatHandler;
 
 /// Decodes all formats supported by the [`image`] crate via `image::open`.
 ///

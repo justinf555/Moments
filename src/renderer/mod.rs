@@ -10,6 +10,7 @@
 
 pub mod decode;
 pub mod edits;
+pub mod format;
 pub mod orientation;
 pub mod output;
 pub mod pipeline;
