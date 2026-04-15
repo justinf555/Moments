@@ -98,7 +98,7 @@ pub async fn persist(params: PersistParams<'_>) -> Result<PersistResult, ImportE
     media
         .insert_media(&MediaRecord {
             id: media_id.clone(),
-            content_hash: params.content_hash.map(|s| s.to_string()),
+            content_hash: content_hash.map(|s| s.to_string()),
             external_id: None,
             relative_path,
             original_filename,

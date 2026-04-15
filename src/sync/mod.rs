@@ -15,7 +15,6 @@ use tracing::{error, info};
 
 use crate::event_bus::EventSender;
 use crate::library::db::Database;
-use crate::library::error::LibraryError;
 use crate::library::Library;
 
 pub(crate) mod client;
@@ -60,6 +59,7 @@ impl SyncHandle {
         events: EventSender,
         thumbnails_dir: PathBuf,
         initial_interval_secs: u64,
+        tokio: tokio::runtime::Handle,
     ) -> Self {
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -75,7 +75,7 @@ impl SyncHandle {
             rx: thumbnail_rx,
             semaphore: Arc::new(Semaphore::new(MAX_THUMBNAIL_WORKERS)),
         };
-        tokio::spawn(async move {
+        tokio.spawn(async move {
             downloader.run().await;
         });
 
@@ -90,7 +90,7 @@ impl SyncHandle {
             thumbnails_dir,
             interval_rx: tokio::sync::Mutex::new(interval_rx.clone()),
         };
-        tokio::spawn(async move {
+        tokio.spawn(async move {
             if let Err(e) = pull.run().await {
                 error!("pull manager exited with error: {e}");
             }
@@ -99,12 +99,11 @@ impl SyncHandle {
         // Spawn push manager.
         let push = push::PushManager {
             client,
-            library,
             db,
             shutdown_rx,
             interval_rx: tokio::sync::Mutex::new(interval_rx),
         };
-        tokio::spawn(async move {
+        tokio.spawn(async move {
             if let Err(e) = push.run().await {
                 error!("push manager exited with error: {e}");
             }

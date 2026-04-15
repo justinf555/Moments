@@ -686,6 +686,7 @@ impl MomentsApplication {
                                 lib,
                                 bus.sender(),
                                 retention_days,
+                                tokio.clone(),
                             );
                             *app.imp().purge_handle.borrow_mut() = Some(handle);
                         }
@@ -708,6 +709,7 @@ impl MomentsApplication {
                                 bus.sender(),
                                 sync_thumbnails_dir,
                                 sync_interval,
+                                tokio.clone(),
                             );
                             *app.imp().sync_handle.borrow_mut() = Some(handle);
                         }

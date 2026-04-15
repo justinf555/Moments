@@ -3,13 +3,10 @@
 //! Reads pending entries from the `sync_outbox` table, maps each to an
 //! Immich API call, and marks entries as done or failed.
 
-use std::sync::Arc;
-
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
-use crate::library::Library;
 
 use super::client::ImmichClient;
 
@@ -29,7 +26,6 @@ const BATCH_SIZE: i64 = 100;
 /// Push sync engine — drains the outbox and makes Immich API calls.
 pub(crate) struct PushManager {
     pub client: ImmichClient,
-    pub library: Arc<Library>,
     pub db: Database,
     pub shutdown_rx: tokio::sync::watch::Receiver<bool>,
     pub interval_rx: tokio::sync::Mutex<tokio::sync::watch::Receiver<u64>>,
@@ -489,48 +485,19 @@ mod tests {
         .unwrap();
     }
 
-    /// Create a PushManager with a real DB and a dummy Library.
-    ///
-    /// The DB helpers under test (`fetch_pending`, `mark_done`, `mark_failed`,
-    /// `purge_completed`, `lookup_*`, `set_*`) all use `self.db` directly,
-    /// not `self.library`, so we just need a valid Library instance for the
-    /// struct field.
-    async fn make_push_manager(db: Database) -> (tempfile::TempDir, PushManager) {
+    /// Create a PushManager with a real DB for testing DB helpers.
+    async fn make_push_manager(db: Database) -> PushManager {
         let client = ImmichClient::new("https://test.example.com", "fake-token").unwrap();
-
-        // Build a separate Library with its own DB (for struct completeness).
-        let lib_dir = tempfile::tempdir().unwrap();
-        let bundle = crate::library::bundle::Bundle::create(
-            &lib_dir.path().join("Test.library"),
-            &crate::library::config::LibraryConfig::Local {
-                mode: crate::library::config::LocalStorageMode::Managed,
-            },
-        )
-        .unwrap();
-        let library = Library::open(
-            bundle,
-            crate::library::config::LocalStorageMode::Managed,
-            Database::new(),
-            std::sync::Arc::new(crate::sync::outbox::NoOpRecorder),
-            std::sync::Arc::new(crate::library::resolver::LocalResolver::new(
-                std::path::PathBuf::new(),
-                crate::library::config::LocalStorageMode::Managed,
-            )),
-        )
-        .await
-        .unwrap();
 
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let (_interval_tx, interval_rx) = tokio::sync::watch::channel(60u64);
 
-        let push = PushManager {
+        PushManager {
             client,
-            library: Arc::new(library),
             db,
             shutdown_rx,
             interval_rx: tokio::sync::Mutex::new(interval_rx),
-        };
-        (lib_dir, push)
+        }
     }
 
     #[tokio::test]
@@ -540,7 +507,7 @@ mod tests {
         insert_outbox_entry(&db, "asset", "a2", "favorite", None).await;
         insert_outbox_entry(&db, "album", "b1", "create", Some(r#"{"name":"Test"}"#)).await;
 
-        let (_lib_dir, push) = make_push_manager(db).await;
+        let push = make_push_manager(db).await;
         let entries = push.fetch_pending().await.unwrap();
 
         assert_eq!(entries.len(), 3);
@@ -553,7 +520,7 @@ mod tests {
     #[tokio::test]
     async fn fetch_pending_empty_returns_empty() {
         let (_dir, db) = setup_push_db().await;
-        let (_lib_dir, push) = make_push_manager(db).await;
+        let push = make_push_manager(db).await;
         let entries = push.fetch_pending().await.unwrap();
         assert!(entries.is_empty());
     }
@@ -575,7 +542,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (_lib_dir, push) = make_push_manager(db).await;
+        let push = make_push_manager(db).await;
         let entries = push.fetch_pending().await.unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].entity_id, "pending");
@@ -586,7 +553,7 @@ mod tests {
         let (_dir, db) = setup_push_db().await;
         insert_outbox_entry(&db, "asset", "a1", "trash", None).await;
 
-        let (_lib_dir, push) = make_push_manager(db.clone()).await;
+        let push = make_push_manager(db.clone()).await;
         push.mark_done(1).await.unwrap();
 
         let row: (i64,) = sqlx::query_as("SELECT status FROM sync_outbox WHERE id = 1")
@@ -601,7 +568,7 @@ mod tests {
         let (_dir, db) = setup_push_db().await;
         insert_outbox_entry(&db, "asset", "a1", "trash", None).await;
 
-        let (_lib_dir, push) = make_push_manager(db.clone()).await;
+        let push = make_push_manager(db.clone()).await;
         push.mark_failed(1, "connection timeout").await.unwrap();
 
         let row: (i64, Option<String>) =
@@ -626,7 +593,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (_lib_dir, push) = make_push_manager(db.clone()).await;
+        let push = make_push_manager(db.clone()).await;
         push.purge_completed().await.unwrap();
 
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sync_outbox")
@@ -639,7 +606,7 @@ mod tests {
     #[tokio::test]
     async fn parse_payload_valid_json() {
         let (_dir, db) = setup_push_db().await;
-        let (_lib_dir, push) = make_push_manager(db).await;
+        let push = make_push_manager(db).await;
 
         let entry = OutboxEntry {
             id: 1,
@@ -656,7 +623,7 @@ mod tests {
     #[tokio::test]
     async fn parse_payload_none_returns_empty_object() {
         let (_dir, db) = setup_push_db().await;
-        let (_lib_dir, push) = make_push_manager(db).await;
+        let push = make_push_manager(db).await;
 
         let entry = OutboxEntry {
             id: 1,
@@ -674,7 +641,7 @@ mod tests {
     #[tokio::test]
     async fn parse_payload_invalid_json_returns_error() {
         let (_dir, db) = setup_push_db().await;
-        let (_lib_dir, push) = make_push_manager(db).await;
+        let push = make_push_manager(db).await;
 
         let entry = OutboxEntry {
             id: 1,
@@ -697,7 +664,7 @@ mod tests {
         record.external_id = Some("immich-uuid-1".to_string());
         db.upsert_media(&record).await.unwrap();
 
-        let (_lib_dir, push) = make_push_manager(db).await;
+        let push = make_push_manager(db).await;
         let ext_id = push.lookup_media_external_id("local-1").await.unwrap();
         assert_eq!(ext_id, "immich-uuid-1");
     }
@@ -705,7 +672,7 @@ mod tests {
     #[tokio::test]
     async fn lookup_media_external_id_missing_returns_error() {
         let (_dir, db) = setup_push_db().await;
-        let (_lib_dir, push) = make_push_manager(db).await;
+        let push = make_push_manager(db).await;
 
         let result = push.lookup_media_external_id("nonexistent").await;
         assert!(result.is_err());
@@ -720,7 +687,7 @@ mod tests {
         let record = test_record(MediaId::new("local-no-ext".to_string()));
         db.upsert_media(&record).await.unwrap();
 
-        let (_lib_dir, push) = make_push_manager(db).await;
+        let push = make_push_manager(db).await;
         let result = push.lookup_media_external_id("local-no-ext").await;
         assert!(result.is_err());
     }
@@ -743,7 +710,7 @@ mod tests {
         .await
         .unwrap();
 
-        let (_lib_dir, push) = make_push_manager(db).await;
+        let push = make_push_manager(db).await;
         let ext_id = push.lookup_album_external_id("local-album").await.unwrap();
         assert_eq!(ext_id, "immich-album-uuid");
     }
@@ -751,7 +718,7 @@ mod tests {
     #[tokio::test]
     async fn lookup_album_external_id_missing_returns_error() {
         let (_dir, db) = setup_push_db().await;
-        let (_lib_dir, push) = make_push_manager(db).await;
+        let push = make_push_manager(db).await;
 
         let result = push.lookup_album_external_id("no-album").await;
         assert!(result.is_err());
@@ -773,7 +740,7 @@ mod tests {
         .await
         .unwrap();
 
-        let (_lib_dir, push) = make_push_manager(db).await;
+        let push = make_push_manager(db).await;
         let ext_id = push
             .lookup_person_external_id("local-person")
             .await
@@ -784,7 +751,7 @@ mod tests {
     #[tokio::test]
     async fn lookup_person_external_id_missing_returns_error() {
         let (_dir, db) = setup_push_db().await;
-        let (_lib_dir, push) = make_push_manager(db).await;
+        let push = make_push_manager(db).await;
 
         let result = push.lookup_person_external_id("no-person").await;
         assert!(result.is_err());
@@ -797,7 +764,7 @@ mod tests {
         let record = test_record(MediaId::new("local-m".to_string()));
         db.upsert_media(&record).await.unwrap();
 
-        let (_lib_dir, push) = make_push_manager(db.clone()).await;
+        let push = make_push_manager(db.clone()).await;
         push.set_media_external_id("local-m", "new-ext-id")
             .await
             .unwrap();
@@ -824,7 +791,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (_lib_dir, push) = make_push_manager(db.clone()).await;
+        let push = make_push_manager(db.clone()).await;
         push.set_album_external_id("alb-local", "alb-ext-id")
             .await
             .unwrap();
@@ -851,7 +818,7 @@ mod tests {
         db.upsert_media(&r1).await.unwrap();
         db.upsert_media(&r2).await.unwrap();
 
-        let (_lib_dir, push) = make_push_manager(db).await;
+        let push = make_push_manager(db).await;
         let payload = serde_json::json!({ "media_ids": ["m1", "m2"] });
         let ext_ids = push.resolve_media_external_ids(&payload).await.unwrap();
         assert_eq!(ext_ids, vec!["ext-m1", "ext-m2"]);
@@ -860,7 +827,7 @@ mod tests {
     #[tokio::test]
     async fn resolve_media_external_ids_empty_payload() {
         let (_dir, db) = setup_push_db().await;
-        let (_lib_dir, push) = make_push_manager(db).await;
+        let push = make_push_manager(db).await;
 
         let payload = serde_json::json!({});
         let ext_ids = push.resolve_media_external_ids(&payload).await.unwrap();

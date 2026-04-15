@@ -25,10 +25,11 @@ pub fn start(
     library: Arc<Library>,
     bus: EventSender,
     retention_days: u32,
+    tokio: tokio::runtime::Handle,
 ) -> JoinHandle<()> {
     let max_age_secs = i64::from(retention_days) * 24 * 60 * 60;
 
-    tokio::spawn(async move {
+    tokio.spawn(async move {
         loop {
             purge_expired(&library, &bus, max_age_secs, retention_days).await;
             tokio::time::sleep(CHECK_INTERVAL).await;
