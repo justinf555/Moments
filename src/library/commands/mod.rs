@@ -54,7 +54,7 @@ fn is_command(event: &AppEvent) -> bool {
 /// On failure, sends `AppEvent::Error` with a user-facing message.
 pub(crate) async fn handle_command(event: AppEvent, library: &Arc<Library>, bus: &EventSender) {
     match event {
-        AppEvent::TrashRequested { ids } => match library.trash(&ids).await {
+        AppEvent::TrashRequested { ids } => match library.media().trash(&ids).await {
             Ok(()) => bus.send(AppEvent::Trashed { ids }),
             Err(e) => {
                 error!("trash failed: {e}");
@@ -62,7 +62,7 @@ pub(crate) async fn handle_command(event: AppEvent, library: &Arc<Library>, bus:
             }
         },
 
-        AppEvent::RestoreRequested { ids } => match library.restore(&ids).await {
+        AppEvent::RestoreRequested { ids } => match library.media().restore(&ids).await {
             Ok(()) => bus.send(AppEvent::Restored { ids }),
             Err(e) => {
                 error!("restore failed: {e}");
@@ -78,20 +78,21 @@ pub(crate) async fn handle_command(event: AppEvent, library: &Arc<Library>, bus:
             }
         },
 
-        AppEvent::FavoriteRequested { ids, state } => match library.set_favorite(&ids, state).await
-        {
-            Ok(()) => bus.send(AppEvent::FavoriteChanged {
-                ids,
-                is_favorite: state,
-            }),
-            Err(e) => {
-                error!("set_favorite failed: {e}");
-                bus.send(AppEvent::Error(format!("Failed to update favourite: {e}")));
+        AppEvent::FavoriteRequested { ids, state } => {
+            match library.media().set_favorite(&ids, state).await {
+                Ok(()) => bus.send(AppEvent::FavoriteChanged {
+                    ids,
+                    is_favorite: state,
+                }),
+                Err(e) => {
+                    error!("set_favorite failed: {e}");
+                    bus.send(AppEvent::Error(format!("Failed to update favourite: {e}")));
+                }
             }
-        },
+        }
 
         AppEvent::RemoveFromAlbumRequested { album_id, ids } => {
-            match library.remove_from_album(&album_id, &ids).await {
+            match library.albums().remove_from_album(&album_id, &ids).await {
                 Ok(()) => bus.send(AppEvent::AlbumMediaChanged { album_id }),
                 Err(e) => {
                     error!("remove_from_album failed: {e}");
@@ -101,7 +102,7 @@ pub(crate) async fn handle_command(event: AppEvent, library: &Arc<Library>, bus:
         }
 
         AppEvent::AddToAlbumRequested { album_id, ids } => {
-            match library.add_to_album(&album_id, &ids).await {
+            match library.albums().add_to_album(&album_id, &ids).await {
                 Ok(()) => bus.send(AppEvent::AlbumMediaChanged { album_id }),
                 Err(e) => {
                     error!("add_to_album failed: {e}");
@@ -110,35 +111,37 @@ pub(crate) async fn handle_command(event: AppEvent, library: &Arc<Library>, bus:
             }
         }
 
-        AppEvent::CreateAlbumRequested { name, ids } => match library.create_album(&name).await {
-            Ok(album_id) => {
-                debug!(album_id = %album_id, %name, "album created");
-                bus.send(AppEvent::AlbumCreated {
-                    id: album_id.clone(),
-                    name,
-                });
-                if !ids.is_empty() {
-                    match library.add_to_album(&album_id, &ids).await {
-                        Ok(()) => {
-                            debug!(album_id = %album_id, "photos added to new album");
-                            bus.send(AppEvent::AlbumMediaChanged { album_id });
-                        }
-                        Err(e) => {
-                            error!("add_to_album after create failed: {e}");
-                            bus.send(AppEvent::Error(format!("Failed to add to album: {e}")));
+        AppEvent::CreateAlbumRequested { name, ids } => {
+            match library.albums().create_album(&name).await {
+                Ok(album_id) => {
+                    debug!(album_id = %album_id, %name, "album created");
+                    bus.send(AppEvent::AlbumCreated {
+                        id: album_id.clone(),
+                        name,
+                    });
+                    if !ids.is_empty() {
+                        match library.albums().add_to_album(&album_id, &ids).await {
+                            Ok(()) => {
+                                debug!(album_id = %album_id, "photos added to new album");
+                                bus.send(AppEvent::AlbumMediaChanged { album_id });
+                            }
+                            Err(e) => {
+                                error!("add_to_album after create failed: {e}");
+                                bus.send(AppEvent::Error(format!("Failed to add to album: {e}")));
+                            }
                         }
                     }
                 }
+                Err(e) => {
+                    error!("create_album failed: {e}");
+                    bus.send(AppEvent::Error(format!("Failed to create album: {e}")));
+                }
             }
-            Err(e) => {
-                error!("create_album failed: {e}");
-                bus.send(AppEvent::Error(format!("Failed to create album: {e}")));
-            }
-        },
+        }
 
         AppEvent::DeleteAlbumRequested { ids } => {
             for id in ids {
-                match library.delete_album(&id).await {
+                match library.albums().delete_album(&id).await {
                     Ok(()) => {
                         debug!(album_id = %id, "album deleted");
                         bus.send(AppEvent::AlbumDeleted { id });
@@ -153,6 +156,7 @@ pub(crate) async fn handle_command(event: AppEvent, library: &Arc<Library>, bus:
 
         AppEvent::EmptyTrashRequested => {
             let items = match library
+                .media()
                 .list_media(MediaFilter::Trashed, None, u32::MAX)
                 .await
             {
@@ -182,6 +186,7 @@ pub(crate) async fn handle_command(event: AppEvent, library: &Arc<Library>, bus:
 
         AppEvent::RestoreAllTrashRequested => {
             let items = match library
+                .media()
                 .list_media(MediaFilter::Trashed, None, u32::MAX)
                 .await
             {
@@ -197,7 +202,7 @@ pub(crate) async fn handle_command(event: AppEvent, library: &Arc<Library>, bus:
             }
             let ids: Vec<_> = items.into_iter().map(|i| i.id).collect();
             let count = ids.len();
-            match library.restore(&ids).await {
+            match library.media().restore(&ids).await {
                 Ok(()) => {
                     info!(count, "all trash restored");
                     bus.send(AppEvent::Restored { ids });
@@ -261,7 +266,10 @@ mod tests {
     async fn trash_success_emits_trashed() {
         let lib = test_library().await;
         let id = MediaId::new("a".repeat(64));
-        lib.insert_media(&test_record(id.clone())).await.unwrap();
+        lib.media()
+            .insert_media(&test_record(id.clone()))
+            .await
+            .unwrap();
         let (bus, rx) = EventSender::test_channel();
         handle_command(
             AppEvent::TrashRequested {
@@ -279,8 +287,11 @@ mod tests {
     async fn restore_success_emits_restored() {
         let lib = test_library().await;
         let id = MediaId::new("b".repeat(64));
-        lib.insert_media(&test_record(id.clone())).await.unwrap();
-        lib.trash(std::slice::from_ref(&id)).await.unwrap();
+        lib.media()
+            .insert_media(&test_record(id.clone()))
+            .await
+            .unwrap();
+        lib.media().trash(std::slice::from_ref(&id)).await.unwrap();
         let (bus, rx) = EventSender::test_channel();
         handle_command(
             AppEvent::RestoreRequested {
@@ -298,7 +309,10 @@ mod tests {
     async fn delete_success_emits_deleted() {
         let lib = test_library().await;
         let id = MediaId::new("c".repeat(64));
-        lib.insert_media(&test_record(id.clone())).await.unwrap();
+        lib.media()
+            .insert_media(&test_record(id.clone()))
+            .await
+            .unwrap();
         let (bus, rx) = EventSender::test_channel();
         handle_command(
             AppEvent::DeleteRequested {
@@ -316,7 +330,10 @@ mod tests {
     async fn favorite_success_emits_changed() {
         let lib = test_library().await;
         let id = MediaId::new("d".repeat(64));
-        lib.insert_media(&test_record(id.clone())).await.unwrap();
+        lib.media()
+            .insert_media(&test_record(id.clone()))
+            .await
+            .unwrap();
         let (bus, rx) = EventSender::test_channel();
         handle_command(
             AppEvent::FavoriteRequested {
@@ -355,7 +372,10 @@ mod tests {
     async fn create_album_success_with_ids() {
         let lib = test_library().await;
         let id = MediaId::new("e".repeat(64));
-        lib.insert_media(&test_record(id.clone())).await.unwrap();
+        lib.media()
+            .insert_media(&test_record(id.clone()))
+            .await
+            .unwrap();
         let (bus, rx) = EventSender::test_channel();
         handle_command(
             AppEvent::CreateAlbumRequested {

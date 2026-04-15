@@ -1,6 +1,5 @@
 use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
@@ -10,7 +9,6 @@ use tracing::debug;
 
 use crate::client::AlbumClient;
 use crate::library::album::AlbumId;
-use crate::library::Library;
 use crate::ui::album_dialogs;
 use crate::ui::photo_grid::texture_cache::TextureCache;
 
@@ -60,9 +58,6 @@ mod imp {
 
         // Service dependencies
         pub album_client: OnceCell<AlbumClient>,
-        /// Library + tokio kept temporarily for drill-down into photo grids.
-        pub library: OnceCell<Arc<Library>>,
-        pub tokio: OnceCell<tokio::runtime::Handle>,
 
         // State
         pub(super) store: OnceCell<gio::ListStore>,
@@ -127,8 +122,6 @@ impl AlbumGridView {
 
     pub fn setup(
         &self,
-        library: Arc<Library>,
-        tokio: tokio::runtime::Handle,
         settings: gio::Settings,
         texture_cache: Rc<TextureCache>,
         bus_sender: crate::event_bus::EventSender,
@@ -142,14 +135,6 @@ impl AlbumGridView {
             imp.album_client.set(album_client.clone()).is_ok(),
             "setup called twice"
         );
-
-        // Library + tokio kept temporarily for drill-down into photo grids
-        // and factory thumbnail loading. Will be removed when MediaClient exists.
-        assert!(
-            imp.library.set(Arc::clone(&library)).is_ok(),
-            "setup called twice"
-        );
-        assert!(imp.tokio.set(tokio.clone()).is_ok(), "setup called twice");
 
         // ── Sort state ──────────────────────────────────────────────────
         let sort_order = Rc::new(Cell::new(settings.uint("album-sort-order")));

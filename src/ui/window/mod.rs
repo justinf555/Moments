@@ -20,12 +20,11 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use adw::subclass::prelude::*;
 use gtk::prelude::*;
 use gtk::{gio, glib};
-use tracing::{debug, error, instrument, warn};
+use tracing::{debug, instrument, warn};
 
 /// Wrapper for a reload callback that implements `Debug` and `Default`.
 pub struct ReloadCallback(Box<dyn Fn()>);
@@ -51,7 +50,6 @@ impl Default for ReloadCallback {
         Self(Box::new(|| {}))
     }
 }
-use crate::library::Library;
 
 use crate::ui::coordinator::ContentCoordinator;
 use crate::ui::empty_library::EmptyLibraryView;
@@ -185,17 +183,11 @@ impl MomentsWindow {
     /// All models subscribe to the [`EventBus`] for event delivery.
     /// The caller does not need to forward events — components are
     /// self-contained.
-    pub fn setup(
-        &self,
-        library: Arc<Library>,
-        tokio: tokio::runtime::Handle,
-        settings: gio::Settings,
-        bus: &crate::event_bus::EventBus,
-    ) {
+    pub fn setup(&self, settings: gio::Settings, bus: &crate::event_bus::EventBus) {
         let imp = self.imp();
         let bus_sender = bus.sender();
 
-        let sidebar = self.setup_sidebar(&library, &tokio, &settings);
+        let sidebar = self.setup_sidebar(&settings);
 
         let texture_cache = Rc::new(TextureCache::new());
 
@@ -204,8 +196,6 @@ impl MomentsWindow {
 
         self.register_lazy_views(
             &mut coordinator.borrow_mut(),
-            &library,
-            &tokio,
             &settings,
             &texture_cache,
             &bus_sender,
@@ -296,12 +286,7 @@ impl MomentsWindow {
         }));
     }
 
-    fn setup_sidebar(
-        &self,
-        library: &Arc<Library>,
-        tokio: &tokio::runtime::Handle,
-        settings: &gio::Settings,
-    ) -> MomentsSidebar {
+    fn setup_sidebar(&self, settings: &gio::Settings) -> MomentsSidebar {
         let imp = self.imp();
 
         let sidebar = MomentsSidebar::new();
@@ -318,15 +303,13 @@ impl MomentsWindow {
             .expect("sidebar set once in setup()");
 
         {
-            let lib = Arc::clone(library);
-            let tk = tokio.clone();
             let sb = sidebar.clone();
-            glib::MainContext::default().spawn_local(async move {
-                let result = tk.spawn(async move { lib.library_stats().await }).await;
-                match result {
-                    Ok(Ok(stats)) => sb.set_trash_count(stats.trashed_count as u32),
-                    Ok(Err(e)) => warn!("failed to load library stats: {e}"),
-                    Err(e) => error!("library stats task panicked: {e}"),
+            let media_client = crate::application::MomentsApplication::default()
+                .media_client()
+                .expect("media client available");
+            media_client.library_stats(move |result| {
+                if let Ok(stats) = result {
+                    sb.set_trash_count(stats.trashed_count as u32);
                 }
             });
         }
@@ -392,8 +375,6 @@ impl MomentsWindow {
     fn register_lazy_views(
         &self,
         coordinator: &mut ContentCoordinator,
-        library: &Arc<Library>,
-        tokio: &tokio::runtime::Handle,
         settings: &gio::Settings,
         texture_cache: &Rc<TextureCache>,
         bus_sender: &crate::event_bus::EventSender,
@@ -470,14 +451,12 @@ impl MomentsWindow {
         }
 
         {
-            let lib = Arc::clone(library);
-            let tk = tokio.clone();
             let s = settings.clone();
             let tc = Rc::clone(texture_cache);
             let bs = bus_sender.clone();
             coordinator.register_lazy("albums", move || {
                 let view = super::album_grid::AlbumGridView::new();
-                view.setup(lib, tk, s, tc, bs);
+                view.setup(s, tc, bs);
                 view.upcast()
             });
         }

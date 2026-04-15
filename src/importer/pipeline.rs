@@ -118,7 +118,7 @@ impl ImportPipeline {
         let media_id = hasher::hash_file(source).await?;
 
         // Step 3: Deduplicate — check if hash already exists
-        if self.library.media_exists(&media_id).await? {
+        if self.library.media().media_exists(&media_id).await? {
             debug!(%media_id, "duplicate detected via hash");
             return Ok(Some(SkipReason::Duplicate));
         }

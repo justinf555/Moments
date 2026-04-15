@@ -585,7 +585,7 @@ impl MomentsApplication {
                             .get()
                             .expect("settings initialised")
                             .clone();
-                        window.setup(library, tokio.clone(), settings, &bus);
+                        window.setup(settings, &bus);
 
                         // Subscribe for command events — routes *Requested
                         // events to library calls on the Tokio runtime.
