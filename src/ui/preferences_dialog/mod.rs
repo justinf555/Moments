@@ -331,7 +331,7 @@ fn build_sync_group(settings: &gio::Settings) -> adw::PreferencesGroup {
     interval_row.connect_changed(move |row| {
         let secs = row.value() as u32;
         let _ = settings_sync.set_uint("sync-interval-seconds", secs);
-        // TODO: Sync interval live-update will be restored with sync (phase 4).
+        crate::application::MomentsApplication::default().set_sync_interval(secs as u64);
     });
     group.add(&interval_row);
 

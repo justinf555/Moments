@@ -60,6 +60,8 @@ mod imp {
         pub subscriptions: RefCell<Vec<crate::event_bus::Subscription>>,
         /// Background task handle for periodic trash purge.
         pub purge_handle: RefCell<Option<tokio::task::JoinHandle<()>>>,
+        /// Sync engine handle (Immich only).
+        pub sync_handle: RefCell<Option<crate::sync::SyncHandle>>,
     }
 
     #[glib::object_subclass]
@@ -212,6 +214,13 @@ impl MomentsApplication {
     /// Returns `None` if no library is open yet.
     pub fn media_client(&self) -> Option<crate::client::MediaClient> {
         self.imp().media_client.borrow().clone()
+    }
+
+    /// Update the sync polling interval. No-op if no sync engine is running.
+    pub fn set_sync_interval(&self, secs: u64) {
+        if let Some(ref handle) = *self.imp().sync_handle.borrow() {
+            handle.set_interval(secs);
+        }
     }
 
     /// Get the singleton application instance.
@@ -488,8 +497,17 @@ impl MomentsApplication {
     ///  2. Wires the shell (sidebar, views, command dispatcher).
     ///  3. Switches the window to its content page.
     fn load_library_async(&self, bundle: Bundle, config: LibraryConfig, window: MomentsWindow) {
+        // Extract Immich connection info before the config is consumed.
+        let immich_info = match &config {
+            LibraryConfig::Immich {
+                server_url,
+                access_token,
+            } => Some((server_url.clone(), access_token.clone())),
+            _ => None,
+        };
+
         // Store backend type for preferences dialog.
-        if let LibraryConfig::Immich { ref server_url, .. } = config {
+        if let Some((ref server_url, _)) = immich_info {
             self.imp().is_immich.set(true);
             *self.imp().immich_server_url.borrow_mut() = Some(server_url.clone());
         }
@@ -516,7 +534,14 @@ impl MomentsApplication {
                 let import_mode = storage_mode.clone();
                 let db = crate::library::db::Database::new();
                 let recorder: std::sync::Arc<dyn crate::library::recorder::MutationRecorder> =
-                    std::sync::Arc::new(crate::sync::outbox::NoOpRecorder);
+                    if immich_info.is_some() {
+                        std::sync::Arc::new(crate::sync::outbox::QueueWriterOutbox::new(
+                            db.clone(),
+                        ))
+                    } else {
+                        std::sync::Arc::new(crate::sync::outbox::NoOpRecorder)
+                    };
+                let db_for_sync = db.clone();
                 let open_result = tokio
                     .spawn(async move { Library::open(bundle, storage_mode, db, recorder).await })
                     .await
@@ -534,6 +559,7 @@ impl MomentsApplication {
                         bus.sender().send(AppEvent::Ready);
 
                         // Create the import client (GObject singleton).
+                        let sync_thumbnails_dir = thumbnails_dir.clone();
                         {
                             use crate::library::format::{
                                 FormatRegistry, RawHandler, StandardHandler, VideoHandler,
@@ -640,6 +666,35 @@ impl MomentsApplication {
                                 retention_days,
                             );
                             *app.imp().purge_handle.borrow_mut() = Some(handle);
+                        }
+
+                        // Start Immich sync engine if applicable.
+                        if let Some((server_url, access_token)) = &immich_info {
+                            let lib = Arc::clone(
+                                app.imp().library.borrow().as_ref().expect("library set"),
+                            );
+                            let sync_interval = app
+                                .imp()
+                                .settings
+                                .get()
+                                .expect("settings initialised")
+                                .uint("sync-interval-seconds") as u64;
+                            match crate::sync::SyncHandle::start(
+                                server_url,
+                                access_token,
+                                lib,
+                                db_for_sync,
+                                bus.sender(),
+                                sync_thumbnails_dir,
+                                sync_interval,
+                            ) {
+                                Ok(handle) => {
+                                    *app.imp().sync_handle.borrow_mut() = Some(handle);
+                                }
+                                Err(e) => {
+                                    error!("failed to start sync engine: {e}");
+                                }
+                            }
                         }
 
                         // Store bus for shutdown cleanup.
