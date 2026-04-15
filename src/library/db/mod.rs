@@ -14,7 +14,6 @@ pub(crate) mod media;
 mod metadata;
 mod sync;
 mod thumbnails;
-mod upload;
 
 /// Aggregate library statistics for the preferences overview.
 #[derive(Debug, Clone, Default)]

@@ -6,5 +6,6 @@ pub mod event_bus;
 pub mod importer;
 pub mod library;
 pub mod renderer;
+pub mod sync;
 pub mod tasks;
 pub mod ui;
