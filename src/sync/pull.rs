@@ -482,7 +482,7 @@ impl PullManager {
     async fn handle_asset_delete(&self, asset_id: &str) -> Result<(), LibraryError> {
         let id = MediaId::new(asset_id.to_owned());
         self.library
-            .delete_permanently(std::slice::from_ref(&id))
+            .delete_permanently_from_sync(std::slice::from_ref(&id))
             .await?;
         self.events
             .send(AppEvent::AssetDeletedRemote { media_id: id });
@@ -682,7 +682,7 @@ impl PullManager {
                         "removing orphaned assets after reset sync"
                     );
                     let ids: Vec<MediaId> = orphaned_ids.into_iter().map(MediaId::new).collect();
-                    self.library.delete_permanently(&ids).await?;
+                    self.library.delete_permanently_from_sync(&ids).await?;
                 }
             }
         }

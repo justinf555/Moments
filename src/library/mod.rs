@@ -125,7 +125,8 @@ impl Library {
     /// Permanently delete assets: removes files from disk, then DB rows.
     ///
     /// Coordinates across MediaService (file removal + DB delete) and
-    /// ThumbnailService (cached thumbnail removal).
+    /// ThumbnailService (cached thumbnail removal). Records the mutation
+    /// to the outbox for push sync.
     pub async fn delete_permanently(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
         for id in ids {
             self.media.remove_original(id).await;
@@ -135,6 +136,24 @@ impl Library {
             }
         }
         self.media.delete_permanently(ids).await
+    }
+
+    /// Permanently delete assets without recording to the outbox.
+    ///
+    /// Used by pull sync when processing server-driven deletions —
+    /// these should not be pushed back to the server.
+    pub async fn delete_permanently_from_sync(
+        &self,
+        ids: &[MediaId],
+    ) -> Result<(), LibraryError> {
+        for id in ids {
+            self.media.remove_original(id).await;
+            let thumb = self.thumbnails.thumbnail_path(id);
+            if let Err(e) = tokio::fs::remove_file(&thumb).await {
+                tracing::debug!(id = %id, "thumbnail not on disk or already removed: {e}");
+            }
+        }
+        self.media.repo.delete_permanently(ids).await
     }
 }
 
