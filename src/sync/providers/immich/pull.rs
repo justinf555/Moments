@@ -13,16 +13,13 @@ use tracing::{debug, error, info, instrument, warn};
 
 use crate::app_event::AppEvent;
 use crate::event_bus::EventSender;
-use crate::library::album::AlbumId;
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
-use crate::library::faces::repository::AssetFaceRow;
-use crate::library::media::{MediaId, MediaItem, MediaRecord, MediaType};
-use crate::library::metadata::MediaMetadataRecord;
-use crate::library::thumbnail::sharded_thumbnail_path;
+use crate::library::media::MediaId;
 use crate::library::Library;
 
 use super::client::ImmichClient;
+use super::handlers::{self, CounterKind, SyncContext};
 use super::types::*;
 use super::ACK_FLUSH_THRESHOLD;
 
@@ -36,6 +33,20 @@ struct SyncCounters {
     people: usize,
     faces: usize,
     errors: usize,
+}
+
+impl SyncCounters {
+    fn increment(&mut self, kind: CounterKind) {
+        match kind {
+            CounterKind::Assets => self.assets += 1,
+            CounterKind::Exifs => self.exifs += 1,
+            CounterKind::Deletes => self.deletes += 1,
+            CounterKind::Albums => self.albums += 1,
+            CounterKind::People => self.people += 1,
+            CounterKind::Faces => self.faces += 1,
+            CounterKind::None => {}
+        }
+    }
 }
 
 /// Background pull sync engine for the Immich backend.
@@ -123,6 +134,15 @@ impl PullManager {
         let mut line_number: usize = 0;
         let sync_cycle = chrono::Utc::now().to_rfc3339();
 
+        let entity_handlers = handlers::all_handlers();
+        let ctx = SyncContext {
+            client: self.client.clone(),
+            library: Arc::clone(&self.library),
+            db: self.db.clone(),
+            events: self.events.clone(),
+            thumbnails_dir: self.thumbnails_dir.clone(),
+        };
+
         info!("reading sync stream");
 
         while let Some(line) = lines.next_line().await.map_err(|e| {
@@ -144,233 +164,82 @@ impl PullManager {
                 LibraryError::Immich(format!("failed to parse sync line {line_number}: {e}"))
             })?;
 
-            match sync_line.entity_type.as_str() {
-                "SyncResetV1" => {
-                    self.handle_sync_reset(&mut is_reset, &mut existing_ids)
-                        .await?;
-                    acks.push(sync_line.ack);
-                }
-                "AssetV1" => {
-                    let asset: SyncAssetV1 =
-                        deserialize_entity(&sync_line.data, "AssetV1", line_number)?;
-                    let id = asset.id.clone();
-                    self.process_entity(
-                        "AssetV1",
-                        &id,
-                        &sync_cycle,
-                        "upsert",
-                        sync_line.ack,
-                        self.handle_asset(asset),
-                        &mut acks,
-                        &mut counters.assets,
-                        &mut counters.errors,
-                    )
-                    .await;
-                    if counters.assets % 500 == 0 && counters.assets > 0 {
-                        info!(assets = counters.assets, "sync progress");
+            let entity_type = sync_line.entity_type.as_str();
+
+            // ── Reset tracking ──────────────────────────────────────
+            // SyncResetV1 sets the reset flag and loads existing IDs.
+            // AssetV1/AssetDeleteV1 remove IDs from the tracking set.
+            if entity_type == "SyncResetV1" {
+                warn!("server requested sync reset — performing full resync");
+                is_reset = true;
+                let ids = self.db.all_media_ids().await?;
+                info!(
+                    existing_count = ids.len(),
+                    "loaded existing media IDs for reset tracking"
+                );
+                existing_ids = Some(ids);
+            }
+
+            // ── Dispatch to handler ─────────────────────────────────
+            if let Some(handler) = entity_handlers.iter().find(|h| h.entity_type() == entity_type)
+            {
+                let audit_id = self
+                    .db
+                    .start_sync_audit(entity_type, "", &sync_cycle)
+                    .await
+                    .ok();
+
+                match handler.handle(&sync_line.data, line_number, &ctx).await {
+                    Ok(result) => {
+                        if let Some(aid) = audit_id {
+                            let _ = self
+                                .db
+                                .complete_sync_audit(aid, result.audit_action)
+                                .await;
+                        }
+                        acks.push(sync_line.ack);
+                        counters.increment(result.counter);
+
+                        // Track asset IDs for reset orphan detection.
+                        if let Some(ref mut ids) = existing_ids {
+                            if !result.entity_id.is_empty() {
+                                ids.remove(&result.entity_id);
+                            }
+                        }
                     }
-                    if let Some(ref mut ids) = existing_ids {
-                        ids.remove(&id);
+                    Err(e) => {
+                        warn!(entity_type, error = %e, "skipping sync entity");
+                        if let Some(aid) = audit_id {
+                            let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
+                        }
+                        counters.errors += 1;
                     }
                 }
-                "AssetDeleteV1" => {
-                    let delete: SyncAssetDeleteV1 =
-                        deserialize_entity(&sync_line.data, "AssetDeleteV1", line_number)?;
-                    let id = delete.asset_id.clone();
-                    if let Some(ref mut ids) = existing_ids {
-                        ids.remove(&id);
-                    }
-                    self.process_entity(
-                        "AssetDeleteV1",
-                        &id,
-                        &sync_cycle,
-                        "delete",
-                        sync_line.ack,
-                        self.handle_asset_delete(&id),
-                        &mut acks,
-                        &mut counters.deletes,
-                        &mut counters.errors,
-                    )
-                    .await;
+
+                if counters.assets % 500 == 0 && counters.assets > 0 {
+                    info!(assets = counters.assets, "sync progress");
                 }
-                "AssetExifV1" => {
-                    let exif: SyncAssetExifV1 =
-                        deserialize_entity(&sync_line.data, "AssetExifV1", line_number)?;
-                    let id = exif.asset_id.clone();
-                    self.process_entity(
-                        "AssetExifV1",
-                        &id,
-                        &sync_cycle,
-                        "upsert",
-                        sync_line.ack,
-                        self.handle_asset_exif(exif),
-                        &mut acks,
-                        &mut counters.exifs,
-                        &mut counters.errors,
-                    )
-                    .await;
-                }
-                "AlbumV1" => {
-                    let album: SyncAlbumV1 =
-                        deserialize_entity(&sync_line.data, "AlbumV1", line_number)?;
-                    let id = album.id.clone();
-                    self.process_entity(
-                        "AlbumV1",
-                        &id,
-                        &sync_cycle,
-                        "upsert",
-                        sync_line.ack,
-                        self.handle_album(album),
-                        &mut acks,
-                        &mut counters.albums,
-                        &mut counters.errors,
-                    )
-                    .await;
-                }
-                "AlbumDeleteV1" => {
-                    let delete: SyncAlbumDeleteV1 =
-                        deserialize_entity(&sync_line.data, "AlbumDeleteV1", line_number)?;
-                    let id = delete.album_id.clone();
-                    self.process_entity(
-                        "AlbumDeleteV1",
-                        &id,
-                        &sync_cycle,
-                        "delete",
-                        sync_line.ack,
-                        self.handle_album_delete(&id),
-                        &mut acks,
-                        &mut counters.deletes,
-                        &mut counters.errors,
-                    )
-                    .await;
-                }
-                "AlbumToAssetV1" => {
-                    let assoc: SyncAlbumToAssetV1 =
-                        deserialize_entity(&sync_line.data, "AlbumToAssetV1", line_number)?;
-                    let id = format!("{}:{}", assoc.album_id, assoc.asset_id);
-                    self.process_entity(
-                        "AlbumToAssetV1",
-                        &id,
-                        &sync_cycle,
-                        "upsert",
-                        sync_line.ack,
-                        self.handle_album_asset(assoc),
-                        &mut acks,
-                        &mut counters.albums,
-                        &mut counters.errors,
-                    )
-                    .await;
-                }
-                "AlbumToAssetDeleteV1" => {
-                    let assoc: SyncAlbumToAssetDeleteV1 = deserialize_entity(
-                        &sync_line.data,
-                        "AlbumToAssetDeleteV1",
-                        line_number,
-                    )?;
-                    let id = format!("{}:{}", assoc.album_id, assoc.asset_id);
-                    self.process_entity(
-                        "AlbumToAssetDeleteV1",
-                        &id,
-                        &sync_cycle,
-                        "delete",
-                        sync_line.ack,
-                        self.handle_album_asset_delete(assoc),
-                        &mut acks,
-                        &mut counters.albums,
-                        &mut counters.errors,
-                    )
-                    .await;
-                }
-                "PersonV1" => {
-                    let person: SyncPersonV1 =
-                        deserialize_entity(&sync_line.data, "PersonV1", line_number)?;
-                    let id = person.id.clone();
-                    self.process_entity(
-                        "PersonV1",
-                        &id,
-                        &sync_cycle,
-                        "upsert",
-                        sync_line.ack,
-                        self.handle_person(person),
-                        &mut acks,
-                        &mut counters.people,
-                        &mut counters.errors,
-                    )
-                    .await;
-                }
-                "PersonDeleteV1" => {
-                    let delete: SyncPersonDeleteV1 =
-                        deserialize_entity(&sync_line.data, "PersonDeleteV1", line_number)?;
-                    let id = delete.person_id.clone();
-                    self.process_entity(
-                        "PersonDeleteV1",
-                        &id,
-                        &sync_cycle,
-                        "delete",
-                        sync_line.ack,
-                        self.library.faces().delete_person_by_id(&id),
-                        &mut acks,
-                        &mut counters.deletes,
-                        &mut counters.errors,
-                    )
-                    .await;
-                }
-                "AssetFaceV1" => {
-                    let face: SyncAssetFaceV1 =
-                        deserialize_entity(&sync_line.data, "AssetFaceV1", line_number)?;
-                    let id = face.id.clone();
-                    self.process_entity(
-                        "AssetFaceV1",
-                        &id,
-                        &sync_cycle,
-                        "upsert",
-                        sync_line.ack,
-                        self.handle_asset_face(face),
-                        &mut acks,
-                        &mut counters.faces,
-                        &mut counters.errors,
-                    )
-                    .await;
-                }
-                "AssetFaceDeleteV1" => {
-                    let delete: SyncAssetFaceDeleteV1 =
-                        deserialize_entity(&sync_line.data, "AssetFaceDeleteV1", line_number)?;
-                    let id = delete.asset_face_id.clone();
-                    self.process_entity(
-                        "AssetFaceDeleteV1",
-                        &id,
-                        &sync_cycle,
-                        "delete",
-                        sync_line.ack,
-                        self.library.faces().delete_asset_face(&id),
-                        &mut acks,
-                        &mut counters.deletes,
-                        &mut counters.errors,
-                    )
-                    .await;
-                }
-                "SyncCompleteV1" => {
-                    info!(
-                        assets = counters.assets,
-                        exifs = counters.exifs,
-                        deletes = counters.deletes,
-                        albums = counters.albums,
-                        people = counters.people,
-                        faces = counters.faces,
-                        errors = counters.errors,
-                        lines = line_number,
-                        "sync stream complete"
-                    );
-                    acks.push(sync_line.ack);
-                    break;
-                }
-                other => {
-                    debug!(
-                        entity_type = other,
-                        line_number, "ignoring unknown sync entity type"
-                    );
-                    acks.push(sync_line.ack);
-                }
+            } else if entity_type == "SyncCompleteV1" {
+                // Not dispatched through handlers — breaks the loop.
+                info!(
+                    assets = counters.assets,
+                    exifs = counters.exifs,
+                    deletes = counters.deletes,
+                    albums = counters.albums,
+                    people = counters.people,
+                    faces = counters.faces,
+                    errors = counters.errors,
+                    lines = line_number,
+                    "sync stream complete"
+                );
+                acks.push(sync_line.ack);
+                break;
+            } else {
+                debug!(
+                    entity_type,
+                    line_number, "ignoring unknown sync entity type"
+                );
+                acks.push(sync_line.ack);
             }
 
             if acks.len() >= ACK_FLUSH_THRESHOLD {
@@ -387,281 +256,7 @@ impl PullManager {
             .await
     }
 
-    // ── Entity handlers ─────────────────────────────────────────────────
-
-    #[instrument(skip(self, asset), fields(asset_id = %asset.id))]
-    async fn handle_asset(&self, asset: SyncAssetV1) -> Result<(), LibraryError> {
-        let media_type = match asset.asset_type.as_str() {
-            "VIDEO" => MediaType::Video,
-            _ => MediaType::Image,
-        };
-
-        let taken_at = parse_datetime(&asset.local_date_time)
-            .or_else(|| parse_datetime(&asset.file_created_at));
-
-        let imported_at = parse_datetime(&asset.file_created_at)
-            .unwrap_or_else(|| chrono::Utc::now().timestamp());
-
-        let is_trashed = asset.deleted_at.is_some();
-        let trashed_at = parse_datetime(&asset.deleted_at);
-        let duration_ms = asset.duration.as_deref().and_then(parse_duration_ms);
-
-        let id_str = asset.id.clone();
-        let record = MediaRecord {
-            id: MediaId::new(id_str.clone()),
-            content_hash: None,
-            external_id: Some(id_str.clone()),
-            relative_path: format!("immich/{id_str}"),
-            original_filename: asset.original_file_name,
-            file_size: 0,
-            imported_at,
-            media_type,
-            taken_at,
-            width: asset.width,
-            height: asset.height,
-            orientation: 1,
-            duration_ms,
-            is_favorite: asset.is_favorite,
-            is_trashed,
-            trashed_at,
-        };
-
-        let media_id = record.id.clone();
-        self.library.media().upsert_media(&record).await?;
-
-        // Emit per-asset event for incremental grid updates.
-        let item = MediaItem {
-            id: media_id.clone(),
-            taken_at,
-            imported_at,
-            original_filename: record.original_filename.clone(),
-            width: record.width,
-            height: record.height,
-            orientation: record.orientation,
-            media_type,
-            is_favorite: record.is_favorite,
-            is_trashed: record.is_trashed,
-            trashed_at: record.trashed_at,
-            duration_ms: record.duration_ms,
-        };
-        self.events.send(AppEvent::AssetSynced { item });
-
-        // Download thumbnail inline.
-        if let Err(e) = self.download_thumbnail(&media_id).await {
-            debug!(id = %media_id, "thumbnail download failed: {e}");
-        }
-
-        Ok(())
-    }
-
-    #[instrument(skip(self, exif), fields(asset_id = %exif.asset_id))]
-    async fn handle_asset_exif(&self, exif: SyncAssetExifV1) -> Result<(), LibraryError> {
-        let record = MediaMetadataRecord {
-            media_id: MediaId::new(exif.asset_id),
-            camera_make: exif.make,
-            camera_model: exif.model,
-            lens_model: exif.lens_model,
-            aperture: exif.f_number,
-            shutter_str: exif.exposure_time,
-            iso: exif.iso.map(|v| v as u32),
-            focal_length: exif.focal_length,
-            gps_lat: exif.latitude,
-            gps_lon: exif.longitude,
-            gps_alt: None,
-            color_space: exif.profile_description,
-        };
-
-        self.library.metadata().upsert_metadata(&record).await
-    }
-
-    #[instrument(skip(self))]
-    async fn handle_asset_delete(&self, asset_id: &str) -> Result<(), LibraryError> {
-        let id = MediaId::new(asset_id.to_owned());
-        self.library
-            .delete_permanently_from_sync(std::slice::from_ref(&id))
-            .await?;
-        self.events
-            .send(AppEvent::AssetDeletedRemote { media_id: id });
-        Ok(())
-    }
-
-    #[instrument(skip(self, album), fields(album_id = %album.id, name = %album.name))]
-    async fn handle_album(&self, album: SyncAlbumV1) -> Result<(), LibraryError> {
-        let created_at = parse_datetime(&Some(album.created_at)).unwrap_or(0);
-        let updated_at = parse_datetime(&Some(album.updated_at)).unwrap_or(0);
-
-        self.library
-            .albums()
-            .upsert_album(
-                &album.id,
-                &album.name,
-                created_at,
-                updated_at,
-                Some(&album.id),
-            )
-            .await?;
-
-        self.events.send(AppEvent::AlbumCreated {
-            id: AlbumId::from_raw(album.id),
-            name: album.name,
-        });
-
-        Ok(())
-    }
-
-    #[instrument(skip(self))]
-    async fn handle_album_delete(&self, album_id: &str) -> Result<(), LibraryError> {
-        let id = AlbumId::from_raw(album_id.to_owned());
-        self.library.albums().delete_album(&id).await?;
-        self.events.send(AppEvent::AlbumDeleted { id });
-        Ok(())
-    }
-
-    async fn handle_album_asset(&self, assoc: SyncAlbumToAssetV1) -> Result<(), LibraryError> {
-        let now = chrono::Utc::now().timestamp();
-        self.db
-            .upsert_album_media(&assoc.album_id, &assoc.asset_id, now)
-            .await?;
-        self.events.send(AppEvent::AlbumMediaChanged {
-            album_id: AlbumId::from_raw(assoc.album_id),
-        });
-        Ok(())
-    }
-
-    async fn handle_album_asset_delete(
-        &self,
-        assoc: SyncAlbumToAssetDeleteV1,
-    ) -> Result<(), LibraryError> {
-        self.db
-            .delete_album_media_entry(&assoc.album_id, &assoc.asset_id)
-            .await?;
-        self.events.send(AppEvent::AlbumMediaChanged {
-            album_id: AlbumId::from_raw(assoc.album_id),
-        });
-        Ok(())
-    }
-
-    #[instrument(skip(self, person), fields(person_id = %person.id, name = %person.name))]
-    async fn handle_person(&self, person: SyncPersonV1) -> Result<(), LibraryError> {
-        self.library
-            .faces()
-            .upsert_person(
-                &person.id,
-                &person.name,
-                person.birth_date.as_deref(),
-                person.is_hidden,
-                person.is_favorite,
-                person.color.as_deref(),
-                person.face_asset_id.as_deref(),
-                Some(&person.id),
-            )
-            .await?;
-
-        // Download person face thumbnail.
-        let person_thumb_dir = self.thumbnails_dir.join("people");
-        let thumb_path = person_thumb_dir.join(format!("{}.jpg", person.id));
-        if !thumb_path.exists() {
-            let api_path = format!("/people/{}/thumbnail", person.id);
-            match self.client.get_bytes(&api_path).await {
-                Ok(bytes) => {
-                    if let Some(parent) = thumb_path.parent() {
-                        let _ = tokio::fs::create_dir_all(parent).await;
-                    }
-                    let _ = tokio::fs::write(&thumb_path, &bytes).await;
-                    debug!(person_id = %person.id, "person thumbnail downloaded");
-                }
-                Err(e) => {
-                    debug!(person_id = %person.id, "person thumbnail download failed: {e}");
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    #[instrument(skip(self, face), fields(face_id = %face.id, asset_id = %face.asset_id))]
-    async fn handle_asset_face(&self, face: SyncAssetFaceV1) -> Result<(), LibraryError> {
-        let row = AssetFaceRow {
-            id: face.id,
-            asset_id: face.asset_id,
-            person_id: face.person_id.clone(),
-            image_width: face.image_width,
-            image_height: face.image_height,
-            bbox_x1: face.bounding_box_x1,
-            bbox_y1: face.bounding_box_y1,
-            bbox_x2: face.bounding_box_x2,
-            bbox_y2: face.bounding_box_y2,
-            source_type: face
-                .source_type
-                .unwrap_or_else(|| "MachineLearning".to_string()),
-        };
-
-        self.library.faces().upsert_asset_face(&row).await?;
-
-        if let Some(ref person_id) = face.person_id {
-            self.library.faces().update_face_count(person_id).await?;
-        }
-
-        Ok(())
-    }
-
     // ── Sync infrastructure ─────────────────────────────────────────────
-
-    async fn handle_sync_reset(
-        &self,
-        is_reset: &mut bool,
-        existing_ids: &mut Option<HashSet<String>>,
-    ) -> Result<(), LibraryError> {
-        warn!("server requested sync reset — performing full resync");
-        *is_reset = true;
-        let ids = self.db.all_media_ids().await?;
-        info!(
-            existing_count = ids.len(),
-            "loaded existing media IDs for reset tracking"
-        );
-        *existing_ids = Some(ids);
-        self.library.faces().clear_asset_faces().await?;
-        self.library.faces().clear_people().await?;
-        self.db.clear_sync_checkpoints().await?;
-        Ok(())
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn process_entity(
-        &self,
-        entity_type: &str,
-        entity_id: &str,
-        sync_cycle: &str,
-        audit_action: &str,
-        ack: String,
-        handler_result: impl std::future::Future<Output = Result<(), LibraryError>>,
-        acks: &mut Vec<String>,
-        success_counter: &mut usize,
-        error_counter: &mut usize,
-    ) {
-        let audit_id = self
-            .db
-            .start_sync_audit(entity_type, entity_id, sync_cycle)
-            .await
-            .ok();
-
-        match handler_result.await {
-            Ok(()) => {
-                if let Some(aid) = audit_id {
-                    let _ = self.db.complete_sync_audit(aid, audit_action).await;
-                }
-                acks.push(ack);
-                *success_counter += 1;
-            }
-            Err(e) => {
-                warn!(entity_type, entity_id, error = %e, "skipping sync entity");
-                if let Some(aid) = audit_id {
-                    let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
-                }
-                *error_counter += 1;
-            }
-        }
-    }
 
     async fn finish_sync(
         &self,
@@ -741,58 +336,13 @@ impl PullManager {
         acks.clear();
         Ok(())
     }
-
-    /// Download a single thumbnail from Immich and write it to the local cache.
-    #[instrument(skip(self))]
-    async fn download_thumbnail(&self, media_id: &MediaId) -> Result<(), LibraryError> {
-        let path = sharded_thumbnail_path(&self.thumbnails_dir, media_id);
-
-        // Skip if already cached on disk.
-        if path.exists() {
-            debug!("thumbnail already cached, skipping download");
-            let now = chrono::Utc::now().timestamp();
-            self.library
-                .thumbnails()
-                .set_thumbnail_ready(media_id, &path.to_string_lossy(), now)
-                .await?;
-            self.events.send(AppEvent::ThumbnailReady {
-                media_id: media_id.clone(),
-            });
-            return Ok(());
-        }
-
-        // Download from Immich.
-        let api_path = format!("/assets/{}/thumbnail?size=thumbnail", media_id.as_str());
-        let bytes = self.client.get_bytes(&api_path).await?;
-
-        // Create shard directories and write file.
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(LibraryError::Io)?;
-        }
-        tokio::fs::write(&path, &bytes)
-            .await
-            .map_err(LibraryError::Io)?;
-
-        // Update DB status and emit event.
-        let now = chrono::Utc::now().timestamp();
-        self.library
-            .thumbnails()
-            .set_thumbnail_ready(media_id, &path.to_string_lossy(), now)
-            .await?;
-        self.events.send(AppEvent::ThumbnailReady {
-            media_id: media_id.clone(),
-        });
-
-        Ok(())
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::library::db::test_helpers::{open_test_db, test_record};
+    use crate::library::media::MediaId;
 
     // ── SyncCounters ───────────────────────────────────────────────
 
@@ -805,6 +355,18 @@ mod tests {
         assert_eq!(c.albums, 0);
         assert_eq!(c.people, 0);
         assert_eq!(c.faces, 0);
+        assert_eq!(c.errors, 0);
+    }
+
+    #[test]
+    fn sync_counters_increment() {
+        let mut c = SyncCounters::default();
+        c.increment(CounterKind::Assets);
+        c.increment(CounterKind::Assets);
+        c.increment(CounterKind::Deletes);
+        c.increment(CounterKind::None);
+        assert_eq!(c.assets, 2);
+        assert_eq!(c.deletes, 1);
         assert_eq!(c.errors, 0);
     }
 
@@ -831,7 +393,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(row.0, "upsert");
-        assert!(row.1.is_some()); // completed_at is set
+        assert!(row.1.is_some());
     }
 
     #[tokio::test]
@@ -913,7 +475,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = open_test_db(dir.path()).await;
 
-        // Use different relative_paths to avoid UNIQUE constraint conflict.
         db.upsert_media(&record_with_taken_at(
             MediaId::new("id-a".to_string()),
             "2025/01/photo_a.jpg",
@@ -949,7 +510,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = open_test_db(dir.path()).await;
 
-        // First insert an album and a media record (foreign keys).
         let now = chrono::Utc::now().timestamp();
         sqlx::query("INSERT INTO albums (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)")
             .bind("alb-1")
@@ -972,7 +532,6 @@ mod tests {
                 .unwrap();
         assert_eq!(count.0, 1);
 
-        // Insert again should be ignored (INSERT OR IGNORE).
         db.upsert_album_media("alb-1", "med-1", now).await.unwrap();
         let count2: (i64,) =
             sqlx::query_as("SELECT COUNT(*) FROM album_media WHERE album_id = 'alb-1'")
@@ -990,38 +549,5 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(count3.0, 0);
-    }
-
-    #[tokio::test]
-    async fn save_sync_checkpoints_empty_is_noop() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = open_test_db(dir.path()).await;
-
-        // Empty list should not error.
-        db.save_sync_checkpoints(&[]).await.unwrap();
-    }
-
-    /// Test the checkpoint extraction logic from flush_acks.
-    /// Since flush_acks calls the Immich API, we test the parsing logic directly.
-    #[test]
-    fn checkpoint_extraction_keeps_latest_per_entity_type() {
-        let acks = vec![
-            "AssetV1|ack-1".to_string(),
-            "AssetV1|ack-2".to_string(),
-            "AlbumV1|ack-3".to_string(),
-            "AssetV1|ack-4".to_string(),
-        ];
-
-        let mut checkpoints: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        for ack in &acks {
-            if let Some(entity_type) = ack.split('|').next() {
-                checkpoints.insert(entity_type.to_string(), ack.clone());
-            }
-        }
-
-        assert_eq!(checkpoints.len(), 2);
-        assert_eq!(checkpoints["AssetV1"], "AssetV1|ack-4");
-        assert_eq!(checkpoints["AlbumV1"], "AlbumV1|ack-3");
     }
 }

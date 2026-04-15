@@ -7,6 +7,7 @@
 //! - **CachedResolver**: fetches originals from Immich on cache miss
 
 pub(crate) mod client;
+pub(crate) mod handlers;
 pub(crate) mod pull;
 pub(crate) mod push;
 pub mod resolver;
