@@ -1,12 +1,13 @@
 //! Unified render pipeline.
 //!
-//! Central, stateless pipeline for all image decode/render/output operations.
-//! Replaces scattered inline decode logic across the viewer, thumbnail
-//! generator, and edit panel.
+//! Central, stateless orchestrator that composes the individual step
+//! modules into a single render call.
 //!
 //! ```text
-//! Path → decode (magic bytes) → orient (EXIF) → resize? → apply edits? → output
+//! Path → decode → orient (EXIF) → resize? → apply edits? → DynamicImage
 //! ```
+//!
+//! The caller converts the output using [`super::output`] helpers.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -29,33 +30,11 @@ pub enum RenderSize {
     Thumbnail(u32),
 }
 
-/// Output format for the rendered image.
-#[derive(Debug, Clone)]
-pub enum RenderOutput {
-    /// Raw RGBA pixel bytes + dimensions. Ready for `GdkMemoryTexture`.
-    Rgba,
-    /// Encoded WebP bytes. Ready for disk cache.
-    WebP,
-}
-
 /// Options controlling what the pipeline produces.
 #[derive(Debug, Clone)]
 pub struct RenderOptions<'a> {
     pub size: RenderSize,
-    pub output: RenderOutput,
     pub edits: Option<&'a EditState>,
-}
-
-/// Result of a render operation.
-pub enum RenderResult {
-    /// RGBA pixel bytes with dimensions.
-    Rgba {
-        bytes: Vec<u8>,
-        width: u32,
-        height: u32,
-    },
-    /// Encoded WebP bytes.
-    WebP(Vec<u8>),
 }
 
 /// Central stateless render pipeline.
@@ -91,61 +70,36 @@ impl RenderPipeline {
         sharded_thumbnail_path(&self.thumbnails_dir, id)
     }
 
-    /// Decode an image from a file path using magic-byte detection.
-    ///
-    /// This is the single decode entry point — no other code should call
-    /// `image::open`, `image::ImageReader`, or `FormatRegistry::decode`
-    /// directly.
-    #[instrument(skip(self))]
-    pub fn decode(&self, path: &Path) -> Result<DynamicImage, LibraryError> {
-        self.formats.decode(path)
-    }
-
-    /// Full render pipeline: decode → orient → resize → edit → output.
+    /// Full render pipeline: decode → orient → resize → edit → DynamicImage.
     ///
     /// Blocking — call from `spawn_blocking` or a blocking thread.
+    /// The caller converts the result using [`super::output`] helpers.
     #[instrument(skip(self, options))]
     pub fn render(
         &self,
         path: &Path,
         options: &RenderOptions<'_>,
-    ) -> Result<RenderResult, LibraryError> {
-        // 1. Decode
-        let img = self.decode(path)?;
+    ) -> Result<DynamicImage, LibraryError> {
+        // Step 1: Decode — detect format from magic bytes, dispatch to handler.
+        let img = super::decode::decode(path, &self.formats)?;
 
-        // 2. Orient (EXIF)
+        // Step 2: Orient — apply EXIF rotation/flip (skips video and HEIF).
         let img = self.apply_exif_orientation(path, img);
 
-        // 3. Resize
+        // Step 3: Resize — scale to thumbnail size if requested.
         let img = match options.size {
             RenderSize::FullRes => img,
-            RenderSize::Thumbnail(max_edge) => img.thumbnail(max_edge, max_edge),
+            RenderSize::Thumbnail(max_edge) => super::resize::resize(img, max_edge),
         };
 
-        // 4. Apply edits
+        // Step 4: Edit — apply non-destructive edits if provided.
         let img = match options.edits {
-            Some(edits) => super::apply_edits(&img, edits),
+            Some(edits) => super::edits::apply_edits(&img, edits),
             None => img,
         };
 
-        // 5. Output
-        match options.output {
-            RenderOutput::Rgba => {
-                let rgba = img.to_rgba8();
-                let (w, h) = rgba.dimensions();
-                Ok(RenderResult::Rgba {
-                    bytes: rgba.into_raw(),
-                    width: w,
-                    height: h,
-                })
-            }
-            RenderOutput::WebP => {
-                let mut buf = std::io::Cursor::new(Vec::new());
-                img.write_to(&mut buf, image::ImageFormat::WebP)
-                    .map_err(|e| LibraryError::Thumbnail(e.to_string()))?;
-                Ok(RenderResult::WebP(buf.into_inner()))
-            }
-        }
+        // Caller converts to output format via output::to_rgba() or output::to_webp().
+        Ok(img)
     }
 
     /// Apply EXIF orientation correction.
@@ -168,11 +122,11 @@ impl RenderPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::library::format::standard::StandardHandler;
     use image::{GenericImageView, ImageFormat, RgbaImage};
     use std::io::Cursor;
 
     fn test_formats() -> Arc<FormatRegistry> {
-        use crate::library::format::standard::StandardHandler;
         let mut reg = FormatRegistry::new();
         reg.register(Arc::new(StandardHandler));
         Arc::new(reg)
@@ -188,165 +142,94 @@ mod tests {
         path
     }
 
-    #[test]
-    fn decode_jpeg_by_magic_bytes() {
-        let dir = tempfile::tempdir().unwrap();
-        // Write a JPEG but give it no extension.
-        let path = write_test_jpeg(dir.path(), "no_extension");
-
-        let pipeline = RenderPipeline::new(
+    fn test_pipeline(dir: &Path) -> RenderPipeline {
+        RenderPipeline::new(
             test_formats(),
-            dir.path().to_path_buf(),
-            dir.path().to_path_buf(),
-        );
-        let img = pipeline.decode(&path).unwrap();
+            dir.to_path_buf(),
+            dir.to_path_buf(),
+        )
+    }
+
+    #[test]
+    fn render_fullres_returns_correct_dimensions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_test_jpeg(dir.path(), "photo");
+        let pipeline = test_pipeline(dir.path());
+
+        let img = pipeline
+            .render(&path, &RenderOptions { size: RenderSize::FullRes, edits: None })
+            .unwrap();
         assert_eq!(img.dimensions(), (100, 50));
     }
 
     #[test]
-    fn render_thumbnail_produces_webp() {
+    fn render_thumbnail_resizes() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_test_jpeg(dir.path(), "photo");
+        let pipeline = test_pipeline(dir.path());
 
-        let pipeline = RenderPipeline::new(
-            test_formats(),
-            dir.path().to_path_buf(),
-            dir.path().to_path_buf(),
-        );
-
-        let result = pipeline
-            .render(
-                &path,
-                &RenderOptions {
-                    size: RenderSize::Thumbnail(50),
-                    output: RenderOutput::WebP,
-                    edits: None,
-                },
-            )
+        let img = pipeline
+            .render(&path, &RenderOptions { size: RenderSize::Thumbnail(20), edits: None })
             .unwrap();
-
-        match result {
-            RenderResult::WebP(bytes) => {
-                assert!(!bytes.is_empty());
-                // WebP magic: RIFF....WEBP
-                assert_eq!(&bytes[..4], b"RIFF");
-                assert_eq!(&bytes[8..12], b"WEBP");
-            }
-            _ => panic!("expected WebP output"),
-        }
-    }
-
-    #[test]
-    fn render_fullres_produces_rgba() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = write_test_jpeg(dir.path(), "photo");
-
-        let pipeline = RenderPipeline::new(
-            test_formats(),
-            dir.path().to_path_buf(),
-            dir.path().to_path_buf(),
-        );
-
-        let result = pipeline
-            .render(
-                &path,
-                &RenderOptions {
-                    size: RenderSize::FullRes,
-                    output: RenderOutput::Rgba,
-                    edits: None,
-                },
-            )
-            .unwrap();
-
-        match result {
-            RenderResult::Rgba {
-                bytes,
-                width,
-                height,
-            } => {
-                assert_eq!(width, 100);
-                assert_eq!(height, 50);
-                assert_eq!(bytes.len(), (100 * 50 * 4) as usize);
-            }
-            _ => panic!("expected RGBA output"),
-        }
+        assert!(img.width() <= 20);
+        assert!(img.height() <= 20);
     }
 
     #[test]
     fn render_with_edits_applies_brightness() {
         let dir = tempfile::tempdir().unwrap();
 
-        // Write a JPEG with known pixel values.
-        let mut img = RgbaImage::new(4, 4);
-        for px in img.pixels_mut() {
+        let mut src = RgbaImage::new(4, 4);
+        for px in src.pixels_mut() {
             *px = image::Rgba([100, 100, 100, 255]);
         }
-        let img = DynamicImage::ImageRgba8(img);
         let path = dir.path().join("test");
         let mut buf = Vec::new();
-        img.write_to(&mut Cursor::new(&mut buf), ImageFormat::Jpeg)
+        DynamicImage::ImageRgba8(src)
+            .write_to(&mut Cursor::new(&mut buf), ImageFormat::Jpeg)
             .unwrap();
         std::fs::write(&path, &buf).unwrap();
 
-        let pipeline = RenderPipeline::new(
-            test_formats(),
-            dir.path().to_path_buf(),
-            dir.path().to_path_buf(),
-        );
-
+        let pipeline = test_pipeline(dir.path());
         let mut edits = EditState::default();
         edits.exposure.brightness = 0.5;
 
-        let result = pipeline
-            .render(
-                &path,
-                &RenderOptions {
-                    size: RenderSize::FullRes,
-                    output: RenderOutput::Rgba,
-                    edits: Some(&edits),
-                },
-            )
+        let img = pipeline
+            .render(&path, &RenderOptions { size: RenderSize::FullRes, edits: Some(&edits) })
             .unwrap();
 
-        if let RenderResult::Rgba { bytes, .. } = result {
-            // First pixel R channel should be brighter than 100.
-            assert!(bytes[0] > 100);
-        } else {
-            panic!("expected RGBA output");
-        }
+        let px = img.as_rgba8().unwrap().get_pixel(0, 0);
+        assert!(px[0] > 100);
     }
 
     #[test]
-    fn thumbnail_resize_respects_max_edge() {
+    fn render_extensionless_file_works() {
         let dir = tempfile::tempdir().unwrap();
-        let path = write_test_jpeg(dir.path(), "wide");
+        let path = write_test_jpeg(dir.path(), "no_extension");
+        let pipeline = test_pipeline(dir.path());
 
-        let pipeline = RenderPipeline::new(
-            test_formats(),
-            dir.path().to_path_buf(),
-            dir.path().to_path_buf(),
-        );
+        let img = pipeline
+            .render(&path, &RenderOptions { size: RenderSize::FullRes, edits: None })
+            .unwrap();
+        assert_eq!(img.dimensions(), (100, 50));
+    }
 
-        let result = pipeline
-            .render(
-                &path,
-                &RenderOptions {
-                    size: RenderSize::Thumbnail(20),
-                    output: RenderOutput::Rgba,
-                    edits: None,
-                },
-            )
+    #[test]
+    fn output_helpers_work_with_pipeline_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_test_jpeg(dir.path(), "photo");
+        let pipeline = test_pipeline(dir.path());
+
+        let img = pipeline
+            .render(&path, &RenderOptions { size: RenderSize::FullRes, edits: None })
             .unwrap();
 
-        if let RenderResult::Rgba { width, height, .. } = result {
-            // Longest edge should be ≤ 20.
-            assert!(width <= 20);
-            assert!(height <= 20);
-            // Aspect ratio preserved: 100x50 → 20x10.
-            assert_eq!(width, 20);
-            assert_eq!(height, 10);
-        } else {
-            panic!("expected RGBA output");
-        }
+        let (bytes, w, h) = super::super::output::to_rgba(&img);
+        assert_eq!(w, 100);
+        assert_eq!(h, 50);
+        assert_eq!(bytes.len(), (100 * 50 * 4) as usize);
+
+        let webp = super::super::output::to_webp(&img).unwrap();
+        assert_eq!(&webp[..4], b"RIFF");
     }
 }
