@@ -240,6 +240,7 @@ mod tests {
             Library::open(
                 bundle,
                 LocalStorageMode::Managed,
+                crate::library::db::Database::new(),
                 std::sync::Arc::new(crate::sync::outbox::NoOpRecorder),
             )
             .await

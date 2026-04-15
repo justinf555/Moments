@@ -65,7 +65,7 @@ impl MediaRepository {
     pub async fn exists(&self, id: &MediaId) -> Result<bool, LibraryError> {
         let row: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM media WHERE id = ?")
             .bind(id.as_str())
-            .fetch_optional(&self.db.pool)
+            .fetch_optional(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
         Ok(row.is_some())
@@ -80,7 +80,7 @@ impl MediaRepository {
              FROM media WHERE id = ?",
         )
         .bind(id.as_str())
-        .fetch_optional(&self.db.pool)
+        .fetch_optional(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
         Ok(row.map(MediaRow::into_item))
@@ -91,7 +91,7 @@ impl MediaRepository {
         let row: Option<String> =
             sqlx::query_scalar("SELECT original_filename FROM media WHERE id = ?")
                 .bind(id.as_str())
-                .fetch_optional(&self.db.pool)
+                .fetch_optional(self.db.pool())
                 .await
                 .map_err(LibraryError::Db)?;
         Ok(row)
@@ -104,7 +104,7 @@ impl MediaRepository {
         let row: Option<String> =
             sqlx::query_scalar("SELECT relative_path FROM media WHERE id = ?")
                 .bind(id.as_str())
-                .fetch_optional(&self.db.pool)
+                .fetch_optional(self.db.pool())
                 .await
                 .map_err(LibraryError::Db)?;
         Ok(row)
@@ -163,7 +163,7 @@ impl MediaRepository {
                     q = q.bind(val.as_str());
                 }
                 q.bind(limit as i64)
-                    .fetch_all(&self.db.pool)
+                    .fetch_all(self.db.pool())
                     .await
                     .map_err(LibraryError::Db)?
             }
@@ -184,7 +184,7 @@ impl MediaRepository {
                     q = q.bind(val.as_str());
                 }
                 q.bind(limit as i64)
-                    .fetch_all(&self.db.pool)
+                    .fetch_all(self.db.pool())
                     .await
                     .map_err(LibraryError::Db)?
             }
@@ -199,7 +199,7 @@ impl MediaRepository {
         let rows: Vec<(String,)> =
             sqlx::query_as("SELECT id FROM media WHERE is_trashed = 1 AND trashed_at < ?")
                 .bind(cutoff)
-                .fetch_all(&self.db.pool)
+                .fetch_all(self.db.pool())
                 .await
                 .map_err(LibraryError::Db)?;
         Ok(rows.into_iter().map(|(id,)| MediaId::new(id)).collect())
@@ -215,18 +215,18 @@ impl MediaRepository {
                 COUNT(CASE WHEN is_trashed = 1 THEN 1 END)
              FROM media",
         )
-        .fetch_one(&self.db.pool)
+        .fetch_one(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
 
         let album_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM albums")
-            .fetch_one(&self.db.pool)
+            .fetch_one(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
 
         let people_count: (i64,) =
             sqlx::query_as("SELECT COUNT(*) FROM people WHERE name != '' AND is_hidden = 0")
-                .fetch_one(&self.db.pool)
+                .fetch_one(self.db.pool())
                 .await
                 .map_err(LibraryError::Db)?;
 
@@ -267,7 +267,7 @@ impl MediaRepository {
         .bind(record.is_favorite as i64)
         .bind(record.is_trashed as i64)
         .bind(record.trashed_at)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
         Ok(())
@@ -298,7 +298,7 @@ impl MediaRepository {
         .bind(record.is_favorite as i64)
         .bind(record.is_trashed as i64)
         .bind(record.trashed_at)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
         Ok(())
@@ -318,7 +318,7 @@ impl MediaRepository {
             query = query.bind(id.as_str());
         }
         query
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
         Ok(())
@@ -339,7 +339,7 @@ impl MediaRepository {
             query = query.bind(id.as_str());
         }
         query
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
         Ok(())
@@ -359,7 +359,7 @@ impl MediaRepository {
             query = query.bind(id.as_str());
         }
         query
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
         Ok(())
@@ -371,7 +371,7 @@ impl MediaRepository {
             return Ok(());
         }
         let placeholders = id_placeholders(ids.len());
-        let mut tx = self.db.pool.begin().await.map_err(LibraryError::Db)?;
+        let mut tx = self.db.pool().begin().await.map_err(LibraryError::Db)?;
         for (table, col) in [
             ("edits", "media_id"),
             ("asset_faces", "asset_id"),

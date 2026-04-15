@@ -34,7 +34,7 @@ impl Database {
         .bind(album_id)
         .bind(media_id)
         .bind(added_at)
-        .execute(&self.pool)
+        .execute(self.pool())
         .await
         .map_err(LibraryError::Db)?;
         Ok(())
@@ -49,7 +49,7 @@ impl Database {
         sqlx::query("DELETE FROM album_media WHERE album_id = ? AND media_id = ?")
             .bind(album_id)
             .bind(media_id)
-            .execute(&self.pool)
+            .execute(self.pool())
             .await
             .map_err(LibraryError::Db)?;
         Ok(())
@@ -58,7 +58,7 @@ impl Database {
     /// Load all media IDs into a HashSet (for reset sync deletion detection).
     pub async fn all_media_ids(&self) -> Result<std::collections::HashSet<String>, LibraryError> {
         let rows: Vec<(String,)> = sqlx::query_as("SELECT id FROM media")
-            .fetch_all(&self.pool)
+            .fetch_all(self.pool())
             .await
             .map_err(LibraryError::Db)?;
         Ok(rows.into_iter().map(|(id,)| id).collect())
@@ -81,14 +81,14 @@ impl Database {
         for (entity_type, ack) in acks {
             query = query.bind(entity_type).bind(ack);
         }
-        query.execute(&self.pool).await.map_err(LibraryError::Db)?;
+        query.execute(self.pool()).await.map_err(LibraryError::Db)?;
         Ok(())
     }
 
     /// Clear all sync checkpoints (for reset sync).
     pub async fn clear_sync_checkpoints(&self) -> Result<(), LibraryError> {
         sqlx::query("DELETE FROM sync_checkpoints")
-            .execute(&self.pool)
+            .execute(self.pool())
             .await
             .map_err(LibraryError::Db)?;
         Ok(())
@@ -111,7 +111,7 @@ impl Database {
         .bind(entity_id)
         .bind(&now)
         .bind(sync_cycle)
-        .execute(&self.pool)
+        .execute(self.pool())
         .await
         .map_err(LibraryError::Db)?;
         Ok(result.last_insert_rowid())
@@ -124,7 +124,7 @@ impl Database {
             .bind(&now)
             .bind(action)
             .bind(row_id)
-            .execute(&self.pool)
+            .execute(self.pool())
             .await
             .map_err(LibraryError::Db)?;
         Ok(())
@@ -139,7 +139,7 @@ impl Database {
         .bind(&now)
         .bind(error_msg)
         .bind(row_id)
-        .execute(&self.pool)
+        .execute(self.pool())
         .await
         .map_err(LibraryError::Db)?;
         Ok(())

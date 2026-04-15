@@ -190,9 +190,9 @@ mod tests {
     use tempfile::tempdir;
 
     async fn open_test_db(dir: &Path) -> Database {
-        Database::open(&dir.join("db").join("test.db"))
-            .await
-            .unwrap()
+        let db = Database::new();
+        db.open(&dir.join("db").join("test.db")).await.unwrap();
+        db
     }
 
     fn test_record(id: MediaId, filename: &str) -> MediaRecord {

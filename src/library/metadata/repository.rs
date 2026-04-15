@@ -45,7 +45,7 @@ impl MetadataRepository {
              FROM media_metadata WHERE media_id = ?",
         )
         .bind(id.as_str())
-        .fetch_optional(&self.db.pool)
+        .fetch_optional(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
 
@@ -103,7 +103,7 @@ impl MetadataRepository {
         .bind(record.gps_lon)
         .bind(record.gps_alt)
         .bind(&record.color_space)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
         Ok(())
@@ -135,7 +135,7 @@ impl MetadataRepository {
         .bind(record.gps_lon)
         .bind(record.gps_alt)
         .bind(&record.color_space)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
         Ok(())

@@ -30,6 +30,7 @@ pub fn stub_deps() -> (Arc<Library>, tokio::runtime::Handle) {
             Library::open(
                 bundle,
                 LocalStorageMode::Managed,
+                moments::library::db::Database::new(),
                 std::sync::Arc::new(moments::sync::outbox::NoOpRecorder),
             )
             .await

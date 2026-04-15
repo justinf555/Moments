@@ -514,10 +514,11 @@ impl MomentsApplication {
                 let bus = EventBus::new();
 
                 let import_mode = storage_mode.clone();
+                let db = crate::library::db::Database::new();
                 let recorder: std::sync::Arc<dyn crate::library::recorder::MutationRecorder> =
                     std::sync::Arc::new(crate::sync::outbox::NoOpRecorder);
                 let open_result = tokio
-                    .spawn(async move { Library::open(bundle, storage_mode, recorder).await })
+                    .spawn(async move { Library::open(bundle, storage_mode, db, recorder).await })
                     .await
                     .map_err(|e| crate::library::error::LibraryError::Runtime(e.to_string()));
                 let storage_mode = import_mode;

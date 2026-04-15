@@ -68,7 +68,7 @@ impl FacesRepository {
         );
 
         let rows: Vec<PersonRow> = sqlx::query_as(&sql)
-            .fetch_all(&self.db.pool)
+            .fetch_all(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
 
@@ -95,7 +95,7 @@ impl FacesRepository {
              ORDER BY COALESCE(m.taken_at, m.imported_at) DESC",
         )
         .bind(person_id)
-        .fetch_all(&self.db.pool)
+        .fetch_all(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
 
@@ -109,7 +109,7 @@ impl FacesRepository {
         sqlx::query("UPDATE people SET name = ? WHERE id = ?")
             .bind(name)
             .bind(id)
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
         Ok(())
@@ -120,7 +120,7 @@ impl FacesRepository {
         sqlx::query("UPDATE people SET is_hidden = ? WHERE id = ?")
             .bind(hidden)
             .bind(id)
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
         Ok(())
@@ -161,7 +161,7 @@ impl FacesRepository {
         .bind(color)
         .bind(face_asset_id)
         .bind(now)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
         Ok(())
@@ -171,7 +171,7 @@ impl FacesRepository {
     pub async fn delete_person(&self, id: &str) -> Result<(), LibraryError> {
         sqlx::query("DELETE FROM people WHERE id = ?")
             .bind(id)
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
         Ok(())
@@ -203,7 +203,7 @@ impl FacesRepository {
         .bind(face.bbox_x2)
         .bind(face.bbox_y2)
         .bind(&face.source_type)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
         Ok(())
@@ -213,7 +213,7 @@ impl FacesRepository {
     pub async fn delete_asset_face(&self, id: &str) -> Result<(), LibraryError> {
         sqlx::query("DELETE FROM asset_faces WHERE id = ?")
             .bind(id)
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
         Ok(())
@@ -228,7 +228,7 @@ impl FacesRepository {
         )
         .bind(person_id)
         .bind(person_id)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
         Ok(())
@@ -237,7 +237,7 @@ impl FacesRepository {
     /// Delete all people (used during sync reset).
     pub async fn clear_people(&self) -> Result<(), LibraryError> {
         sqlx::query("DELETE FROM people")
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
         Ok(())
@@ -246,7 +246,7 @@ impl FacesRepository {
     /// Delete all asset faces (used during sync reset).
     pub async fn clear_asset_faces(&self) -> Result<(), LibraryError> {
         sqlx::query("DELETE FROM asset_faces")
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
         Ok(())

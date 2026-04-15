@@ -50,7 +50,7 @@ impl AlbumRepository {
         .bind(name)
         .bind(created_at)
         .bind(updated_at)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
         Ok(())
@@ -71,7 +71,7 @@ impl AlbumRepository {
              GROUP BY a.id
              ORDER BY a.updated_at DESC",
         )
-        .fetch_all(&self.db.pool)
+        .fetch_all(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
 
@@ -97,7 +97,7 @@ impl AlbumRepository {
             .bind(name)
             .bind(now)
             .bind(now)
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
         Ok(id)
@@ -110,7 +110,7 @@ impl AlbumRepository {
             .bind(name)
             .bind(now)
             .bind(id.as_str())
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
         Ok(())
@@ -120,12 +120,12 @@ impl AlbumRepository {
     pub async fn delete(&self, id: &AlbumId) -> Result<(), LibraryError> {
         sqlx::query("DELETE FROM album_media WHERE album_id = ?")
             .bind(id.as_str())
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
         sqlx::query("DELETE FROM albums WHERE id = ?")
             .bind(id.as_str())
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
         Ok(())
@@ -154,14 +154,14 @@ impl AlbumRepository {
                 .bind(now);
         }
         query
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
 
         sqlx::query("UPDATE albums SET updated_at = ? WHERE id = ?")
             .bind(now)
             .bind(album_id.as_str())
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
         Ok(())
@@ -185,14 +185,14 @@ impl AlbumRepository {
             query = query.bind(media_id.as_str());
         }
         query
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
         let now = chrono::Utc::now().timestamp();
         sqlx::query("UPDATE albums SET updated_at = ? WHERE id = ?")
             .bind(now)
             .bind(album_id.as_str())
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
         Ok(())
@@ -218,7 +218,7 @@ impl AlbumRepository {
             )
             .bind(album_id.as_str())
             .bind(limit as i64)
-            .fetch_all(&self.db.pool)
+            .fetch_all(self.db.pool())
             .await
             .map_err(LibraryError::Db)?,
             Some(cur) => sqlx::query_as::<_, MediaRow>(
@@ -239,7 +239,7 @@ impl AlbumRepository {
             .bind(cur.sort_key)
             .bind(cur.id.as_str())
             .bind(limit as i64)
-            .fetch_all(&self.db.pool)
+            .fetch_all(self.db.pool())
             .await
             .map_err(LibraryError::Db)?,
         };
@@ -270,7 +270,7 @@ impl AlbumRepository {
             query = query.bind(id.as_str());
         }
         let rows = query
-            .fetch_all(&self.db.pool)
+            .fetch_all(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
         Ok(rows
@@ -295,7 +295,7 @@ impl AlbumRepository {
         )
         .bind(album_id.as_str())
         .bind(limit as i64)
-        .fetch_all(&self.db.pool)
+        .fetch_all(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
 

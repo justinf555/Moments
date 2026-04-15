@@ -54,7 +54,7 @@ impl QueueWriterOutbox {
         .bind(action)
         .bind(payload)
         .bind(now)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
 
@@ -182,7 +182,11 @@ mod tests {
     #[tokio::test]
     async fn queue_writer_enqueues_favorite() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Database::open(&dir.path().join("test.db")).await.unwrap();
+        let db = {
+            let db = Database::new();
+            db.open(&dir.path().join("test.db")).await.unwrap();
+            db
+        };
         let writer = QueueWriterOutbox::new(db.clone());
 
         let id = MediaId::new("abc123".to_string());
@@ -197,7 +201,7 @@ mod tests {
         let row: (String, String, String, i64) = sqlx::query_as(
             "SELECT entity_type, entity_id, action, status FROM sync_outbox WHERE id = 1",
         )
-        .fetch_one(&db.pool)
+        .fetch_one(db.pool())
         .await
         .unwrap();
 
@@ -210,7 +214,11 @@ mod tests {
     #[tokio::test]
     async fn queue_writer_enqueues_album_with_payload() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Database::open(&dir.path().join("test.db")).await.unwrap();
+        let db = {
+            let db = Database::new();
+            db.open(&dir.path().join("test.db")).await.unwrap();
+            db
+        };
         let writer = QueueWriterOutbox::new(db.clone());
 
         let album_id = crate::library::album::AlbumId::new();
@@ -224,7 +232,7 @@ mod tests {
 
         let row: (String, String, Option<String>) =
             sqlx::query_as("SELECT entity_type, action, payload FROM sync_outbox WHERE id = 1")
-                .fetch_one(&db.pool)
+                .fetch_one(db.pool())
                 .await
                 .unwrap();
 
@@ -237,7 +245,11 @@ mod tests {
     #[tokio::test]
     async fn queue_writer_enqueues_per_id_for_batch() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Database::open(&dir.path().join("test.db")).await.unwrap();
+        let db = {
+            let db = Database::new();
+            db.open(&dir.path().join("test.db")).await.unwrap();
+            db
+        };
         let writer = QueueWriterOutbox::new(db.clone());
 
         writer
@@ -252,7 +264,7 @@ mod tests {
             .unwrap();
 
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sync_outbox")
-            .fetch_one(&db.pool)
+            .fetch_one(db.pool())
             .await
             .unwrap();
         assert_eq!(count.0, 3);

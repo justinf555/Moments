@@ -22,7 +22,7 @@ impl ThumbnailRepository {
         let id_str = id.as_str();
         sqlx::query("INSERT OR IGNORE INTO thumbnails (media_id, status) VALUES (?, 0)")
             .bind(id_str)
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
         Ok(())
@@ -42,7 +42,7 @@ impl ThumbnailRepository {
         .bind(file_path)
         .bind(generated_at)
         .bind(id_str)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
         Ok(())
@@ -53,7 +53,7 @@ impl ThumbnailRepository {
         let id_str = id.as_str();
         sqlx::query("UPDATE thumbnails SET status = 2 WHERE media_id = ?")
             .bind(id_str)
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
         Ok(())
@@ -65,7 +65,7 @@ impl ThumbnailRepository {
         let row: Option<i64> =
             sqlx::query_scalar("SELECT status FROM thumbnails WHERE media_id = ?")
                 .bind(id_str)
-                .fetch_optional(&self.db.pool)
+                .fetch_optional(self.db.pool())
                 .await
                 .map_err(LibraryError::Db)?;
         Ok(row.map(ThumbnailStatus::from_i64))

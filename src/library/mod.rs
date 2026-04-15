@@ -46,16 +46,21 @@ pub struct Library {
 
 impl Library {
     /// Open a library from a validated bundle.
+    ///
+    /// The `db` handle must have been created with [`Database::new`] — this
+    /// method calls [`Database::open`] to connect and run migrations. All
+    /// clones of `db` (e.g. held by sync or outbox) become active.
     #[instrument(skip_all, fields(path = %bundle.path.display(), mode = ?mode))]
     pub async fn open(
         bundle: Bundle,
         mode: LocalStorageMode,
+        db: Database,
         recorder: Arc<dyn MutationRecorder>,
     ) -> Result<Self, LibraryError> {
         info!("opening library");
 
         let db_path = bundle.database.join("moments.db");
-        let db = Database::open(&db_path).await?;
+        db.open(&db_path).await?;
 
         let albums = AlbumService::new(db.clone(), Arc::clone(&recorder));
         let faces = FacesService::new(db.clone(), None, Arc::clone(&recorder));
@@ -134,6 +139,7 @@ mod tests {
         Library::open(
             bundle,
             LocalStorageMode::Managed,
+            Database::new(),
             Arc::new(crate::sync::outbox::NoOpRecorder),
         )
         .await

@@ -23,7 +23,7 @@ impl EditingRepository {
         let row: Option<(String,)> =
             sqlx::query_as("SELECT edit_json FROM edits WHERE media_id = ?")
                 .bind(id_str)
-                .fetch_optional(&self.db.pool)
+                .fetch_optional(self.db.pool())
                 .await
                 .map_err(LibraryError::Db)?;
 
@@ -59,7 +59,7 @@ impl EditingRepository {
         .bind(id_str)
         .bind(&json)
         .bind(now)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
 
@@ -71,7 +71,7 @@ impl EditingRepository {
         let id_str = id.as_str();
         sqlx::query("DELETE FROM edits WHERE media_id = ?")
             .bind(id_str)
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
         Ok(())
@@ -84,7 +84,7 @@ impl EditingRepository {
         sqlx::query("UPDATE edits SET rendered_at = ? WHERE media_id = ?")
             .bind(now)
             .bind(id_str)
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
         Ok(())
@@ -97,7 +97,7 @@ impl EditingRepository {
             "SELECT 1 FROM edits WHERE media_id = ? AND (rendered_at IS NULL OR updated_at > rendered_at)",
         )
         .bind(id_str)
-        .fetch_optional(&self.db.pool)
+        .fetch_optional(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
 
