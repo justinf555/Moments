@@ -9,6 +9,8 @@ pub mod faces;
 pub mod format;
 pub mod media;
 pub mod metadata;
+pub mod mutation;
+pub mod recorder;
 pub mod thumbnail;
 
 use tracing::{debug, info, instrument};
