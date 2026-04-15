@@ -16,7 +16,15 @@ impl FormatHandler for StandardHandler {
     }
 
     fn decode(&self, path: &Path) -> Result<image::DynamicImage, LibraryError> {
-        image::open(path).map_err(|e| LibraryError::Thumbnail(e.to_string()))
+        // Use Reader with format guessing instead of image::open() so that
+        // extensionless files (UUID-sharded originals) are decoded via magic
+        // bytes rather than relying on the file extension.
+        image::io::Reader::open(path)
+            .map_err(|e| LibraryError::Thumbnail(e.to_string()))?
+            .with_guessed_format()
+            .map_err(|e| LibraryError::Thumbnail(e.to_string()))?
+            .decode()
+            .map_err(|e| LibraryError::Thumbnail(e.to_string()))
     }
 }
 
