@@ -16,7 +16,7 @@ use image::DynamicImage;
 use tracing::instrument;
 
 use crate::library::editing::EditState;
-use crate::library::error::LibraryError;
+use crate::renderer::error::RenderError;
 use crate::renderer::format::FormatRegistry;
 
 /// What size to render.
@@ -57,7 +57,7 @@ impl RenderPipeline {
         &self,
         path: &Path,
         options: &RenderOptions<'_>,
-    ) -> Result<DynamicImage, LibraryError> {
+    ) -> Result<DynamicImage, RenderError> {
         // Step 1: Decode — detect format from magic bytes, dispatch to handler.
         let img = super::decode::decode(path, &self.formats)?;
 

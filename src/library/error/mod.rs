@@ -22,6 +22,9 @@ pub enum LibraryError {
     #[error("thumbnail error: {0}")]
     Thumbnail(String),
 
+    #[error("render error: {0}")]
+    Render(#[from] crate::renderer::error::RenderError),
+
     #[error("immich error: {0}")]
     Immich(String),
 }

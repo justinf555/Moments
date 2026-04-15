@@ -1,4 +1,5 @@
 use crate::library::error::LibraryError;
+use crate::renderer::error::RenderError;
 
 /// Errors that can arise during the import pipeline.
 #[derive(Debug, thiserror::Error)]
@@ -22,6 +23,10 @@ pub enum ImportError {
     /// Builder validation — a required field was not set.
     #[error("builder error: {0}")]
     Builder(String),
+
+    /// A render pipeline step failed (decode, orient, resize).
+    #[error("render error: {0}")]
+    Render(#[from] RenderError),
 
     /// A library service call failed (DB insert, duplicate check, etc.).
     #[error("library error: {0}")]

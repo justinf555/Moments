@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::library::error::LibraryError;
+use super::super::error::RenderError;
 use crate::library::media::MediaType;
 
 /// Video file extensions accepted during import.
@@ -32,7 +32,7 @@ pub trait FormatHandler: Send + Sync {
     fn extensions(&self) -> &[&str];
 
     /// Decode the file at `path` to a [`image::DynamicImage`].
-    fn decode(&self, path: &Path) -> Result<image::DynamicImage, LibraryError>;
+    fn decode(&self, path: &Path) -> Result<image::DynamicImage, RenderError>;
 }
 
 /// Single source of truth for all supported image formats.
@@ -70,9 +70,9 @@ impl FormatRegistry {
 
     /// Decode the file at `path` using the handler registered for its extension.
     ///
-    /// Returns [`LibraryError::Thumbnail`] if no handler is registered or
+    /// Returns [`RenderError::DecodeFailed`] if no handler is registered or
     /// decoding fails.
-    pub fn decode(&self, path: &Path) -> Result<image::DynamicImage, LibraryError> {
+    pub fn decode(&self, path: &Path) -> Result<image::DynamicImage, RenderError> {
         // Try magic-byte detection first (works for extensionless files).
         if let Some(handler) = self.handler_by_magic(path) {
             match handler.decode(path) {
@@ -99,7 +99,7 @@ impl FormatRegistry {
         let handler = self
             .handlers
             .get(&ext)
-            .ok_or_else(|| LibraryError::Thumbnail(format!("no handler registered for .{ext}")))?;
+            .ok_or_else(|| RenderError::FormatNotRecognised(path.to_path_buf()))?;
 
         handler.decode(path)
     }
@@ -194,8 +194,8 @@ mod tests {
         fn extensions(&self) -> &[&str] {
             &["fake"]
         }
-        fn decode(&self, _path: &Path) -> Result<image::DynamicImage, LibraryError> {
-            Err(LibraryError::Thumbnail("fake handler".into()))
+        fn decode(&self, _path: &Path) -> Result<image::DynamicImage, RenderError> {
+            Err(RenderError::DecodeFailed("fake handler".into()))
         }
     }
 
@@ -219,7 +219,7 @@ mod tests {
     fn decode_returns_error_for_unknown_extension() {
         let reg = FormatRegistry::new();
         let err = reg.decode(&PathBuf::from("photo.jpg")).unwrap_err();
-        assert!(matches!(err, LibraryError::Thumbnail(_)));
+        assert!(matches!(err, RenderError::FormatNotRecognised(_)));
     }
 
     #[test]

@@ -5,7 +5,7 @@ use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
 use tracing::{debug, instrument, warn};
 
-use crate::library::error::LibraryError;
+use crate::renderer::error::RenderError;
 use crate::library::thumbnail::thumbnailer::apply_orientation;
 
 use super::registry::{FormatHandler, VIDEO_EXTENSIONS};
@@ -24,34 +24,34 @@ impl FormatHandler for VideoHandler {
     }
 
     #[instrument(skip(self), fields(path = %path.display()))]
-    fn decode(&self, path: &Path) -> Result<image::DynamicImage, LibraryError> {
+    fn decode(&self, path: &Path) -> Result<image::DynamicImage, RenderError> {
         extract_poster_frame(path)
     }
 }
 
 /// Extract the first video frame as an `image::DynamicImage`.
-fn extract_poster_frame(path: &Path) -> Result<image::DynamicImage, LibraryError> {
+fn extract_poster_frame(path: &Path) -> Result<image::DynamicImage, RenderError> {
     let uri = format!(
         "file://{}",
-        path.canonicalize().map_err(LibraryError::Io)?.display()
+        path.canonicalize().map_err(RenderError::Io)?.display()
     );
 
     let pipeline = gst::parse::launch(&format!(
         "uridecodebin uri={uri} ! videoconvert ! video/x-raw,format=RGB ! appsink name=sink"
     ))
-    .map_err(|e| LibraryError::Thumbnail(format!("GStreamer pipeline error: {e}")))?;
+    .map_err(|e| RenderError::DecodeFailed(format!("GStreamer pipeline error: {e}")))?;
 
     let pipeline = pipeline
         .downcast::<gst::Pipeline>()
-        .map_err(|_| LibraryError::Thumbnail("failed to downcast to Pipeline".into()))?;
+        .map_err(|_| RenderError::DecodeFailed("failed to downcast to Pipeline".into()))?;
 
     let sink = pipeline
         .by_name("sink")
-        .ok_or_else(|| LibraryError::Thumbnail("appsink not found in pipeline".into()))?;
+        .ok_or_else(|| RenderError::DecodeFailed("appsink not found in pipeline".into()))?;
 
     let appsink = sink
         .downcast::<gst_app::AppSink>()
-        .map_err(|_| LibraryError::Thumbnail("failed to downcast to AppSink".into()))?;
+        .map_err(|_| RenderError::DecodeFailed("failed to downcast to AppSink".into()))?;
 
     // Limit to 1 buffer — we only need one frame.
     appsink.set_max_buffers(1);
@@ -59,35 +59,35 @@ fn extract_poster_frame(path: &Path) -> Result<image::DynamicImage, LibraryError
 
     pipeline
         .set_state(gst::State::Playing)
-        .map_err(|e| LibraryError::Thumbnail(format!("failed to start pipeline: {e}")))?;
+        .map_err(|e| RenderError::DecodeFailed(format!("failed to start pipeline: {e}")))?;
 
     // Pull one sample (blocks until a frame is decoded or EOS/error).
     let sample = appsink
         .pull_sample()
-        .map_err(|_| LibraryError::Thumbnail("no frame decoded from video".into()))?;
+        .map_err(|_| RenderError::DecodeFailed("no frame decoded from video".into()))?;
 
     let buffer = sample
         .buffer()
-        .ok_or_else(|| LibraryError::Thumbnail("sample has no buffer".into()))?;
+        .ok_or_else(|| RenderError::DecodeFailed("sample has no buffer".into()))?;
 
     let caps = sample
         .caps()
-        .ok_or_else(|| LibraryError::Thumbnail("sample has no caps".into()))?;
+        .ok_or_else(|| RenderError::DecodeFailed("sample has no caps".into()))?;
 
     let video_info = gstreamer_video::VideoInfo::from_caps(caps)
-        .map_err(|e| LibraryError::Thumbnail(format!("invalid video caps: {e}")))?;
+        .map_err(|e| RenderError::DecodeFailed(format!("invalid video caps: {e}")))?;
 
     let width = video_info.width();
     let height = video_info.height();
 
     let map = buffer
         .map_readable()
-        .map_err(|_| LibraryError::Thumbnail("failed to map buffer".into()))?;
+        .map_err(|_| RenderError::DecodeFailed("failed to map buffer".into()))?;
 
     debug!(width, height, bytes = map.len(), "extracted poster frame");
 
     let img = image::RgbImage::from_raw(width, height, map.to_vec()).ok_or_else(|| {
-        LibraryError::Thumbnail(format!(
+        RenderError::DecodeFailed(format!(
             "RGB buffer size mismatch: {}x{} expected {} bytes, got {}",
             width,
             height,

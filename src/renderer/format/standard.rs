@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::library::error::LibraryError;
+use crate::renderer::error::RenderError;
 use crate::renderer::format::registry::FormatHandler;
 
 /// Decodes all formats supported by the [`image`] crate via `image::open`.
@@ -15,16 +15,16 @@ impl FormatHandler for StandardHandler {
         &["jpg", "jpeg", "png", "webp", "tiff", "tif", "heic", "heif"]
     }
 
-    fn decode(&self, path: &Path) -> Result<image::DynamicImage, LibraryError> {
+    fn decode(&self, path: &Path) -> Result<image::DynamicImage, RenderError> {
         // Use Reader with format guessing instead of image::open() so that
         // extensionless files (UUID-sharded originals) are decoded via magic
         // bytes rather than relying on the file extension.
         image::ImageReader::open(path)
-            .map_err(|e| LibraryError::Thumbnail(e.to_string()))?
+            .map_err(|e| RenderError::DecodeFailed(e.to_string()))?
             .with_guessed_format()
-            .map_err(|e| LibraryError::Thumbnail(e.to_string()))?
+            .map_err(|e| RenderError::DecodeFailed(e.to_string()))?
             .decode()
-            .map_err(|e| LibraryError::Thumbnail(e.to_string()))
+            .map_err(|e| RenderError::DecodeFailed(e.to_string()))
     }
 }
 

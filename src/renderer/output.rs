@@ -6,7 +6,7 @@
 
 use image::DynamicImage;
 
-use crate::library::error::LibraryError;
+use crate::renderer::error::RenderError;
 
 /// Convert to RGBA pixel bytes. Returns `(bytes, width, height)`.
 ///
@@ -20,10 +20,10 @@ pub fn to_rgba(img: &DynamicImage) -> (Vec<u8>, u32, u32) {
 /// Encode as WebP bytes.
 ///
 /// Ready for writing to the thumbnail disk cache.
-pub fn to_webp(img: &DynamicImage) -> Result<Vec<u8>, LibraryError> {
+pub fn to_webp(img: &DynamicImage) -> Result<Vec<u8>, RenderError> {
     let mut buf = std::io::Cursor::new(Vec::new());
     img.write_to(&mut buf, image::ImageFormat::WebP)
-        .map_err(|e| LibraryError::Thumbnail(e.to_string()))?;
+        .map_err(|e| RenderError::EncodeFailed(e.to_string()))?;
     Ok(buf.into_inner())
 }
 

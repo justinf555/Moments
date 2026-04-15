@@ -3,7 +3,7 @@ use std::path::Path;
 use rawler::decoders::RawDecodeParams;
 use rawler::rawsource::RawSource;
 
-use crate::library::error::LibraryError;
+use crate::renderer::error::RenderError;
 use crate::renderer::format::registry::FormatHandler;
 
 /// Decodes RAW camera files via the `rawler` crate.
@@ -27,12 +27,12 @@ impl FormatHandler for RawHandler {
         ]
     }
 
-    fn decode(&self, path: &Path) -> Result<image::DynamicImage, LibraryError> {
+    fn decode(&self, path: &Path) -> Result<image::DynamicImage, RenderError> {
         let source = RawSource::new(path)
-            .map_err(|e| LibraryError::Thumbnail(format!("failed to open RAW file: {e}")))?;
+            .map_err(|e| RenderError::DecodeFailed(format!("failed to open RAW file: {e}")))?;
 
         let decoder = rawler::get_decoder(&source)
-            .map_err(|e| LibraryError::Thumbnail(format!("no RAW decoder for file: {e}")))?;
+            .map_err(|e| RenderError::DecodeFailed(format!("no RAW decoder for file: {e}")))?;
 
         let params = RawDecodeParams::default();
 
@@ -40,14 +40,14 @@ impl FormatHandler for RawHandler {
         // and finally full demosaicing if no embedded JPEG is present.
         if let Some(img) = decoder
             .thumbnail_image(&source, &params)
-            .map_err(|e| LibraryError::Thumbnail(format!("RAW thumbnail extraction failed: {e}")))?
+            .map_err(|e| RenderError::DecodeFailed(format!("RAW thumbnail extraction failed: {e}")))?
         {
             return Ok(img);
         }
 
         if let Some(img) = decoder
             .preview_image(&source, &params)
-            .map_err(|e| LibraryError::Thumbnail(format!("RAW preview extraction failed: {e}")))?
+            .map_err(|e| RenderError::DecodeFailed(format!("RAW preview extraction failed: {e}")))?
         {
             return Ok(img);
         }
@@ -56,12 +56,12 @@ impl FormatHandler for RawHandler {
         // every supported RAW file gets a thumbnail rather than silently failing.
         if let Some(img) = decoder
             .full_image(&source, &params)
-            .map_err(|e| LibraryError::Thumbnail(format!("RAW full decode failed: {e}")))?
+            .map_err(|e| RenderError::DecodeFailed(format!("RAW full decode failed: {e}")))?
         {
             return Ok(img);
         }
 
-        Err(LibraryError::Thumbnail(
+        Err(RenderError::DecodeFailed(
             "RAW decoder returned no image".to_string(),
         ))
     }
@@ -74,19 +74,19 @@ impl RawHandler {
     /// largest embedded preview, then the smallest thumbnail as a last resort.
     /// This is the reverse order of [`FormatHandler::decode`] which optimises
     /// for speed (thumbnailing).
-    pub fn decode_full_res(&self, path: &Path) -> Result<image::DynamicImage, LibraryError> {
+    pub fn decode_full_res(&self, path: &Path) -> Result<image::DynamicImage, RenderError> {
         let source = RawSource::new(path)
-            .map_err(|e| LibraryError::Thumbnail(format!("failed to open RAW file: {e}")))?;
+            .map_err(|e| RenderError::DecodeFailed(format!("failed to open RAW file: {e}")))?;
 
         let decoder = rawler::get_decoder(&source)
-            .map_err(|e| LibraryError::Thumbnail(format!("no RAW decoder for file: {e}")))?;
+            .map_err(|e| RenderError::DecodeFailed(format!("no RAW decoder for file: {e}")))?;
 
         let params = RawDecodeParams::default();
 
         // Full demosaicing — highest quality, slowest.
         if let Some(img) = decoder
             .full_image(&source, &params)
-            .map_err(|e| LibraryError::Thumbnail(format!("RAW full decode failed: {e}")))?
+            .map_err(|e| RenderError::DecodeFailed(format!("RAW full decode failed: {e}")))?
         {
             return Ok(img);
         }
@@ -94,7 +94,7 @@ impl RawHandler {
         // Embedded full-size JPEG preview — fast and usually camera-quality.
         if let Some(img) = decoder
             .preview_image(&source, &params)
-            .map_err(|e| LibraryError::Thumbnail(format!("RAW preview extraction failed: {e}")))?
+            .map_err(|e| RenderError::DecodeFailed(format!("RAW preview extraction failed: {e}")))?
         {
             return Ok(img);
         }
@@ -102,12 +102,12 @@ impl RawHandler {
         // Last resort: smallest embedded thumbnail.
         if let Some(img) = decoder
             .thumbnail_image(&source, &params)
-            .map_err(|e| LibraryError::Thumbnail(format!("RAW thumbnail extraction failed: {e}")))?
+            .map_err(|e| RenderError::DecodeFailed(format!("RAW thumbnail extraction failed: {e}")))?
         {
             return Ok(img);
         }
 
-        Err(LibraryError::Thumbnail(
+        Err(RenderError::DecodeFailed(
             "RAW decoder returned no image".to_string(),
         ))
     }

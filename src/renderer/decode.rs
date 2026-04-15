@@ -10,12 +10,12 @@ use std::sync::Arc;
 use image::DynamicImage;
 use tracing::instrument;
 
-use crate::library::error::LibraryError;
+use crate::renderer::error::RenderError;
 use crate::renderer::format::FormatRegistry;
 
 /// Decode an image from a file path using magic-byte detection.
 #[instrument(skip(formats))]
-pub fn decode(path: &Path, formats: &Arc<FormatRegistry>) -> Result<DynamicImage, LibraryError> {
+pub fn decode(path: &Path, formats: &Arc<FormatRegistry>) -> Result<DynamicImage, RenderError> {
     formats.decode(path)
 }
 
