@@ -342,7 +342,7 @@ impl PushManager {
     }
 
     async fn purge_completed(&self) -> Result<(), LibraryError> {
-        sqlx::query("DELETE FROM sync_outbox WHERE status = 1")
+        sqlx::query("DELETE FROM sync_outbox WHERE status IN (1, 2)")
             .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
