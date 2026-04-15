@@ -8,6 +8,7 @@ use std::time::Duration;
 pub(crate) mod client;
 pub(crate) mod downloader;
 pub mod outbox;
+pub(crate) mod pull;
 pub(crate) mod types;
 
 /// How often to check for expired trash items.
