@@ -148,7 +148,13 @@ impl PushManager {
                     .await
             }
             ("asset", "delete") => {
-                let external_id = self.lookup_media_external_id(&entry.entity_id).await?;
+                let external_id = match self.lookup_media_external_id(&entry.entity_id).await {
+                    Ok(eid) => eid,
+                    Err(_) => {
+                        debug!(id = %entry.entity_id, "asset already deleted, skipping push");
+                        return Ok(());
+                    }
+                };
                 self.client
                     .delete_with_body(
                         "/assets",
@@ -187,7 +193,13 @@ impl PushManager {
                     .await
             }
             ("album", "delete") => {
-                let external_id = self.lookup_album_external_id(&entry.entity_id).await?;
+                let external_id = match self.lookup_album_external_id(&entry.entity_id).await {
+                    Ok(eid) => eid,
+                    Err(_) => {
+                        debug!(id = %entry.entity_id, "album already deleted, skipping push");
+                        return Ok(());
+                    }
+                };
                 self.client
                     .delete_no_content(&format!("/albums/{external_id}"))
                     .await
@@ -340,49 +352,49 @@ impl PushManager {
     // ── External ID lookups ─────────────────────────────────────────
 
     async fn lookup_media_external_id(&self, local_id: &str) -> Result<String, LibraryError> {
-        let row: Option<(Option<String>,)> =
-            sqlx::query_as("SELECT external_id FROM media WHERE id = ?")
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT COALESCE(external_id, id) FROM media WHERE id = ?")
                 .bind(local_id)
                 .fetch_optional(self.db.pool())
                 .await
                 .map_err(LibraryError::Db)?;
 
-        match row.and_then(|(eid,)| eid) {
-            Some(eid) => Ok(eid),
+        match row {
+            Some((eid,)) => Ok(eid),
             None => Err(LibraryError::Immich(format!(
-                "no external_id for media {local_id}"
+                "media not found: {local_id}"
             ))),
         }
     }
 
     async fn lookup_album_external_id(&self, local_id: &str) -> Result<String, LibraryError> {
-        let row: Option<(Option<String>,)> =
-            sqlx::query_as("SELECT external_id FROM albums WHERE id = ?")
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT COALESCE(external_id, id) FROM albums WHERE id = ?")
                 .bind(local_id)
                 .fetch_optional(self.db.pool())
                 .await
                 .map_err(LibraryError::Db)?;
 
-        match row.and_then(|(eid,)| eid) {
-            Some(eid) => Ok(eid),
+        match row {
+            Some((eid,)) => Ok(eid),
             None => Err(LibraryError::Immich(format!(
-                "no external_id for album {local_id}"
+                "album not found: {local_id}"
             ))),
         }
     }
 
     async fn lookup_person_external_id(&self, local_id: &str) -> Result<String, LibraryError> {
-        let row: Option<(Option<String>,)> =
-            sqlx::query_as("SELECT external_id FROM people WHERE id = ?")
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT COALESCE(external_id, id) FROM people WHERE id = ?")
                 .bind(local_id)
                 .fetch_optional(self.db.pool())
                 .await
                 .map_err(LibraryError::Db)?;
 
-        match row.and_then(|(eid,)| eid) {
-            Some(eid) => Ok(eid),
+        match row {
+            Some((eid,)) => Ok(eid),
             None => Err(LibraryError::Immich(format!(
-                "no external_id for person {local_id}"
+                "person not found: {local_id}"
             ))),
         }
     }
@@ -676,20 +688,20 @@ mod tests {
 
         let result = push.lookup_media_external_id("nonexistent").await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("no external_id"));
+        assert!(result.unwrap_err().to_string().contains("media not found"));
     }
 
     #[tokio::test]
-    async fn lookup_media_external_id_null_returns_error() {
+    async fn lookup_media_external_id_null_falls_back_to_id() {
         let (_dir, db) = setup_push_db().await;
 
-        // Insert a media record with no external_id.
+        // Insert a media record with no external_id — COALESCE returns id.
         let record = test_record(MediaId::new("local-no-ext".to_string()));
         db.upsert_media(&record).await.unwrap();
 
         let push = make_push_manager(db).await;
         let result = push.lookup_media_external_id("local-no-ext").await;
-        assert!(result.is_err());
+        assert_eq!(result.unwrap(), "local-no-ext");
     }
 
     #[tokio::test]
