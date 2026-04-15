@@ -4,6 +4,7 @@
 //! dialog. The dialog never imports `Library` or performs async queries.
 
 use crate::library::album::AlbumId;
+use crate::library::media::MediaId;
 
 /// All data needed to populate the album picker dialog.
 #[derive(Debug)]
@@ -11,7 +12,7 @@ pub struct AlbumPickerData {
     /// Albums to display, pre-sorted by `updated_at` DESC.
     pub albums: Vec<AlbumEntry>,
     /// Media IDs being added (the current selection).
-    pub media_ids: Vec<crate::library::media::MediaId>,
+    pub media_ids: Vec<MediaId>,
 }
 
 /// View-model for a single album row in the picker.

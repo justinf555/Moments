@@ -11,9 +11,6 @@ use crate::library::media::MediaId;
 
 pub mod album_row;
 pub mod dialog;
-pub mod state;
-
-pub use state::{AlbumEntry, AlbumPickerData};
 
 /// Fetch album data asynchronously and present the picker dialog.
 ///

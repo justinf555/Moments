@@ -5,7 +5,7 @@ use gtk::glib;
 
 use crate::library::album::AlbumId;
 
-use super::state::AlbumEntry;
+use crate::client::album::AlbumEntry;
 
 /// A row in the album picker list, holding widget references for dynamic updates.
 pub struct AlbumRow {

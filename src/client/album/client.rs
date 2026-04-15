@@ -16,7 +16,7 @@ use crate::library::album::{Album, AlbumId};
 use crate::library::error::LibraryError;
 use crate::library::media::MediaId;
 use crate::library::Library;
-use crate::ui::album_picker_dialog::{AlbumEntry, AlbumPickerData};
+use super::picker_data::{AlbumEntry, AlbumPickerData};
 
 /// Non-GObject dependencies for album operations.
 struct AlbumDeps {

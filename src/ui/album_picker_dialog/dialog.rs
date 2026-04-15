@@ -12,7 +12,7 @@ use crate::event_bus::EventSender;
 use crate::library::album::AlbumId;
 
 use super::album_row::AlbumRow;
-use super::state::AlbumPickerData;
+use crate::client::album::AlbumPickerData;
 
 struct DialogInner {
     dialog: adw::Dialog,
