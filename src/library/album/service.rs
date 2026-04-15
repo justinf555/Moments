@@ -1,21 +1,26 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::model::{Album, AlbumId};
 use super::repository::AlbumRepository;
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
 use crate::library::media::{MediaCursor, MediaId, MediaItem};
+use crate::library::mutation::Mutation;
+use crate::library::recorder::MutationRecorder;
 
 /// Album management service.
 #[derive(Clone)]
 pub struct AlbumService {
     pub(crate) repo: AlbumRepository,
+    recorder: Arc<dyn MutationRecorder>,
 }
 
 impl AlbumService {
-    pub fn new(db: Database) -> Self {
+    pub fn new(db: Database, recorder: Arc<dyn MutationRecorder>) -> Self {
         Self {
             repo: AlbumRepository::new(db),
+            recorder,
         }
     }
 
@@ -24,15 +29,31 @@ impl AlbumService {
     }
 
     pub async fn create_album(&self, name: &str) -> Result<AlbumId, LibraryError> {
-        self.repo.create(name).await
+        let id = self.repo.create(name).await?;
+        self.recorder
+            .record(&Mutation::AlbumCreated {
+                id: id.clone(),
+                name: name.to_string(),
+            })
+            .await?;
+        Ok(id)
     }
 
     pub async fn rename_album(&self, id: &AlbumId, name: &str) -> Result<(), LibraryError> {
-        self.repo.rename(id, name).await
+        self.repo.rename(id, name).await?;
+        self.recorder
+            .record(&Mutation::AlbumRenamed {
+                id: id.clone(),
+                name: name.to_string(),
+            })
+            .await
     }
 
     pub async fn delete_album(&self, id: &AlbumId) -> Result<(), LibraryError> {
-        self.repo.delete(id).await
+        self.repo.delete(id).await?;
+        self.recorder
+            .record(&Mutation::AlbumDeleted { id: id.clone() })
+            .await
     }
 
     pub async fn add_to_album(
@@ -40,7 +61,13 @@ impl AlbumService {
         album_id: &AlbumId,
         media_ids: &[MediaId],
     ) -> Result<(), LibraryError> {
-        self.repo.add_media(album_id, media_ids).await
+        self.repo.add_media(album_id, media_ids).await?;
+        self.recorder
+            .record(&Mutation::AlbumMediaAdded {
+                album_id: album_id.clone(),
+                media_ids: media_ids.to_vec(),
+            })
+            .await
     }
 
     pub async fn remove_from_album(
@@ -48,7 +75,13 @@ impl AlbumService {
         album_id: &AlbumId,
         media_ids: &[MediaId],
     ) -> Result<(), LibraryError> {
-        self.repo.remove_media(album_id, media_ids).await
+        self.repo.remove_media(album_id, media_ids).await?;
+        self.recorder
+            .record(&Mutation::AlbumMediaRemoved {
+                album_id: album_id.clone(),
+                media_ids: media_ids.to_vec(),
+            })
+            .await
     }
 
     pub async fn list_album_media(

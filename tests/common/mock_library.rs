@@ -27,9 +27,13 @@ pub fn stub_deps() -> (Arc<Library>, tokio::runtime::Handle) {
         // Leak the tempdir so it lives for the test duration.
         std::mem::forget(dir);
         Arc::new(
-            Library::open(bundle, LocalStorageMode::Managed)
-                .await
-                .unwrap(),
+            Library::open(
+                bundle,
+                LocalStorageMode::Managed,
+                std::sync::Arc::new(moments::sync::outbox::NoOpRecorder),
+            )
+            .await
+            .unwrap(),
         )
     });
 

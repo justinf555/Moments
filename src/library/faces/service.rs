@@ -1,14 +1,19 @@
+use std::sync::Arc;
+
 use super::model::{Person, PersonId};
 use super::repository::FacesRepository;
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
 use crate::library::media::MediaId;
+use crate::library::mutation::Mutation;
+use crate::library::recorder::MutationRecorder;
 
 /// Face/people management service.
 #[derive(Clone)]
 pub struct FacesService {
     pub(crate) repo: FacesRepository,
     thumbnails_dir: Option<std::path::PathBuf>,
+    recorder: Arc<dyn MutationRecorder>,
 }
 
 impl FacesService {
@@ -16,10 +21,15 @@ impl FacesService {
     ///
     /// Pass `thumbnails_dir` for backends that store person thumbnails
     /// (Immich). Pass `None` for backends without face detection (local).
-    pub fn new(db: Database, thumbnails_dir: Option<std::path::PathBuf>) -> Self {
+    pub fn new(
+        db: Database,
+        thumbnails_dir: Option<std::path::PathBuf>,
+        recorder: Arc<dyn MutationRecorder>,
+    ) -> Self {
         Self {
             repo: FacesRepository::new(db),
             thumbnails_dir,
+            recorder,
         }
     }
 
@@ -44,7 +54,13 @@ impl FacesService {
         person_id: &PersonId,
         name: &str,
     ) -> Result<(), LibraryError> {
-        self.repo.rename_person(person_id.as_str(), name).await
+        self.repo.rename_person(person_id.as_str(), name).await?;
+        self.recorder
+            .record(&Mutation::PersonRenamed {
+                id: person_id.clone(),
+                name: name.to_string(),
+            })
+            .await
     }
 
     pub async fn set_person_hidden(
@@ -54,6 +70,12 @@ impl FacesService {
     ) -> Result<(), LibraryError> {
         self.repo
             .set_person_hidden(person_id.as_str(), hidden)
+            .await?;
+        self.recorder
+            .record(&Mutation::PersonHidden {
+                id: person_id.clone(),
+                hidden,
+            })
             .await
     }
 

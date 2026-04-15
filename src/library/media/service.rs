@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use tracing::warn;
 
@@ -7,6 +8,8 @@ use super::repository::MediaRepository;
 use crate::library::config::LocalStorageMode;
 use crate::library::db::{Database, LibraryStats};
 use crate::library::error::LibraryError;
+use crate::library::mutation::Mutation;
+use crate::library::recorder::MutationRecorder;
 
 /// Media asset service.
 ///
@@ -17,14 +20,21 @@ pub struct MediaService {
     pub(crate) repo: MediaRepository,
     originals_dir: PathBuf,
     mode: LocalStorageMode,
+    recorder: Arc<dyn MutationRecorder>,
 }
 
 impl MediaService {
-    pub fn new(db: Database, originals_dir: PathBuf, mode: LocalStorageMode) -> Self {
+    pub fn new(
+        db: Database,
+        originals_dir: PathBuf,
+        mode: LocalStorageMode,
+        recorder: Arc<dyn MutationRecorder>,
+    ) -> Self {
         Self {
             repo: MediaRepository::new(db),
             originals_dir,
             mode,
+            recorder,
         }
     }
 
@@ -80,19 +90,40 @@ impl MediaService {
     }
 
     pub async fn set_favorite(&self, ids: &[MediaId], favorite: bool) -> Result<(), LibraryError> {
-        self.repo.set_favorite(ids, favorite).await
+        self.repo.set_favorite(ids, favorite).await?;
+        self.recorder
+            .record(&Mutation::AssetFavorited {
+                ids: ids.to_vec(),
+                favorite,
+            })
+            .await
     }
 
     pub async fn trash(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
-        self.repo.trash(ids).await
+        self.repo.trash(ids).await?;
+        self.recorder
+            .record(&Mutation::AssetTrashed {
+                ids: ids.to_vec(),
+            })
+            .await
     }
 
     pub async fn restore(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
-        self.repo.restore(ids).await
+        self.repo.restore(ids).await?;
+        self.recorder
+            .record(&Mutation::AssetRestored {
+                ids: ids.to_vec(),
+            })
+            .await
     }
 
     pub async fn delete_permanently(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
-        self.repo.delete_permanently(ids).await
+        self.repo.delete_permanently(ids).await?;
+        self.recorder
+            .record(&Mutation::AssetDeleted {
+                ids: ids.to_vec(),
+            })
+            .await
     }
 
     pub async fn expired_trash(&self, max_age_secs: i64) -> Result<Vec<MediaId>, LibraryError> {

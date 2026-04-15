@@ -237,9 +237,13 @@ mod tests {
         .unwrap();
         std::mem::forget(dir);
         Arc::new(
-            Library::open(bundle, LocalStorageMode::Managed)
-                .await
-                .unwrap(),
+            Library::open(
+                bundle,
+                LocalStorageMode::Managed,
+                std::sync::Arc::new(crate::sync::outbox::NoOpRecorder),
+            )
+            .await
+            .unwrap(),
         )
     }
 

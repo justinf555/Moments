@@ -13,6 +13,8 @@ pub mod mutation;
 pub mod recorder;
 pub mod thumbnail;
 
+use std::sync::Arc;
+
 use tracing::{debug, info, instrument};
 
 use album::AlbumService;
@@ -24,6 +26,7 @@ use error::LibraryError;
 use faces::FacesService;
 use media::{MediaId, MediaService};
 use metadata::MetadataService;
+use recorder::MutationRecorder;
 use thumbnail::ThumbnailService;
 
 /// The Moments library — a single concrete type composing all feature services.
@@ -44,16 +47,20 @@ pub struct Library {
 impl Library {
     /// Open a library from a validated bundle.
     #[instrument(skip_all, fields(path = %bundle.path.display(), mode = ?mode))]
-    pub async fn open(bundle: Bundle, mode: LocalStorageMode) -> Result<Self, LibraryError> {
+    pub async fn open(
+        bundle: Bundle,
+        mode: LocalStorageMode,
+        recorder: Arc<dyn MutationRecorder>,
+    ) -> Result<Self, LibraryError> {
         info!("opening library");
 
         let db_path = bundle.database.join("moments.db");
         let db = Database::open(&db_path).await?;
 
-        let albums = AlbumService::new(db.clone());
-        let faces = FacesService::new(db.clone(), None);
+        let albums = AlbumService::new(db.clone(), Arc::clone(&recorder));
+        let faces = FacesService::new(db.clone(), None, Arc::clone(&recorder));
         let editing = EditingService::new(db.clone());
-        let media = MediaService::new(db.clone(), bundle.originals.clone(), mode);
+        let media = MediaService::new(db.clone(), bundle.originals.clone(), mode, recorder);
         let metadata = MetadataService::new(db.clone());
         let thumbnails = ThumbnailService::new(db, bundle.thumbnails.clone());
 
@@ -124,9 +131,13 @@ mod tests {
     use crate::library::config::LibraryConfig;
 
     async fn open_test_library(bundle: Bundle) -> Library {
-        Library::open(bundle, LocalStorageMode::Managed)
-            .await
-            .unwrap()
+        Library::open(
+            bundle,
+            LocalStorageMode::Managed,
+            Arc::new(crate::sync::outbox::NoOpRecorder),
+        )
+        .await
+        .unwrap()
     }
 
     #[tokio::test]
