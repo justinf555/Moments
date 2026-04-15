@@ -12,8 +12,8 @@ use crate::renderer::format::registry::FormatHandler;
 ///   1. `thumbnail_image` — smallest embedded preview
 ///   2. `preview_image`   — larger embedded preview
 ///
-/// If neither is available the file is skipped (returns an error), as
-/// full demosaicing is too slow and memory-intensive for thumbnailing.
+/// Thumbnails are cached on disk after import, so the decode cost is
+/// paid only once per asset.
 pub struct RawHandler;
 
 impl FormatHandler for RawHandler {
@@ -36,24 +36,8 @@ impl FormatHandler for RawHandler {
 
         let params = RawDecodeParams::default();
 
-        // Prefer the smallest embedded preview; fall back through larger previews
-        // and finally full demosaicing if no embedded JPEG is present.
-        if let Some(img) = decoder
-            .thumbnail_image(&source, &params)
-            .map_err(|e| RenderError::DecodeFailed(format!("RAW thumbnail extraction failed: {e}")))?
-        {
-            return Ok(img);
-        }
-
-        if let Some(img) = decoder
-            .preview_image(&source, &params)
-            .map_err(|e| RenderError::DecodeFailed(format!("RAW preview extraction failed: {e}")))?
-        {
-            return Ok(img);
-        }
-
-        // Last resort: full demosaicing. Slower and memory-intensive, but ensures
-        // every supported RAW file gets a thumbnail rather than silently failing.
+        // Full demosaicing — highest quality. Thumbnails are cached on disk
+        // so this cost is paid only once per import.
         if let Some(img) = decoder
             .full_image(&source, &params)
             .map_err(|e| RenderError::DecodeFailed(format!("RAW full decode failed: {e}")))?
@@ -61,41 +45,7 @@ impl FormatHandler for RawHandler {
             return Ok(img);
         }
 
-        Err(RenderError::DecodeFailed(
-            "RAW decoder returned no image".to_string(),
-        ))
-    }
-}
-
-impl RawHandler {
-    /// Decode at the highest available resolution for full-res viewing.
-    ///
-    /// TODO: Wire into pipeline for FullRes renders — currently the pipeline
-    /// uses FormatHandler::decode which optimises for thumbnail speed.
-    #[allow(dead_code)]
-    ///
-    /// Tries full demosaicing first (actual sensor data), falls back to the
-    /// largest embedded preview, then the smallest thumbnail as a last resort.
-    /// This is the reverse order of [`FormatHandler::decode`] which optimises
-    /// for speed (thumbnailing).
-    pub fn decode_full_res(&self, path: &Path) -> Result<image::DynamicImage, RenderError> {
-        let source = RawSource::new(path)
-            .map_err(|e| RenderError::DecodeFailed(format!("failed to open RAW file: {e}")))?;
-
-        let decoder = rawler::get_decoder(&source)
-            .map_err(|e| RenderError::DecodeFailed(format!("no RAW decoder for file: {e}")))?;
-
-        let params = RawDecodeParams::default();
-
-        // Full demosaicing — highest quality, slowest.
-        if let Some(img) = decoder
-            .full_image(&source, &params)
-            .map_err(|e| RenderError::DecodeFailed(format!("RAW full decode failed: {e}")))?
-        {
-            return Ok(img);
-        }
-
-        // Embedded full-size JPEG preview — fast and usually camera-quality.
+        // Embedded full-size preview — fast fallback if demosaic unavailable.
         if let Some(img) = decoder
             .preview_image(&source, &params)
             .map_err(|e| RenderError::DecodeFailed(format!("RAW preview extraction failed: {e}")))?
