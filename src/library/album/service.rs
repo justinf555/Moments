@@ -24,6 +24,21 @@ impl AlbumService {
         }
     }
 
+    // ── Sync upsert (pull from server, no outbox recording) ────────
+
+    /// Insert or replace an album from the sync stream.
+    pub async fn upsert_album(
+        &self,
+        id: &str,
+        name: &str,
+        created_at: i64,
+        updated_at: i64,
+    ) -> Result<(), LibraryError> {
+        self.repo.upsert(id, name, created_at, updated_at).await
+    }
+
+    // ── Query methods ───────────────────────────────────────────────
+
     pub async fn list_albums(&self) -> Result<Vec<Album>, LibraryError> {
         self.repo.list().await
     }

@@ -66,6 +66,13 @@ impl MediaService {
         }
     }
 
+    // ── Sync upsert (pull from server, no outbox recording) ────────
+
+    /// Insert or replace a media record from the sync stream.
+    pub async fn upsert_media(&self, record: &MediaRecord) -> Result<(), LibraryError> {
+        self.repo.upsert(record).await
+    }
+
     // ── Delegating methods ──────────────────────────────────────────
 
     pub async fn media_exists(&self, id: &MediaId) -> Result<bool, LibraryError> {

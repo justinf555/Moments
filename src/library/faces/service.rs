@@ -33,6 +33,60 @@ impl FacesService {
         }
     }
 
+    // ── Sync upserts (pull from server, no outbox recording) ───────
+
+    /// Insert or replace a person from the sync stream.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn upsert_person(
+        &self,
+        id: &str,
+        name: &str,
+        birth_date: Option<&str>,
+        is_hidden: bool,
+        is_favorite: bool,
+        color: Option<&str>,
+        face_asset_id: Option<&str>,
+    ) -> Result<(), LibraryError> {
+        self.repo
+            .upsert_person(id, name, birth_date, is_hidden, is_favorite, color, face_asset_id)
+            .await
+    }
+
+    /// Insert or replace an asset face from the sync stream.
+    pub(crate) async fn upsert_asset_face(
+        &self,
+        face: &super::repository::AssetFaceRow,
+    ) -> Result<(), LibraryError> {
+        self.repo.upsert_asset_face(face).await
+    }
+
+    /// Delete a person by ID (sync stream delete).
+    pub async fn delete_person_by_id(&self, id: &str) -> Result<(), LibraryError> {
+        self.repo.delete_person(id).await
+    }
+
+    /// Delete an asset face by ID (sync stream delete).
+    pub async fn delete_asset_face(&self, id: &str) -> Result<(), LibraryError> {
+        self.repo.delete_asset_face(id).await
+    }
+
+    /// Update the denormalized face count for a person.
+    pub async fn update_face_count(&self, person_id: &str) -> Result<(), LibraryError> {
+        self.repo.update_face_count(person_id).await
+    }
+
+    /// Clear all people (for reset sync).
+    pub async fn clear_people(&self) -> Result<(), LibraryError> {
+        self.repo.clear_people().await
+    }
+
+    /// Clear all asset faces (for reset sync).
+    pub async fn clear_asset_faces(&self) -> Result<(), LibraryError> {
+        self.repo.clear_asset_faces().await
+    }
+
+    // ── Query methods ───────────────────────────────────────────────
+
     pub async fn list_people(
         &self,
         include_hidden: bool,
