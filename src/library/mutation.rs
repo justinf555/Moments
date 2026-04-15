@@ -28,7 +28,13 @@ pub enum Mutation {
     AssetRestored { ids: Vec<MediaId> },
 
     /// One or more assets were permanently deleted.
-    AssetDeleted { ids: Vec<MediaId> },
+    ///
+    /// `external_ids` maps `(local_id, server_id)` — captured before
+    /// the DB delete so the push manager can reference the server.
+    AssetDeleted {
+        ids: Vec<MediaId>,
+        external_ids: Vec<(String, String)>,
+    },
 
     // ── Album ────────────────────────────────────────────────────────
 
@@ -127,13 +133,22 @@ impl Mutation {
                 })
                 .collect(),
 
-            Mutation::AssetDeleted { ids } => ids
+            Mutation::AssetDeleted { ids, external_ids } => ids
                 .iter()
-                .map(|id| OutboxRow {
-                    entity_type: "asset".into(),
-                    entity_id: id.as_str().into(),
-                    action: "delete".into(),
-                    payload: None,
+                .map(|id| {
+                    let ext_id = external_ids
+                        .iter()
+                        .find(|(lid, _)| lid == id.as_str())
+                        .map(|(_, eid)| eid.as_str());
+                    let payload = ext_id.map(|eid| {
+                        serde_json::json!({ "external_id": eid }).to_string()
+                    });
+                    OutboxRow {
+                        entity_type: "asset".into(),
+                        entity_id: id.as_str().into(),
+                        action: "delete".into(),
+                        payload,
+                    }
                 })
                 .collect(),
 
@@ -254,9 +269,17 @@ impl Mutation {
             ("asset", "restore") => Some(Mutation::AssetRestored {
                 ids: vec![MediaId::new(row.entity_id.clone())],
             }),
-            ("asset", "delete") => Some(Mutation::AssetDeleted {
-                ids: vec![MediaId::new(row.entity_id.clone())],
-            }),
+            ("asset", "delete") => {
+                let p = json();
+                let external_ids = p["external_id"]
+                    .as_str()
+                    .map(|eid| vec![(row.entity_id.clone(), eid.to_string())])
+                    .unwrap_or_default();
+                Some(Mutation::AssetDeleted {
+                    ids: vec![MediaId::new(row.entity_id.clone())],
+                    external_ids,
+                })
+            }
             ("album", "create") => {
                 let p = json();
                 let name = p["name"].as_str().unwrap_or("").to_string();
@@ -375,6 +398,7 @@ mod tests {
             },
             Mutation::AssetDeleted {
                 ids: vec![MediaId::new("id5".to_string())],
+                external_ids: vec![("id5".to_string(), "ext-5".to_string())],
             },
             Mutation::AlbumCreated {
                 id: AlbumId::from_raw("a1".to_string()),
@@ -438,6 +462,7 @@ mod tests {
             },
             Mutation::AssetDeleted {
                 ids: vec![MediaId::new("id5".into())],
+                external_ids: vec![("id5".into(), "ext-5".into())],
             },
             Mutation::AlbumCreated {
                 id: AlbumId::from_raw("a1".into()),

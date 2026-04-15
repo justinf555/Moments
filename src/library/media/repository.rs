@@ -340,6 +340,31 @@ impl MediaRepository {
         Ok(())
     }
 
+    /// Look up external_ids for a batch of media IDs.
+    ///
+    /// Returns `(local_id, external_id)` pairs. IDs without an external_id
+    /// are omitted from the result.
+    pub async fn external_ids(
+        &self,
+        ids: &[MediaId],
+    ) -> Result<Vec<(String, String)>, LibraryError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = id_placeholders(ids.len());
+        let sql = format!(
+            "SELECT id, external_id FROM media WHERE id IN ({placeholders}) AND external_id IS NOT NULL"
+        );
+        let mut query = sqlx::query_as::<_, (String, String)>(&sql);
+        for id in ids {
+            query = query.bind(id.as_str());
+        }
+        query
+            .fetch_all(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)
+    }
+
     /// Move assets to the trash (soft delete).
     pub async fn trash(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
         if ids.is_empty() {

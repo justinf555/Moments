@@ -172,11 +172,14 @@ impl MediaService {
     }
 
     pub async fn delete_permanently(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
+        // Capture external_ids before the DB delete removes the rows.
+        let external_ids = self.repo.external_ids(ids).await.unwrap_or_default();
         self.repo.delete_permanently(ids).await?;
         if let Err(e) = self
             .recorder
             .record(&Mutation::AssetDeleted {
                 ids: ids.to_vec(),
+                external_ids,
             })
             .await
         {

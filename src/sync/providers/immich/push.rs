@@ -174,13 +174,15 @@ impl PushManager {
                     .await
             }
 
-            Mutation::AssetDeleted { ids } => {
-                let external_id = match self.lookup_media_external_id(ids[0].as_str()).await {
-                    Ok(eid) => eid,
-                    Err(_) => {
-                        debug!(id = %ids[0], "asset already deleted, skipping push");
-                        return Ok(());
-                    }
+            Mutation::AssetDeleted { ids, external_ids } => {
+                // Use the external_id captured before the DB delete.
+                let external_id = external_ids
+                    .iter()
+                    .find(|(lid, _)| lid == ids[0].as_str())
+                    .map(|(_, eid)| eid.clone());
+                let Some(external_id) = external_id else {
+                    warn!(id = %ids[0], "no external_id for deleted asset, skipping push");
+                    return Ok(());
                 };
                 self.client
                     .delete_with_body(

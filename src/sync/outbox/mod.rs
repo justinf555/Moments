@@ -234,6 +234,7 @@ mod tests {
         writer
             .record(&Mutation::AssetDeleted {
                 ids: vec![MediaId::new("del1".to_string())],
+                external_ids: vec![("del1".to_string(), "ext-del1".to_string())],
             })
             .await
             .unwrap();
