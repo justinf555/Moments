@@ -289,7 +289,20 @@ impl MediaRepository {
     /// Upsert a media record (used by sync).
     ///
     /// Uses `INSERT OR REPLACE` so existing records are fully overwritten.
+    /// Before inserting, removes any existing row whose `external_id`
+    /// matches the incoming `id` — this handles the case where a locally
+    /// imported asset (local UUID) was uploaded to Immich and the server
+    /// now streams it back with its own UUID as the `id`.
     pub async fn upsert(&self, record: &MediaRecord) -> Result<(), LibraryError> {
+        // If a local row was uploaded and assigned this server ID as its
+        // external_id, remove it so the server-keyed row takes over.
+        sqlx::query("DELETE FROM media WHERE external_id = ? AND id != ?")
+            .bind(record.id.as_str())
+            .bind(record.id.as_str())
+            .execute(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
+
         sqlx::query(
             "INSERT OR REPLACE INTO media (id, content_hash, external_id, relative_path,
                                            original_filename, file_size, imported_at,
