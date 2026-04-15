@@ -82,6 +82,92 @@ impl ThumbnailDownloader {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::library::thumbnail::sharded_thumbnail_path;
+
+    #[test]
+    fn sharded_path_uses_webp_extension() {
+        let dir = std::path::PathBuf::from("/thumbnails");
+        let id = MediaId::new("aabbccdd11223344".to_string());
+        let path = sharded_thumbnail_path(&dir, &id);
+        assert!(path.to_str().unwrap().ends_with(".webp"));
+    }
+
+    #[test]
+    fn sharded_path_creates_two_level_shard() {
+        let dir = std::path::PathBuf::from("/thumbnails");
+        let id = MediaId::new("abcdef1234567890".to_string());
+        let path = sharded_thumbnail_path(&dir, &id);
+        assert_eq!(
+            path,
+            std::path::PathBuf::from("/thumbnails/ab/cd/abcdef1234567890.webp")
+        );
+    }
+
+    #[test]
+    fn sharded_path_short_id_flat() {
+        let dir = std::path::PathBuf::from("/thumbnails");
+        let id = MediaId::new("abc".to_string());
+        let path = sharded_thumbnail_path(&dir, &id);
+        assert_eq!(path, std::path::PathBuf::from("/thumbnails/abc.webp"));
+    }
+
+    #[tokio::test]
+    async fn downloader_finishes_when_channel_closed() {
+        // When the sender is dropped, the downloader should finish.
+        let (tx, rx) = tokio::sync::mpsc::channel(10);
+        let client = ImmichClient::new("http://127.0.0.1:1", "fake").unwrap();
+
+        // We need a Library to construct the downloader. Create a minimal one.
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = crate::library::bundle::Bundle::create(
+            &dir.path().join("Test.library"),
+            &crate::library::config::LibraryConfig::Local {
+                mode: crate::library::config::LocalStorageMode::Managed,
+            },
+        )
+        .unwrap();
+        let library = Arc::new(
+            crate::library::Library::open(
+                bundle,
+                crate::library::config::LocalStorageMode::Managed,
+                crate::library::db::Database::new(),
+                Arc::new(crate::sync::outbox::NoOpRecorder),
+                Arc::new(crate::library::resolver::LocalResolver::new(
+                    std::path::PathBuf::new(),
+                    crate::library::config::LocalStorageMode::Managed,
+                )),
+            )
+            .await
+            .unwrap(),
+        );
+
+        let events = EventSender::no_op();
+
+        let downloader = ThumbnailDownloader {
+            client,
+            library,
+            events,
+            thumbnails_dir: dir.path().to_path_buf(),
+            rx,
+            semaphore: Arc::new(Semaphore::new(2)),
+        };
+
+        // Drop the sender — the downloader's loop should terminate.
+        drop(tx);
+
+        // Run with a timeout to ensure it doesn't hang.
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            downloader.run(),
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+}
+
 /// Download a single thumbnail from Immich and write it to the local cache.
 #[instrument(skip(client, library, events, thumbnails_dir))]
 async fn download_thumbnail(

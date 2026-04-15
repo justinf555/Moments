@@ -452,3 +452,418 @@ impl PushManager {
         Ok(external_ids)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::library::db::test_helpers::{open_test_db, test_record};
+    use crate::library::media::MediaId;
+
+    /// Helper: create DB, insert outbox entries, return a PushManager.
+    /// We cannot call API methods (no real server), but we can test DB helpers.
+    async fn setup_push_db() -> (tempfile::TempDir, Database) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        (dir, db)
+    }
+
+    async fn insert_outbox_entry(
+        db: &Database,
+        entity_type: &str,
+        entity_id: &str,
+        action: &str,
+        payload: Option<&str>,
+    ) {
+        let now = chrono::Utc::now().timestamp();
+        sqlx::query(
+            "INSERT INTO sync_outbox (entity_type, entity_id, action, payload, created_at)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(entity_type)
+        .bind(entity_id)
+        .bind(action)
+        .bind(payload)
+        .bind(now)
+        .execute(db.pool())
+        .await
+        .unwrap();
+    }
+
+    /// Create a PushManager with a real DB and a dummy Library.
+    ///
+    /// The DB helpers under test (`fetch_pending`, `mark_done`, `mark_failed`,
+    /// `purge_completed`, `lookup_*`, `set_*`) all use `self.db` directly,
+    /// not `self.library`, so we just need a valid Library instance for the
+    /// struct field.
+    async fn make_push_manager(db: Database) -> (tempfile::TempDir, PushManager) {
+        let client = ImmichClient::new("https://test.example.com", "fake-token").unwrap();
+
+        // Build a separate Library with its own DB (for struct completeness).
+        let lib_dir = tempfile::tempdir().unwrap();
+        let bundle = crate::library::bundle::Bundle::create(
+            &lib_dir.path().join("Test.library"),
+            &crate::library::config::LibraryConfig::Local {
+                mode: crate::library::config::LocalStorageMode::Managed,
+            },
+        )
+        .unwrap();
+        let library = Library::open(
+            bundle,
+            crate::library::config::LocalStorageMode::Managed,
+            Database::new(),
+            std::sync::Arc::new(crate::sync::outbox::NoOpRecorder),
+            std::sync::Arc::new(crate::library::resolver::LocalResolver::new(
+                std::path::PathBuf::new(),
+                crate::library::config::LocalStorageMode::Managed,
+            )),
+        )
+        .await
+        .unwrap();
+
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let (_interval_tx, interval_rx) = tokio::sync::watch::channel(60u64);
+
+        let push = PushManager {
+            client,
+            library: Arc::new(library),
+            db,
+            shutdown_rx,
+            interval_rx: tokio::sync::Mutex::new(interval_rx),
+        };
+        (lib_dir, push)
+    }
+
+    #[tokio::test]
+    async fn fetch_pending_returns_ordered_entries() {
+        let (_dir, db) = setup_push_db().await;
+        insert_outbox_entry(&db, "asset", "a1", "trash", None).await;
+        insert_outbox_entry(&db, "asset", "a2", "favorite", None).await;
+        insert_outbox_entry(&db, "album", "b1", "create", Some(r#"{"name":"Test"}"#)).await;
+
+        let (_lib_dir, push) = make_push_manager(db).await;
+        let entries = push.fetch_pending().await.unwrap();
+
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].entity_id, "a1");
+        assert_eq!(entries[1].entity_id, "a2");
+        assert_eq!(entries[2].entity_id, "b1");
+        assert_eq!(entries[2].payload.as_deref(), Some(r#"{"name":"Test"}"#));
+    }
+
+    #[tokio::test]
+    async fn fetch_pending_empty_returns_empty() {
+        let (_dir, db) = setup_push_db().await;
+        let (_lib_dir, push) = make_push_manager(db).await;
+        let entries = push.fetch_pending().await.unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fetch_pending_skips_done_and_failed() {
+        let (_dir, db) = setup_push_db().await;
+        insert_outbox_entry(&db, "asset", "pending", "trash", None).await;
+        insert_outbox_entry(&db, "asset", "done", "trash", None).await;
+        insert_outbox_entry(&db, "asset", "failed", "trash", None).await;
+
+        // Mark second as done (status=1), third as failed (status=2).
+        sqlx::query("UPDATE sync_outbox SET status = 1 WHERE entity_id = 'done'")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        sqlx::query("UPDATE sync_outbox SET status = 2 WHERE entity_id = 'failed'")
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        let (_lib_dir, push) = make_push_manager(db).await;
+        let entries = push.fetch_pending().await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].entity_id, "pending");
+    }
+
+    #[tokio::test]
+    async fn mark_done_sets_status_to_one() {
+        let (_dir, db) = setup_push_db().await;
+        insert_outbox_entry(&db, "asset", "a1", "trash", None).await;
+
+        let (_lib_dir, push) = make_push_manager(db.clone()).await;
+        push.mark_done(1).await.unwrap();
+
+        let row: (i64,) = sqlx::query_as("SELECT status FROM sync_outbox WHERE id = 1")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(row.0, 1);
+    }
+
+    #[tokio::test]
+    async fn mark_failed_sets_status_and_error() {
+        let (_dir, db) = setup_push_db().await;
+        insert_outbox_entry(&db, "asset", "a1", "trash", None).await;
+
+        let (_lib_dir, push) = make_push_manager(db.clone()).await;
+        push.mark_failed(1, "connection timeout").await.unwrap();
+
+        let row: (i64, Option<String>) =
+            sqlx::query_as("SELECT status, payload FROM sync_outbox WHERE id = 1")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(row.0, 2);
+        assert_eq!(row.1.as_deref(), Some("connection timeout"));
+    }
+
+    #[tokio::test]
+    async fn purge_completed_removes_done_entries() {
+        let (_dir, db) = setup_push_db().await;
+        insert_outbox_entry(&db, "asset", "a1", "trash", None).await;
+        insert_outbox_entry(&db, "asset", "a2", "trash", None).await;
+        insert_outbox_entry(&db, "asset", "a3", "trash", None).await;
+
+        // Mark a1 and a2 as done.
+        sqlx::query("UPDATE sync_outbox SET status = 1 WHERE entity_id IN ('a1', 'a2')")
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        let (_lib_dir, push) = make_push_manager(db.clone()).await;
+        push.purge_completed().await.unwrap();
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sync_outbox")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(count.0, 1); // only a3 remains
+    }
+
+    #[tokio::test]
+    async fn parse_payload_valid_json() {
+        let (_dir, db) = setup_push_db().await;
+        let (_lib_dir, push) = make_push_manager(db).await;
+
+        let entry = OutboxEntry {
+            id: 1,
+            entity_type: "album".to_string(),
+            entity_id: "alb1".to_string(),
+            action: "create".to_string(),
+            payload: Some(r#"{"name":"Photos"}"#.to_string()),
+        };
+
+        let val = push.parse_payload(&entry).unwrap();
+        assert_eq!(val["name"], "Photos");
+    }
+
+    #[tokio::test]
+    async fn parse_payload_none_returns_empty_object() {
+        let (_dir, db) = setup_push_db().await;
+        let (_lib_dir, push) = make_push_manager(db).await;
+
+        let entry = OutboxEntry {
+            id: 1,
+            entity_type: "asset".to_string(),
+            entity_id: "a1".to_string(),
+            action: "trash".to_string(),
+            payload: None,
+        };
+
+        let val = push.parse_payload(&entry).unwrap();
+        assert!(val.is_object());
+        assert_eq!(val.as_object().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn parse_payload_invalid_json_returns_error() {
+        let (_dir, db) = setup_push_db().await;
+        let (_lib_dir, push) = make_push_manager(db).await;
+
+        let entry = OutboxEntry {
+            id: 1,
+            entity_type: "album".to_string(),
+            entity_id: "alb1".to_string(),
+            action: "create".to_string(),
+            payload: Some("not json".to_string()),
+        };
+
+        let result = push.parse_payload(&entry);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn lookup_media_external_id_found() {
+        let (_dir, db) = setup_push_db().await;
+
+        // Insert a media record with external_id.
+        let mut record = test_record(MediaId::new("local-1".to_string()));
+        record.external_id = Some("immich-uuid-1".to_string());
+        db.upsert_media(&record).await.unwrap();
+
+        let (_lib_dir, push) = make_push_manager(db).await;
+        let ext_id = push.lookup_media_external_id("local-1").await.unwrap();
+        assert_eq!(ext_id, "immich-uuid-1");
+    }
+
+    #[tokio::test]
+    async fn lookup_media_external_id_missing_returns_error() {
+        let (_dir, db) = setup_push_db().await;
+        let (_lib_dir, push) = make_push_manager(db).await;
+
+        let result = push.lookup_media_external_id("nonexistent").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("no external_id"));
+    }
+
+    #[tokio::test]
+    async fn lookup_media_external_id_null_returns_error() {
+        let (_dir, db) = setup_push_db().await;
+
+        // Insert a media record with no external_id.
+        let record = test_record(MediaId::new("local-no-ext".to_string()));
+        db.upsert_media(&record).await.unwrap();
+
+        let (_lib_dir, push) = make_push_manager(db).await;
+        let result = push.lookup_media_external_id("local-no-ext").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn lookup_album_external_id_found() {
+        let (_dir, db) = setup_push_db().await;
+
+        // Insert an album with external_id.
+        let now = chrono::Utc::now().timestamp();
+        sqlx::query(
+            "INSERT INTO albums (id, name, created_at, updated_at, external_id) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind("local-album")
+        .bind("Test Album")
+        .bind(now)
+        .bind(now)
+        .bind("immich-album-uuid")
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        let (_lib_dir, push) = make_push_manager(db).await;
+        let ext_id = push.lookup_album_external_id("local-album").await.unwrap();
+        assert_eq!(ext_id, "immich-album-uuid");
+    }
+
+    #[tokio::test]
+    async fn lookup_album_external_id_missing_returns_error() {
+        let (_dir, db) = setup_push_db().await;
+        let (_lib_dir, push) = make_push_manager(db).await;
+
+        let result = push.lookup_album_external_id("no-album").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn lookup_person_external_id_found() {
+        let (_dir, db) = setup_push_db().await;
+
+        sqlx::query(
+            "INSERT INTO people (id, name, face_count, is_hidden, external_id) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind("local-person")
+        .bind("Alice")
+        .bind(5)
+        .bind(false)
+        .bind("immich-person-uuid")
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        let (_lib_dir, push) = make_push_manager(db).await;
+        let ext_id = push
+            .lookup_person_external_id("local-person")
+            .await
+            .unwrap();
+        assert_eq!(ext_id, "immich-person-uuid");
+    }
+
+    #[tokio::test]
+    async fn lookup_person_external_id_missing_returns_error() {
+        let (_dir, db) = setup_push_db().await;
+        let (_lib_dir, push) = make_push_manager(db).await;
+
+        let result = push.lookup_person_external_id("no-person").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn set_media_external_id_updates_record() {
+        let (_dir, db) = setup_push_db().await;
+
+        let record = test_record(MediaId::new("local-m".to_string()));
+        db.upsert_media(&record).await.unwrap();
+
+        let (_lib_dir, push) = make_push_manager(db.clone()).await;
+        push.set_media_external_id("local-m", "new-ext-id")
+            .await
+            .unwrap();
+
+        let row: (Option<String>,) =
+            sqlx::query_as("SELECT external_id FROM media WHERE id = 'local-m'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(row.0.as_deref(), Some("new-ext-id"));
+    }
+
+    #[tokio::test]
+    async fn set_album_external_id_updates_record() {
+        let (_dir, db) = setup_push_db().await;
+
+        let now = chrono::Utc::now().timestamp();
+        sqlx::query("INSERT INTO albums (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)")
+            .bind("alb-local")
+            .bind("My Album")
+            .bind(now)
+            .bind(now)
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        let (_lib_dir, push) = make_push_manager(db.clone()).await;
+        push.set_album_external_id("alb-local", "alb-ext-id")
+            .await
+            .unwrap();
+
+        let row: (Option<String>,) =
+            sqlx::query_as("SELECT external_id FROM albums WHERE id = 'alb-local'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(row.0.as_deref(), Some("alb-ext-id"));
+    }
+
+    #[tokio::test]
+    async fn resolve_media_external_ids_resolves_all() {
+        use crate::library::db::test_helpers::record_with_taken_at;
+
+        let (_dir, db) = setup_push_db().await;
+
+        // Use different relative_paths to avoid UNIQUE constraint conflict.
+        let mut r1 = record_with_taken_at(MediaId::new("m1".to_string()), "photos/a.jpg", Some(1_000));
+        r1.external_id = Some("ext-m1".to_string());
+        let mut r2 = record_with_taken_at(MediaId::new("m2".to_string()), "photos/b.jpg", Some(2_000));
+        r2.external_id = Some("ext-m2".to_string());
+        db.upsert_media(&r1).await.unwrap();
+        db.upsert_media(&r2).await.unwrap();
+
+        let (_lib_dir, push) = make_push_manager(db).await;
+        let payload = serde_json::json!({ "media_ids": ["m1", "m2"] });
+        let ext_ids = push.resolve_media_external_ids(&payload).await.unwrap();
+        assert_eq!(ext_ids, vec!["ext-m1", "ext-m2"]);
+    }
+
+    #[tokio::test]
+    async fn resolve_media_external_ids_empty_payload() {
+        let (_dir, db) = setup_push_db().await;
+        let (_lib_dir, push) = make_push_manager(db).await;
+
+        let payload = serde_json::json!({});
+        let ext_ids = push.resolve_media_external_ids(&payload).await.unwrap();
+        assert!(ext_ids.is_empty());
+    }
+}

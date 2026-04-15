@@ -89,3 +89,90 @@ impl OriginalResolver for CachedResolver {
         Ok(Some(path))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_resolver(originals_dir: PathBuf) -> CachedResolver {
+        let client = Arc::new(
+            ImmichClient::new("https://test.example.com", "fake-token").unwrap(),
+        );
+        CachedResolver::new(client, originals_dir)
+    }
+
+    #[test]
+    fn cache_path_uses_two_level_sharding() {
+        let resolver = make_resolver(PathBuf::from("/data/originals"));
+        let id = MediaId::new("abcdef1234567890".to_string());
+        let path = resolver.cache_path(&id);
+        assert_eq!(
+            path,
+            PathBuf::from("/data/originals/ab/cd/abcdef1234567890.bin")
+        );
+    }
+
+    #[test]
+    fn cache_path_short_id_falls_back_to_flat() {
+        let resolver = make_resolver(PathBuf::from("/data/originals"));
+        let id = MediaId::new("abc".to_string());
+        let path = resolver.cache_path(&id);
+        assert_eq!(path, PathBuf::from("/data/originals/abc.bin"));
+    }
+
+    #[test]
+    fn cache_path_exactly_four_chars() {
+        let resolver = make_resolver(PathBuf::from("/data/originals"));
+        let id = MediaId::new("abcd".to_string());
+        let path = resolver.cache_path(&id);
+        assert_eq!(
+            path,
+            PathBuf::from("/data/originals/ab/cd/abcd.bin")
+        );
+    }
+
+    #[test]
+    fn cache_path_uuid_format() {
+        let resolver = make_resolver(PathBuf::from("/cache"));
+        // Typical Immich UUID (with dashes).
+        let id = MediaId::new("550e8400-e29b-41d4-a716-446655440000".to_string());
+        let path = resolver.cache_path(&id);
+        assert_eq!(
+            path,
+            PathBuf::from("/cache/55/0e/550e8400-e29b-41d4-a716-446655440000.bin")
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_returns_cached_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let resolver = make_resolver(dir.path().to_path_buf());
+        let id = MediaId::new("aabbccdd11223344".to_string());
+
+        // Pre-populate cache.
+        let cache_path = resolver.cache_path(&id);
+        tokio::fs::create_dir_all(cache_path.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&cache_path, b"cached data")
+            .await
+            .unwrap();
+
+        let result = resolver.resolve(&id, "irrelevant/path").await.unwrap();
+        assert_eq!(result, Some(cache_path));
+    }
+
+    #[tokio::test]
+    async fn resolve_cache_miss_with_unreachable_server_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        // Client points to a server that won't respond (localhost with bad port).
+        let client = Arc::new(
+            ImmichClient::new("http://127.0.0.1:1", "fake-token").unwrap(),
+        );
+        let resolver = CachedResolver::new(client, dir.path().to_path_buf());
+        let id = MediaId::new("aabbccdd11223344".to_string());
+
+        let result = resolver.resolve(&id, "some/path").await.unwrap();
+        assert!(result.is_none());
+    }
+}

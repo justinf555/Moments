@@ -470,4 +470,77 @@ mod tests {
         };
         assert_eq!(format!("{about}"), "Immich 1.99.0");
     }
+
+    #[test]
+    fn client_strips_multiple_trailing_slashes() {
+        let client = ImmichClient::new("https://immich.example.com///", "token").unwrap();
+        // Only one trailing slash is stripped by trim_end_matches
+        // so the URL may have double slashes — this tests the actual behavior.
+        assert!(!client.base_url().ends_with('/'));
+    }
+
+    #[test]
+    fn url_builds_correct_nested_path() {
+        let client = ImmichClient::new("https://immich.example.com", "token").unwrap();
+        assert_eq!(
+            client.url("/assets/uuid-123/original"),
+            "https://immich.example.com/api/assets/uuid-123/original"
+        );
+    }
+
+    #[test]
+    fn login_response_deserializes() {
+        let json = serde_json::json!({
+            "accessToken": "token-abc",
+            "userId": "user-uuid",
+            "name": "Test User"
+        });
+        let resp: LoginResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(resp.access_token, "token-abc");
+        assert_eq!(resp.user_id, "user-uuid");
+        assert_eq!(resp.name, "Test User");
+    }
+
+    #[test]
+    fn server_about_deserializes_with_defaults() {
+        let json = serde_json::json!({ "version": "1.120.0" });
+        let about: ServerAbout = serde_json::from_value(json).unwrap();
+        assert_eq!(about.version, "1.120.0");
+        assert!(!about.licensed); // default
+    }
+
+    #[test]
+    fn server_about_deserializes_licensed() {
+        let json = serde_json::json!({ "version": "1.120.0", "licensed": true });
+        let about: ServerAbout = serde_json::from_value(json).unwrap();
+        assert!(about.licensed);
+    }
+
+    #[test]
+    fn truncate_error_body_short() {
+        assert_eq!(truncate_error_body("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_error_body_long() {
+        let long = "a".repeat(300);
+        let truncated = truncate_error_body(&long, 200);
+        assert_eq!(truncated.len(), 200);
+    }
+
+    #[test]
+    fn truncate_error_body_unicode() {
+        // Emoji is multi-byte — should not panic or split a char.
+        let emoji_str = "🎉".repeat(50);
+        let truncated = truncate_error_body(&emoji_str, 10);
+        // 10 emoji characters
+        assert_eq!(truncated.chars().count(), 10);
+    }
+
+    #[test]
+    fn client_clone_shares_base_url() {
+        let client = ImmichClient::new("https://immich.example.com", "token").unwrap();
+        let cloned = client.clone();
+        assert_eq!(client.base_url(), cloned.base_url());
+    }
 }

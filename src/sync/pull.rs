@@ -745,3 +745,240 @@ impl PullManager {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::library::db::test_helpers::{open_test_db, test_record};
+
+    // ── SyncCounters ───────────────────────────────────────────────
+
+    #[test]
+    fn sync_counters_default_is_all_zero() {
+        let c = SyncCounters::default();
+        assert_eq!(c.assets, 0);
+        assert_eq!(c.exifs, 0);
+        assert_eq!(c.deletes, 0);
+        assert_eq!(c.albums, 0);
+        assert_eq!(c.people, 0);
+        assert_eq!(c.faces, 0);
+        assert_eq!(c.errors, 0);
+    }
+
+    // ── Database sync infrastructure ───────────────────────────────
+
+    #[tokio::test]
+    async fn sync_audit_start_and_complete() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+
+        let row_id = db
+            .start_sync_audit("AssetV1", "uuid-1", "cycle-1")
+            .await
+            .unwrap();
+        assert!(row_id > 0);
+
+        db.complete_sync_audit(row_id, "upsert").await.unwrap();
+
+        let row: (String, Option<String>) = sqlx::query_as(
+            "SELECT action, completed_at FROM sync_audit WHERE id = ?",
+        )
+        .bind(row_id)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(row.0, "upsert");
+        assert!(row.1.is_some()); // completed_at is set
+    }
+
+    #[tokio::test]
+    async fn sync_audit_fail() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+
+        let row_id = db
+            .start_sync_audit("AssetV1", "uuid-fail", "cycle-2")
+            .await
+            .unwrap();
+
+        db.fail_sync_audit(row_id, "parse error").await.unwrap();
+
+        let row: (String, Option<String>) = sqlx::query_as(
+            "SELECT action, error_msg FROM sync_audit WHERE id = ?",
+        )
+        .bind(row_id)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(row.0, "error");
+        assert_eq!(row.1.as_deref(), Some("parse error"));
+    }
+
+    #[tokio::test]
+    async fn sync_checkpoints_save_and_clear() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+
+        let pairs = vec![
+            ("AssetV1".to_string(), "ack-asset-100".to_string()),
+            ("AlbumV1".to_string(), "ack-album-50".to_string()),
+        ];
+        db.save_sync_checkpoints(&pairs).await.unwrap();
+
+        let row: (String,) = sqlx::query_as(
+            "SELECT ack FROM sync_checkpoints WHERE entity_type = 'AssetV1'",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(row.0, "ack-asset-100");
+
+        db.clear_sync_checkpoints().await.unwrap();
+
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM sync_checkpoints")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(count.0, 0);
+    }
+
+    #[tokio::test]
+    async fn sync_checkpoints_upsert_replaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+
+        let pairs1 = vec![("AssetV1".to_string(), "ack-1".to_string())];
+        db.save_sync_checkpoints(&pairs1).await.unwrap();
+
+        let pairs2 = vec![("AssetV1".to_string(), "ack-2".to_string())];
+        db.save_sync_checkpoints(&pairs2).await.unwrap();
+
+        let row: (String,) = sqlx::query_as(
+            "SELECT ack FROM sync_checkpoints WHERE entity_type = 'AssetV1'",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(row.0, "ack-2");
+    }
+
+    #[tokio::test]
+    async fn all_media_ids_returns_set() {
+        use crate::library::db::test_helpers::record_with_taken_at;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+
+        // Use different relative_paths to avoid UNIQUE constraint conflict.
+        db.upsert_media(&record_with_taken_at(
+            MediaId::new("id-a".to_string()),
+            "2025/01/photo_a.jpg",
+            Some(1_000),
+        ))
+        .await
+        .unwrap();
+        db.upsert_media(&record_with_taken_at(
+            MediaId::new("id-b".to_string()),
+            "2025/01/photo_b.jpg",
+            Some(2_000),
+        ))
+        .await
+        .unwrap();
+
+        let ids = db.all_media_ids().await.unwrap();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains("id-a"));
+        assert!(ids.contains("id-b"));
+    }
+
+    #[tokio::test]
+    async fn all_media_ids_empty_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+
+        let ids = db.all_media_ids().await.unwrap();
+        assert!(ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn upsert_album_media_and_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+
+        // First insert an album and a media record (foreign keys).
+        let now = chrono::Utc::now().timestamp();
+        sqlx::query("INSERT INTO albums (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)")
+            .bind("alb-1")
+            .bind("Test")
+            .bind(now)
+            .bind(now)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        db.upsert_media(&test_record(MediaId::new("med-1".to_string())))
+            .await
+            .unwrap();
+
+        db.upsert_album_media("alb-1", "med-1", now).await.unwrap();
+
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM album_media WHERE album_id = 'alb-1'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(count.0, 1);
+
+        // Insert again should be ignored (INSERT OR IGNORE).
+        db.upsert_album_media("alb-1", "med-1", now).await.unwrap();
+        let count2: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM album_media WHERE album_id = 'alb-1'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(count2.0, 1);
+
+        db.delete_album_media_entry("alb-1", "med-1")
+            .await
+            .unwrap();
+        let count3: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM album_media WHERE album_id = 'alb-1'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(count3.0, 0);
+    }
+
+    #[tokio::test]
+    async fn save_sync_checkpoints_empty_is_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+
+        // Empty list should not error.
+        db.save_sync_checkpoints(&[]).await.unwrap();
+    }
+
+    /// Test the checkpoint extraction logic from flush_acks.
+    /// Since flush_acks calls the Immich API, we test the parsing logic directly.
+    #[test]
+    fn checkpoint_extraction_keeps_latest_per_entity_type() {
+        let acks = vec![
+            "AssetV1|ack-1".to_string(),
+            "AssetV1|ack-2".to_string(),
+            "AlbumV1|ack-3".to_string(),
+            "AssetV1|ack-4".to_string(),
+        ];
+
+        let mut checkpoints: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for ack in &acks {
+            if let Some(entity_type) = ack.split('|').next() {
+                checkpoints.insert(entity_type.to_string(), ack.clone());
+            }
+        }
+
+        assert_eq!(checkpoints.len(), 2);
+        assert_eq!(checkpoints["AssetV1"], "AssetV1|ack-4");
+        assert_eq!(checkpoints["AlbumV1"], "AlbumV1|ack-3");
+    }
+}

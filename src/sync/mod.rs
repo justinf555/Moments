@@ -129,3 +129,59 @@ impl SyncHandle {
         info!(secs, "sync interval updated");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn constants_are_sensible() {
+        assert!(MAX_THUMBNAIL_WORKERS > 0);
+        assert!(THUMBNAIL_QUEUE_SIZE > 0);
+        assert!(ACK_FLUSH_THRESHOLD > 0);
+        assert!(THUMBNAIL_THROTTLE.as_millis() > 0);
+    }
+
+    #[test]
+    fn sync_handle_shutdown_does_not_panic() {
+        let (shutdown_tx, _shutdown_rx) = watch::channel(false);
+        let (interval_tx, _interval_rx) = watch::channel(60u64);
+        let handle = SyncHandle {
+            shutdown_tx,
+            interval_tx,
+        };
+        handle.shutdown();
+        // Calling shutdown again is also safe.
+        handle.shutdown();
+    }
+
+    #[test]
+    fn sync_handle_set_interval() {
+        let (shutdown_tx, _shutdown_rx) = watch::channel(false);
+        let (interval_tx, interval_rx) = watch::channel(60u64);
+        let handle = SyncHandle {
+            shutdown_tx,
+            interval_tx,
+        };
+
+        handle.set_interval(120);
+        assert_eq!(*interval_rx.borrow(), 120);
+
+        handle.set_interval(0);
+        assert_eq!(*interval_rx.borrow(), 0);
+    }
+
+    #[test]
+    fn sync_handle_shutdown_sets_flag() {
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (interval_tx, _interval_rx) = watch::channel(60u64);
+        let handle = SyncHandle {
+            shutdown_tx,
+            interval_tx,
+        };
+
+        assert!(!*shutdown_rx.borrow());
+        handle.shutdown();
+        assert!(*shutdown_rx.borrow());
+    }
+}

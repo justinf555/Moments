@@ -60,3 +60,98 @@ impl OriginalResolver for LocalResolver {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn managed_mode_joins_originals_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let originals = dir.path().join("originals");
+        std::fs::create_dir_all(&originals).unwrap();
+
+        // Create a file at originals/2025/01/photo.jpg
+        let photo_dir = originals.join("2025").join("01");
+        std::fs::create_dir_all(&photo_dir).unwrap();
+        let photo_path = photo_dir.join("photo.jpg");
+        std::fs::write(&photo_path, b"jpeg data").unwrap();
+
+        let resolver = LocalResolver::new(
+            originals.clone(),
+            super::super::config::LocalStorageMode::Managed,
+        );
+        let id = super::super::media::MediaId::new("test-id".to_string());
+
+        let result = resolver.resolve(&id, "2025/01/photo.jpg").await.unwrap();
+        assert_eq!(result, Some(photo_path));
+    }
+
+    #[tokio::test]
+    async fn managed_mode_returns_none_for_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let resolver = LocalResolver::new(
+            dir.path().to_path_buf(),
+            super::super::config::LocalStorageMode::Managed,
+        );
+        let id = super::super::media::MediaId::new("test-id".to_string());
+
+        let result = resolver.resolve(&id, "nonexistent/photo.jpg").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn referenced_mode_uses_absolute_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let photo_path = dir.path().join("my_photo.jpg");
+        std::fs::write(&photo_path, b"jpeg data").unwrap();
+
+        let resolver = LocalResolver::new(
+            dir.path().to_path_buf(),
+            super::super::config::LocalStorageMode::Referenced,
+        );
+        let id = super::super::media::MediaId::new("test-id".to_string());
+
+        // In referenced mode, relative_path is actually the absolute path.
+        let result = resolver
+            .resolve(&id, photo_path.to_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(result, Some(photo_path));
+    }
+
+    #[tokio::test]
+    async fn referenced_mode_returns_none_for_missing() {
+        let resolver = LocalResolver::new(
+            std::path::PathBuf::from("/unused"),
+            super::super::config::LocalStorageMode::Referenced,
+        );
+        let id = super::super::media::MediaId::new("test-id".to_string());
+
+        let result = resolver
+            .resolve(&id, "/absolutely/nonexistent/photo.jpg")
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn managed_mode_ignores_media_id() {
+        // The LocalResolver does not use the MediaId for path resolution.
+        let dir = tempfile::tempdir().unwrap();
+        let photo = dir.path().join("photo.jpg");
+        std::fs::write(&photo, b"data").unwrap();
+
+        let resolver = LocalResolver::new(
+            dir.path().to_path_buf(),
+            super::super::config::LocalStorageMode::Managed,
+        );
+
+        let id1 = super::super::media::MediaId::new("id-a".to_string());
+        let id2 = super::super::media::MediaId::new("id-b".to_string());
+
+        let r1 = resolver.resolve(&id1, "photo.jpg").await.unwrap();
+        let r2 = resolver.resolve(&id2, "photo.jpg").await.unwrap();
+        assert_eq!(r1, r2);
+    }
+}
