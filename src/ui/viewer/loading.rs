@@ -6,6 +6,7 @@ use tracing::{debug, error};
 use crate::app_event::AppEvent;
 use crate::renderer::output;
 use crate::renderer::pipeline::{RenderOptions, RenderSize};
+use crate::UserFacingError;
 
 use super::PhotoViewer;
 
@@ -69,23 +70,18 @@ impl PhotoViewer {
             let bus = imp.bus_sender().clone();
             drop(viewer);
             glib::MainContext::default().spawn_local(async move {
-                let pixels: Option<(Vec<u8>, u32, u32)> = tokio
+                let result: Option<Result<(Vec<u8>, u32, u32), crate::renderer::error::RenderError>> = tokio
                     .spawn(async move {
                         tokio::task::spawn_blocking(move || {
                             let options = RenderOptions {
                                 size: RenderSize::FullRes,
                                 edits: None,
                             };
-                            match pipeline.render(&path, &options) {
-                                Ok(img) => Some(output::to_rgba(&img)),
-                                Err(e) => {
-                                    debug!("full-res decode failed: {e}");
-                                    None
-                                }
-                            }
+                            let img = pipeline.render(&path, &options)?;
+                            Ok(output::to_rgba(&img))
                         })
                         .await
-                        .ok()?
+                        .ok()
                     })
                     .await
                     .ok()
@@ -103,8 +99,8 @@ impl PhotoViewer {
                     return;
                 }
 
-                match pixels {
-                    Some((raw, width, height)) => {
+                match result {
+                    Some(Ok((raw, width, height))) => {
                         let gbytes = glib::Bytes::from_owned(raw);
                         let texture = gdk::MemoryTexture::new(
                             width as i32,
@@ -118,11 +114,12 @@ impl PhotoViewer {
                             .set_paintable(Some(texture.upcast_ref::<gdk::Paintable>()));
                         debug!("full-res via MemoryTexture: {width}×{height}");
                     }
+                    Some(Err(e)) => {
+                        debug!("full-res decode failed: {e}");
+                        bus.send(AppEvent::Error(e.to_user_facing()));
+                    }
                     None => {
-                        debug!("full-res decode failed, keeping thumbnail");
-                        bus.send(AppEvent::Error(
-                            "Could not display full-resolution image".into(),
-                        ));
+                        debug!("full-res decode failed (task cancelled)");
                     }
                 }
             });
