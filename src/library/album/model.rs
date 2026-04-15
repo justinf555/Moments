@@ -36,6 +36,8 @@ pub struct Album {
     pub media_count: u32,
     /// Most recently added media item — used as the album cover thumbnail.
     pub cover_media_id: Option<MediaId>,
+    /// Whether this album is pinned to the sidebar.
+    pub is_pinned: bool,
 }
 
 #[cfg(test)]

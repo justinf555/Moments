@@ -15,6 +15,7 @@ struct AlbumRow {
     updated_at: i64,
     media_count: i64,
     cover_media_id: Option<String>,
+    is_pinned: bool,
 }
 
 /// Album persistence layer.
@@ -67,7 +68,8 @@ impl AlbumRepository {
                     (SELECT am2.media_id FROM album_media am2
                      JOIN media m ON m.id = am2.media_id AND m.is_trashed = 0
                      WHERE am2.album_id = a.id
-                     ORDER BY am2.added_at DESC LIMIT 1) as cover_media_id
+                     ORDER BY am2.added_at DESC LIMIT 1) as cover_media_id,
+                    a.is_pinned
              FROM albums a
              LEFT JOIN album_media am ON a.id = am.album_id
                  LEFT JOIN media m2 ON am.media_id = m2.id AND m2.is_trashed = 0
@@ -78,17 +80,7 @@ impl AlbumRepository {
         .await
         .map_err(LibraryError::Db)?;
 
-        Ok(rows
-            .into_iter()
-            .map(|r| Album {
-                id: AlbumId::from_raw(r.id),
-                name: r.name,
-                created_at: r.created_at,
-                updated_at: r.updated_at,
-                media_count: r.media_count as u32,
-                cover_media_id: r.cover_media_id.map(MediaId::new),
-            })
-            .collect())
+        Ok(rows.into_iter().map(album_from_row).collect())
     }
 
     /// Fetch a single album by ID, including media count and cover.
@@ -99,7 +91,8 @@ impl AlbumRepository {
                     (SELECT am2.media_id FROM album_media am2
                      JOIN media m ON m.id = am2.media_id AND m.is_trashed = 0
                      WHERE am2.album_id = a.id
-                     ORDER BY am2.added_at DESC LIMIT 1) as cover_media_id
+                     ORDER BY am2.added_at DESC LIMIT 1) as cover_media_id,
+                    a.is_pinned
              FROM albums a
              LEFT JOIN album_media am ON a.id = am.album_id
                  LEFT JOIN media m2 ON am.media_id = m2.id AND m2.is_trashed = 0
@@ -111,14 +104,7 @@ impl AlbumRepository {
         .await
         .map_err(LibraryError::Db)?;
 
-        Ok(row.map(|r| Album {
-            id: AlbumId::from_raw(r.id),
-            name: r.name,
-            created_at: r.created_at,
-            updated_at: r.updated_at,
-            media_count: r.media_count as u32,
-            cover_media_id: r.cover_media_id.map(MediaId::new),
-        }))
+        Ok(row.map(album_from_row))
     }
 
     /// Create a new album with the given name. Returns the new album's ID.
@@ -142,6 +128,17 @@ impl AlbumRepository {
         sqlx::query("UPDATE albums SET name = ?, updated_at = ? WHERE id = ?")
             .bind(name)
             .bind(now)
+            .bind(id.as_str())
+            .execute(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
+        Ok(())
+    }
+
+    /// Set or clear the pinned state for an album.
+    pub async fn set_pinned(&self, id: &AlbumId, pinned: bool) -> Result<(), LibraryError> {
+        sqlx::query("UPDATE albums SET is_pinned = ? WHERE id = ?")
+            .bind(pinned)
             .bind(id.as_str())
             .execute(self.db.pool())
             .await
@@ -346,6 +343,19 @@ impl AlbumRepository {
         .map_err(LibraryError::Db)?;
 
         Ok(rows.into_iter().map(|(id,)| MediaId::new(id)).collect())
+    }
+}
+
+/// Convert an `AlbumRow` into an `Album`.
+fn album_from_row(r: AlbumRow) -> Album {
+    Album {
+        id: AlbumId::from_raw(r.id),
+        name: r.name,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+        media_count: r.media_count as u32,
+        cover_media_id: r.cover_media_id.map(MediaId::new),
+        is_pinned: r.is_pinned,
     }
 }
 
@@ -702,5 +712,19 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn set_pinned_and_read_back() {
+        let dir = tempdir().unwrap();
+        let (repo, _media, _db) = test_repo(dir.path()).await;
+        let id = repo.create("Pin Me").await.unwrap();
+        assert!(!repo.get(&id).await.unwrap().unwrap().is_pinned);
+
+        repo.set_pinned(&id, true).await.unwrap();
+        assert!(repo.get(&id).await.unwrap().unwrap().is_pinned);
+
+        repo.set_pinned(&id, false).await.unwrap();
+        assert!(!repo.get(&id).await.unwrap().unwrap().is_pinned);
     }
 }

@@ -108,6 +108,7 @@ impl AlbumClient {
                         updated_at: chrono::Utc::now().timestamp(),
                         media_count: 0,
                         cover_media_id: None,
+                        is_pinned: false,
                     };
                     client.insert_into_models(album);
                 }
@@ -195,6 +196,7 @@ impl AlbumClient {
                             updated_at: chrono::Utc::now().timestamp(),
                             media_count: 0,
                             cover_media_id: None,
+                            is_pinned: false,
                         };
                         client.insert_into_models(album);
                     }

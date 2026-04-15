@@ -1,16 +1,14 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use gtk::gio;
 use gtk::glib;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
-use tracing::{debug, error};
+use tracing::{debug, error, instrument};
 
 use super::model::AlbumItemObject;
-use super::picker_data::{AlbumEntry, AlbumPickerData};
 use crate::library::album::{Album, AlbumId};
 use crate::library::error::LibraryError;
 use crate::library::media::MediaId;
@@ -106,72 +104,39 @@ impl AlbumClientV2 {
 
     /// Create a new album, optionally adding media to it.
     ///
-    /// On success, inserts the album into all tracked models. If
-    /// `media_ids` is non-empty, adds those items and refreshes the
-    /// album metadata (count, cover).
+    /// On success, inserts the album into all tracked models and loads
+    /// cover thumbnails.
+    #[instrument(skip(self, media_ids))]
     pub fn create_album(&self, name: String, media_ids: Vec<MediaId>) {
         let (library, tokio) = self.deps();
         let client_weak: glib::SendWeakRef<AlbumClientV2> = self.downgrade().into();
 
         glib::MainContext::default().spawn_local(async move {
-            let n = name.clone();
-            let result = tokio
-                .spawn({
-                    let library = Arc::clone(&library);
-                    async move { library.albums().create_album(&n).await }
-                })
-                .await;
+            let result = crate::client::spawn_on(&tokio, async move {
+                let id = library.albums().create_album(&name).await?;
+                if !media_ids.is_empty() {
+                    library.albums().add_to_album(&id, &media_ids).await?;
+                }
+                library
+                    .albums()
+                    .get_album(&id)
+                    .await?
+                    .ok_or_else(|| LibraryError::Runtime(format!("album {id} not found after create")))
+            })
+            .await;
 
-            let album_id = match result {
-                Ok(Ok(id)) => id,
-                Ok(Err(e)) => {
-                    error!("failed to create album: {e}");
-                    crate::client::show_toast(&format!("Failed to create album: {e}"));
-                    return;
+            match result {
+                Ok(album) => {
+                    debug!(album_id = %album.id, name = %album.name, "album created");
+                    if let Some(client) = client_weak.upgrade() {
+                        let album_id = album.id.clone();
+                        client.insert_into_models(album);
+                        client.load_cover_thumbnails(&album_id);
+                    }
                 }
                 Err(e) => {
-                    error!("tokio join error: {e}");
-                    crate::client::show_toast(&format!("Failed to create album: {e}"));
-                    return;
-                }
-            };
-
-            debug!(album_id = %album_id, name = %name, "album created");
-
-            if let Some(client) = client_weak.upgrade() {
-                let album = Album {
-                    id: album_id.clone(),
-                    name: name.clone(),
-                    created_at: chrono::Utc::now().timestamp(),
-                    updated_at: chrono::Utc::now().timestamp(),
-                    media_count: 0,
-                    cover_media_id: None,
-                };
-                client.insert_into_models(album);
-            }
-
-            // Add media if requested.
-            if !media_ids.is_empty() {
-                let aid = album_id.clone();
-                let add_result = tokio
-                    .spawn(async move { library.albums().add_to_album(&aid, &media_ids).await })
-                    .await;
-
-                match add_result {
-                    Ok(Ok(())) => {
-                        debug!(album_id = %album_id, "photos added to new album");
-                        if let Some(client) = client_weak.upgrade() {
-                            client.refresh_album(&album_id);
-                        }
-                    }
-                    Ok(Err(e)) => {
-                        error!("add_to_album after create failed: {e}");
-                        crate::client::show_toast(&format!("Failed to add to album: {e}"));
-                    }
-                    Err(e) => {
-                        error!("tokio join error: {e}");
-                        crate::client::show_toast(&format!("Failed to add to album: {e}"));
-                    }
+                    error!("failed to create album: {e}");
+                    crate::client::show_error_toast(&e);
                 }
             }
         });
@@ -181,6 +146,7 @@ impl AlbumClientV2 {
     ///
     /// On success, removes from all tracked models and emits
     /// `album-deleted` for each ID.
+    #[instrument(skip(self, ids))]
     pub fn delete_album(&self, ids: Vec<AlbumId>) {
         let (library, tokio) = self.deps();
         let client_weak: glib::SendWeakRef<AlbumClientV2> = self.downgrade().into();
@@ -189,12 +155,14 @@ impl AlbumClientV2 {
             for id in ids {
                 let lib = Arc::clone(&library);
                 let aid = id.clone();
-                let result = tokio
-                    .spawn(async move { lib.albums().delete_album(&aid).await })
+                let result =
+                    crate::client::spawn_on(&tokio, async move {
+                        lib.albums().delete_album(&aid).await
+                    })
                     .await;
 
                 match result {
-                    Ok(Ok(())) => {
+                    Ok(()) => {
                         debug!(album_id = %id, "album deleted");
                         if let Some(client) = client_weak.upgrade() {
                             client.remove_from_models(&id);
@@ -204,13 +172,9 @@ impl AlbumClientV2 {
                             );
                         }
                     }
-                    Ok(Err(e)) => {
-                        error!(album_id = %id, "delete_album failed: {e}");
-                        crate::client::show_toast(&format!("Failed to delete album: {e}"));
-                    }
                     Err(e) => {
-                        error!(album_id = %id, "tokio join error: {e}");
-                        crate::client::show_toast(&format!("Failed to delete album: {e}"));
+                        error!(album_id = %id, "delete_album failed: {e}");
+                        crate::client::show_error_toast(&e);
                     }
                 }
             }
@@ -220,30 +184,34 @@ impl AlbumClientV2 {
     /// Add media items to an album.
     ///
     /// On success, refreshes the album metadata in all tracked models.
+    #[instrument(skip(self, media_ids), fields(album_id = %album_id))]
     pub fn add_to_album(&self, album_id: AlbumId, media_ids: Vec<MediaId>) {
         let (library, tokio) = self.deps();
         let client_weak: glib::SendWeakRef<AlbumClientV2> = self.downgrade().into();
 
         glib::MainContext::default().spawn_local(async move {
             let aid = album_id.clone();
-            let result = tokio
-                .spawn(async move { library.albums().add_to_album(&aid, &media_ids).await })
+            let result =
+                crate::client::spawn_on(&tokio, async move {
+                    library.albums().add_to_album(&aid, &media_ids).await?;
+                    library
+                        .albums()
+                        .get_album(&aid)
+                        .await?
+                        .ok_or_else(|| LibraryError::Runtime(format!("album {aid} not found")))
+                })
                 .await;
 
             match result {
-                Ok(Ok(())) => {
+                Ok(album) => {
                     debug!(album_id = %album_id, "photos added to album");
                     if let Some(client) = client_weak.upgrade() {
-                        client.refresh_album(&album_id);
+                        client.update_album_in_models(&album);
                     }
                 }
-                Ok(Err(e)) => {
-                    error!("add_to_album failed: {e}");
-                    crate::client::show_toast(&format!("Failed to add to album: {e}"));
-                }
                 Err(e) => {
-                    error!("tokio join error: {e}");
-                    crate::client::show_toast(&format!("Failed to add to album: {e}"));
+                    error!("add_to_album failed: {e}");
+                    crate::client::show_error_toast(&e);
                 }
             }
         });
@@ -252,30 +220,34 @@ impl AlbumClientV2 {
     /// Remove media items from an album.
     ///
     /// On success, refreshes the album metadata in all tracked models.
+    #[instrument(skip(self, media_ids), fields(album_id = %album_id))]
     pub fn remove_from_album(&self, album_id: AlbumId, media_ids: Vec<MediaId>) {
         let (library, tokio) = self.deps();
         let client_weak: glib::SendWeakRef<AlbumClientV2> = self.downgrade().into();
 
         glib::MainContext::default().spawn_local(async move {
             let aid = album_id.clone();
-            let result = tokio
-                .spawn(async move { library.albums().remove_from_album(&aid, &media_ids).await })
+            let result =
+                crate::client::spawn_on(&tokio, async move {
+                    library.albums().remove_from_album(&aid, &media_ids).await?;
+                    library
+                        .albums()
+                        .get_album(&aid)
+                        .await?
+                        .ok_or_else(|| LibraryError::Runtime(format!("album {aid} not found")))
+                })
                 .await;
 
             match result {
-                Ok(Ok(())) => {
+                Ok(album) => {
                     debug!(album_id = %album_id, "photos removed from album");
                     if let Some(client) = client_weak.upgrade() {
-                        client.refresh_album(&album_id);
+                        client.update_album_in_models(&album);
                     }
                 }
-                Ok(Err(e)) => {
-                    error!("remove_from_album failed: {e}");
-                    crate::client::show_toast(&format!("Failed to remove from album: {e}"));
-                }
                 Err(e) => {
-                    error!("tokio join error: {e}");
-                    crate::client::show_toast(&format!("Failed to remove from album: {e}"));
+                    error!("remove_from_album failed: {e}");
+                    crate::client::show_error_toast(&e);
                 }
             }
         });
@@ -284,6 +256,7 @@ impl AlbumClientV2 {
     /// Rename an album.
     ///
     /// On success, patches the name in all tracked models.
+    #[instrument(skip(self), fields(album_id = %id))]
     pub fn rename_album(&self, id: AlbumId, name: String) {
         let (library, tokio) = self.deps();
         let client_weak: glib::SendWeakRef<AlbumClientV2> = self.downgrade().into();
@@ -291,12 +264,14 @@ impl AlbumClientV2 {
         glib::MainContext::default().spawn_local(async move {
             let rename_id = id.clone();
             let n = name.clone();
-            let result = tokio
-                .spawn(async move { library.albums().rename_album(&rename_id, &n).await })
+            let result =
+                crate::client::spawn_on(&tokio, async move {
+                    library.albums().rename_album(&rename_id, &n).await
+                })
                 .await;
 
             match result {
-                Ok(Ok(())) => {
+                Ok(()) => {
                     debug!(album_id = %id, name = %name, "album renamed");
                     if let Some(client) = client_weak.upgrade() {
                         client.update_in_models(&id, |item| {
@@ -304,13 +279,49 @@ impl AlbumClientV2 {
                         });
                     }
                 }
-                Ok(Err(e)) => {
+                Err(e) => {
                     error!("failed to rename album: {e}");
-                    crate::client::show_toast(&format!("Failed to rename album: {e}"));
+                    crate::client::show_error_toast(&e);
+                }
+            }
+        });
+    }
+
+    /// Pin an album to the sidebar.
+    pub fn pin_album(&self, id: AlbumId) {
+        self.set_pinned(id, true);
+    }
+
+    /// Unpin an album from the sidebar.
+    pub fn unpin_album(&self, id: AlbumId) {
+        self.set_pinned(id, false);
+    }
+
+    #[instrument(skip(self), fields(album_id = %id))]
+    fn set_pinned(&self, id: AlbumId, pinned: bool) {
+        let (library, tokio) = self.deps();
+        let client_weak: glib::SendWeakRef<AlbumClientV2> = self.downgrade().into();
+
+        glib::MainContext::default().spawn_local(async move {
+            let pin_id = id.clone();
+            let result =
+                crate::client::spawn_on(&tokio, async move {
+                    library.albums().set_pinned(&pin_id, pinned).await
+                })
+                .await;
+
+            match result {
+                Ok(()) => {
+                    debug!(album_id = %id, pinned, "album pin state changed");
+                    if let Some(client) = client_weak.upgrade() {
+                        client.update_in_models(&id, |item| {
+                            item.set_pinned(pinned);
+                        });
+                    }
                 }
                 Err(e) => {
-                    error!("tokio join error: {e}");
-                    crate::client::show_toast(&format!("Failed to rename album: {e}"));
+                    error!("failed to set album pinned state: {e}");
+                    crate::client::show_error_toast(&e);
                 }
             }
         });
@@ -326,228 +337,126 @@ impl AlbumClientV2 {
         store
     }
 
-    /// Populate a model with all albums from the service.
+    /// Fetch all albums and splice into the given model.
     ///
-    /// Spawns the fetch on Tokio and splices results into the store on the
-    /// GTK thread. The view should call this on realize.
-    pub fn populate(&self, model: &gio::ListStore) {
+    /// Spawns the fetch on Tokio and splices results into the store on
+    /// the GTK thread. Views should call this on realize.
+    #[instrument(skip(self, model))]
+    pub fn list_albums(&self, model: &gio::ListStore) {
         let (library, tokio) = self.deps();
         let store = model.clone();
 
         glib::MainContext::default().spawn_local(async move {
-            let result = tokio
-                .spawn(async move { library.albums().list_albums().await })
+            let result =
+                crate::client::spawn_on(&tokio, async move {
+                    library.albums().list_albums().await
+                })
                 .await;
 
             match result {
-                Ok(Ok(albums)) => {
+                Ok(albums) => {
                     let objects: Vec<glib::Object> = albums
                         .into_iter()
                         .map(|a| AlbumItemObject::new(a).upcast())
                         .collect();
                     store.splice(0, store.n_items(), &objects);
-                    debug!(count = store.n_items(), "albums populated");
+                    debug!(count = store.n_items(), "albums loaded");
                 }
-                Ok(Err(e)) => error!("failed to load albums: {e}"),
-                Err(e) => error!("tokio join error loading albums: {e}"),
+                Err(e) => {
+                    error!("failed to load albums: {e}");
+                    crate::client::show_error_toast(&e);
+                }
             }
         });
     }
 
     // ── Queries ─────────────────────────────────────────────────────────
 
-    /// Fetch all albums and deliver on the GTK thread.
+    /// Check which albums already contain the given media items.
     ///
-    /// For one-shot queries (e.g. sidebar pinned album name resolution).
-    /// For views that need a live-updating model, use `create_model` +
-    /// `populate` instead.
-    pub fn list_albums(&self, callback: impl FnOnce(Result<Vec<Album>, LibraryError>) + 'static) {
-        let (library, tokio) = self.deps();
-
-        glib::MainContext::default().spawn_local(async move {
-            let result = tokio
-                .spawn(async move { library.albums().list_albums().await })
-                .await;
-
-            match result {
-                Ok(Ok(albums)) => callback(Ok(albums)),
-                Ok(Err(e)) => {
-                    error!("failed to load albums: {e}");
-                    callback(Err(e));
-                }
-                Err(e) => {
-                    error!("tokio join error loading albums: {e}");
-                    callback(Err(LibraryError::Runtime(e.to_string())));
-                }
-            }
-        });
-    }
-
-    // ── Thumbnail helpers ──────────────────────────────────────────────
-
-    /// Fetch cover media IDs for an album and deliver on the GTK thread.
-    pub fn album_cover_media_ids(
-        &self,
-        album_id: AlbumId,
-        limit: u32,
-        callback: impl FnOnce(Result<Vec<MediaId>, LibraryError>) + 'static,
-    ) {
-        let (library, tokio) = self.deps();
-
-        glib::MainContext::default().spawn_local(async move {
-            let result = tokio
-                .spawn(async move {
-                    library
-                        .albums()
-                        .album_cover_media_ids(&album_id, limit)
-                        .await
-                })
-                .await;
-
-            match result {
-                Ok(Ok(ids)) => callback(Ok(ids)),
-                Ok(Err(e)) => {
-                    error!("failed to fetch album cover IDs: {e}");
-                    callback(Err(e));
-                }
-                Err(e) => {
-                    error!("tokio join error fetching cover IDs: {e}");
-                    callback(Err(LibraryError::Runtime(e.to_string())));
-                }
-            }
-        });
-    }
-
-    /// Resolve a thumbnail path for a media ID.
+    /// Returns a map of album ID → count of matching media. Intended for
+    /// the album picker dialog's "already added" indicator.
     ///
-    /// Sync (no I/O) — just path construction.
-    pub fn thumbnail_path(&self, id: &MediaId) -> PathBuf {
-        let deps = self.imp().deps.borrow();
-        let deps = deps.as_ref().expect("AlbumClientV2::configure() not called");
-        deps.library.thumbnails().thumbnail_path(id)
-    }
-
-    // ── Picker dialog ──────────────────────────────────────────────────
-
-    /// Fetch album picker data: albums + membership + decoded thumbnails.
-    pub fn load_picker_data(
+    /// Must be called from within a `glib::MainContext::spawn_local` block.
+    #[instrument(skip(self, media_ids))]
+    pub async fn album_membership(
         &self,
         media_ids: Vec<MediaId>,
-        callback: impl FnOnce(Result<AlbumPickerData, LibraryError>) + 'static,
-    ) {
+    ) -> Result<HashMap<AlbumId, usize>, LibraryError> {
         let (library, tokio) = self.deps();
-
-        glib::MainContext::default().spawn_local(async move {
-            let svc = library.clone();
-            let ids_q = media_ids.clone();
-            let query_result = tokio
-                .spawn(async move {
-                    let albums = svc.albums().list_albums().await?;
-                    let containing = svc.albums().albums_containing_media(&ids_q).await?;
-                    Ok::<_, LibraryError>((albums, containing))
-                })
-                .await;
-
-            let (albums, containing) = match query_result {
-                Ok(Ok(pair)) => pair,
-                Ok(Err(e)) => {
-                    error!("album picker data load failed: {e}");
-                    callback(Err(e));
-                    return;
-                }
-                Err(e) => {
-                    error!("album picker join failed: {e}");
-                    callback(Err(LibraryError::Runtime(e.to_string())));
-                    return;
-                }
-            };
-
-            let thumb_entries: Vec<_> = albums
-                .iter()
-                .map(|a| {
-                    let path = a
-                        .cover_media_id
-                        .as_ref()
-                        .map(|mid| library.thumbnails().thumbnail_path(mid));
-                    (a.id.clone(), path)
-                })
-                .collect();
-
-            let decoded = tokio
-                .spawn(async move {
-                    tokio::task::spawn_blocking(move || {
-                        thumb_entries
-                            .into_iter()
-                            .map(|(id, path)| {
-                                let rgba = path.and_then(|p| {
-                                    let data = std::fs::read(&p).ok()?;
-                                    let img = image::load_from_memory(&data).ok()?;
-                                    let rgba = img.to_rgba8();
-                                    let (w, h) = image::GenericImageView::dimensions(&rgba);
-                                    Some((rgba.into_raw(), w, h))
-                                });
-                                (id, rgba)
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .await
-                    .unwrap_or_default()
-                })
-                .await
-                .unwrap_or_default();
-
-            let decoded_map: HashMap<_, _> = decoded.into_iter().collect();
-
-            let entries = albums
-                .into_iter()
-                .map(|a| {
-                    let already = containing.get(&a.id).copied().unwrap_or(0);
-                    let thumbnail_rgba = decoded_map.get(&a.id).and_then(|opt| opt.clone());
-                    AlbumEntry {
-                        id: a.id,
-                        name: a.name,
-                        media_count: a.media_count,
-                        thumbnail_rgba,
-                        already_added_count: already,
-                    }
-                })
-                .collect();
-
-            debug!(count = media_ids.len(), "album picker data ready");
-
-            callback(Ok(AlbumPickerData {
-                albums: entries,
-                media_ids,
-            }));
-        });
+        crate::client::spawn_on(&tokio, async move {
+            library.albums().albums_containing_media(&media_ids).await
+        })
+        .await
     }
 
-    // ── Refresh (private) ──────────────────────────────────────────────
-
-    /// Re-fetch a single album's data from the service and patch all models.
+    /// Patch an album's metadata in all tracked models and reload cover
+    /// thumbnails.
     ///
-    /// Used when album media changes (add/remove photos) to update the
-    /// count, cover thumbnail, and timestamps.
-    fn refresh_album(&self, album_id: &AlbumId) {
+    /// Called after mutations that change count/cover (add/remove media).
+    fn update_album_in_models(&self, album: &Album) {
+        let album_id = album.id.clone();
+        self.update_in_models(&album.id, |item| {
+            item.set_media_count(album.media_count);
+            item.set_updated_at(album.updated_at);
+            item.set_cover_media_id(
+                album
+                    .cover_media_id
+                    .as_ref()
+                    .map(|mid| mid.as_str().to_owned()),
+            );
+            for i in 0..4 {
+                item.set_mosaic_texture_none(i);
+            }
+        });
+        self.load_cover_thumbnails(&album_id);
+    }
+
+    /// Load cover thumbnails for an album and apply to the item in all models.
+    #[instrument(skip(self), fields(album_id = %album_id))]
+    fn load_cover_thumbnails(&self, album_id: &AlbumId) {
         let (library, tokio) = self.deps();
         let aid = album_id.clone();
         let client_weak: glib::SendWeakRef<AlbumClientV2> = self.downgrade().into();
 
         glib::MainContext::default().spawn_local(async move {
+            // Single spawn: fetch cover IDs + decode thumbnails.
             let aid_query = aid.clone();
-            let result = tokio
-                .spawn(async move { library.albums().get_album(&aid_query).await })
-                .await;
-
-            let album = match result {
-                Ok(Ok(Some(album))) => album,
-                Ok(Ok(None)) => return,
-                Ok(Err(e)) => {
-                    error!("failed to refresh album: {e}");
-                    return;
+            let decoded = crate::client::spawn_on(&tokio, async move {
+                let cover_ids = library.albums().album_cover_media_ids(&aid_query, 4).await?;
+                if cover_ids.is_empty() {
+                    return Ok(Vec::new());
                 }
+
+                let paths: Vec<_> = cover_ids
+                    .iter()
+                    .map(|mid| library.thumbnails().thumbnail_path(mid))
+                    .collect();
+
+                // File I/O + image decode are blocking — run on the
+                // dedicated blocking thread pool to avoid stalling
+                // Tokio async workers.
+                tokio::task::spawn_blocking(move || {
+                    paths
+                        .into_iter()
+                        .map(|path| {
+                            let data = std::fs::read(&path).ok()?;
+                            let img = image::load_from_memory(&data).ok()?;
+                            let rgba = img.to_rgba8();
+                            let (w, h) = rgba.dimensions();
+                            Some((rgba.into_raw(), w, h))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await
+                .map_err(|e| LibraryError::Runtime(e.to_string()))
+            })
+            .await;
+
+            let textures = match decoded {
+                Ok(t) => t,
                 Err(e) => {
-                    error!("tokio join error refreshing album: {e}");
+                    error!("failed to load cover thumbnails: {e}");
                     return;
                 }
             };
@@ -556,98 +465,10 @@ impl AlbumClientV2 {
                 return;
             };
 
-            // Patch album data and clear stale mosaic textures before
-            // the async thumbnail reload replaces them.
             client.update_in_models(&aid, |item| {
-                item.set_media_count(album.media_count);
-                item.set_updated_at(album.updated_at);
-                item.set_cover_media_id(
-                    album
-                        .cover_media_id
-                        .as_ref()
-                        .map(|mid| mid.as_str().to_owned()),
-                );
-                for i in 0..4 {
-                    item.set_mosaic_texture_none(i);
-                }
-            });
-            client.load_cover_thumbnails(&aid);
-        });
-    }
-
-    /// Load cover thumbnails for an album and apply to the item in all models.
-    fn load_cover_thumbnails(&self, album_id: &AlbumId) {
-        let aid = album_id.clone();
-
-        self.album_cover_media_ids(album_id.clone(), 4, move |result| {
-            let cover_ids = match result {
-                Ok(ids) => ids,
-                Err(_) => return,
-            };
-            if cover_ids.is_empty() {
-                return;
-            }
-
-            let Some(client) =
-                crate::application::MomentsApplication::default().album_client_v2()
-            else {
-                return;
-            };
-            let tokio = crate::application::MomentsApplication::default().tokio_handle();
-
-            // Decode cover thumbnails on Tokio.
-            let mut paths = Vec::new();
-            for media_id in &cover_ids {
-                paths.push(client.thumbnail_path(media_id));
-            }
-
-            let aid_inner = aid.clone();
-            glib::MainContext::default().spawn_local(async move {
-                let decoded = tokio
-                    .spawn(async move {
-                        tokio::task::spawn_blocking(move || {
-                            paths
-                                .into_iter()
-                                .map(|path| {
-                                    let data = std::fs::read(&path).ok()?;
-                                    let img = image::load_from_memory(&data).ok()?;
-                                    let rgba = img.to_rgba8();
-                                    let (w, h) = rgba.dimensions();
-                                    Some((rgba.into_raw(), w, h))
-                                })
-                                .collect::<Vec<_>>()
-                        })
-                        .await
-                        .unwrap_or_default()
-                    })
-                    .await
-                    .unwrap_or_default();
-
-                let Some(client) =
-                    crate::application::MomentsApplication::default().album_client_v2()
-                else {
-                    return;
-                };
-
-                let id_str = aid_inner.as_str();
-                let models = client.imp().models.borrow();
-                for weak in models.iter() {
-                    if let Some(store) = weak.upgrade() {
-                        if let Some(item) = find_item_by_id(&store, id_str) {
-                            for (i, result) in decoded.iter().enumerate() {
-                                if let Some((pixels, width, height)) = result {
-                                    let gbytes = glib::Bytes::from_owned(pixels.clone());
-                                    let texture = gtk::gdk::MemoryTexture::new(
-                                        *width as i32,
-                                        *height as i32,
-                                        gtk::gdk::MemoryFormat::R8g8b8a8,
-                                        &gbytes,
-                                        (*width as usize) * 4,
-                                    );
-                                    item.set_mosaic_texture(i, texture.upcast());
-                                }
-                            }
-                        }
+                for (i, result) in textures.iter().enumerate() {
+                    if let Some((pixels, width, height)) = result {
+                        item.set_mosaic_texture(i, texture_from_rgba(pixels, *width, *height));
                     }
                 }
             });
@@ -672,7 +493,7 @@ impl AlbumClientV2 {
         let models = self.imp().models.borrow();
         for weak in models.iter() {
             if let Some(store) = weak.upgrade() {
-                if let Some(item) = find_item_by_id(&store, id_str) {
+                if let Some((_, item)) = find_by_id(&store, id_str) {
                     update(&item);
                 }
             }
@@ -689,7 +510,7 @@ impl AlbumClientV2 {
             let Some(store) = weak.upgrade() else {
                 return false; // Dead ref, prune.
             };
-            if let Some(position) = find_position_by_id(&store, id_str) {
+            if let Some((position, _)) = find_by_id(&store, id_str) {
                 store.remove(position);
             }
             true
@@ -697,30 +518,28 @@ impl AlbumClientV2 {
     }
 }
 
-/// Find an `AlbumItemObject` by album ID in a store.
-fn find_item_by_id(store: &gio::ListStore, id: &str) -> Option<AlbumItemObject> {
-    for i in 0..store.n_items() {
-        if let Some(obj) = store
-            .item(i)
-            .and_then(|o| o.downcast::<AlbumItemObject>().ok())
-        {
-            if obj.id() == id {
-                return Some(obj);
-            }
-        }
-    }
-    None
+/// Create a `gdk::Texture` from raw RGBA pixel data.
+fn texture_from_rgba(pixels: &[u8], width: u32, height: u32) -> gtk::gdk::Texture {
+    let gbytes = glib::Bytes::from(pixels);
+    gtk::gdk::MemoryTexture::new(
+        width as i32,
+        height as i32,
+        gtk::gdk::MemoryFormat::R8g8b8a8,
+        &gbytes,
+        (width as usize) * 4,
+    )
+    .upcast()
 }
 
-/// Find the position of an album by ID in a store.
-fn find_position_by_id(store: &gio::ListStore, id: &str) -> Option<u32> {
+/// Find an `AlbumItemObject` and its position by album ID in a store.
+fn find_by_id(store: &gio::ListStore, id: &str) -> Option<(u32, AlbumItemObject)> {
     for i in 0..store.n_items() {
         if let Some(obj) = store
             .item(i)
             .and_then(|o| o.downcast::<AlbumItemObject>().ok())
         {
             if obj.id() == id {
-                return Some(i);
+                return Some((i, obj));
             }
         }
     }
@@ -731,19 +550,204 @@ fn find_position_by_id(store: &gio::ListStore, id: &str) -> Option<u32> {
 mod tests {
     use super::*;
 
+    fn test_album(id: &str, name: &str) -> Album {
+        Album {
+            id: AlbumId::from_raw(id.to_string()),
+            name: name.to_string(),
+            created_at: 1000,
+            updated_at: 2000,
+            media_count: 0,
+            cover_media_id: None,
+            is_pinned: false,
+        }
+    }
+
+    // ── Signal ────────────────────────────────────────────────────────
+
     #[test]
     fn signal_album_deleted_exists() {
         let client = AlbumClientV2::new();
-        // Verify the signal is registered and connectable.
-        let connected = std::cell::Cell::new(false);
         let _handler = client.connect_closure(
             "album-deleted",
             false,
-            glib::closure_local!(|_client: &AlbumClientV2, _id: &str| {
-                // Signal fired.
-            }),
+            glib::closure_local!(|_client: &AlbumClientV2, _id: &str| {}),
         );
-        // Emit and verify it doesn't panic.
         client.emit_by_name::<()>("album-deleted", &[&"test-id".to_string()]);
+    }
+
+    // ── find_by_id ────────────────────────────────────────────────────
+
+    #[test]
+    fn find_by_id_returns_matching_item() {
+        let store = gio::ListStore::new::<AlbumItemObject>();
+        store.append(&AlbumItemObject::new(test_album("a1", "Alpha")));
+        store.append(&AlbumItemObject::new(test_album("b2", "Beta")));
+
+        let (pos, item) = find_by_id(&store, "b2").unwrap();
+        assert_eq!(pos, 1);
+        assert_eq!(item.id(), "b2");
+    }
+
+    #[test]
+    fn find_by_id_returns_none_for_missing() {
+        let store = gio::ListStore::new::<AlbumItemObject>();
+        store.append(&AlbumItemObject::new(test_album("a1", "Alpha")));
+
+        assert!(find_by_id(&store, "missing").is_none());
+    }
+
+    #[test]
+    fn find_by_id_empty_store() {
+        let store = gio::ListStore::new::<AlbumItemObject>();
+        assert!(find_by_id(&store, "any").is_none());
+    }
+
+    // ── create_model ──────────────────────────────────────────────────
+
+    #[test]
+    fn create_model_tracks_weak_ref() {
+        let client = AlbumClientV2::new();
+        let store = client.create_model();
+
+        assert_eq!(client.imp().models.borrow().len(), 1);
+        assert!(client.imp().models.borrow()[0].upgrade().is_some());
+
+        drop(store);
+        assert!(client.imp().models.borrow()[0].upgrade().is_none());
+    }
+
+    // ── insert_into_models ────────────────────────────────────────────
+
+    #[test]
+    fn insert_into_models_adds_to_all_stores() {
+        let client = AlbumClientV2::new();
+        let store1 = client.create_model();
+        let store2 = client.create_model();
+
+        client.insert_into_models(test_album("a1", "Alpha"));
+
+        assert_eq!(store1.n_items(), 1);
+        assert_eq!(store2.n_items(), 1);
+        let item: AlbumItemObject = store1.item(0).unwrap().downcast().unwrap();
+        assert_eq!(item.name(), "Alpha");
+    }
+
+    #[test]
+    fn insert_into_models_skips_dead_refs() {
+        let client = AlbumClientV2::new();
+        let _live = client.create_model();
+        let dead = client.create_model();
+        drop(dead);
+
+        // Should not panic on the dead ref.
+        client.insert_into_models(test_album("a1", "Alpha"));
+        assert_eq!(_live.n_items(), 1);
+    }
+
+    // ── update_in_models ──────────────────────────────────────────────
+
+    #[test]
+    fn update_in_models_patches_all_stores() {
+        let client = AlbumClientV2::new();
+        let store1 = client.create_model();
+        let store2 = client.create_model();
+
+        client.insert_into_models(test_album("a1", "Old Name"));
+
+        let id = AlbumId::from_raw("a1".to_string());
+        client.update_in_models(&id, |item| {
+            item.set_name("New Name".to_string());
+        });
+
+        let item1: AlbumItemObject = store1.item(0).unwrap().downcast().unwrap();
+        let item2: AlbumItemObject = store2.item(0).unwrap().downcast().unwrap();
+        assert_eq!(item1.name(), "New Name");
+        assert_eq!(item2.name(), "New Name");
+    }
+
+    #[test]
+    fn update_in_models_no_match_is_noop() {
+        let client = AlbumClientV2::new();
+        let store = client.create_model();
+        client.insert_into_models(test_album("a1", "Alpha"));
+
+        let id = AlbumId::from_raw("missing".to_string());
+        client.update_in_models(&id, |item| {
+            item.set_name("Should Not Happen".to_string());
+        });
+
+        let item: AlbumItemObject = store.item(0).unwrap().downcast().unwrap();
+        assert_eq!(item.name(), "Alpha");
+    }
+
+    // ── remove_from_models ────────────────────────────────────────────
+
+    #[test]
+    fn remove_from_models_removes_from_all_stores() {
+        let client = AlbumClientV2::new();
+        let store1 = client.create_model();
+        let store2 = client.create_model();
+
+        client.insert_into_models(test_album("a1", "Alpha"));
+        client.insert_into_models(test_album("b2", "Beta"));
+        assert_eq!(store1.n_items(), 2);
+
+        let id = AlbumId::from_raw("a1".to_string());
+        client.remove_from_models(&id);
+
+        assert_eq!(store1.n_items(), 1);
+        assert_eq!(store2.n_items(), 1);
+        let item: AlbumItemObject = store1.item(0).unwrap().downcast().unwrap();
+        assert_eq!(item.id(), "b2");
+    }
+
+    #[test]
+    fn remove_from_models_prunes_dead_refs() {
+        let client = AlbumClientV2::new();
+        let _live = client.create_model();
+        let dead = client.create_model();
+        drop(dead);
+
+        assert_eq!(client.imp().models.borrow().len(), 2);
+
+        let id = AlbumId::from_raw("any".to_string());
+        client.remove_from_models(&id);
+
+        // Dead ref should have been pruned.
+        assert_eq!(client.imp().models.borrow().len(), 1);
+    }
+
+    // ── update_album_in_models ────────────────────────────────────────
+
+    #[test]
+    fn update_in_models_patches_metadata_fields() {
+        let client = AlbumClientV2::new();
+        let store = client.create_model();
+        client.insert_into_models(test_album("a1", "Alpha"));
+
+        let id = AlbumId::from_raw("a1".to_string());
+        client.update_in_models(&id, |item| {
+            item.set_media_count(5);
+            item.set_updated_at(3000);
+            item.set_cover_media_id(Some("cover123".to_string()));
+            item.set_pinned(true);
+        });
+
+        let item: AlbumItemObject = store.item(0).unwrap().downcast().unwrap();
+        assert_eq!(item.media_count(), 5);
+        assert_eq!(item.updated_at(), 3000);
+        assert_eq!(item.cover_media_id(), Some("cover123".to_string()));
+        assert!(item.pinned());
+    }
+
+    // ── texture_from_rgba ─────────────────────────────────────────────
+
+    #[test]
+    fn texture_from_rgba_creates_valid_texture() {
+        // 2x2 red RGBA pixels.
+        let pixels = vec![255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255];
+        let texture = texture_from_rgba(&pixels, 2, 2);
+        assert_eq!(texture.width(), 2);
+        assert_eq!(texture.height(), 2);
     }
 }

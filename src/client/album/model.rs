@@ -22,6 +22,8 @@ mod imp {
         pub updated_at: Cell<i64>,
         #[property(get, set, nullable)]
         pub cover_media_id: RefCell<Option<String>>,
+        #[property(get, set)]
+        pub pinned: Cell<bool>,
 
         /// Cover textures for the 2x2 mosaic (up to 4).
         #[property(get, set, nullable)]
@@ -59,6 +61,7 @@ impl AlbumItemObject {
         imp.updated_at.set(album.updated_at);
         imp.cover_media_id
             .replace(album.cover_media_id.map(|mid| mid.as_str().to_owned()));
+        imp.pinned.set(album.is_pinned);
         obj
     }
 

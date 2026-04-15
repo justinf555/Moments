@@ -1,3 +1,7 @@
+use gettextrs::gettext;
+
+use crate::UserFacingError;
+
 /// Errors that can arise from any library operation.
 #[derive(Debug, thiserror::Error)]
 pub enum LibraryError {
@@ -29,6 +33,18 @@ pub enum LibraryError {
     Immich(String),
 }
 
+impl UserFacingError for LibraryError {
+    fn to_user_facing(&self) -> String {
+        match self {
+            Self::Db(_) => gettext("A database error occurred"),
+            Self::Io(_) => gettext("Could not read or write file"),
+            Self::Runtime(_) => gettext("An unexpected error occurred"),
+            // Remaining variants — fall back to Display for now.
+            _ => self.to_string(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -58,5 +74,30 @@ mod tests {
     fn invalid_backend_includes_name() {
         let err = LibraryError::InvalidBackend("s3".to_string());
         assert!(err.to_string().contains("s3"));
+    }
+
+    #[test]
+    fn user_facing_db_is_non_technical() {
+        let sql_err = sqlx::Error::RowNotFound;
+        let err = LibraryError::from(sql_err);
+        let msg = err.to_user_facing();
+        assert!(!msg.contains("RowNotFound"));
+        assert!(!msg.is_empty());
+    }
+
+    #[test]
+    fn user_facing_runtime_is_non_technical() {
+        let err = LibraryError::Runtime("task panicked".to_string());
+        let msg = err.to_user_facing();
+        assert!(!msg.contains("panicked"));
+        assert!(!msg.is_empty());
+    }
+
+    #[test]
+    fn user_facing_fallback_uses_display() {
+        let err = LibraryError::Bundle("corrupt header".to_string());
+        let msg = err.to_user_facing();
+        // Fallback variants use Display until they get their own message.
+        assert_eq!(msg, err.to_string());
     }
 }

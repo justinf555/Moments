@@ -67,6 +67,10 @@ impl AlbumService {
         Ok(id)
     }
 
+    pub async fn set_pinned(&self, id: &AlbumId, pinned: bool) -> Result<(), LibraryError> {
+        self.repo.set_pinned(id, pinned).await
+    }
+
     pub async fn rename_album(&self, id: &AlbumId, name: &str) -> Result<(), LibraryError> {
         self.repo.rename(id, name).await?;
         if let Err(e) = self
