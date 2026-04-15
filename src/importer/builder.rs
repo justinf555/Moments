@@ -5,8 +5,9 @@ use super::error::ImportError;
 use super::pipeline::ProgressFn;
 use super::ImportPipeline;
 use crate::library::config::LocalStorageMode;
-use crate::renderer::format::FormatRegistry;
 use crate::library::Library;
+use crate::renderer::format::FormatRegistry;
+use crate::renderer::pipeline::RenderPipeline;
 
 /// Builder for [`ImportPipeline`].
 ///
@@ -17,6 +18,7 @@ pub struct ImportPipelineBuilder {
     thumbnails_dir: Option<PathBuf>,
     library: Option<Arc<Library>>,
     formats: Option<Arc<FormatRegistry>>,
+    render_pipeline: Option<Arc<RenderPipeline>>,
     mode: Option<LocalStorageMode>,
     on_progress: Option<ProgressFn>,
 }
@@ -28,6 +30,7 @@ impl ImportPipelineBuilder {
             thumbnails_dir: None,
             library: None,
             formats: None,
+            render_pipeline: None,
             mode: None,
             on_progress: None,
         }
@@ -55,6 +58,11 @@ impl ImportPipelineBuilder {
 
     pub fn formats(mut self, reg: Arc<FormatRegistry>) -> Self {
         self.formats = Some(reg);
+        self
+    }
+
+    pub fn render_pipeline(mut self, pipeline: Arc<RenderPipeline>) -> Self {
+        self.render_pipeline = Some(pipeline);
         self
     }
 
@@ -90,6 +98,9 @@ impl ImportPipelineBuilder {
                 .ok_or_else(|| missing("thumbnails_dir"))?,
             library: self.library.ok_or_else(|| missing("library"))?,
             formats: self.formats.ok_or_else(|| missing("formats"))?,
+            render_pipeline: self
+                .render_pipeline
+                .ok_or_else(|| missing("render_pipeline"))?,
             mode: self.mode.ok_or_else(|| missing("mode"))?,
             on_progress: self.on_progress,
         })

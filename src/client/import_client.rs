@@ -272,11 +272,16 @@ impl ImportClient {
         let progress_weak: glib::SendWeakRef<ImportClient> = self.downgrade().into();
         let complete_weak: glib::SendWeakRef<ImportClient> = self.downgrade().into();
 
+        let render_pipeline = std::sync::Arc::new(
+            crate::renderer::pipeline::RenderPipeline::new(formats.clone()),
+        );
+
         let pipeline = match ImportPipeline::builder()
             .originals_dir(originals_dir)
             .thumbnails_dir(thumbnails_dir)
             .library(library)
             .formats(formats)
+            .render_pipeline(render_pipeline)
             .mode(mode)
             .on_progress(move |p| {
                 let weak = progress_weak.clone();

@@ -9,9 +9,10 @@ use super::error::ImportError;
 use super::types::{ImportProgress, ImportSummary};
 use super::{discovery, filter, hasher, metadata, persistence, thumbnail, types::SkipReason};
 use crate::library::config::LocalStorageMode;
-use crate::renderer::format::FormatRegistry;
 use crate::library::media::MediaId;
 use crate::library::Library;
+use crate::renderer::format::FormatRegistry;
+use crate::renderer::pipeline::RenderPipeline;
 
 /// Progress callback type — invoked after each file is processed.
 pub type ProgressFn = Box<dyn Fn(ImportProgress) + Send + Sync>;
@@ -37,6 +38,7 @@ pub struct ImportPipeline {
     /// Provides media, metadata, and thumbnail services.
     pub(super) library: Arc<Library>,
     pub(super) formats: Arc<FormatRegistry>,
+    pub(super) render_pipeline: Arc<RenderPipeline>,
     pub(super) mode: LocalStorageMode,
     pub(super) on_progress: Option<ProgressFn>,
 }
@@ -176,13 +178,13 @@ impl ImportPipeline {
         })
         .await?;
 
-        // Step 8: Thumbnail — decode, resize, encode, write (inline)
+        // Step 8: Thumbnail — render via pipeline, write to disk.
         thumbnail::generate_thumbnail(
             &media_id,
             &result.thumbnail_source,
             &self.thumbnails_dir,
             self.library.thumbnails(),
-            &self.formats,
+            &self.render_pipeline,
         )
         .await;
 
