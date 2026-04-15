@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gdk, glib};
@@ -9,7 +7,6 @@ use crate::client::MediaItemObject;
 use crate::event_bus::EventSender;
 use crate::library::media::MediaId;
 use crate::library::metadata::MediaMetadataRecord;
-use crate::library::Library;
 
 pub mod edit_panel;
 pub mod info_panel;
@@ -58,8 +55,6 @@ mod imp {
         pub menu_btn: TemplateChild<gtk::MenuButton>,
 
         // Service dependencies (set once in setup)
-        pub library: OnceCell<Arc<Library>>,
-        pub tokio: OnceCell<tokio::runtime::Handle>,
         pub bus_sender: OnceCell<EventSender>,
 
         // Owned sub-panels (set in setup, not GObject yet)
@@ -86,12 +81,6 @@ mod imp {
     }
 
     impl PhotoViewer {
-        pub fn library(&self) -> &Arc<Library> {
-            self.library.get().expect("library not initialized")
-        }
-        pub fn tokio(&self) -> &tokio::runtime::Handle {
-            self.tokio.get().expect("tokio not initialized")
-        }
         pub fn bus_sender(&self) -> &EventSender {
             self.bus_sender.get().expect("bus_sender not initialized")
         }
@@ -165,20 +154,9 @@ impl PhotoViewer {
     }
 
     /// Inject service dependencies, build sub-panels, and wire signal handlers.
-    pub fn setup(
-        &self,
-        library: Arc<Library>,
-        tokio: tokio::runtime::Handle,
-        bus_sender: EventSender,
-    ) {
+    pub fn setup(&self, bus_sender: EventSender) {
         let imp = self.imp();
 
-        // Store service deps.
-        assert!(
-            imp.library.set(library.clone()).is_ok(),
-            "setup called twice"
-        );
-        assert!(imp.tokio.set(tokio.clone()).is_ok(), "setup called twice");
         assert!(
             imp.bus_sender.set(bus_sender.clone()).is_ok(),
             "setup called twice"
@@ -187,7 +165,7 @@ impl PhotoViewer {
         // Build sub-panels and add to sidebar stack.
         let info_panel = InfoPanel::new();
         let edit_panel = EditPanel::new();
-        edit_panel.setup(imp.picture.clone(), library, tokio, bus_sender);
+        edit_panel.setup(imp.picture.clone(), bus_sender);
         imp.sidebar_stack.add_named(&info_panel, Some("info"));
         imp.sidebar_stack.add_named(&edit_panel, Some("edit"));
         *imp.info_panel.borrow_mut() = Some(info_panel);

@@ -1,5 +1,4 @@
 use std::rc::Rc;
-use std::sync::Arc;
 
 use adw::prelude::*;
 use gettextrs::gettext;
@@ -9,7 +8,6 @@ use crate::application::MomentsApplication;
 use crate::client::AlbumClient;
 use crate::library::album::AlbumId;
 use crate::library::media::MediaFilter;
-use crate::library::Library;
 use crate::ui::album_dialogs;
 use crate::ui::photo_grid::texture_cache::TextureCache;
 use crate::ui::photo_grid::PhotoGridView;
@@ -20,10 +18,7 @@ use crate::client::AlbumItemObject;
 ///
 /// Used by both item activation (double-click) and the context menu Open button,
 /// eliminating previously duplicated drill-down logic.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn open_album_drilldown(
-    library: &Arc<Library>,
-    tokio: &tokio::runtime::Handle,
     settings: &gtk::gio::Settings,
     texture_cache: &Rc<TextureCache>,
     bus_sender: &crate::event_bus::EventSender,
@@ -38,8 +33,6 @@ pub(crate) fn open_album_drilldown(
     let store = media_client.create_model(filter.clone());
     let view = PhotoGridView::new();
     view.setup(
-        Arc::clone(library),
-        tokio.clone(),
         settings.clone(),
         Rc::clone(texture_cache),
         bus_sender.clone(),
@@ -75,11 +68,8 @@ fn find_clicked_item(grid_view: &gtk::GridView, x: f64, y: f64) -> Option<AlbumI
 ///
 /// Resolves the clicked item from (x, y), then builds a popover with
 /// Open, Rename, Pin to Sidebar, Share (stub), and Delete actions.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn show_context_menu(
     grid_view: &gtk::GridView,
-    library: &Arc<Library>,
-    tokio: &tokio::runtime::Handle,
     settings: &gtk::gio::Settings,
     texture_cache: &Rc<TextureCache>,
     bus_sender: &crate::event_bus::EventSender,
@@ -151,8 +141,6 @@ pub(crate) fn show_context_menu(
     wire_open_button(
         &open_btn,
         &popover,
-        library,
-        tokio,
         settings,
         texture_cache,
         bus_sender,
@@ -242,8 +230,6 @@ fn wire_pin_button(
 fn wire_open_button(
     open_btn: &gtk::Button,
     popover: &gtk::Popover,
-    library: &Arc<Library>,
-    tokio: &tokio::runtime::Handle,
     settings: &gtk::gio::Settings,
     texture_cache: &Rc<TextureCache>,
     bus_sender: &crate::event_bus::EventSender,
@@ -252,8 +238,6 @@ fn wire_open_button(
     album_name: &str,
 ) {
     let pop = popover.downgrade();
-    let lib = Arc::clone(library);
-    let tk = tokio.clone();
     let s = settings.clone();
     let tc = Rc::clone(texture_cache);
     let bs = bus_sender.clone();
@@ -265,7 +249,7 @@ fn wire_open_button(
             p.popdown();
         }
         let album_id = AlbumId::from_raw(aid.clone());
-        open_album_drilldown(&lib, &tk, &s, &tc, &bs, &nav, album_id, &aname);
+        open_album_drilldown(&s, &tc, &bs, &nav, album_id, &aname);
     });
 }
 

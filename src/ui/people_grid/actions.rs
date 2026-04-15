@@ -1,5 +1,4 @@
 use std::rc::Rc;
-use std::sync::Arc;
 
 use adw::prelude::*;
 use gettextrs::gettext;
@@ -9,25 +8,19 @@ use tracing::debug;
 use crate::client::{PeopleClient, PersonItemObject};
 use crate::library::faces::PersonId;
 use crate::library::media::MediaFilter;
-use crate::library::Library;
 use crate::ui::photo_grid::texture_cache::TextureCache;
 use crate::ui::photo_grid::PhotoGridView;
 
 /// Wire item activation — clicking a person pushes a filtered PhotoGridView.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn wire_activation(
     grid_view: &gtk::GridView,
     store: &gio::ListStore,
     nav_view: &adw::NavigationView,
-    library: &Arc<Library>,
-    tokio: &tokio::runtime::Handle,
     settings: &gio::Settings,
     texture_cache: &Rc<TextureCache>,
     bus_sender: &crate::event_bus::EventSender,
 ) {
     let nav = nav_view.clone();
-    let lib = Arc::clone(library);
-    let tk = tokio.clone();
     let s = settings.clone();
     let tc = Rc::clone(texture_cache);
     let bs = bus_sender.clone();
@@ -53,13 +46,7 @@ pub(super) fn wire_activation(
             .expect("media client available");
         let store = mc.create_model(filter.clone());
         let view = PhotoGridView::new();
-        view.setup(
-            Arc::clone(&lib),
-            tk.clone(),
-            s.clone(),
-            Rc::clone(&tc),
-            bs.clone(),
-        );
+        view.setup(s.clone(), Rc::clone(&tc), bs.clone());
         view.set_store(store, filter);
 
         let display_name = if name.is_empty() {

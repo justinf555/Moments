@@ -289,12 +289,9 @@ impl MomentsApplication {
             .expect("settings initialised")
             .clone();
         let is_immich = self.imp().is_immich.get();
-        let library = self.imp().library.borrow().clone();
         let immich_url = self.imp().immich_server_url.borrow().clone();
 
-        crate::ui::preferences_dialog::show_preferences(
-            &window, &settings, is_immich, library, immich_url,
-        );
+        crate::ui::preferences_dialog::show_preferences(&window, &settings, is_immich, immich_url);
     }
 
     /// Show the first-run setup window.

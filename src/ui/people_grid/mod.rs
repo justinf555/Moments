@@ -1,13 +1,11 @@
 use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gio, glib};
 
 use crate::client::PeopleClient;
-use crate::library::Library;
 use crate::ui::photo_grid::texture_cache::TextureCache;
 
 mod actions;
@@ -42,8 +40,6 @@ mod imp {
 
         // Service dependencies
         pub people_client: OnceCell<PeopleClient>,
-        /// Library + tokio kept temporarily for drill-down into photo grids.
-        pub library: OnceCell<Arc<Library>>,
 
         // State
         pub(super) store: OnceCell<gio::ListStore>,
@@ -97,8 +93,6 @@ impl PeopleGridView {
     /// Set up the People collection grid view.
     pub fn setup_people(
         &self,
-        library: Arc<Library>,
-        tokio: tokio::runtime::Handle,
         settings: gio::Settings,
         texture_cache: Rc<TextureCache>,
         bus_sender: crate::event_bus::EventSender,
@@ -110,12 +104,6 @@ impl PeopleGridView {
             .expect("people client available after library load");
         assert!(
             imp.people_client.set(people_client.clone()).is_ok(),
-            "setup called twice"
-        );
-
-        // Library kept temporarily for drill-down into photo grids.
-        assert!(
-            imp.library.set(Arc::clone(&library)).is_ok(),
             "setup called twice"
         );
 
@@ -157,8 +145,6 @@ impl PeopleGridView {
             &imp.grid_view,
             &store,
             &imp.nav_view,
-            &library,
-            &tokio,
             &settings,
             &texture_cache,
             &bus_sender,

@@ -200,7 +200,7 @@ impl MomentsWindow {
         let texture_cache = Rc::new(TextureCache::new());
 
         let (content_stack, coordinator, photos_model) =
-            self.build_coordinator(&library, &tokio, &settings, &texture_cache, &bus_sender);
+            self.build_coordinator(&settings, &texture_cache, &bus_sender);
 
         self.register_lazy_views(
             &mut coordinator.borrow_mut(),
@@ -225,14 +225,7 @@ impl MomentsWindow {
             .set(Rc::clone(&coordinator))
             .expect("coordinator set once in setup()");
 
-        self.connect_sidebar_navigation(
-            &sidebar,
-            &library,
-            &tokio,
-            &settings,
-            &texture_cache,
-            &bus_sender,
-        );
+        self.connect_sidebar_navigation(&sidebar, &settings, &texture_cache, &bus_sender);
 
         sidebar.select_first();
 
@@ -362,8 +355,6 @@ impl MomentsWindow {
     #[allow(clippy::type_complexity)]
     fn build_coordinator(
         &self,
-        library: &Arc<Library>,
-        tokio: &tokio::runtime::Handle,
         settings: &gio::Settings,
         texture_cache: &Rc<TextureCache>,
         bus_sender: &crate::event_bus::EventSender,
@@ -384,8 +375,6 @@ impl MomentsWindow {
         let photos_store = media_client.create_model(MediaFilter::All);
         let photos_view = PhotoGridView::new();
         photos_view.setup(
-            Arc::clone(library),
-            tokio.clone(),
             settings.clone(),
             Rc::clone(texture_cache),
             bus_sender.clone(),
@@ -412,8 +401,6 @@ impl MomentsWindow {
         use crate::library::media::MediaFilter;
 
         {
-            let lib = Arc::clone(library);
-            let tk = tokio.clone();
             let s = settings.clone();
             let tc = Rc::clone(texture_cache);
             let bs = bus_sender.clone();
@@ -423,15 +410,13 @@ impl MomentsWindow {
                     .expect("media client available");
                 let store = mc.create_model(MediaFilter::Favorites);
                 let view = PhotoGridView::new();
-                view.setup(lib, tk, s, tc, bs);
+                view.setup(s, tc, bs);
                 view.set_store(store, MediaFilter::Favorites);
                 view.upcast()
             });
         }
 
         {
-            let lib = Arc::clone(library);
-            let tk = tokio.clone();
             let s = settings.clone();
             let tc = Rc::clone(texture_cache);
             let bs = bus_sender.clone();
@@ -444,15 +429,13 @@ impl MomentsWindow {
                     .expect("media client available");
                 let store = mc.create_model(filter.clone());
                 let view = PhotoGridView::new();
-                view.setup(lib, tk, s, tc, bs);
+                view.setup(s, tc, bs);
                 view.set_store(store, filter);
                 view.upcast()
             });
         }
 
         {
-            let lib = Arc::clone(library);
-            let tk = tokio.clone();
             let s = settings.clone();
             let tc = Rc::clone(texture_cache);
             let bs = bus_sender.clone();
@@ -462,22 +445,20 @@ impl MomentsWindow {
                     .expect("media client available");
                 let store = mc.create_model(MediaFilter::Trashed);
                 let view = PhotoGridView::new();
-                view.setup(lib, tk, s, tc, bs);
+                view.setup(s, tc, bs);
                 view.set_store(store, MediaFilter::Trashed);
                 view.upcast()
             });
         }
 
         {
-            let lib = Arc::clone(library);
-            let tk = tokio.clone();
             let s = settings.clone();
             let tc = Rc::clone(texture_cache);
             let bs = bus_sender.clone();
             let win_weak = self.downgrade();
             coordinator.register_lazy("people", move || {
                 let view = PeopleGridView::new();
-                view.setup_people(lib, tk, s, tc, bs);
+                view.setup_people(s, tc, bs);
                 if let Some(win) = win_weak.upgrade() {
                     let view_clone = view.clone();
                     *win.imp().people_reload.borrow_mut() = Some(ReloadCallback::new(move || {
@@ -525,15 +506,11 @@ impl MomentsWindow {
     fn connect_sidebar_navigation(
         &self,
         sidebar: &MomentsSidebar,
-        library: &Arc<Library>,
-        tokio: &tokio::runtime::Handle,
         settings: &gio::Settings,
         texture_cache: &Rc<TextureCache>,
         bus_sender: &crate::event_bus::EventSender,
     ) {
         let obj_weak = self.downgrade();
-        let lib = Arc::clone(library);
-        let tk = tokio.clone();
         let s = settings.clone();
         let tc = Rc::clone(texture_cache);
         let bs = bus_sender.clone();
@@ -557,13 +534,7 @@ impl MomentsWindow {
                         .expect("media client available");
                     let store = mc.create_model(filter.clone());
                     let view = PhotoGridView::new();
-                    view.setup(
-                        Arc::clone(&lib),
-                        tk.clone(),
-                        s.clone(),
-                        Rc::clone(&tc),
-                        bs.clone(),
-                    );
+                    view.setup(s.clone(), Rc::clone(&tc), bs.clone());
                     view.set_store(store, filter);
                     coord.register(id, &view);
                 }

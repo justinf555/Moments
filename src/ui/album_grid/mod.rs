@@ -250,8 +250,6 @@ impl AlbumGridView {
 
         // ── Wire item activation (click → open album photo grid) ────────
         {
-            let lib = Arc::clone(&library);
-            let tk = tokio.clone();
             let s = settings.clone();
             let tc = Rc::clone(&texture_cache);
             let bs = bus_sender.clone();
@@ -269,7 +267,7 @@ impl AlbumGridView {
 
                 debug!(album_id = %album_id_str, name = %album_name, "album activated");
 
-                actions::open_album_drilldown(&lib, &tk, &s, &tc, &bs, &nav, album_id, &album_name);
+                actions::open_album_drilldown(&s, &tc, &bs, &nav, album_id, &album_name);
             });
         }
 
@@ -279,17 +277,13 @@ impl AlbumGridView {
             gesture.set_button(3);
 
             let gv = imp.grid_view.clone();
-            let lib_ctx = Arc::clone(&library);
-            let tk_ctx = tokio.clone();
             let nav_ctx = imp.nav_view.clone();
             let s_ctx = settings.clone();
             let tc_ctx = Rc::clone(&texture_cache);
             let bs_ctx = bus_sender.clone();
 
             gesture.connect_pressed(move |gesture, _, x, y| {
-                actions::show_context_menu(
-                    &gv, &lib_ctx, &tk_ctx, &s_ctx, &tc_ctx, &bs_ctx, &nav_ctx, x, y,
-                );
+                actions::show_context_menu(&gv, &s_ctx, &tc_ctx, &bs_ctx, &nav_ctx, x, y);
                 gesture.set_state(gtk::EventSequenceState::Claimed);
             });
 

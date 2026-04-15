@@ -1,9 +1,6 @@
 use adw::prelude::*;
-use gtk::{gio, glib};
-use std::sync::Arc;
+use gtk::gio;
 use tracing::debug;
-
-use crate::library::Library;
 
 /// Build and present the Preferences dialog.
 ///
@@ -15,7 +12,6 @@ pub fn show_preferences(
     window: &impl IsA<gtk::Widget>,
     settings: &gio::Settings,
     is_immich: bool,
-    library: Option<Arc<Library>>,
     immich_server_url: Option<String>,
 ) {
     let dialog = adw::PreferencesDialog::new();
@@ -23,14 +19,14 @@ pub fn show_preferences(
 
     dialog.add(&build_general_page(settings));
 
-    let (library_page, stats_rows) = build_library_page(settings, is_immich, &library);
+    let (library_page, stats_rows) = build_library_page(settings, is_immich);
     dialog.add(&library_page);
-    spawn_library_stats(library.clone(), stats_rows);
+    spawn_library_stats(stats_rows);
 
     if is_immich {
-        let (immich_page, server_rows) = build_immich_page(settings, &library, &immich_server_url);
+        let (immich_page, server_rows) = build_immich_page(settings, &immich_server_url);
         dialog.add(&immich_page);
-        spawn_server_stats(library.clone(), server_rows);
+        spawn_server_stats(server_rows);
     }
 
     dialog.present(Some(window));
@@ -131,7 +127,6 @@ struct LibraryStatsRows {
 fn build_library_page(
     settings: &gio::Settings,
     is_immich: bool,
-    library: &Option<Arc<Library>>,
 ) -> (adw::PreferencesPage, LibraryStatsRows) {
     let page = adw::PreferencesPage::new();
     page.set_title("Library");
@@ -140,7 +135,7 @@ fn build_library_page(
     let (overview_group, photos_row, videos_row, albums_row, people_row) = build_overview_group();
     page.add(&overview_group);
 
-    let (storage_group, cache_usage_row) = build_storage_group(settings, is_immich, library);
+    let (storage_group, cache_usage_row) = build_storage_group(settings, is_immich);
     page.add(&storage_group);
 
     let stats_rows = LibraryStatsRows {
@@ -190,7 +185,6 @@ fn build_overview_group() -> (
 fn build_storage_group(
     settings: &gio::Settings,
     is_immich: bool,
-    library: &Option<Arc<Library>>,
 ) -> (adw::PreferencesGroup, Option<adw::ActionRow>) {
     let group = adw::PreferencesGroup::new();
     group.set_title("Storage");
@@ -205,12 +199,10 @@ fn build_storage_group(
         cache_row.set_subtitle("Maximum disk cache for downloaded originals (MB)");
         cache_row.set_value(settings.uint("originals-cache-max-mb") as f64);
         let settings_cache = settings.clone();
-        let lib_cache = library.clone();
         cache_row.connect_changed(move |row| {
             let mb = row.value() as u32;
             let _ = settings_cache.set_uint("originals-cache-max-mb", mb);
             // TODO: Cache limit live-update will be restored with sync (phase 4).
-            let _ = &lib_cache;
         });
         group.add(&cache_row);
 
@@ -226,54 +218,50 @@ fn build_storage_group(
     (group, cache_usage_row)
 }
 
-fn spawn_library_stats(library: Option<Arc<Library>>, rows: LibraryStatsRows) {
-    let Some(lib) = library else { return };
-    let tokio = crate::application::MomentsApplication::default().tokio_handle();
+fn spawn_library_stats(rows: LibraryStatsRows) {
+    let Some(media_client) = crate::application::MomentsApplication::default().media_client()
+    else {
+        return;
+    };
     let photos_weak = rows.photos.downgrade();
     let videos_weak = rows.videos.downgrade();
     let albums_weak = rows.albums.downgrade();
     let people_weak = rows.people.downgrade();
     let cache_weak = rows.cache_used.as_ref().map(|r| r.downgrade());
-    glib::MainContext::default().spawn_local(async move {
-        let result = tokio.spawn(async move { lib.library_stats().await }).await;
-        match result {
-            Ok(Ok(stats)) => {
-                if let Some(r) = photos_weak.upgrade() {
-                    r.set_subtitle(&format_count(stats.photo_count, "photo"));
-                }
-                if let Some(r) = videos_weak.upgrade() {
-                    r.set_subtitle(&format_count(stats.video_count, "video"));
-                }
-                if let Some(r) = albums_weak.upgrade() {
-                    r.set_subtitle(&format_count(stats.album_count, "album"));
-                }
-                if let Some(r) = people_weak.upgrade() {
-                    r.set_subtitle(&format_count(stats.people_count, "person"));
-                }
-                if let Some(Some(r)) = cache_weak.as_ref().map(|w| w.upgrade()) {
-                    r.set_subtitle(&format_bytes(stats.cache_used_bytes));
-                }
+    media_client.library_stats(move |result| match result {
+        Ok(stats) => {
+            if let Some(r) = photos_weak.upgrade() {
+                r.set_subtitle(&format_count(stats.photo_count, "photo"));
             }
-            Ok(Err(e)) => {
-                tracing::error!("library_stats failed: {e}");
-                if let Some(r) = photos_weak.upgrade() {
-                    r.set_subtitle("—");
-                }
-                if let Some(r) = videos_weak.upgrade() {
-                    r.set_subtitle("—");
-                }
-                if let Some(r) = albums_weak.upgrade() {
-                    r.set_subtitle("—");
-                }
-                if let Some(r) = people_weak.upgrade() {
-                    r.set_subtitle("—");
-                }
-                if let Some(Some(r)) = cache_weak.as_ref().map(|w| w.upgrade()) {
-                    r.set_subtitle("—");
-                }
+            if let Some(r) = videos_weak.upgrade() {
+                r.set_subtitle(&format_count(stats.video_count, "video"));
             }
-            Err(e) => {
-                tracing::error!("library_stats join failed: {e}");
+            if let Some(r) = albums_weak.upgrade() {
+                r.set_subtitle(&format_count(stats.album_count, "album"));
+            }
+            if let Some(r) = people_weak.upgrade() {
+                r.set_subtitle(&format_count(stats.people_count, "person"));
+            }
+            if let Some(Some(r)) = cache_weak.as_ref().map(|w| w.upgrade()) {
+                r.set_subtitle(&format_bytes(stats.cache_used_bytes));
+            }
+        }
+        Err(e) => {
+            tracing::error!("library_stats failed: {e}");
+            if let Some(r) = photos_weak.upgrade() {
+                r.set_subtitle("—");
+            }
+            if let Some(r) = videos_weak.upgrade() {
+                r.set_subtitle("—");
+            }
+            if let Some(r) = albums_weak.upgrade() {
+                r.set_subtitle("—");
+            }
+            if let Some(r) = people_weak.upgrade() {
+                r.set_subtitle("—");
+            }
+            if let Some(Some(r)) = cache_weak.as_ref().map(|w| w.upgrade()) {
+                r.set_subtitle("—");
             }
         }
     });
@@ -287,7 +275,6 @@ struct ServerStatsRows {
 
 fn build_immich_page(
     settings: &gio::Settings,
-    library: &Option<Arc<Library>>,
     immich_server_url: &Option<String>,
 ) -> (adw::PreferencesPage, ServerStatsRows) {
     let page = adw::PreferencesPage::new();
@@ -295,7 +282,7 @@ fn build_immich_page(
     page.set_icon_name(Some("network-server-symbolic"));
 
     page.add(&build_connection_group(immich_server_url));
-    page.add(&build_sync_group(settings, library));
+    page.add(&build_sync_group(settings));
 
     let (server_group, server_rows) = build_server_stats_group();
     page.add(&server_group);
@@ -328,10 +315,7 @@ fn build_connection_group(immich_server_url: &Option<String>) -> adw::Preference
     group
 }
 
-fn build_sync_group(
-    settings: &gio::Settings,
-    library: &Option<Arc<Library>>,
-) -> adw::PreferencesGroup {
+fn build_sync_group(settings: &gio::Settings) -> adw::PreferencesGroup {
     let group = adw::PreferencesGroup::new();
     group.set_title("Sync");
 
@@ -344,12 +328,10 @@ fn build_sync_group(
     interval_row.set_subtitle("Seconds between sync cycles");
     interval_row.set_value(settings.uint("sync-interval-seconds") as f64);
     let settings_sync = settings.clone();
-    let lib_sync = library.clone();
     interval_row.connect_changed(move |row| {
         let secs = row.value() as u32;
         let _ = settings_sync.set_uint("sync-interval-seconds", secs);
         // TODO: Sync interval live-update will be restored with sync (phase 4).
-        let _ = &lib_sync;
     });
     group.add(&interval_row);
 
@@ -384,15 +366,16 @@ fn build_server_stats_group() -> (adw::PreferencesGroup, ServerStatsRows) {
     (group, rows)
 }
 
-fn spawn_server_stats(library: Option<Arc<Library>>, rows: ServerStatsRows) {
-    let Some(lib) = library else { return };
-    let tokio = crate::application::MomentsApplication::default().tokio_handle();
+fn spawn_server_stats(rows: ServerStatsRows) {
+    let Some(media_client) = crate::application::MomentsApplication::default().media_client()
+    else {
+        return;
+    };
     let sp_weak = rows.photos.downgrade();
     let sv_weak = rows.videos.downgrade();
     let sd_weak = rows.disk.downgrade();
-    glib::MainContext::default().spawn_local(async move {
-        let result = tokio.spawn(async move { lib.library_stats().await }).await;
-        if let Ok(Ok(stats)) = result {
+    media_client.library_stats(move |result| {
+        if let Ok(stats) = result {
             if let Some(server) = stats.server {
                 if let Some(r) = sp_weak.upgrade() {
                     r.set_subtitle(&format_count(server.server_photos, "photo"));

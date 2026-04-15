@@ -1,6 +1,5 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
@@ -11,7 +10,6 @@ use tracing::instrument;
 use crate::app_event::AppEvent;
 use crate::client::MediaItemObject;
 use crate::library::media::{MediaFilter, MediaType};
-use crate::library::Library;
 use crate::ui::video_viewer::VideoViewer;
 use crate::ui::viewer::PhotoViewer;
 
@@ -483,8 +481,6 @@ impl PhotoGridView {
 
     pub fn setup(
         &self,
-        library: Arc<Library>,
-        tokio: tokio::runtime::Handle,
         settings: gio::Settings,
         texture_cache: Rc<texture_cache::TextureCache>,
         bus_sender: crate::event_bus::EventSender,
@@ -499,11 +495,11 @@ impl PhotoGridView {
             "setup called twice"
         );
 
-        // Viewers (still need Library + tokio for full-res decode — will migrate later).
+        // Viewers.
         let photo_viewer = PhotoViewer::new();
-        photo_viewer.setup(Arc::clone(&library), tokio.clone(), bus_sender.clone());
+        photo_viewer.setup(bus_sender.clone());
         let video_viewer = VideoViewer::new();
-        video_viewer.setup(Arc::clone(&library), tokio.clone(), bus_sender.clone());
+        video_viewer.setup(bus_sender.clone());
         assert!(imp.photo_viewer.set(photo_viewer).is_ok());
         assert!(imp.video_viewer.set(video_viewer).is_ok());
 
