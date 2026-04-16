@@ -7,7 +7,7 @@ src/shortcuts-dialog.blp
 src/ui/album_grid.blp
 src/ui/album_grid.rs
 src/ui/album_grid/actions.rs
-src/ui/album_grid/card.rs
+src/ui/album_grid/card/mod.rs
 src/ui/album_grid/factory.rs
 src/ui/album_grid/selection.rs
 src/ui/people_grid.blp

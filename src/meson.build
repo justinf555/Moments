@@ -28,7 +28,7 @@ blueprints = custom_target(
     'ui/viewer/info_panel/location_section.blp',
     'ui/viewer/info_panel/file_section.blp',
     'ui/photo_grid/cell.blp',
-    'ui/album_grid/card.blp',
+    'ui/album_grid/card/card.blp',
     'ui/people_grid/cell.blp',
   ),
   output: '.',

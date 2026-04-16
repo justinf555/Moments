@@ -5,6 +5,9 @@ use gtk::{glib, prelude::*, subclass::prelude::*};
 
 use crate::client::AlbumItemObject;
 
+const COVER_SIZE: i32 = 205;
+const LABEL_HEIGHT: i32 = 52;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DisplayMode {
     Placeholder,
@@ -13,7 +16,7 @@ enum DisplayMode {
 }
 
 /// Signal handler IDs stored between `bind` and `unbind`.
-pub struct CardBindings {
+struct CardBindings {
     item: glib::WeakRef<AlbumItemObject>,
     handlers: Vec<glib::SignalHandlerId>,
 }
@@ -23,7 +26,7 @@ mod imp {
     use gtk::CompositeTemplate;
 
     #[derive(Default, CompositeTemplate)]
-    #[template(resource = "/io/github/justinf555/Moments/ui/album_grid/card.ui")]
+    #[template(resource = "/io/github/justinf555/Moments/ui/album_grid/card/card.ui")]
     pub struct AlbumCard {
         #[template_child]
         pub single_picture: TemplateChild<gtk::Picture>,
@@ -49,7 +52,7 @@ mod imp {
         pub in_selection_mode: Cell<bool>,
         /// Click handler for the checkbox — connected in factory bind.
         pub checkbox_handler: RefCell<Option<glib::SignalHandlerId>>,
-        pub bindings: RefCell<Option<CardBindings>>,
+        pub(super) bindings: RefCell<Option<CardBindings>>,
     }
 
     #[glib::object_subclass]
@@ -73,8 +76,10 @@ mod imp {
         fn constructed(&self) {
             self.parent_constructed();
 
-            // Hover controller — show checkbox on mouse enter/leave.
             let obj = self.obj();
+            obj.set_size_request(COVER_SIZE, COVER_SIZE + LABEL_HEIGHT);
+
+            // Hover controller — show checkbox on mouse enter/leave.
             let motion = gtk::EventControllerMotion::new();
             motion.set_propagation_phase(gtk::PropagationPhase::Capture);
             let cell_weak = obj.downgrade();

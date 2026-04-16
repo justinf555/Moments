@@ -136,143 +136,27 @@ impl AlbumGridView {
             "setup called twice"
         );
 
-        // ── Sort state ──────────────────────────────────────────────────
         let sort_order = Rc::new(Cell::new(settings.uint("album-sort-order")));
-
-        // Sort menu.
-        let sort_menu = build_sort_menu();
-        imp.menu_btn.set_menu_model(Some(&sort_menu));
-
-        // Sort action group — radio action with u32 state.
-        let sort_action = gio::SimpleAction::new_stateful(
-            "sort",
-            Some(&u32::static_variant_type()),
-            &sort_order.get().to_variant(),
-        );
-
-        let action_group = gio::SimpleActionGroup::new();
-        action_group.add_action(&sort_action);
-
-        // ── Selection mode state ────────────────────────────────────────
         let selection_mode = Rc::new(Cell::new(false));
-
-        let selection_title = gtk::Label::new(Some("0 selected"));
-        selection_title.add_css_class("heading");
-
-        // Enter-selection action — created early so the factory can reference it.
         let enter_selection = gio::SimpleAction::new("select", None);
 
-        // ── Grid ────────────────────────────────────────────────────────
         let store = album_client.create_model();
-        let multi_selection = gtk::MultiSelection::new(Some(store.clone()));
+        let sort_model = gtk::SortListModel::new(Some(store.clone()), None::<gtk::Sorter>);
+        let multi_selection = gtk::MultiSelection::new(Some(sort_model.clone()));
 
-        imp.grid_view.set_model(Some(&multi_selection));
-        imp.grid_view.set_factory(Some(&factory::build_factory(
-            Rc::clone(&selection_mode),
-            multi_selection.clone(),
-            enter_selection.clone(),
-        )));
-
-        // ── Wire selection mode with the real widgets ────────────────────
-        selection::wire_selection_mode(
+        let action_group = self.wire_sort(&settings, &sort_order, &sort_model);
+        self.wire_grid(&multi_selection, &selection_mode, &enter_selection);
+        self.wire_selection(
             &enter_selection,
-            &imp.header,
-            &imp.new_album_btn,
-            &imp.menu_btn,
-            &imp.cancel_btn,
-            &selection_title,
-            &imp.action_bar,
-            &imp.grid_view,
             &multi_selection,
             &store,
             &selection_mode,
-            &bus_sender,
+            &action_group,
         );
-        action_group.add_action(&enter_selection);
-
-        // ── Toggle empty ↔ grid based on store count ────────────────────
-        {
-            let stack = imp.content_stack.clone();
-            store.connect_items_changed(move |store, _, _, _| {
-                let target = if store.n_items() > 0 { "grid" } else { "empty" };
-                stack.set_visible_child_name(target);
-            });
-        }
-
-        // ── Wire sort action ────────────────────────────────────────────
-        {
-            let so = Rc::clone(&sort_order);
-            let s = settings.clone();
-            let st = store.clone();
-            sort_action.connect_activate(move |action, param| {
-                let Some(value) = param.and_then(|v| v.get::<u32>()) else {
-                    return;
-                };
-                action.set_state(&value.to_variant());
-                so.set(value);
-                s.set_uint("album-sort-order", value).ok();
-                sort_store(&st, value);
-                debug!(sort_order = value, "album sort changed");
-            });
-        }
-
-        // ── Wire "New Album" buttons ────────────────────────────────────
-        {
-            let ac = album_client.clone();
-            let connect_create = move |btn: &gtk::Button| {
-                let ac = ac.clone();
-                album_dialogs::show_create_album_dialog(btn, move |name| {
-                    ac.create_album(name, vec![]);
-                });
-            };
-
-            let cb = connect_create.clone();
-            imp.new_album_btn.connect_clicked(move |btn| cb(btn));
-            imp.empty_new_btn
-                .connect_clicked(move |btn| connect_create(btn));
-        }
-
-        // ── Wire item activation (click → open album photo grid) ────────
-        {
-            let s = settings.clone();
-            let tc = Rc::clone(&texture_cache);
-            let bs = bus_sender.clone();
-            let st = store.clone();
-            let nav = imp.nav_view.clone();
-
-            imp.grid_view.connect_activate(move |_, position| {
-                let Some(obj) = st.item(position) else { return };
-                let Some(item) = obj.downcast_ref::<AlbumItemObject>() else {
-                    return;
-                };
-                let album_id_str = item.id();
-                let album_name = item.name();
-                let album_id = AlbumId::from_raw(album_id_str.clone());
-
-                debug!(album_id = %album_id_str, name = %album_name, "album activated");
-
-                actions::open_album_drilldown(&s, &tc, &bs, &nav, album_id, &album_name);
-            });
-        }
-
-        // ── Right-click context menu ────────────────────────────────────
-        {
-            let gesture = gtk::GestureClick::new();
-            gesture.set_button(3);
-
-            let gv = imp.grid_view.clone();
-            let nav_ctx = imp.nav_view.clone();
-            let s_ctx = settings.clone();
-            let tc_ctx = Rc::clone(&texture_cache);
-            let bs_ctx = bus_sender.clone();
-
-            gesture.connect_pressed(move |gesture, _, x, y| {
-                actions::show_context_menu(&gv, &s_ctx, &tc_ctx, &bs_ctx, &nav_ctx, x, y);
-                gesture.set_state(gtk::EventSequenceState::Claimed);
-            });
-
-            imp.grid_view.add_controller(gesture);
-        }
+        self.wire_empty_toggle(&store);
+        self.wire_create_buttons(&album_client);
+        self.wire_activation(&settings, &texture_cache, &bus_sender, &store);
+        self.wire_context_menu(&settings, &texture_cache, &bus_sender);
 
         imp.toolbar_view
             .insert_action_group("album", Some(&action_group));
@@ -281,11 +165,161 @@ impl AlbumGridView {
         assert!(imp.sort_order.set(sort_order).is_ok());
     }
 
-    pub fn reload(&self) {
+    // ── Setup helpers (private) ──────────────────────────────────────────
+
+    fn wire_sort(
+        &self,
+        settings: &gio::Settings,
+        sort_order: &Rc<Cell<u32>>,
+        sort_model: &gtk::SortListModel,
+    ) -> gio::SimpleActionGroup {
         let imp = self.imp();
-        if let (Some(store), Some(album_client)) = (imp.store.get(), imp.album_client.get()) {
-            album_client.list_albums(store);
-        }
+
+        let sort_menu = build_sort_menu();
+        imp.menu_btn.set_menu_model(Some(&sort_menu));
+
+        let sort_action = gio::SimpleAction::new_stateful(
+            "sort",
+            Some(&u32::static_variant_type()),
+            &sort_order.get().to_variant(),
+        );
+
+        // Apply the initial sort order.
+        sort_model.set_sorter(Some(&build_sorter(sort_order.get())));
+
+        let so = Rc::clone(sort_order);
+        let s = settings.clone();
+        let sm = sort_model.clone();
+        sort_action.connect_activate(move |action, param| {
+            let Some(value) = param.and_then(|v| v.get::<u32>()) else {
+                return;
+            };
+            action.set_state(&value.to_variant());
+            so.set(value);
+            s.set_uint("album-sort-order", value).ok();
+            sm.set_sorter(Some(&build_sorter(value)));
+            debug!(sort_order = value, "album sort changed");
+        });
+
+        let action_group = gio::SimpleActionGroup::new();
+        action_group.add_action(&sort_action);
+        action_group
+    }
+
+    fn wire_grid(
+        &self,
+        multi_selection: &gtk::MultiSelection,
+        selection_mode: &Rc<Cell<bool>>,
+        enter_selection: &gio::SimpleAction,
+    ) {
+        let imp = self.imp();
+        imp.grid_view.set_model(Some(multi_selection));
+        imp.grid_view.set_factory(Some(&factory::build_factory(
+            Rc::clone(selection_mode),
+            multi_selection.clone(),
+            enter_selection.clone(),
+        )));
+    }
+
+    fn wire_selection(
+        &self,
+        enter_selection: &gio::SimpleAction,
+        multi_selection: &gtk::MultiSelection,
+        store: &gio::ListStore,
+        selection_mode: &Rc<Cell<bool>>,
+        action_group: &gio::SimpleActionGroup,
+    ) {
+        let imp = self.imp();
+
+        selection::wire_selection_mode(&selection::SelectionConfig {
+            enter_selection,
+            header: &imp.header,
+            new_album_btn: &imp.new_album_btn,
+            menu_btn: &imp.menu_btn,
+            cancel_btn: &imp.cancel_btn,
+            action_bar: &imp.action_bar,
+            grid_view: &imp.grid_view,
+            multi_selection,
+            store,
+            selection_mode,
+        });
+        action_group.add_action(enter_selection);
+    }
+
+    fn wire_empty_toggle(&self, store: &gio::ListStore) {
+        let stack = self.imp().content_stack.clone();
+        store.connect_items_changed(move |store, _, _, _| {
+            let target = if store.n_items() > 0 { "grid" } else { "empty" };
+            stack.set_visible_child_name(target);
+        });
+    }
+
+    fn wire_create_buttons(&self, album_client: &AlbumClientV2) {
+        let imp = self.imp();
+        let ac = album_client.clone();
+        let connect_create = move |btn: &gtk::Button| {
+            let ac = ac.clone();
+            album_dialogs::show_create_album_dialog(btn, move |name| {
+                ac.create_album(name, vec![]);
+            });
+        };
+
+        let cb = connect_create.clone();
+        imp.new_album_btn.connect_clicked(move |btn| cb(btn));
+        imp.empty_new_btn
+            .connect_clicked(move |btn| connect_create(btn));
+    }
+
+    fn wire_activation(
+        &self,
+        settings: &gio::Settings,
+        texture_cache: &Rc<TextureCache>,
+        bus_sender: &crate::event_bus::EventSender,
+        store: &gio::ListStore,
+    ) {
+        let s = settings.clone();
+        let tc = Rc::clone(texture_cache);
+        let bs = bus_sender.clone();
+        let st = store.clone();
+        let nav = self.imp().nav_view.clone();
+
+        self.imp().grid_view.connect_activate(move |_, position| {
+            let Some(obj) = st.item(position) else { return };
+            let Some(item) = obj.downcast_ref::<AlbumItemObject>() else {
+                return;
+            };
+            let album_id_str = item.id();
+            let album_name = item.name();
+            let album_id = AlbumId::from_raw(album_id_str.clone());
+
+            debug!(album_id = %album_id_str, name = %album_name, "album activated");
+
+            actions::open_album_drilldown(&s, &tc, &bs, &nav, album_id, &album_name);
+        });
+    }
+
+    fn wire_context_menu(
+        &self,
+        settings: &gio::Settings,
+        texture_cache: &Rc<TextureCache>,
+        bus_sender: &crate::event_bus::EventSender,
+    ) {
+        let imp = self.imp();
+        let gesture = gtk::GestureClick::new();
+        gesture.set_button(3);
+
+        let gv = imp.grid_view.clone();
+        let nav = imp.nav_view.clone();
+        let s = settings.clone();
+        let tc = Rc::clone(texture_cache);
+        let bs = bus_sender.clone();
+
+        gesture.connect_pressed(move |gesture, _, x, y| {
+            actions::show_context_menu(&gv, &s, &tc, &bs, &nav, x, y);
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+        });
+
+        imp.grid_view.add_controller(gesture);
     }
 }
 
@@ -311,24 +345,20 @@ fn build_sort_menu() -> gio::Menu {
     menu
 }
 
-/// Sort the store in-place by the given sort order.
-fn sort_store(store: &gio::ListStore, order: u32) {
-    store.sort(|a, b| {
+/// Build a `CustomSorter` for the given sort order.
+fn build_sorter(order: u32) -> gtk::CustomSorter {
+    gtk::CustomSorter::new(move |a, b| {
         let a = a
             .downcast_ref::<AlbumItemObject>()
             .expect("store holds AlbumItemObject");
         let b = b
             .downcast_ref::<AlbumItemObject>()
             .expect("store holds AlbumItemObject");
-        sort_album_items(a, b, order)
-    });
-}
-
-/// Compare two album items for sorting.
-fn sort_album_items(a: &AlbumItemObject, b: &AlbumItemObject, order: u32) -> std::cmp::Ordering {
-    match order {
-        SORT_NAME => a.name().to_lowercase().cmp(&b.name().to_lowercase()),
-        SORT_CREATED => b.created_at().cmp(&a.created_at()),
-        _ => b.updated_at().cmp(&a.updated_at()),
-    }
+        match order {
+            SORT_NAME => a.name().to_lowercase().cmp(&b.name().to_lowercase()),
+            SORT_CREATED => b.created_at().cmp(&a.created_at()),
+            _ => b.updated_at().cmp(&a.updated_at()),
+        }
+        .into()
+    })
 }

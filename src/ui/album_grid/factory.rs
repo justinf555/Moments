@@ -1,7 +1,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use gettextrs::gettext;
+use gettextrs::{gettext, ngettext};
 use gtk::{prelude::*, subclass::prelude::*};
 
 use super::card::AlbumCard;
@@ -21,7 +21,6 @@ pub fn build_factory(
     factory.connect_setup(move |_, obj| {
         let list_item = obj.downcast_ref::<gtk::ListItem>().expect("is ListItem");
         let card = AlbumCard::new();
-        card.set_size_request(205, 205 + 52); // Cover + labels.
         list_item.set_child(Some(&card));
     });
 
@@ -44,11 +43,8 @@ pub fn build_factory(
         // Accessibility: label the card and its checkbox.
         let name = item.name();
         let count = item.media_count();
-        let card_label = if count == 1 {
-            format!("{name}, 1 photo")
-        } else {
-            format!("{name}, {count} photos")
-        };
+        let photos = ngettext("{} photo", "{} photos", count).replace("{}", &count.to_string());
+        let card_label = format!("{name}, {photos}");
         card.update_property(&[gtk::accessible::Property::Label(&card_label)]);
         let checkbox_label = format!("{} {name}", gettext("Select"));
         card.imp()
