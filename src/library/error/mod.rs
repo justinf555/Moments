@@ -31,6 +31,9 @@ pub enum LibraryError {
 
     #[error("immich error: {0}")]
     Immich(String),
+
+    #[error("server unreachable: {0}")]
+    Connectivity(String),
 }
 
 impl UserFacingError for LibraryError {

@@ -138,6 +138,7 @@ impl PullManager {
         let mut lines = reader.lines();
         let mut acks: Vec<String> = Vec::new();
         let mut counters = SyncCounters::default();
+        let mut notified_processing = false;
         let mut is_reset = false;
         let mut existing_ids: Option<HashSet<String>> = None;
         let mut line_number: usize = 0;
@@ -207,6 +208,13 @@ impl PullManager {
                         }
                         acks.push(sync_line.ack);
                         counters.increment(result.counter);
+
+                        // Notify UI on first processed item so the spinner
+                        // shows immediately, even for small syncs.
+                        if !notified_processing {
+                            let _ = self.sync_events.send(SyncEvent::Processing { items: 1 });
+                            notified_processing = true;
+                        }
 
                         // Track asset IDs for reset orphan detection.
                         if let Some(ref mut ids) = existing_ids {

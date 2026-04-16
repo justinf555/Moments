@@ -99,10 +99,18 @@ mod imp {
             // Drop all library-related state so the Arc<Library>
             // (and the SqlitePool it wraps) is freed before drop(tokio)
             // in main() tries to shut down the runtime.
+            // Shut down sync engine explicitly before dropping clients.
+            if let Some(ref handle) = *self.sync_handle.borrow() {
+                handle.shutdown();
+            }
+
             self.event_bus.borrow_mut().take();
+            self.sync_client.borrow_mut().take();
+            self.import_client.borrow_mut().take();
             self.album_client_v2.borrow_mut().take();
             self.people_client.borrow_mut().take();
             self.media_client.borrow_mut().take();
+            self.sync_handle.borrow_mut().take();
             self.library.borrow_mut().take();
 
             self.parent_shutdown();

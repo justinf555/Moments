@@ -23,12 +23,7 @@ pub enum SyncEvent {
 /// Check whether a sync error indicates a connectivity/network problem
 /// (offline) vs a server-side or protocol error.
 pub fn is_connectivity_error(err: &crate::library::error::LibraryError) -> bool {
-    let msg = err.to_string().to_lowercase();
-    msg.contains("connection refused")
-        || msg.contains("dns error")
-        || msg.contains("timed out")
-        || msg.contains("network is unreachable")
-        || msg.contains("no route to host")
+    matches!(err, crate::library::error::LibraryError::Connectivity(_))
 }
 
 #[cfg(test)]
