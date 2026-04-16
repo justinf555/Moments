@@ -31,7 +31,13 @@ impl SyncEntityHandler for AlbumHandler {
 
         ctx.library
             .albums()
-            .upsert_album(&album.id, &album.name, created_at, updated_at, Some(&album.id))
+            .upsert_album(
+                &album.id,
+                &album.name,
+                created_at,
+                updated_at,
+                Some(&album.id),
+            )
             .await?;
 
         ctx.events.send(AppEvent::AlbumCreated {
@@ -61,8 +67,7 @@ impl SyncEntityHandler for AlbumDeleteHandler {
         line_number: usize,
         ctx: &SyncContext,
     ) -> Result<HandlerResult, LibraryError> {
-        let delete: SyncAlbumDeleteV1 =
-            deserialize_entity(data, "AlbumDeleteV1", line_number)?;
+        let delete: SyncAlbumDeleteV1 = deserialize_entity(data, "AlbumDeleteV1", line_number)?;
         let id_str = delete.album_id.clone();
         let id = AlbumId::from_raw(id_str.clone());
         ctx.library.albums().delete_album(&id).await?;

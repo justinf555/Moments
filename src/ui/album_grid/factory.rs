@@ -59,7 +59,9 @@ pub fn build_factory(
         let name = item.name();
         let count = item.media_count();
         let photos = ngettext("{} photo", "{} photos", count).replace("{}", &count.to_string());
-        card.update_property(&[gtk::accessible::Property::Label(&format!("{name}, {photos}"))]);
+        card.update_property(&[gtk::accessible::Property::Label(&format!(
+            "{name}, {photos}"
+        ))]);
         let checkbox_label = format!("{} {name}", gettext("Select"));
         card.imp()
             .checkbox

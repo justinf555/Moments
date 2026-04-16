@@ -14,7 +14,6 @@ use crate::library::media::MediaId;
 #[derive(Debug, Clone)]
 pub enum Mutation {
     // ── Asset ────────────────────────────────────────────────────────
-
     /// A new asset was imported locally and may need uploading.
     AssetImported { id: MediaId, file_path: PathBuf },
 
@@ -37,7 +36,6 @@ pub enum Mutation {
     },
 
     // ── Album ────────────────────────────────────────────────────────
-
     /// A new album was created.
     AlbumCreated { id: AlbumId, name: String },
 
@@ -66,7 +64,6 @@ pub enum Mutation {
     },
 
     // ── People ───────────────────────────────────────────────────────
-
     /// A person was renamed.
     PersonRenamed { id: PersonId, name: String },
 
@@ -546,10 +543,7 @@ mod tests {
     #[test]
     fn mutation_clone_deep_copies_vecs() {
         let original = Mutation::AssetTrashed {
-            ids: vec![
-                MediaId::new("a".to_string()),
-                MediaId::new("b".to_string()),
-            ],
+            ids: vec![MediaId::new("a".to_string()), MediaId::new("b".to_string())],
         };
         let cloned = original.clone();
 

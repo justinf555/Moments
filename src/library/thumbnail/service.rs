@@ -30,10 +30,7 @@ pub fn sharded_original_path(originals_dir: &std::path::Path, id: &MediaId) -> P
     if hex.len() < 4 {
         return originals_dir.join(hex);
     }
-    originals_dir
-        .join(&hex[..2])
-        .join(&hex[2..4])
-        .join(hex)
+    originals_dir.join(&hex[..2]).join(&hex[2..4]).join(hex)
 }
 
 /// Return the relative portion of a sharded original path (no directory prefix).

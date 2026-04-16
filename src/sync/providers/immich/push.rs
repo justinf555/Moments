@@ -157,10 +157,7 @@ impl PushManager {
             Mutation::AssetTrashed { ids } => {
                 let external_id = self.lookup_media_external_id(ids[0].as_str()).await?;
                 self.client
-                    .delete_with_body(
-                        "/assets",
-                        &serde_json::json!({ "ids": [external_id] }),
-                    )
+                    .delete_with_body("/assets", &serde_json::json!({ "ids": [external_id] }))
                     .await
             }
 
@@ -228,8 +225,7 @@ impl PushManager {
                 media_ids,
             } => {
                 let external_id = self.lookup_album_external_id(album_id.as_str()).await?;
-                let external_media_ids =
-                    self.resolve_media_external_ids_list(&media_ids).await?;
+                let external_media_ids = self.resolve_media_external_ids_list(&media_ids).await?;
                 self.client
                     .put_no_content(
                         &format!("/albums/{external_id}/assets"),
@@ -243,8 +239,7 @@ impl PushManager {
                 media_ids,
             } => {
                 let external_id = self.lookup_album_external_id(album_id.as_str()).await?;
-                let external_media_ids =
-                    self.resolve_media_external_ids_list(&media_ids).await?;
+                let external_media_ids = self.resolve_media_external_ids_list(&media_ids).await?;
                 self.client
                     .delete_with_body(
                         &format!("/albums/{external_id}/assets"),
@@ -332,13 +327,15 @@ impl PushManager {
 
         Ok(rows
             .into_iter()
-            .map(|(id, entity_type, entity_id, action, payload)| OutboxEntry {
-                id,
-                entity_type,
-                entity_id,
-                action,
-                payload,
-            })
+            .map(
+                |(id, entity_type, entity_id, action, payload)| OutboxEntry {
+                    id,
+                    entity_type,
+                    entity_id,
+                    action,
+                    payload,
+                },
+            )
             .collect())
     }
 
@@ -383,9 +380,7 @@ impl PushManager {
 
         match row {
             Some((eid,)) => Ok(eid),
-            None => Err(LibraryError::Immich(format!(
-                "media not found: {local_id}"
-            ))),
+            None => Err(LibraryError::Immich(format!("media not found: {local_id}"))),
         }
     }
 
@@ -399,9 +394,7 @@ impl PushManager {
 
         match row {
             Some((eid,)) => Ok(eid),
-            None => Err(LibraryError::Immich(format!(
-                "album not found: {local_id}"
-            ))),
+            None => Err(LibraryError::Immich(format!("album not found: {local_id}"))),
         }
     }
 
@@ -469,11 +462,7 @@ impl PushManager {
     ) -> Result<Vec<String>, LibraryError> {
         let local_ids: Vec<&str> = payload["media_ids"]
             .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str())
-                    .collect::<Vec<_>>()
-            })
+            .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
             .unwrap_or_default();
 
         let mut external_ids = Vec::with_capacity(local_ids.len());
@@ -866,9 +855,11 @@ mod tests {
         let (_dir, db) = setup_push_db().await;
 
         // Use different relative_paths to avoid UNIQUE constraint conflict.
-        let mut r1 = record_with_taken_at(MediaId::new("m1".to_string()), "photos/a.jpg", Some(1_000));
+        let mut r1 =
+            record_with_taken_at(MediaId::new("m1".to_string()), "photos/a.jpg", Some(1_000));
         r1.external_id = Some("ext-m1".to_string());
-        let mut r2 = record_with_taken_at(MediaId::new("m2".to_string()), "photos/b.jpg", Some(2_000));
+        let mut r2 =
+            record_with_taken_at(MediaId::new("m2".to_string()), "photos/b.jpg", Some(2_000));
         r2.external_id = Some("ext-m2".to_string());
         db.upsert_media(&r1).await.unwrap();
         db.upsert_media(&r2).await.unwrap();

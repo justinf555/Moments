@@ -21,8 +21,7 @@ impl SyncEntityHandler for AlbumAssetHandler {
         line_number: usize,
         ctx: &SyncContext,
     ) -> Result<HandlerResult, LibraryError> {
-        let assoc: SyncAlbumToAssetV1 =
-            deserialize_entity(data, "AlbumToAssetV1", line_number)?;
+        let assoc: SyncAlbumToAssetV1 = deserialize_entity(data, "AlbumToAssetV1", line_number)?;
         let id = format!("{}:{}", assoc.album_id, assoc.asset_id);
 
         let now = chrono::Utc::now().timestamp();

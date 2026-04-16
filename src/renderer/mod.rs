@@ -16,4 +16,3 @@ pub mod orientation;
 pub mod output;
 pub mod pipeline;
 pub mod resize;
-

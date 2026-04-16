@@ -88,9 +88,7 @@ mod tests {
     use crate::library::thumbnail::sharded_original_path;
 
     fn make_resolver(originals_dir: PathBuf) -> CachedResolver {
-        let client = Arc::new(
-            ImmichClient::new("https://test.example.com", "fake-token").unwrap(),
-        );
+        let client = Arc::new(ImmichClient::new("https://test.example.com", "fake-token").unwrap());
         CachedResolver::new(client, originals_dir)
     }
 
@@ -118,10 +116,7 @@ mod tests {
         let dir = PathBuf::from("/data/originals");
         let id = MediaId::new("abcd".to_string());
         let path = sharded_original_path(&dir, &id);
-        assert_eq!(
-            path,
-            PathBuf::from("/data/originals/ab/cd/abcd")
-        );
+        assert_eq!(path, PathBuf::from("/data/originals/ab/cd/abcd"));
     }
 
     #[test]
@@ -146,9 +141,7 @@ mod tests {
         tokio::fs::create_dir_all(cache_path.parent().unwrap())
             .await
             .unwrap();
-        tokio::fs::write(&cache_path, b"cached data")
-            .await
-            .unwrap();
+        tokio::fs::write(&cache_path, b"cached data").await.unwrap();
 
         let result = resolver
             .resolve(&id, "irrelevant/path", Some("photo.jpeg"), None)
@@ -160,9 +153,7 @@ mod tests {
     #[tokio::test]
     async fn resolve_cache_miss_with_unreachable_server_returns_none() {
         let dir = tempfile::tempdir().unwrap();
-        let client = Arc::new(
-            ImmichClient::new("http://127.0.0.1:1", "fake-token").unwrap(),
-        );
+        let client = Arc::new(ImmichClient::new("http://127.0.0.1:1", "fake-token").unwrap());
         let resolver = CachedResolver::new(client, dir.path().to_path_buf());
         let id = MediaId::new("aabbccdd11223344".to_string());
 

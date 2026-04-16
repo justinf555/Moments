@@ -106,7 +106,7 @@ mod tests {
 
     #[test]
     fn immich_constants_are_sensible() {
-        assert!(providers::immich::ACK_FLUSH_THRESHOLD > 0);
+        const { assert!(providers::immich::ACK_FLUSH_THRESHOLD > 0) };
     }
 
     #[test]

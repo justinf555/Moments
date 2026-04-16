@@ -68,7 +68,10 @@ mod tests {
         std::fs::write(&file, b"not a photo").unwrap();
 
         let pipeline = test_pipeline();
-        assert!(matches!(filter(&file, &pipeline), FilterResult::Unsupported));
+        assert!(matches!(
+            filter(&file, &pipeline),
+            FilterResult::Unsupported
+        ));
     }
 
     #[test]
@@ -78,6 +81,9 @@ mod tests {
         std::fs::write(&file, b"mystery").unwrap();
 
         let pipeline = test_pipeline();
-        assert!(matches!(filter(&file, &pipeline), FilterResult::Unsupported));
+        assert!(matches!(
+            filter(&file, &pipeline),
+            FilterResult::Unsupported
+        ));
     }
 }

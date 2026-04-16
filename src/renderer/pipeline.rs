@@ -95,15 +95,14 @@ impl RenderPipeline {
         // Caller converts to output format via output::to_rgba() or output::to_webp().
         Ok(img)
     }
-
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use image::{GenericImageView, ImageFormat, RgbaImage};
-    use std::path::PathBuf;
     use std::io::Cursor;
+    use std::path::PathBuf;
 
     fn write_test_jpeg(dir: &Path, name: &str) -> PathBuf {
         let img = DynamicImage::ImageRgba8(RgbaImage::new(100, 50));
@@ -126,7 +125,13 @@ mod tests {
         let pipeline = test_pipeline();
 
         let img = pipeline
-            .render(&path, &RenderOptions { size: RenderSize::FullRes, edits: None })
+            .render(
+                &path,
+                &RenderOptions {
+                    size: RenderSize::FullRes,
+                    edits: None,
+                },
+            )
             .unwrap();
         assert_eq!(img.dimensions(), (100, 50));
     }
@@ -138,7 +143,13 @@ mod tests {
         let pipeline = test_pipeline();
 
         let img = pipeline
-            .render(&path, &RenderOptions { size: RenderSize::Thumbnail(20), edits: None })
+            .render(
+                &path,
+                &RenderOptions {
+                    size: RenderSize::Thumbnail(20),
+                    edits: None,
+                },
+            )
             .unwrap();
         assert!(img.width() <= 20);
         assert!(img.height() <= 20);
@@ -164,7 +175,13 @@ mod tests {
         edits.exposure.brightness = 0.5;
 
         let img = pipeline
-            .render(&path, &RenderOptions { size: RenderSize::FullRes, edits: Some(&edits) })
+            .render(
+                &path,
+                &RenderOptions {
+                    size: RenderSize::FullRes,
+                    edits: Some(&edits),
+                },
+            )
             .unwrap();
 
         let px = img.as_rgba8().unwrap().get_pixel(0, 0);
@@ -178,7 +195,13 @@ mod tests {
         let pipeline = test_pipeline();
 
         let img = pipeline
-            .render(&path, &RenderOptions { size: RenderSize::FullRes, edits: None })
+            .render(
+                &path,
+                &RenderOptions {
+                    size: RenderSize::FullRes,
+                    edits: None,
+                },
+            )
             .unwrap();
         assert_eq!(img.dimensions(), (100, 50));
     }
@@ -190,7 +213,13 @@ mod tests {
         let pipeline = test_pipeline();
 
         let img = pipeline
-            .render(&path, &RenderOptions { size: RenderSize::FullRes, edits: None })
+            .render(
+                &path,
+                &RenderOptions {
+                    size: RenderSize::FullRes,
+                    edits: None,
+                },
+            )
             .unwrap();
 
         let (bytes, w, h) = super::super::output::to_rgba(&img);

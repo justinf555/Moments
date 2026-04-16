@@ -73,12 +73,11 @@ impl MediaRepository {
 
     /// Return `true` if an asset with this content hash already exists (dedup check).
     pub async fn exists_by_content_hash(&self, hash: &str) -> Result<bool, LibraryError> {
-        let row: Option<(i64,)> =
-            sqlx::query_as("SELECT 1 FROM media WHERE content_hash = ?")
-                .bind(hash)
-                .fetch_optional(self.db.pool())
-                .await
-                .map_err(LibraryError::Db)?;
+        let row: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM media WHERE content_hash = ?")
+            .bind(hash)
+            .fetch_optional(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
         Ok(row.is_some())
     }
 

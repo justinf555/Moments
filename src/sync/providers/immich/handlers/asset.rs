@@ -41,8 +41,8 @@ async fn handle_asset(asset: SyncAssetV1, ctx: &SyncContext) -> Result<(), Libra
         _ => MediaType::Image,
     };
 
-    let taken_at = parse_datetime(&asset.local_date_time)
-        .or_else(|| parse_datetime(&asset.file_created_at));
+    let taken_at =
+        parse_datetime(&asset.local_date_time).or_else(|| parse_datetime(&asset.file_created_at));
 
     let imported_at =
         parse_datetime(&asset.file_created_at).unwrap_or_else(|| chrono::Utc::now().timestamp());
@@ -90,7 +90,15 @@ async fn handle_asset(asset: SyncAssetV1, ctx: &SyncContext) -> Result<(), Libra
     };
     ctx.events.send(AppEvent::AssetSynced { item });
 
-    if let Err(e) = download_thumbnail(&ctx.client, &ctx.library, &ctx.events, &ctx.thumbnails_dir, &media_id).await {
+    if let Err(e) = download_thumbnail(
+        &ctx.client,
+        &ctx.library,
+        &ctx.events,
+        &ctx.thumbnails_dir,
+        &media_id,
+    )
+    .await
+    {
         debug!(id = %media_id, "thumbnail download failed: {e}");
     }
 
@@ -111,15 +119,13 @@ impl SyncEntityHandler for AssetDeleteHandler {
         line_number: usize,
         ctx: &SyncContext,
     ) -> Result<HandlerResult, LibraryError> {
-        let delete: SyncAssetDeleteV1 =
-            deserialize_entity(data, "AssetDeleteV1", line_number)?;
+        let delete: SyncAssetDeleteV1 = deserialize_entity(data, "AssetDeleteV1", line_number)?;
         let id = delete.asset_id.clone();
         let media_id = MediaId::new(id.clone());
         ctx.library
             .delete_permanently_from_sync(std::slice::from_ref(&media_id))
             .await?;
-        ctx.events
-            .send(AppEvent::AssetDeletedRemote { media_id });
+        ctx.events.send(AppEvent::AssetDeletedRemote { media_id });
         Ok(HandlerResult {
             entity_id: id,
             audit_action: "delete",

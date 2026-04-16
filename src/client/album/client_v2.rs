@@ -96,7 +96,9 @@ impl AlbumClientV2 {
 
     fn deps(&self) -> (Arc<Library>, tokio::runtime::Handle) {
         let deps = self.imp().deps.borrow();
-        let deps = deps.as_ref().expect("AlbumClientV2::configure() not called");
+        let deps = deps
+            .as_ref()
+            .expect("AlbumClientV2::configure() not called");
         (deps.library.clone(), deps.tokio.clone())
     }
 
@@ -117,11 +119,9 @@ impl AlbumClientV2 {
                 if !media_ids.is_empty() {
                     library.albums().add_to_album(&id, &media_ids).await?;
                 }
-                library
-                    .albums()
-                    .get_album(&id)
-                    .await?
-                    .ok_or_else(|| LibraryError::Runtime(format!("album {id} not found after create")))
+                library.albums().get_album(&id).await?.ok_or_else(|| {
+                    LibraryError::Runtime(format!("album {id} not found after create"))
+                })
             })
             .await;
 
@@ -155,21 +155,17 @@ impl AlbumClientV2 {
             for id in ids {
                 let lib = Arc::clone(&library);
                 let aid = id.clone();
-                let result =
-                    crate::client::spawn_on(&tokio, async move {
-                        lib.albums().delete_album(&aid).await
-                    })
-                    .await;
+                let result = crate::client::spawn_on(&tokio, async move {
+                    lib.albums().delete_album(&aid).await
+                })
+                .await;
 
                 match result {
                     Ok(()) => {
                         debug!(album_id = %id, "album deleted");
                         if let Some(client) = client_weak.upgrade() {
                             client.remove_from_models(&id);
-                            client.emit_by_name::<()>(
-                                "album-deleted",
-                                &[&id.as_str().to_string()],
-                            );
+                            client.emit_by_name::<()>("album-deleted", &[&id.as_str().to_string()]);
                         }
                     }
                     Err(e) => {
@@ -191,16 +187,15 @@ impl AlbumClientV2 {
 
         glib::MainContext::default().spawn_local(async move {
             let aid = album_id.clone();
-            let result =
-                crate::client::spawn_on(&tokio, async move {
-                    library.albums().add_to_album(&aid, &media_ids).await?;
-                    library
-                        .albums()
-                        .get_album(&aid)
-                        .await?
-                        .ok_or_else(|| LibraryError::Runtime(format!("album {aid} not found")))
-                })
-                .await;
+            let result = crate::client::spawn_on(&tokio, async move {
+                library.albums().add_to_album(&aid, &media_ids).await?;
+                library
+                    .albums()
+                    .get_album(&aid)
+                    .await?
+                    .ok_or_else(|| LibraryError::Runtime(format!("album {aid} not found")))
+            })
+            .await;
 
             match result {
                 Ok(album) => {
@@ -227,16 +222,15 @@ impl AlbumClientV2 {
 
         glib::MainContext::default().spawn_local(async move {
             let aid = album_id.clone();
-            let result =
-                crate::client::spawn_on(&tokio, async move {
-                    library.albums().remove_from_album(&aid, &media_ids).await?;
-                    library
-                        .albums()
-                        .get_album(&aid)
-                        .await?
-                        .ok_or_else(|| LibraryError::Runtime(format!("album {aid} not found")))
-                })
-                .await;
+            let result = crate::client::spawn_on(&tokio, async move {
+                library.albums().remove_from_album(&aid, &media_ids).await?;
+                library
+                    .albums()
+                    .get_album(&aid)
+                    .await?
+                    .ok_or_else(|| LibraryError::Runtime(format!("album {aid} not found")))
+            })
+            .await;
 
             match result {
                 Ok(album) => {
@@ -264,11 +258,10 @@ impl AlbumClientV2 {
         glib::MainContext::default().spawn_local(async move {
             let rename_id = id.clone();
             let n = name.clone();
-            let result =
-                crate::client::spawn_on(&tokio, async move {
-                    library.albums().rename_album(&rename_id, &n).await
-                })
-                .await;
+            let result = crate::client::spawn_on(&tokio, async move {
+                library.albums().rename_album(&rename_id, &n).await
+            })
+            .await;
 
             match result {
                 Ok(()) => {
@@ -306,11 +299,10 @@ impl AlbumClientV2 {
 
         glib::MainContext::default().spawn_local(async move {
             let pin_id = id.clone();
-            let result =
-                crate::client::spawn_on(&tokio, async move {
-                    library.albums().set_pinned(&pin_id, pinned).await
-                })
-                .await;
+            let result = crate::client::spawn_on(&tokio, async move {
+                library.albums().set_pinned(&pin_id, pinned).await
+            })
+            .await;
 
             match result {
                 Ok(()) => {
@@ -351,9 +343,10 @@ impl AlbumClientV2 {
 
         glib::MainContext::default().spawn_local(async move {
             let result =
-                crate::client::spawn_on(&tokio, async move {
-                    library.albums().list_albums().await
-                })
+                crate::client::spawn_on(
+                    &tokio,
+                    async move { library.albums().list_albums().await },
+                )
                 .await;
 
             match result {
@@ -457,7 +450,10 @@ impl AlbumClientV2 {
             // Single spawn: fetch cover IDs + decode thumbnails.
             let aid_query = aid.clone();
             let decoded = crate::client::spawn_on(&tokio, async move {
-                let cover_ids = library.albums().album_cover_media_ids(&aid_query, 4).await?;
+                let cover_ids = library
+                    .albums()
+                    .album_cover_media_ids(&aid_query, 4)
+                    .await?;
                 if cover_ids.is_empty() {
                     return Ok(Vec::new());
                 }
@@ -784,7 +780,9 @@ mod tests {
     #[test]
     fn texture_from_rgba_creates_valid_texture() {
         // 2x2 red RGBA pixels.
-        let pixels = vec![255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255];
+        let pixels = vec![
+            255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255,
+        ];
         let texture = texture_from_rgba(&pixels, 2, 2);
         assert_eq!(texture.width(), 2);
         assert_eq!(texture.height(), 2);

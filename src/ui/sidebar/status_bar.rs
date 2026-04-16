@@ -60,8 +60,7 @@ impl StatusBar {
         let (bar_stack, idle_label, sync_label, thumb_label, upload_label, complete_label) =
             build_status_bar_stack();
 
-        let (sheet_box, progress_label, progress_bar, detail_label) =
-            build_upload_detail_sheet();
+        let (sheet_box, progress_label, progress_bar, detail_label) = build_upload_detail_sheet();
 
         let bottom_sheet = build_bottom_sheet(toolbar_view, &sheet_box, &bar_stack);
 
@@ -282,7 +281,14 @@ fn build_status_bar_page(
     (hbox, label)
 }
 
-fn build_status_bar_stack() -> (gtk::Stack, gtk::Label, gtk::Label, gtk::Label, gtk::Label, gtk::Label) {
+fn build_status_bar_stack() -> (
+    gtk::Stack,
+    gtk::Label,
+    gtk::Label,
+    gtk::Label,
+    gtk::Label,
+    gtk::Label,
+) {
     let bar_stack = gtk::Stack::new();
     bar_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
     bar_stack.set_transition_duration(200);
@@ -322,7 +328,14 @@ fn build_status_bar_stack() -> (gtk::Stack, gtk::Label, gtk::Label, gtk::Label, 
     );
     bar_stack.add_named(&complete_box, Some("complete"));
 
-    (bar_stack, idle_label, sync_label, thumb_label, upload_label, complete_label)
+    (
+        bar_stack,
+        idle_label,
+        sync_label,
+        thumb_label,
+        upload_label,
+        complete_label,
+    )
 }
 
 fn build_upload_detail_sheet() -> (gtk::Box, gtk::Label, gtk::ProgressBar, gtk::Label) {

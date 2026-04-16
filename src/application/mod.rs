@@ -550,19 +550,19 @@ impl MomentsApplication {
 
                 let recorder: std::sync::Arc<dyn crate::library::recorder::MutationRecorder> =
                     if immich_client.is_some() {
-                        std::sync::Arc::new(crate::sync::outbox::QueueWriterOutbox::new(
-                            db.clone(),
-                        ))
+                        std::sync::Arc::new(crate::sync::outbox::QueueWriterOutbox::new(db.clone()))
                     } else {
                         std::sync::Arc::new(crate::sync::outbox::NoOpRecorder)
                     };
 
                 let resolver: std::sync::Arc<dyn crate::library::resolver::OriginalResolver> =
                     if let Some(ref client) = immich_client {
-                        std::sync::Arc::new(crate::sync::providers::immich::resolver::CachedResolver::new(
-                            std::sync::Arc::new(client.clone()),
-                            originals_dir.clone(),
-                        ))
+                        std::sync::Arc::new(
+                            crate::sync::providers::immich::resolver::CachedResolver::new(
+                                std::sync::Arc::new(client.clone()),
+                                originals_dir.clone(),
+                            ),
+                        )
                     } else {
                         std::sync::Arc::new(crate::library::resolver::LocalResolver::new(
                             originals_dir.clone(),
@@ -614,10 +614,7 @@ impl MomentsApplication {
                         // Create the album client (GObject singleton).
                         {
                             let album_client_v2 = crate::client::AlbumClientV2::new();
-                            album_client_v2.configure(
-                                Arc::clone(&library),
-                                tokio.clone(),
-                            );
+                            album_client_v2.configure(Arc::clone(&library), tokio.clone());
                             *app.imp().album_client_v2.borrow_mut() = Some(album_client_v2);
                         }
 
@@ -709,7 +706,8 @@ impl MomentsApplication {
                                 .settings
                                 .get()
                                 .expect("settings initialised")
-                                .uint("sync-interval-seconds") as u64;
+                                .uint("sync-interval-seconds")
+                                as u64;
                             let handle = crate::sync::SyncHandle::start(
                                 client,
                                 lib,

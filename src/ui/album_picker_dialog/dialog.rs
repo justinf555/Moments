@@ -273,8 +273,7 @@ fn connect_signals(
             let album_id = i.selected_album_id.borrow().clone();
             if let Some(album_id) = album_id {
                 debug!(%album_id, count = i.media_ids.len(), "adding to album");
-                i.album_client
-                    .add_to_album(album_id, i.media_ids.clone());
+                i.album_client.add_to_album(album_id, i.media_ids.clone());
                 i.dialog.close();
             }
         });
@@ -304,8 +303,7 @@ fn connect_signals(
                 return;
             }
             debug!(%name, count = i.media_ids.len(), "creating album and adding");
-            i.album_client
-                .create_album(name, i.media_ids.clone());
+            i.album_client.create_album(name, i.media_ids.clone());
             i.dialog.close();
         };
 

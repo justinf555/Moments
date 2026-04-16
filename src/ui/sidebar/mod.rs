@@ -80,9 +80,7 @@ mod imp {
                 .expect("pinned_section not initialized")
         }
         pub fn status_bar(&self) -> &super::StatusBar {
-            self.status_bar
-                .get()
-                .expect("status_bar not initialized")
+            self.status_bar.get().expect("status_bar not initialized")
         }
     }
 
@@ -166,10 +164,8 @@ mod imp {
                 obj.downcast_ref::<crate::client::AlbumItemObject>()
                     .is_some_and(|item| item.pinned())
             });
-            let pinned_model = gtk::FilterListModel::new(
-                None::<gio::ListModel>,
-                Some(filter.clone()),
-            );
+            let pinned_model =
+                gtk::FilterListModel::new(None::<gio::ListModel>, Some(filter.clone()));
             let _ = self.pinned_filter.set(filter);
             let _ = self.pinned_model.set(pinned_model);
 
@@ -213,7 +209,8 @@ mod imp {
                         let album_client = crate::application::MomentsApplication::default()
                             .album_client_v2()
                             .expect("album client v2 available");
-                        album_client.unpin_album(crate::library::album::AlbumId::from_raw(obj.id()));
+                        album_client
+                            .unpin_album(crate::library::album::AlbumId::from_raw(obj.id()));
                     }
                 });
             }
@@ -265,7 +262,10 @@ mod imp {
                         people,
                         faces,
                     } => {
-                        sidebar.imp().status_bar().show_sync_progress(*assets, *people, *faces);
+                        sidebar
+                            .imp()
+                            .status_bar()
+                            .show_sync_progress(*assets, *people, *faces);
                     }
                     crate::app_event::AppEvent::SyncComplete { .. } => {
                         sidebar.imp().status_bar().show_sync_complete();
@@ -479,7 +479,9 @@ impl MomentsSidebar {
         let weak = self.downgrade();
         pinned_model.connect_items_changed(move |model, pos, removed, added| {
             debug!(
-                pos, removed, added,
+                pos,
+                removed,
+                added,
                 total = model.n_items(),
                 "pinned filter items_changed"
             );
@@ -531,5 +533,4 @@ impl MomentsSidebar {
             }
         }
     }
-
 }

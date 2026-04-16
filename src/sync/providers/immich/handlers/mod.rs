@@ -24,19 +24,19 @@ use crate::library::Library;
 
 use super::client::ImmichClient;
 
-pub use album::AlbumHandler;
 pub use album::AlbumDeleteHandler;
-pub use album_asset::AlbumAssetHandler;
+pub use album::AlbumHandler;
 pub use album_asset::AlbumAssetDeleteHandler;
-pub use asset::AssetHandler;
+pub use album_asset::AlbumAssetHandler;
 pub use asset::AssetDeleteHandler;
+pub use asset::AssetHandler;
 pub use asset_exif::AssetExifHandler;
-pub use asset_face::AssetFaceHandler;
 pub use asset_face::AssetFaceDeleteHandler;
-pub use person::PersonHandler;
+pub use asset_face::AssetFaceHandler;
 pub use person::PersonDeleteHandler;
-pub use sync_lifecycle::SyncResetHandler;
+pub use person::PersonHandler;
 pub use sync_lifecycle::SyncCompleteHandler;
+pub use sync_lifecycle::SyncResetHandler;
 
 /// Which counter to increment on success.
 #[derive(Debug, Clone, Copy)]

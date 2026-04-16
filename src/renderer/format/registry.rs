@@ -14,7 +14,6 @@ pub const VIDEO_EXTENSIONS: &[&str] = &[
     "mp4", "mov", "m4v", "mkv", "webm", "avi", "mts", "m2ts", "3gp",
 ];
 
-
 /// Decodes image files of a specific set of formats into a [`image::DynamicImage`].
 ///
 /// Implement this trait for each format family (standard, RAW, etc.) and
@@ -132,7 +131,10 @@ impl FormatRegistry {
     /// Returns `true` if the file at `path` is HEIC/HEIF (by magic bytes).
     pub fn is_heif_by_magic(&self, path: &Path) -> bool {
         use super::detect::{detect_format, DetectedFormat, ImageFormat};
-        matches!(detect_format(path), Ok(DetectedFormat::Image(ImageFormat::Heif)))
+        matches!(
+            detect_format(path),
+            Ok(DetectedFormat::Image(ImageFormat::Heif))
+        )
     }
 
     /// Determine the [`MediaType`] using content sniffing with extension fallback.

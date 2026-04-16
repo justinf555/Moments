@@ -47,8 +47,8 @@ impl OutboxRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::library::mutation::Mutation;
     use crate::library::media::MediaId;
+    use crate::library::mutation::Mutation;
 
     async fn open_db() -> (tempfile::TempDir, Database) {
         let dir = tempfile::tempdir().unwrap();
@@ -98,14 +98,12 @@ mod tests {
 
         repo.insert(&rows[0]).await.unwrap();
 
-        let row: (Option<String>,) =
-            sqlx::query_as("SELECT payload FROM sync_outbox WHERE id = 1")
-                .fetch_one(db.pool())
-                .await
-                .unwrap();
+        let row: (Option<String>,) = sqlx::query_as("SELECT payload FROM sync_outbox WHERE id = 1")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
 
-        let payload: serde_json::Value =
-            serde_json::from_str(row.0.as_deref().unwrap()).unwrap();
+        let payload: serde_json::Value = serde_json::from_str(row.0.as_deref().unwrap()).unwrap();
         assert_eq!(payload["name"], "Vacation");
     }
 }

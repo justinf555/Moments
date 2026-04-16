@@ -182,9 +182,7 @@ impl ContextMenuBin {
             return;
         }
         if let Some(popover) = imp.popover.borrow().as_ref() {
-            popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
-                x as i32, y as i32, 1, 1,
-            )));
+            popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
             debug!("context menu opened at ({x}, {y})");
             popover.popup();
         }

@@ -54,10 +54,9 @@ impl FormatHandler for RawHandler {
         }
 
         // Last resort: smallest embedded thumbnail.
-        if let Some(img) = decoder
-            .thumbnail_image(&source, &params)
-            .map_err(|e| RenderError::DecodeFailed(format!("RAW thumbnail extraction failed: {e}")))?
-        {
+        if let Some(img) = decoder.thumbnail_image(&source, &params).map_err(|e| {
+            RenderError::DecodeFailed(format!("RAW thumbnail extraction failed: {e}"))
+        })? {
             return Ok(img);
         }
 

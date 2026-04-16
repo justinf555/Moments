@@ -25,10 +25,7 @@ impl MetadataService {
     }
 
     /// Insert or replace metadata from the sync stream.
-    pub async fn upsert_metadata(
-        &self,
-        record: &MediaMetadataRecord,
-    ) -> Result<(), LibraryError> {
+    pub async fn upsert_metadata(&self, record: &MediaMetadataRecord) -> Result<(), LibraryError> {
         self.repo.upsert(record).await
     }
 

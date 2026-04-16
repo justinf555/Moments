@@ -79,8 +79,7 @@ impl SyncEntityHandler for PersonDeleteHandler {
         line_number: usize,
         ctx: &SyncContext,
     ) -> Result<HandlerResult, LibraryError> {
-        let delete: SyncPersonDeleteV1 =
-            deserialize_entity(data, "PersonDeleteV1", line_number)?;
+        let delete: SyncPersonDeleteV1 = deserialize_entity(data, "PersonDeleteV1", line_number)?;
         let id = delete.person_id.clone();
         ctx.library.faces().delete_person_by_id(&id).await?;
         Ok(HandlerResult {

@@ -87,7 +87,10 @@ mod tests {
         );
         let id = super::super::media::MediaId::new("test-id".to_string());
 
-        let result = resolver.resolve(&id,"2025/01/photo.jpg", None, None).await.unwrap();
+        let result = resolver
+            .resolve(&id, "2025/01/photo.jpg", None, None)
+            .await
+            .unwrap();
         assert_eq!(result, Some(photo_path));
     }
 
@@ -100,7 +103,10 @@ mod tests {
         );
         let id = super::super::media::MediaId::new("test-id".to_string());
 
-        let result = resolver.resolve(&id,"nonexistent/photo.jpg", None, None).await.unwrap();
+        let result = resolver
+            .resolve(&id, "nonexistent/photo.jpg", None, None)
+            .await
+            .unwrap();
         assert!(result.is_none());
     }
 
@@ -154,8 +160,14 @@ mod tests {
         let id1 = super::super::media::MediaId::new("id-a".to_string());
         let id2 = super::super::media::MediaId::new("id-b".to_string());
 
-        let r1 = resolver.resolve(&id1, "photo.jpg", None, None).await.unwrap();
-        let r2 = resolver.resolve(&id2, "photo.jpg", None, None).await.unwrap();
+        let r1 = resolver
+            .resolve(&id1, "photo.jpg", None, None)
+            .await
+            .unwrap();
+        let r2 = resolver
+            .resolve(&id2, "photo.jpg", None, None)
+            .await
+            .unwrap();
         assert_eq!(r1, r2);
     }
 }

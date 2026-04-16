@@ -181,7 +181,9 @@ impl PullManager {
             }
 
             // ── Dispatch to handler ─────────────────────────────────
-            if let Some(handler) = entity_handlers.iter().find(|h| h.entity_type() == entity_type)
+            if let Some(handler) = entity_handlers
+                .iter()
+                .find(|h| h.entity_type() == entity_type)
             {
                 let audit_id = self
                     .db
@@ -192,10 +194,7 @@ impl PullManager {
                 match handler.handle(&sync_line.data, line_number, &ctx).await {
                     Ok(result) => {
                         if let Some(aid) = audit_id {
-                            let _ = self
-                                .db
-                                .complete_sync_audit(aid, result.audit_action)
-                                .await;
+                            let _ = self.db.complete_sync_audit(aid, result.audit_action).await;
                         }
                         acks.push(sync_line.ack);
                         counters.increment(result.counter);
@@ -385,13 +384,12 @@ mod tests {
 
         db.complete_sync_audit(row_id, "upsert").await.unwrap();
 
-        let row: (String, Option<String>) = sqlx::query_as(
-            "SELECT action, completed_at FROM sync_audit WHERE id = ?",
-        )
-        .bind(row_id)
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
+        let row: (String, Option<String>) =
+            sqlx::query_as("SELECT action, completed_at FROM sync_audit WHERE id = ?")
+                .bind(row_id)
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
         assert_eq!(row.0, "upsert");
         assert!(row.1.is_some());
     }
@@ -408,13 +406,12 @@ mod tests {
 
         db.fail_sync_audit(row_id, "parse error").await.unwrap();
 
-        let row: (String, Option<String>) = sqlx::query_as(
-            "SELECT action, error_msg FROM sync_audit WHERE id = ?",
-        )
-        .bind(row_id)
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
+        let row: (String, Option<String>) =
+            sqlx::query_as("SELECT action, error_msg FROM sync_audit WHERE id = ?")
+                .bind(row_id)
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
         assert_eq!(row.0, "error");
         assert_eq!(row.1.as_deref(), Some("parse error"));
     }
@@ -430,21 +427,19 @@ mod tests {
         ];
         db.save_sync_checkpoints(&pairs).await.unwrap();
 
-        let row: (String,) = sqlx::query_as(
-            "SELECT ack FROM sync_checkpoints WHERE entity_type = 'AssetV1'",
-        )
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
+        let row: (String,) =
+            sqlx::query_as("SELECT ack FROM sync_checkpoints WHERE entity_type = 'AssetV1'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
         assert_eq!(row.0, "ack-asset-100");
 
         db.clear_sync_checkpoints().await.unwrap();
 
-        let count: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM sync_checkpoints")
-                .fetch_one(db.pool())
-                .await
-                .unwrap();
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sync_checkpoints")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
         assert_eq!(count.0, 0);
     }
 
@@ -459,12 +454,11 @@ mod tests {
         let pairs2 = vec![("AssetV1".to_string(), "ack-2".to_string())];
         db.save_sync_checkpoints(&pairs2).await.unwrap();
 
-        let row: (String,) = sqlx::query_as(
-            "SELECT ack FROM sync_checkpoints WHERE entity_type = 'AssetV1'",
-        )
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
+        let row: (String,) =
+            sqlx::query_as("SELECT ack FROM sync_checkpoints WHERE entity_type = 'AssetV1'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
         assert_eq!(row.0, "ack-2");
     }
 
@@ -540,9 +534,7 @@ mod tests {
                 .unwrap();
         assert_eq!(count2.0, 1);
 
-        db.delete_album_media_entry("alb-1", "med-1")
-            .await
-            .unwrap();
+        db.delete_album_media_entry("alb-1", "med-1").await.unwrap();
         let count3: (i64,) =
             sqlx::query_as("SELECT COUNT(*) FROM album_media WHERE album_id = 'alb-1'")
                 .fetch_one(db.pool())

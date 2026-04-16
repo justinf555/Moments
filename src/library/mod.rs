@@ -137,10 +137,7 @@ impl Library {
     ///
     /// Used by pull sync when processing server-driven deletions —
     /// these should not be pushed back to the server.
-    pub async fn delete_permanently_from_sync(
-        &self,
-        ids: &[MediaId],
-    ) -> Result<(), LibraryError> {
+    pub async fn delete_permanently_from_sync(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
         let original_paths = self.media.collect_original_paths(ids).await;
         self.media.delete_permanently_no_record(ids).await?;
         self.cleanup_files(ids, &original_paths).await;

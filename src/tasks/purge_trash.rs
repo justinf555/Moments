@@ -58,7 +58,10 @@ async fn purge_expired(
         return;
     }
 
-    info!(count = expired.len(), retention_days, "purging expired trash");
+    info!(
+        count = expired.len(),
+        retention_days, "purging expired trash"
+    );
 
     if let Err(e) = library.delete_permanently(&expired).await {
         error!("failed to purge expired trash: {e}");

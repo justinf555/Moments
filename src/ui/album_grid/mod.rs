@@ -310,7 +310,6 @@ impl AlbumGridView {
             actions::open_album_drilldown(&s, &tc, &bs, &nav, album_id, &album_name);
         });
     }
-
 }
 
 // ── Free functions ───────────────────────────────────────────────────────────

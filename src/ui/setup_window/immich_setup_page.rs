@@ -193,14 +193,12 @@ impl MomentsImmichSetupPage {
                 }
                 Ok(Err(e)) => {
                     error!("validation failed: {e}");
-                    imp.status_label
-                        .set_text(&format!("Server error: {e}"));
+                    imp.status_label.set_text(&format!("Server error: {e}"));
                     imp.status_label.add_css_class("error");
                 }
                 Err(e) => {
                     error!("tokio join error: {e}");
-                    imp.status_label
-                        .set_text(&format!("Internal error: {e}"));
+                    imp.status_label.set_text(&format!("Internal error: {e}"));
                     imp.status_label.add_css_class("error");
                 }
             }

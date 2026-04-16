@@ -163,11 +163,10 @@ mod tests {
             .await
             .unwrap();
 
-        let row: (String,) =
-            sqlx::query_as("SELECT action FROM sync_outbox WHERE id = 1")
-                .fetch_one(db.pool())
-                .await
-                .unwrap();
+        let row: (String,) = sqlx::query_as("SELECT action FROM sync_outbox WHERE id = 1")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
         assert_eq!(row.0, "unfavorite");
     }
 
@@ -300,8 +299,7 @@ mod tests {
         assert_eq!(row.0, "album");
         assert_eq!(row.1, "album-del");
         assert_eq!(row.2, "delete");
-        let payload: serde_json::Value =
-            serde_json::from_str(row.3.as_deref().unwrap()).unwrap();
+        let payload: serde_json::Value = serde_json::from_str(row.3.as_deref().unwrap()).unwrap();
         assert_eq!(payload["external_id"], "ext-del");
     }
 
@@ -430,11 +428,10 @@ mod tests {
             .await
             .unwrap();
 
-        let row: (Option<String>,) =
-            sqlx::query_as("SELECT payload FROM sync_outbox WHERE id = 1")
-                .fetch_one(db.pool())
-                .await
-                .unwrap();
+        let row: (Option<String>,) = sqlx::query_as("SELECT payload FROM sync_outbox WHERE id = 1")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
 
         let payload: serde_json::Value = serde_json::from_str(row.0.as_deref().unwrap()).unwrap();
         assert_eq!(payload["hidden"], false);

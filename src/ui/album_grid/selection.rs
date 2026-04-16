@@ -89,10 +89,11 @@ pub(crate) fn wire_selection_mode(cfg: &SelectionConfig<'_>) {
     // Update selection count label when selection changes.
     {
         let title = selection_title.clone();
-        cfg.multi_selection.connect_selection_changed(move |sel, _, _| {
-            let count = sel.selection().size() as u32;
-            title.set_text(&format!("{count} selected"));
-        });
+        cfg.multi_selection
+            .connect_selection_changed(move |sel, _, _| {
+                let count = sel.selection().size() as u32;
+                title.set_text(&format!("{count} selected"));
+            });
     }
 
     // Wire batch-delete button in the action bar.

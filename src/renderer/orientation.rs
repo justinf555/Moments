@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use image::DynamicImage;
 
-use crate::renderer::format::FormatRegistry;
 use crate::library::metadata::exif::extract_exif;
+use crate::renderer::format::FormatRegistry;
 
 /// Full orientation pipeline step: read EXIF, skip when inappropriate, apply.
 ///

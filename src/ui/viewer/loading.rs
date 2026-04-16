@@ -70,7 +70,10 @@ impl PhotoViewer {
             let bus = imp.bus_sender().clone();
             drop(viewer);
             glib::MainContext::default().spawn_local(async move {
-                let result: Option<Result<(Vec<u8>, u32, u32), crate::renderer::error::RenderError>> = tokio
+                #[allow(clippy::type_complexity)]
+                let result: Option<
+                    Result<(Vec<u8>, u32, u32), crate::renderer::error::RenderError>,
+                > = tokio
                     .spawn(async move {
                         tokio::task::spawn_blocking(move || {
                             let options = RenderOptions {

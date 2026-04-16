@@ -146,9 +146,7 @@ impl MediaService {
         self.repo.trash(ids).await?;
         if let Err(e) = self
             .recorder
-            .record(&Mutation::AssetTrashed {
-                ids: ids.to_vec(),
-            })
+            .record(&Mutation::AssetTrashed { ids: ids.to_vec() })
             .await
         {
             warn!(error = %e, "failed to record AssetTrashed mutation");
@@ -160,9 +158,7 @@ impl MediaService {
         self.repo.restore(ids).await?;
         if let Err(e) = self
             .recorder
-            .record(&Mutation::AssetRestored {
-                ids: ids.to_vec(),
-            })
+            .record(&Mutation::AssetRestored { ids: ids.to_vec() })
             .await
         {
             warn!(error = %e, "failed to record AssetRestored mutation");
@@ -195,10 +191,7 @@ impl MediaService {
     }
 
     /// Permanently delete without outbox recording (used by pull sync).
-    pub async fn delete_permanently_no_record(
-        &self,
-        ids: &[MediaId],
-    ) -> Result<(), LibraryError> {
+    pub async fn delete_permanently_no_record(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
         self.repo.delete_permanently(ids).await
     }
 
