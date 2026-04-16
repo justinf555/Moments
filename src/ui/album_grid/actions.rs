@@ -180,9 +180,13 @@ pub(crate) fn show_context_menu(
     popover.set_parent(grid_view);
     popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
     popover.set_has_arrow(true);
-    popover.insert_action_group("ctx", Some(&action_group));
+    // Install action group on the grid_view so GTK's action resolution
+    // finds it when walking up from the PopoverMenu.
+    grid_view.insert_action_group("ctx", Some(&action_group));
 
-    popover.connect_closed(|p| {
+    let gv = grid_view.clone();
+    popover.connect_closed(move |p| {
+        gv.insert_action_group("ctx", None::<&gio::SimpleActionGroup>);
         p.unparent();
     });
     popover.popup();
