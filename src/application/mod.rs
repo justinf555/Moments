@@ -49,7 +49,7 @@ mod imp {
         pub library: RefCell<Option<Arc<Library>>>,
         pub import_client: RefCell<Option<crate::client::import_client::ImportClient>>,
         pub album_client_v2: RefCell<Option<crate::client::AlbumClientV2>>,
-        pub people_client: RefCell<Option<crate::client::PeopleClient>>,
+        pub people_client: RefCell<Option<crate::client::PeopleClientV2>>,
         pub media_client: RefCell<Option<crate::client::MediaClient>>,
         pub render_pipeline: RefCell<Option<Arc<crate::renderer::pipeline::RenderPipeline>>>,
         pub is_immich: Cell<bool>,
@@ -213,7 +213,7 @@ impl MomentsApplication {
     ///
     /// Available from anywhere via `MomentsApplication::default().people_client()`.
     /// Returns `None` if no library is open yet.
-    pub fn people_client(&self) -> Option<crate::client::PeopleClient> {
+    pub fn people_client(&self) -> Option<crate::client::PeopleClientV2> {
         self.imp().people_client.borrow().clone()
     }
 
@@ -619,9 +619,11 @@ impl MomentsApplication {
                         }
 
                         // Create the people client (GObject singleton).
+                        // Subscribe to FacesEvent for reactive model updates.
                         {
-                            let people_client = crate::client::PeopleClient::new();
-                            people_client.configure(Arc::clone(&library), tokio.clone());
+                            let faces_rx = library.faces().subscribe().await;
+                            let people_client = crate::client::PeopleClientV2::new();
+                            people_client.configure(Arc::clone(&library), tokio.clone(), faces_rx);
                             *app.imp().people_client.borrow_mut() = Some(people_client);
                         }
 

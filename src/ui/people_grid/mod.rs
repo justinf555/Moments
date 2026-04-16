@@ -5,7 +5,7 @@ use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gio, glib};
 
-use crate::client::PeopleClient;
+use crate::client::PeopleClientV2;
 use crate::ui::photo_grid::texture_cache::TextureCache;
 
 mod actions;
@@ -13,6 +13,9 @@ pub mod cell;
 pub mod factory;
 
 /// Shared filter state for the people grid.
+///
+/// Toggle buttons mutate this state, then call `changed()` on the
+/// `gtk::CustomFilter` so the `FilterListModel` re-evaluates visibility.
 pub(crate) struct PeopleFilter {
     include_hidden: Cell<bool>,
     include_unnamed: Cell<bool>,
@@ -39,11 +42,12 @@ mod imp {
         pub hidden_toggle: TemplateChild<gtk::ToggleButton>,
 
         // Service dependencies
-        pub people_client: OnceCell<PeopleClient>,
+        pub people_client: OnceCell<PeopleClientV2>,
 
         // State
         pub(super) store: OnceCell<gio::ListStore>,
-        pub(super) filter: OnceCell<Rc<PeopleFilter>>,
+        pub(super) filter_model: OnceCell<gtk::FilterListModel>,
+        pub(super) filter_state: OnceCell<Rc<PeopleFilter>>,
     }
 
     #[glib::object_subclass]
@@ -107,68 +111,71 @@ impl PeopleGridView {
             "setup called twice"
         );
 
-        let filter = Rc::new(PeopleFilter {
+        let filter_state = Rc::new(PeopleFilter {
             include_hidden: Cell::new(false),
             include_unnamed: Cell::new(false),
         });
 
-        let store = people_client.create_model(false, false);
+        // Client returns all people — filtering happens here via FilterListModel.
+        let store = people_client.create_model();
+
+        let fs = Rc::clone(&filter_state);
+        let custom_filter = gtk::CustomFilter::new(move |obj| {
+            let Some(person) = obj.downcast_ref::<crate::client::PersonItemObject>() else {
+                return false;
+            };
+            if person.is_hidden() && !fs.include_hidden.get() {
+                return false;
+            }
+            if person.name().is_empty() && !fs.include_unnamed.get() {
+                return false;
+            }
+            true
+        });
+
+        let filter_model =
+            gtk::FilterListModel::new(Some(store.clone()), Some(custom_filter.clone()));
 
         let cell_size = 140;
         let factory = factory::build_factory(cell_size);
-        let selection = gtk::NoSelection::new(Some(store.clone()));
+        let selection = gtk::NoSelection::new(Some(filter_model.clone()));
         imp.grid_view.set_model(Some(&selection));
         imp.grid_view.set_factory(Some(&factory));
 
-        // Wire toggle buttons to repopulate via client.
+        // Wire toggle buttons to update filter state and re-evaluate.
         {
-            let f = Rc::clone(&filter);
-            let s = store.clone();
-            let pc = people_client.clone();
+            let fs = Rc::clone(&filter_state);
+            let cf = custom_filter.clone();
             imp.unnamed_toggle.connect_toggled(move |btn| {
-                f.include_unnamed.set(btn.is_active());
-                pc.populate(&s, f.include_hidden.get(), btn.is_active());
+                fs.include_unnamed.set(btn.is_active());
+                cf.changed(gtk::FilterChange::Different);
             });
         }
         {
-            let f = Rc::clone(&filter);
-            let s = store.clone();
-            let pc = people_client.clone();
+            let fs = Rc::clone(&filter_state);
+            let cf = custom_filter;
             imp.hidden_toggle.connect_toggled(move |btn| {
-                f.include_hidden.set(btn.is_active());
-                pc.populate(&s, btn.is_active(), f.include_unnamed.get());
+                fs.include_hidden.set(btn.is_active());
+                cf.changed(gtk::FilterChange::Different);
             });
         }
 
         // Wire item activation and context menu.
         actions::wire_activation(
             &imp.grid_view,
-            &store,
+            &filter_model,
             &imp.nav_view,
             &settings,
             &texture_cache,
             &bus_sender,
         );
-        actions::wire_context_menu(&imp.grid_view, &store, &people_client);
+        actions::wire_context_menu(&imp.grid_view, &filter_model, &people_client);
 
         // Initial populate.
-        people_client.populate(&store, false, false);
+        people_client.list_people(&store);
 
         assert!(imp.store.set(store).is_ok());
-        assert!(imp.filter.set(filter).is_ok());
-    }
-
-    /// Reload the people grid from the database.
-    pub fn reload(&self) {
-        let imp = self.imp();
-        if let (Some(store), Some(people_client), Some(filter)) =
-            (imp.store.get(), imp.people_client.get(), imp.filter.get())
-        {
-            people_client.populate(
-                store,
-                filter.include_hidden.get(),
-                filter.include_unnamed.get(),
-            );
-        }
+        assert!(imp.filter_model.set(filter_model).is_ok());
+        assert!(imp.filter_state.set(filter_state).is_ok());
     }
 }

@@ -288,10 +288,6 @@ impl PullManager {
             errors: counters.errors,
         });
 
-        if counters.people > 0 || counters.faces > 0 {
-            self.events.send(AppEvent::PeopleSyncComplete);
-        }
-
         if counters.assets > 0 || counters.errors > 0 {
             info!(
                 synced = counters.assets,

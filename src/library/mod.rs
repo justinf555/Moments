@@ -34,7 +34,7 @@ use thumbnail::ThumbnailService;
 /// Constructed via [`Library::open`] with a validated [`Bundle`] and
 /// [`LocalStorageMode`]. All operations are accessed via service accessors
 /// (`media()`, `albums()`, `faces()`, etc.) or through the client layer
-/// (`MediaClient`, `AlbumClientV2`, `PeopleClient`).
+/// (`MediaClient`, `AlbumClientV2`, `PeopleClientV2`).
 pub struct Library {
     albums: AlbumService,
     faces: FacesService,
