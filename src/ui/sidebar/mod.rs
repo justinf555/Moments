@@ -25,6 +25,8 @@ mod imp {
         /// Route IDs in display order (matches sidebar item indices).
         pub active_routes: RefCell<Vec<&'static str>>,
         pub pinned_section: OnceCell<adw::SidebarSection>,
+        /// Underlying album store — must be kept alive for the filter to work.
+        pub pinned_store: OnceCell<gio::ListStore>,
         /// Filtered model of pinned albums — drives the pinned sidebar section.
         pub pinned_model: OnceCell<gtk::FilterListModel>,
         pub trash_badge: OnceCell<gtk::Label>,
@@ -47,6 +49,7 @@ mod imp {
                 people_item: OnceCell::new(),
                 active_routes: RefCell::new(Vec::new()),
                 pinned_section: OnceCell::new(),
+                pinned_store: OnceCell::new(),
                 pinned_model: OnceCell::new(),
                 trash_badge: OnceCell::new(),
                 trash_count: Cell::new(0),
@@ -440,6 +443,10 @@ impl MomentsSidebar {
 
         let store = album_client.create_model();
         album_client.list_albums(&store);
+
+        // Keep the store alive — the FilterListModel holds a weak-ish
+        // reference and the store would be dropped otherwise.
+        let _ = imp.pinned_store.set(store.clone());
 
         let Some(pinned_model) = imp.pinned_model.get() else {
             return;
