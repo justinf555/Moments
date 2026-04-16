@@ -217,7 +217,7 @@ impl MomentsWindow {
         {
             let weak = self.downgrade();
             import_client.connect_notify_local(Some("state"), move |client, _| {
-                if client.state() == crate::client::import_client::ImportState::Complete {
+                if client.state() == crate::client::ImportState::Complete {
                     let weak = weak.clone();
                     glib::idle_add_local_once(move || {
                         if let Some(win) = weak.upgrade() {
