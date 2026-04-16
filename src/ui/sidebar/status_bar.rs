@@ -112,11 +112,15 @@ impl StatusBar {
         self.start_idle_timer();
     }
 
+    // Sync display methods are unused now — SyncClient handles state.
+    // Will be removed with the StatusBar in Phase 3 (ActivityIndicator).
+    #[allow(dead_code)]
     pub fn show_sync_started(&self) {
         self.sync_label.set_text("Syncing...");
         self.set_status(StatusState::Sync, "sync");
     }
 
+    #[allow(dead_code)]
     pub fn show_sync_progress(&self, assets: usize, people: usize, faces: usize) {
         let total = assets + people + faces;
         self.sync_label
@@ -124,6 +128,7 @@ impl StatusBar {
         self.set_status(StatusState::Sync, "sync");
     }
 
+    #[allow(dead_code)]
     pub fn show_sync_complete(&self) {
         self.last_synced_at
             .set(Some(chrono::Utc::now().timestamp()));

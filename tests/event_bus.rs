@@ -28,12 +28,12 @@ fn single_subscriber_receives_event() {
     let received = Rc::new(Cell::new(false));
     let r = Rc::clone(&received);
     let _sub = bus.subscribe(move |event| {
-        if matches!(event, AppEvent::SyncStarted) {
+        if matches!(event, AppEvent::Ready) {
             r.set(true);
         }
     });
 
-    bus.sender().send(AppEvent::SyncStarted);
+    bus.sender().send(AppEvent::Ready);
     flush_events();
 
     assert!(received.get());
@@ -48,13 +48,13 @@ fn multiple_subscribers_all_receive() {
     for _ in 0..3 {
         let c = Rc::clone(&count);
         subs.push(bus.subscribe(move |event| {
-            if matches!(event, AppEvent::SyncStarted) {
+            if matches!(event, AppEvent::Ready) {
                 c.set(c.get() + 1);
             }
         }));
     }
 
-    bus.sender().send(AppEvent::SyncStarted);
+    bus.sender().send(AppEvent::Ready);
     flush_events();
 
     assert_eq!(count.get(), 3);
@@ -67,17 +67,12 @@ fn subscribers_ignore_unmatched_events() {
     let received = Rc::new(Cell::new(false));
     let r = Rc::clone(&received);
     let _sub = bus.subscribe(move |event| {
-        if matches!(event, AppEvent::SyncStarted) {
+        if matches!(event, AppEvent::Ready) {
             r.set(true);
         }
     });
 
-    bus.sender().send(AppEvent::SyncComplete {
-        assets: 0,
-        people: 0,
-        faces: 0,
-        errors: 0,
-    });
+    bus.sender().send(AppEvent::ShutdownComplete);
     flush_events();
 
     assert!(
@@ -94,8 +89,8 @@ fn multiple_events_delivered_in_order() {
     let l = Rc::clone(&log);
     let _sub = bus.subscribe(move |event| {
         let name = match event {
-            AppEvent::SyncStarted => "start",
-            AppEvent::SyncComplete { .. } => "complete",
+            AppEvent::Ready => "ready",
+            AppEvent::ShutdownComplete => "shutdown",
             AppEvent::ThumbnailReady { .. } => "thumb",
             _ => return,
         };
@@ -103,23 +98,18 @@ fn multiple_events_delivered_in_order() {
     });
 
     let tx = bus.sender();
-    tx.send(AppEvent::SyncStarted);
+    tx.send(AppEvent::Ready);
     tx.send(AppEvent::ThumbnailReady {
         media_id: MediaId::new("abc".to_string()),
     });
-    tx.send(AppEvent::SyncComplete {
-        assets: 10,
-        people: 0,
-        faces: 0,
-        errors: 0,
-    });
+    tx.send(AppEvent::ShutdownComplete);
     flush_events();
 
     let entries = log.borrow();
     assert_eq!(entries.len(), 3);
-    assert_eq!(entries[0], "start");
+    assert_eq!(entries[0], "ready");
     assert_eq!(entries[1], "thumb");
-    assert_eq!(entries[2], "complete");
+    assert_eq!(entries[2], "shutdown");
 }
 
 // ── Cross-thread delivery ───────────────────────────────────────────────────
@@ -131,14 +121,14 @@ fn sender_works_from_another_thread() {
     let received = Rc::new(Cell::new(false));
     let r = Rc::clone(&received);
     let _sub = bus.subscribe(move |event| {
-        if matches!(event, AppEvent::SyncStarted) {
+        if matches!(event, AppEvent::Ready) {
             r.set(true);
         }
     });
 
     let tx = bus.sender();
     std::thread::spawn(move || {
-        tx.send(AppEvent::SyncStarted);
+        tx.send(AppEvent::Ready);
     })
     .join()
     .unwrap();
@@ -215,12 +205,12 @@ fn drop_cleans_up_thread_local_state() {
     let received = Rc::new(Cell::new(false));
     let r = Rc::clone(&received);
     let _sub = bus.subscribe(move |event| {
-        if matches!(event, AppEvent::SyncStarted) {
+        if matches!(event, AppEvent::Ready) {
             r.set(true);
         }
     });
 
-    bus.sender().send(AppEvent::SyncStarted);
+    bus.sender().send(AppEvent::Ready);
     flush_events();
 
     assert!(received.get(), "new bus after drop should work");
@@ -240,7 +230,7 @@ fn dropping_subscription_during_dispatch_does_not_panic() {
     let b_count = Rc::new(Cell::new(0u32));
     let bc = Rc::clone(&b_count);
     let sub = bus.subscribe(move |event| {
-        if matches!(event, AppEvent::SyncStarted) {
+        if matches!(event, AppEvent::Ready) {
             bc.set(bc.get() + 1);
         }
     });
@@ -248,7 +238,7 @@ fn dropping_subscription_during_dispatch_does_not_panic() {
 
     let sb = Rc::clone(&sub_b);
     let _sub_a = bus.subscribe(move |event| {
-        if matches!(event, AppEvent::SyncStarted) {
+        if matches!(event, AppEvent::Ready) {
             // Drop subscriber B's subscription from within dispatch.
             sb.borrow_mut().take();
         }
@@ -257,7 +247,7 @@ fn dropping_subscription_during_dispatch_does_not_panic() {
     // First event: A drops B's subscription during dispatch.
     // B still fires because the SUBSCRIBERS immutable borrow is held for the entire
     // dispatch cycle — the removal is deferred until after the loop completes.
-    bus.sender().send(AppEvent::SyncStarted);
+    bus.sender().send(AppEvent::Ready);
     flush_events();
     assert_eq!(
         b_count.get(),
@@ -266,7 +256,7 @@ fn dropping_subscription_during_dispatch_does_not_panic() {
     );
 
     // Second event: B should no longer fire — it was removed after the first cycle.
-    bus.sender().send(AppEvent::SyncStarted);
+    bus.sender().send(AppEvent::Ready);
     flush_events();
     assert_eq!(b_count.get(), 1, "B should not fire after being dropped");
 }
@@ -280,19 +270,19 @@ fn dropping_subscription_removes_subscriber() {
     let count = Rc::new(Cell::new(0u32));
     let c = Rc::clone(&count);
     let sub = bus.subscribe(move |event| {
-        if matches!(event, AppEvent::SyncStarted) {
+        if matches!(event, AppEvent::Ready) {
             c.set(c.get() + 1);
         }
     });
 
-    bus.sender().send(AppEvent::SyncStarted);
+    bus.sender().send(AppEvent::Ready);
     flush_events();
     assert_eq!(count.get(), 1);
 
     // Drop the subscription — subscriber should be removed.
     drop(sub);
 
-    bus.sender().send(AppEvent::SyncStarted);
+    bus.sender().send(AppEvent::Ready);
     flush_events();
     assert_eq!(count.get(), 1, "subscriber should not fire after drop");
 }

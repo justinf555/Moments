@@ -196,10 +196,13 @@ impl ImmichClient {
         method: &str,
         path: &str,
     ) -> Result<reqwest::Response, LibraryError> {
-        let resp = request
-            .send()
-            .await
-            .map_err(|e| LibraryError::Immich(format!("{method} {path} failed: {e}")))?;
+        let resp = request.send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() {
+                LibraryError::Connectivity(format!("{method} {path} failed: {e}"))
+            } else {
+                LibraryError::Immich(format!("{method} {path} failed: {e}"))
+            }
+        })?;
 
         let status = resp.status();
         if !status.is_success() {

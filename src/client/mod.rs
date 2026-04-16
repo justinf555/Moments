@@ -2,11 +2,13 @@ pub mod album;
 pub mod import_client;
 pub mod media;
 pub mod people;
+pub mod sync;
 
 pub use album::{AlbumClientV2, AlbumItemObject};
 pub use import_client::{ImportClient, ImportState};
 pub use media::{MediaClient, MediaItemObject};
 pub use people::{PeopleClientV2, PersonItemObject};
+pub use sync::{SyncClient, SyncState};
 
 use std::future::Future;
 
