@@ -143,12 +143,8 @@ impl FacesService {
 
     // ── Query methods ───────────────────────────────────────────────
 
-    pub async fn list_people(
-        &self,
-        include_hidden: bool,
-        include_unnamed: bool,
-    ) -> Result<Vec<Person>, LibraryError> {
-        self.repo.list_people(include_hidden, include_unnamed).await
+    pub async fn list_people(&self) -> Result<Vec<Person>, LibraryError> {
+        self.repo.list_people().await
     }
 
     pub async fn get_person(&self, person_id: &PersonId) -> Result<Option<Person>, LibraryError> {

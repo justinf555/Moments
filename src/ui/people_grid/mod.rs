@@ -148,7 +148,12 @@ impl PeopleGridView {
             let cf = custom_filter.clone();
             imp.unnamed_toggle.connect_toggled(move |btn| {
                 fs.include_unnamed.set(btn.is_active());
-                cf.changed(gtk::FilterChange::Different);
+                let change = if btn.is_active() {
+                    gtk::FilterChange::LessStrict
+                } else {
+                    gtk::FilterChange::MoreStrict
+                };
+                cf.changed(change);
             });
         }
         {
@@ -156,7 +161,12 @@ impl PeopleGridView {
             let cf = custom_filter;
             imp.hidden_toggle.connect_toggled(move |btn| {
                 fs.include_hidden.set(btn.is_active());
-                cf.changed(gtk::FilterChange::Different);
+                let change = if btn.is_active() {
+                    gtk::FilterChange::LessStrict
+                } else {
+                    gtk::FilterChange::MoreStrict
+                };
+                cf.changed(change);
             });
         }
 

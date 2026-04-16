@@ -14,14 +14,8 @@ use super::Database;
 
 impl Database {
     /// Forwarding shim — delegates to `FacesRepository`.
-    pub async fn list_people(
-        &self,
-        include_hidden: bool,
-        include_unnamed: bool,
-    ) -> Result<Vec<crate::library::faces::Person>, LibraryError> {
-        FacesRepository::new(self.clone())
-            .list_people(include_hidden, include_unnamed)
-            .await
+    pub async fn list_people(&self) -> Result<Vec<crate::library::faces::Person>, LibraryError> {
+        FacesRepository::new(self.clone()).list_people().await
     }
 
     /// Forwarding shim — delegates to `FacesRepository`.
