@@ -122,12 +122,13 @@ impl FacesService {
     }
 
     /// Update the denormalized face count for a person.
+    ///
+    /// No `FacesEvent` is emitted — `face_count` is not exposed as a
+    /// GObject property on `PersonItemObject`, so there is nothing to
+    /// patch on the client. Emitting here would cause an O(faces) storm
+    /// of no-op DB roundtrips during bulk sync.
     pub async fn update_face_count(&self, person_id: &str) -> Result<(), LibraryError> {
-        self.repo.update_face_count(person_id).await?;
-        self.emit(FacesEvent::PersonUpdated(PersonId::from_raw(
-            person_id.to_string(),
-        )));
-        Ok(())
+        self.repo.update_face_count(person_id).await
     }
 
     /// Clear all people (for reset sync).
@@ -162,6 +163,11 @@ impl FacesService {
         Ok(ids.into_iter().map(MediaId::new).collect())
     }
 
+    /// Rename a person.
+    ///
+    /// No `FacesEvent` is emitted — `PeopleClientV2` patches the model
+    /// directly in its success callback to avoid a redundant DB roundtrip.
+    /// Callers that bypass the client must patch the UI themselves.
     pub async fn rename_person(
         &self,
         person_id: &PersonId,
@@ -181,6 +187,11 @@ impl FacesService {
         Ok(())
     }
 
+    /// Set a person's hidden state.
+    ///
+    /// No `FacesEvent` is emitted — `PeopleClientV2` patches the model
+    /// directly in its success callback to avoid a redundant DB roundtrip.
+    /// Callers that bypass the client must patch the UI themselves.
     pub async fn set_person_hidden(
         &self,
         person_id: &PersonId,

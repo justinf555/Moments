@@ -3,8 +3,8 @@ use super::model::PersonId;
 /// Events emitted by `FacesService` after state changes.
 ///
 /// Consumed by `PeopleClientV2` to patch ListStore models in-place.
-/// Sent via `tokio::sync::mpsc` — single producer (service), single
-/// consumer (client).
+/// Sent via `tokio::sync::mpsc` — multiple producers possible via
+/// `FacesService: Clone`, single consumer (client).
 #[derive(Debug, Clone)]
 pub enum FacesEvent {
     /// A new person was added (sync upsert, no prior row).

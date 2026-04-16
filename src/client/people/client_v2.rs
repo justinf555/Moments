@@ -282,32 +282,39 @@ impl PeopleClientV2 {
 
     // ── Model patching (private) ───────────────────────────────────────
 
-    /// Insert a person into all tracked models.
+    /// Insert a person into all tracked models. Prunes dead weak refs.
     fn insert_into_models(&self, person: &Person, thumb: Option<std::path::PathBuf>) {
-        let models = self.imp().models.borrow();
+        let mut models = self.imp().models.borrow_mut();
         let obj = PersonItemObject::new(person, thumb);
-        for weak in models.iter() {
+        models.retain(|weak| {
             if let Some(store) = weak.upgrade() {
                 store.append(&obj);
+                true
+            } else {
+                false
             }
-        }
+        });
         debug!(person_id = %person.id, "insert_into_models");
     }
 
     /// Find a person by ID across all tracked models and apply an update.
+    /// Prunes dead weak refs.
     fn update_in_models(&self, id: &str, update: impl Fn(&PersonItemObject)) {
-        let models = self.imp().models.borrow();
+        let mut models = self.imp().models.borrow_mut();
         let mut updated = 0u32;
         let mut live = 0u32;
-        for weak in models.iter() {
+        models.retain(|weak| {
             if let Some(store) = weak.upgrade() {
                 live += 1;
                 if let Some(item) = find_by_id(&store, id) {
                     update(&item);
                     updated += 1;
                 }
+                true
+            } else {
+                false
             }
-        }
+        });
         debug!(
             person_id = id,
             live_models = live,
