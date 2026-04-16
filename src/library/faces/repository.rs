@@ -42,35 +42,17 @@ impl FacesRepository {
 
     // ── Read queries ────────────────────────────────────────────────
 
-    /// List people, ordered by face count descending.
-    pub async fn list_people(
-        &self,
-        include_hidden: bool,
-        include_unnamed: bool,
-    ) -> Result<Vec<Person>, LibraryError> {
-        let mut conditions = Vec::new();
-        if !include_hidden {
-            conditions.push("is_hidden = 0");
-        }
-        if !include_unnamed {
-            conditions.push("name != ''");
-        }
-
-        let where_clause = if conditions.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", conditions.join(" AND "))
-        };
-
-        let sql = format!(
-            "SELECT id, name, face_count, is_hidden FROM people {} ORDER BY face_count DESC, name ASC",
-            where_clause
-        );
-
-        let rows: Vec<PersonRow> = sqlx::query_as(&sql)
-            .fetch_all(self.db.pool())
-            .await
-            .map_err(LibraryError::Db)?;
+    /// List all people, ordered by face count descending.
+    ///
+    /// Returns every person (hidden, unnamed, all). Filtering is done
+    /// at the widget layer via `gtk::FilterListModel`.
+    pub async fn list_people(&self) -> Result<Vec<Person>, LibraryError> {
+        let rows: Vec<PersonRow> = sqlx::query_as(
+            "SELECT id, name, face_count, is_hidden FROM people ORDER BY face_count DESC, name ASC",
+        )
+        .fetch_all(self.db.pool())
+        .await
+        .map_err(LibraryError::Db)?;
 
         Ok(rows
             .into_iter()
@@ -300,7 +282,7 @@ mod tests {
             .await
             .unwrap();
 
-        let people = repo.list_people(true, true).await.unwrap();
+        let people = repo.list_people().await.unwrap();
         assert_eq!(people.len(), 2);
     }
 
@@ -316,13 +298,13 @@ mod tests {
             .await
             .unwrap();
 
-        let people = repo.list_people(true, true).await.unwrap();
+        let people = repo.list_people().await.unwrap();
         assert_eq!(people.len(), 1);
         assert_eq!(people[0].name, "Alice Smith");
     }
 
     #[tokio::test]
-    async fn list_people_excludes_hidden() {
+    async fn list_people_includes_hidden_and_unnamed() {
         let dir = tempdir().unwrap();
         let (repo, _media, _db) = test_repo(dir.path()).await;
 
@@ -332,33 +314,12 @@ mod tests {
         repo.upsert_person("p2", "Hidden", None, true, false, None, None, None)
             .await
             .unwrap();
-
-        let visible = repo.list_people(false, true).await.unwrap();
-        assert_eq!(visible.len(), 1);
-        assert_eq!(visible[0].name, "Alice");
-
-        let all = repo.list_people(true, true).await.unwrap();
-        assert_eq!(all.len(), 2);
-    }
-
-    #[tokio::test]
-    async fn list_people_excludes_unnamed() {
-        let dir = tempdir().unwrap();
-        let (repo, _media, _db) = test_repo(dir.path()).await;
-
-        repo.upsert_person("p1", "Alice", None, false, false, None, None, None)
-            .await
-            .unwrap();
-        repo.upsert_person("p2", "", None, false, false, None, None, None)
+        repo.upsert_person("p3", "", None, false, false, None, None, None)
             .await
             .unwrap();
 
-        let named = repo.list_people(true, false).await.unwrap();
-        assert_eq!(named.len(), 1);
-        assert_eq!(named[0].name, "Alice");
-
-        let all = repo.list_people(true, true).await.unwrap();
-        assert_eq!(all.len(), 2);
+        let all = repo.list_people().await.unwrap();
+        assert_eq!(all.len(), 3);
     }
 
     #[tokio::test]
@@ -421,7 +382,7 @@ mod tests {
         repo.update_face_count("p1").await.unwrap();
         repo.update_face_count("p2").await.unwrap();
 
-        let people = repo.list_people(true, true).await.unwrap();
+        let people = repo.list_people().await.unwrap();
         assert_eq!(people[0].name, "Bob"); // 2 faces
         assert_eq!(people[0].face_count, 2);
         assert_eq!(people[1].name, "Alice"); // 1 face
@@ -438,7 +399,7 @@ mod tests {
             .unwrap();
         repo.delete_person("p1").await.unwrap();
 
-        let people = repo.list_people(true, true).await.unwrap();
+        let people = repo.list_people().await.unwrap();
         assert!(people.is_empty());
     }
 
@@ -452,7 +413,7 @@ mod tests {
             .unwrap();
         repo.rename_person("p1", "Alice Smith").await.unwrap();
 
-        let people = repo.list_people(true, true).await.unwrap();
+        let people = repo.list_people().await.unwrap();
         assert_eq!(people[0].name, "Alice Smith");
     }
 
@@ -466,10 +427,7 @@ mod tests {
             .unwrap();
         repo.set_person_hidden("p1", true).await.unwrap();
 
-        let visible = repo.list_people(false, true).await.unwrap();
-        assert!(visible.is_empty());
-
-        let all = repo.list_people(true, true).await.unwrap();
+        let all = repo.list_people().await.unwrap();
         assert_eq!(all.len(), 1);
         assert!(all[0].is_hidden);
     }
@@ -509,7 +467,7 @@ mod tests {
         let media = repo.list_media_for_person("p1").await.unwrap();
         assert!(media.is_empty());
 
-        let people = repo.list_people(true, true).await.unwrap();
+        let people = repo.list_people().await.unwrap();
         assert_eq!(people[0].face_count, 0);
     }
 
@@ -589,7 +547,7 @@ mod tests {
         repo.clear_asset_faces().await.unwrap();
         repo.clear_people().await.unwrap();
 
-        let people = repo.list_people(true, true).await.unwrap();
+        let people = repo.list_people().await.unwrap();
         assert!(people.is_empty());
 
         let media = repo.list_media_for_person("p1").await.unwrap();

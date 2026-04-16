@@ -180,8 +180,8 @@ impl PeopleClientV2 {
 
     /// Fetch all people and splice into the given model.
     ///
-    /// Loads every person (hidden, unnamed, all) from the service and
-    /// replaces the model contents. Views should call this on realize.
+    /// Loads every person from the service and replaces the model
+    /// contents. Views apply their own filtering via `FilterListModel`.
     #[instrument(skip(self, model))]
     pub fn list_people(&self, model: &gio::ListStore) {
         let (library, tokio) = self.deps();
@@ -189,10 +189,9 @@ impl PeopleClientV2 {
 
         glib::MainContext::default().spawn_local(async move {
             let lib = library.clone();
-            let result = crate::client::spawn_on(&tokio, async move {
-                lib.faces().list_people(true, true).await
-            })
-            .await;
+            let result =
+                crate::client::spawn_on(&tokio, async move { lib.faces().list_people().await })
+                    .await;
 
             match result {
                 Ok(people) => {
