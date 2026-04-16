@@ -21,7 +21,9 @@ mod imp {
     use gtk::CompositeTemplate;
 
     #[derive(Default, CompositeTemplate)]
-    #[template(resource = "/io/github/justinf555/Moments/ui/widgets/activity_indicator/activity_indicator.ui")]
+    #[template(
+        resource = "/io/github/justinf555/Moments/ui/widgets/activity_indicator/activity_indicator.ui"
+    )]
     pub struct ActivityIndicator {
         #[template_child]
         pub(super) menu_button: TemplateChild<gtk::MenuButton>,
@@ -97,6 +99,24 @@ mod imp {
             self.parent_realize();
             self.obj().bind_clients();
         }
+
+        fn unrealize(&self) {
+            let app = crate::application::MomentsApplication::default();
+            for id in self.app_handlers.borrow_mut().drain(..) {
+                app.disconnect(id);
+            }
+            if let Some(sc) = app.sync_client() {
+                for id in self.sync_handlers.borrow_mut().drain(..) {
+                    sc.disconnect(id);
+                }
+            }
+            if let Some(ic) = app.import_client() {
+                for id in self.import_handlers.borrow_mut().drain(..) {
+                    ic.disconnect(id);
+                }
+            }
+            self.parent_unrealize();
+        }
     }
 }
 
@@ -132,26 +152,24 @@ impl ActivityIndicator {
         let mut app_handlers = self.imp().app_handlers.borrow_mut();
 
         let weak = self.downgrade();
-        app_handlers.push(app.connect_notify_local(
-            Some("sync-client"),
-            move |app, _| {
+        app_handlers.push(
+            app.connect_notify_local(Some("sync-client"), move |app, _| {
                 let Some(this) = weak.upgrade() else { return };
                 if let Some(sc) = app.sync_client() {
                     this.bind_sync_client(&sc);
                 }
-            },
-        ));
+            }),
+        );
 
         let weak = self.downgrade();
-        app_handlers.push(app.connect_notify_local(
-            Some("import-client"),
-            move |app, _| {
+        app_handlers.push(
+            app.connect_notify_local(Some("import-client"), move |app, _| {
                 let Some(this) = weak.upgrade() else { return };
                 if let Some(ic) = app.import_client() {
                     this.bind_import_client(&ic);
                 }
-            },
-        ));
+            }),
+        );
     }
 
     fn bind_sync_client(&self, client: &SyncClient) {
@@ -165,46 +183,40 @@ impl ActivityIndicator {
 
         // React to state changes.
         let weak = self.downgrade();
-        handlers.push(client.connect_notify_local(Some("state"), move |client, _| {
-            let Some(this) = weak.upgrade() else { return };
-            this.on_sync_state_changed(client);
-        }));
+        handlers.push(
+            client.connect_notify_local(Some("state"), move |client, _| {
+                let Some(this) = weak.upgrade() else { return };
+                this.on_sync_state_changed(client);
+            }),
+        );
 
         // React to items-processed changes (update label while syncing).
         let weak = self.downgrade();
-        handlers.push(client.connect_notify_local(
-            Some("items-processed"),
-            move |client, _| {
+        handlers.push(
+            client.connect_notify_local(Some("items-processed"), move |client, _| {
                 let Some(this) = weak.upgrade() else { return };
                 if client.state() == SyncState::Syncing {
                     let items = client.items_processed();
                     let text = if items > 0 {
-                        format!(
-                            "{} {}",
-                            gettext("Syncing\u{2026}"),
-                            ngettext_items(items)
-                        )
+                        format!("{} {}", gettext("Syncing\u{2026}"), ngettext_items(items))
                     } else {
                         gettext("Syncing\u{2026}")
                     };
                     this.imp().sync_label.set_text(&text);
                 }
-            },
-        ));
+            }),
+        );
 
         // React to last-synced-at changes (update idle popover text).
         let weak = self.downgrade();
-        handlers.push(client.connect_notify_local(
-            Some("last-synced-at"),
-            move |client, _| {
+        handlers.push(
+            client.connect_notify_local(Some("last-synced-at"), move |client, _| {
                 let Some(this) = weak.upgrade() else { return };
-                if client.state() == SyncState::Idle
-                    || client.state() == SyncState::Complete
-                {
+                if client.state() == SyncState::Idle || client.state() == SyncState::Complete {
                     this.update_idle_sync_label(client.last_synced_at());
                 }
-            },
-        ));
+            }),
+        );
 
         // Set initial state.
         self.on_sync_state_changed(client);
@@ -221,19 +233,23 @@ impl ActivityIndicator {
 
         // React to state changes.
         let weak = self.downgrade();
-        handlers.push(client.connect_notify_local(Some("state"), move |client, _| {
-            let Some(this) = weak.upgrade() else { return };
-            this.on_import_state_changed(client);
-        }));
+        handlers.push(
+            client.connect_notify_local(Some("state"), move |client, _| {
+                let Some(this) = weak.upgrade() else { return };
+                this.on_import_state_changed(client);
+            }),
+        );
 
         // React to progress (current) changes.
         let weak = self.downgrade();
-        handlers.push(client.connect_notify_local(Some("current"), move |client, _| {
-            let Some(this) = weak.upgrade() else { return };
-            if client.state() == ImportState::Running {
-                this.update_import_progress(client);
-            }
-        }));
+        handlers.push(
+            client.connect_notify_local(Some("current"), move |client, _| {
+                let Some(this) = weak.upgrade() else { return };
+                if client.state() == ImportState::Running {
+                    this.update_import_progress(client);
+                }
+            }),
+        );
     }
 
     // ── Sync state transitions ──────────────────────────────────────
@@ -273,8 +289,7 @@ impl ActivityIndicator {
                     synced_ago_text(client.last_synced_at())
                 };
                 imp.sync_label.set_text(&text);
-                imp.sync_icon
-                    .set_icon_name(Some("object-select-symbolic"));
+                imp.sync_icon.set_icon_name(Some("object-select-symbolic"));
                 imp.sync_row.set_visible(true);
                 if items > 0 {
                     self.show_tick();
@@ -352,12 +367,8 @@ impl ActivityIndicator {
         let imp = self.imp();
         let current = client.current();
         let total = client.total();
-        imp.import_label.set_text(&format!(
-            "{} {}/{}",
-            gettext("Importing"),
-            current,
-            total
-        ));
+        imp.import_label
+            .set_text(&format!("{} {}/{}", gettext("Importing"), current, total));
         imp.import_icon
             .set_icon_name(Some("document-open-symbolic"));
         if total > 0 {
@@ -444,9 +455,8 @@ impl ActivityIndicator {
         if imp.has_persistent_error.get() {
             return;
         }
-        let any_visible = imp.sync_row.is_visible()
-            || imp.import_row.is_visible()
-            || imp.error_row.is_visible();
+        let any_visible =
+            imp.sync_row.is_visible() || imp.import_row.is_visible() || imp.error_row.is_visible();
         if !any_visible && !self.is_any_active() {
             self.hide();
         }

@@ -206,7 +206,11 @@ impl SyncClient {
                     SyncEvent::Complete { items, errors } => {
                         let now = chrono::Utc::now().timestamp();
                         client.set_last_synced_at(now);
-                        if items > 0 || errors > 0 {
+                        // Don't override a persistent error/offline state.
+                        if matches!(client.state(), SyncState::Error | SyncState::Offline) {
+                            return;
+                        }
+                        if items > 0 {
                             client.set_items_processed(items as u32);
                             client.set_errors(errors as u32);
                             client.set_state(SyncState::Complete);
