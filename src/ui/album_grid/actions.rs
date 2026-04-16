@@ -183,10 +183,14 @@ pub(crate) fn show_context_menu(
     menu.append_section(None, &delete_section);
 
     // ── Popover ─────────────────────────────────────────────────────────
-    let popover = gtk::PopoverMenu::from_model(Some(&menu));
+    // Parent first, then set menu model — ensures action resolution
+    // context is established before the model is bound.
+    let popover = gtk::PopoverMenu::builder()
+        .menu_model(&menu)
+        .has_arrow(true)
+        .build();
     popover.set_parent(grid_view);
     popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
-    popover.set_has_arrow(true);
 
     let gv = grid_view.clone();
     let _keep_alive = action_group;
