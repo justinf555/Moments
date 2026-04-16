@@ -156,10 +156,14 @@ mod imp {
             let _ = self.pinned_section.set(pinned_section.clone());
 
             // Build the filtered model — populated later in setup_pinned_albums.
-            let filter = gtk::CustomFilter::new(|obj| {
-                obj.downcast_ref::<crate::client::AlbumItemObject>()
-                    .is_some_and(|item| item.pinned())
-            });
+            // BoolFilter with a property expression re-evaluates automatically
+            // when the `pinned` property changes on any item.
+            let expression = gtk::PropertyExpression::new(
+                crate::client::AlbumItemObject::static_type(),
+                None::<gtk::Expression>,
+                "pinned",
+            );
+            let filter = gtk::BoolFilter::new(Some(expression));
             let pinned_model = gtk::FilterListModel::new(
                 None::<gio::ListModel>,
                 Some(filter),
