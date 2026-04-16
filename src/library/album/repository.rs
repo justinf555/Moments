@@ -83,6 +83,11 @@ impl AlbumRepository {
         Ok(rows.into_iter().map(album_from_row).collect())
     }
 
+    /// Fetch a single album by raw ID string, including media count and cover.
+    pub async fn get_by_raw_id(&self, id: &str) -> Result<Option<Album>, LibraryError> {
+        self.get(&AlbumId::from_raw(id.to_string())).await
+    }
+
     /// Fetch a single album by ID, including media count and cover.
     pub async fn get(&self, id: &AlbumId) -> Result<Option<Album>, LibraryError> {
         let row: Option<AlbumRow> = sqlx::query_as(

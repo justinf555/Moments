@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use tokio::sync::mpsc;
 use tracing::warn;
 
+use super::event::AlbumEvent;
 use super::model::{Album, AlbumId};
 use super::repository::AlbumRepository;
 use crate::library::db::Database;
@@ -12,18 +14,42 @@ use crate::library::mutation::Mutation;
 use crate::library::recorder::MutationRecorder;
 
 /// Album management service.
+///
+/// Holds an `mpsc::Sender<AlbumEvent>` to notify the client layer of
+/// state changes. Call `subscribe()` once to obtain the receiver.
 #[derive(Clone)]
 pub struct AlbumService {
     repo: AlbumRepository,
     recorder: Arc<dyn MutationRecorder>,
+    events_tx: mpsc::UnboundedSender<AlbumEvent>,
+    /// Held so `subscribe()` can hand it out exactly once.
+    events_rx: Arc<tokio::sync::Mutex<Option<mpsc::UnboundedReceiver<AlbumEvent>>>>,
 }
 
 impl AlbumService {
     pub fn new(db: Database, recorder: Arc<dyn MutationRecorder>) -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
         Self {
             repo: AlbumRepository::new(db),
             recorder,
+            events_tx: tx,
+            events_rx: Arc::new(tokio::sync::Mutex::new(Some(rx))),
         }
+    }
+
+    /// Take the event receiver. Can only be called once — panics on
+    /// subsequent calls.
+    pub async fn subscribe(&self) -> mpsc::UnboundedReceiver<AlbumEvent> {
+        self.events_rx
+            .lock()
+            .await
+            .take()
+            .expect("AlbumService::subscribe() called more than once")
+    }
+
+    /// Send an event, ignoring errors (no subscriber yet, or dropped).
+    fn emit(&self, event: AlbumEvent) {
+        let _ = self.events_tx.send(event);
     }
 
     // ── Sync upsert (pull from server, no outbox recording) ────────
@@ -37,9 +63,17 @@ impl AlbumService {
         updated_at: i64,
         external_id: Option<&str>,
     ) -> Result<(), LibraryError> {
+        let existed = self.repo.get_by_raw_id(id).await?.is_some();
         self.repo
             .upsert(id, name, created_at, updated_at, external_id)
-            .await
+            .await?;
+        let album_id = AlbumId::from_raw(id.to_string());
+        if existed {
+            self.emit(AlbumEvent::AlbumUpdated(album_id));
+        } else {
+            self.emit(AlbumEvent::AlbumAdded(album_id));
+        }
+        Ok(())
     }
 
     // ── Query methods ───────────────────────────────────────────────
@@ -89,6 +123,7 @@ impl AlbumService {
     pub async fn delete_album(&self, id: &AlbumId) -> Result<(), LibraryError> {
         let external_id = self.repo.external_id(id).await.unwrap_or(None);
         self.repo.delete(id).await?;
+        self.emit(AlbumEvent::AlbumRemoved(id.clone()));
         if let Err(e) = self
             .recorder
             .record(&Mutation::AlbumDeleted {
@@ -108,6 +143,7 @@ impl AlbumService {
         media_ids: &[MediaId],
     ) -> Result<(), LibraryError> {
         self.repo.add_media(album_id, media_ids).await?;
+        self.emit(AlbumEvent::AlbumUpdated(album_id.clone()));
         if let Err(e) = self
             .recorder
             .record(&Mutation::AlbumMediaAdded {
@@ -127,6 +163,7 @@ impl AlbumService {
         media_ids: &[MediaId],
     ) -> Result<(), LibraryError> {
         self.repo.remove_media(album_id, media_ids).await?;
+        self.emit(AlbumEvent::AlbumUpdated(album_id.clone()));
         if let Err(e) = self
             .recorder
             .record(&Mutation::AlbumMediaRemoved {
