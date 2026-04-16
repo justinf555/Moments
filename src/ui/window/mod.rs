@@ -187,7 +187,7 @@ impl MomentsWindow {
         let imp = self.imp();
         let bus_sender = bus.sender();
 
-        let sidebar = self.setup_sidebar(&settings);
+        let sidebar = self.setup_sidebar();
 
         let texture_cache = Rc::new(TextureCache::new());
 
@@ -286,7 +286,7 @@ impl MomentsWindow {
         }));
     }
 
-    fn setup_sidebar(&self, settings: &gio::Settings) -> MomentsSidebar {
+    fn setup_sidebar(&self) -> MomentsSidebar {
         let imp = self.imp();
 
         let sidebar = MomentsSidebar::new();
@@ -314,23 +314,7 @@ impl MomentsWindow {
             });
         }
 
-        {
-            let sb = sidebar.clone();
-            let s = settings.clone();
-            let album_client = crate::application::MomentsApplication::default()
-                .album_client()
-                .expect("album client available after library load");
-            album_client.list_albums(move |result| match result {
-                Ok(albums) => {
-                    let pairs: Vec<(String, String)> = albums
-                        .into_iter()
-                        .map(|a| (a.id.as_str().to_owned(), a.name))
-                        .collect();
-                    sb.load_pinned_albums(&s, &pairs);
-                }
-                Err(e) => warn!("failed to load albums for sidebar: {e}"),
-            });
-        }
+        sidebar.setup_pinned_albums();
 
         sidebar
     }

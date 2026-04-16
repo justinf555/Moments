@@ -22,8 +22,8 @@ mod imp {
         /// Route IDs in display order (matches sidebar item indices).
         pub active_routes: RefCell<Vec<&'static str>>,
         pub pinned_section: OnceCell<adw::SidebarSection>,
-        /// Album IDs for pinned items, in display order.
-        pub pinned_ids: RefCell<Vec<String>>,
+        /// Filtered model of pinned albums — drives the pinned sidebar section.
+        pub pinned_model: OnceCell<gtk::FilterListModel>,
         pub trash_badge: OnceCell<gtk::Label>,
         pub trash_count: Cell<u32>,
 
@@ -71,7 +71,7 @@ mod imp {
                 people_item: OnceCell::new(),
                 active_routes: RefCell::new(Vec::new()),
                 pinned_section: OnceCell::new(),
-                pinned_ids: RefCell::new(Vec::new()),
+                pinned_model: OnceCell::new(),
                 trash_badge: OnceCell::new(),
                 trash_count: Cell::new(0),
                 bottom_sheet: OnceCell::new(),
@@ -270,6 +270,18 @@ mod imp {
             sidebar.append(pinned_section.clone());
             let _ = self.pinned_section.set(pinned_section.clone());
 
+            // Build the filtered model — populated later in setup_pinned_albums.
+            let filter = gtk::CustomFilter::new(|obj| {
+                obj.downcast_ref::<crate::client::AlbumItemObject>()
+                    .is_some_and(|item| item.pinned())
+            });
+            let pinned_model = gtk::FilterListModel::new(
+                None::<gio::ListModel>,
+                Some(filter),
+            );
+            let _ = self.pinned_model.set(pinned_model);
+
+            // Unpin action — resolves album from pinned model index.
             let menu_target_index: Rc<Cell<Option<u32>>> = Rc::new(Cell::new(None));
             {
                 let mti = Rc::clone(&menu_target_index);
@@ -299,13 +311,17 @@ mod imp {
                     let Some(sidebar) = obj_weak.upgrade() else {
                         return;
                     };
-                    let ids = sidebar.imp().pinned_ids.borrow();
-                    if let Some(album_id) = ids.get(index as usize).cloned() {
-                        drop(ids);
-                        let app = crate::application::MomentsApplication::default();
-                        if let Some(settings) = app.imp().settings.get() {
-                            sidebar.unpin_album(&album_id, settings);
-                        }
+                    let Some(pinned_model) = sidebar.imp().pinned_model.get() else {
+                        return;
+                    };
+                    if let Some(obj) = pinned_model
+                        .item(index)
+                        .and_then(|o| o.downcast::<crate::client::AlbumItemObject>().ok())
+                    {
+                        let album_client = crate::application::MomentsApplication::default()
+                            .album_client_v2()
+                            .expect("album client v2 available");
+                        album_client.unpin_album(crate::library::album::AlbumId::from_raw(obj.id()));
                     }
                 });
             }
@@ -615,12 +631,14 @@ impl MomentsSidebar {
                     f(route_id);
                 }
             } else {
-                // Pinned album item.
+                // Pinned album item — resolve from filtered model.
                 let pinned_index = (index - system_count) as usize;
-                if let Some(sidebar) = weak.upgrade() {
-                    let ids = sidebar.imp().pinned_ids.borrow();
-                    if let Some(album_id) = ids.get(pinned_index) {
-                        let route = format!("album:{album_id}");
+                if let Some(pinned_model) = sb.imp().pinned_model.get() {
+                    if let Some(obj) = pinned_model
+                        .item(pinned_index as u32)
+                        .and_then(|o| o.downcast::<crate::client::AlbumItemObject>().ok())
+                    {
+                        let route = format!("album:{}", obj.id());
                         debug!(route = %route, "pinned album selected");
                         f(&route);
                     }
@@ -662,123 +680,61 @@ impl MomentsSidebar {
 
     // ── Pinned albums ───────────────────────────────────────────────
 
-    /// Maximum number of pinned albums.
-    const MAX_PINNED: usize = 5;
-
-    /// Load pinned albums from GSettings and populate the Pinned section.
+    /// Wire the pinned album section to the album client's model.
     ///
-    /// Called once at startup after the library is available. `albums` is
-    /// the full album list so we can resolve names for the sidebar items.
-    pub fn load_pinned_albums(
-        &self,
-        settings: &gtk::gio::Settings,
-        albums: &[(String, String)], // (id, name)
-    ) {
+    /// Creates a filtered view of pinned albums and reactively syncs
+    /// sidebar items when albums are pinned or unpinned.
+    pub fn setup_pinned_albums(&self) {
         let imp = self.imp();
-        let ids: Vec<String> = settings
-            .strv("pinned-album-ids")
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
 
+        let album_client = crate::application::MomentsApplication::default()
+            .album_client_v2()
+            .expect("album client v2 available");
+
+        let store = album_client.create_model();
+        album_client.list_albums(&store);
+
+        let Some(pinned_model) = imp.pinned_model.get() else {
+            return;
+        };
+        pinned_model.set_model(Some(&store));
+
+        // Build initial items from any already-loaded pinned albums.
+        self.rebuild_pinned_items();
+
+        // React to filter model changes — rebuild sidebar items.
+        let weak = self.downgrade();
+        pinned_model.connect_items_changed(move |_, _, _, _| {
+            if let Some(sidebar) = weak.upgrade() {
+                sidebar.rebuild_pinned_items();
+            }
+        });
+    }
+
+    /// Rebuild the pinned sidebar section from the filtered model.
+    fn rebuild_pinned_items(&self) {
+        let imp = self.imp();
         let section = imp.pinned_section();
+        let Some(pinned_model) = imp.pinned_model.get() else {
+            return;
+        };
+
         section.remove_all();
 
-        let mut valid_ids = Vec::new();
-        for id in &ids {
-            // Find the album name — skip if the album was deleted.
-            if let Some((_, name)) = albums.iter().find(|(aid, _)| aid == id) {
+        for i in 0..pinned_model.n_items() {
+            if let Some(obj) = pinned_model
+                .item(i)
+                .and_then(|o| o.downcast::<crate::client::AlbumItemObject>().ok())
+            {
                 let item = adw::SidebarItem::builder()
-                    .title(name)
+                    .title(&obj.name())
                     .icon_name("folder-symbolic")
                     .build();
                 section.append(item);
-                valid_ids.push(id.clone());
             }
         }
-        // Prune stale entries (deleted albums) from GSettings.
-        if valid_ids.len() < ids.len() {
-            let strv: Vec<&str> = valid_ids.iter().map(|s| s.as_str()).collect();
-            settings.set_strv("pinned-album-ids", strv).ok();
-        }
-        *imp.pinned_ids.borrow_mut() = valid_ids;
-    }
 
-    /// Pin an album to the sidebar. Returns false if already pinned or at limit.
-    pub fn pin_album(
-        &self,
-        album_id: &str,
-        album_name: &str,
-        settings: &gtk::gio::Settings,
-    ) -> bool {
-        let imp = self.imp();
-
-        // Scope the borrow — must drop before GTK/GSettings calls.
-        {
-            let mut ids = imp.pinned_ids.borrow_mut();
-            if ids.len() >= Self::MAX_PINNED || ids.iter().any(|id| id == album_id) {
-                return false;
-            }
-            ids.push(album_id.to_string());
-        }
-
-        let section = imp.pinned_section();
-        let item = adw::SidebarItem::builder()
-            .title(album_name)
-            .icon_name("folder-symbolic")
-            .build();
-        section.append(item);
-
-        // Persist.
-        let strv: Vec<String> = imp.pinned_ids.borrow().iter().cloned().collect();
-        let refs: Vec<&str> = strv.iter().map(|s| s.as_str()).collect();
-        settings.set_strv("pinned-album-ids", refs).ok();
-
-        debug!(album_id = %album_id, name = %album_name, "album pinned to sidebar");
-        true
-    }
-
-    /// Unpin an album from the sidebar.
-    pub fn unpin_album(&self, album_id: &str, settings: &gtk::gio::Settings) {
-        let imp = self.imp();
-
-        // Find position and remove — scoped to drop borrow before GTK calls.
-        let pos = {
-            let mut ids = imp.pinned_ids.borrow_mut();
-            match ids.iter().position(|id| id == album_id) {
-                Some(pos) => {
-                    ids.remove(pos);
-                    pos
-                }
-                None => return,
-            }
-        };
-
-        let section = imp.pinned_section();
-        if let Some(item) = section.item(pos as u32) {
-            section.remove(&item);
-        }
-
-        // Persist.
-        let strv: Vec<String> = imp.pinned_ids.borrow().iter().cloned().collect();
-        let refs: Vec<&str> = strv.iter().map(|s| s.as_str()).collect();
-        settings.set_strv("pinned-album-ids", refs).ok();
-
-        debug!(album_id = %album_id, "album unpinned from sidebar");
-    }
-
-    /// Number of currently pinned albums.
-    pub fn pinned_count(&self) -> usize {
-        self.imp().pinned_ids.borrow().len()
-    }
-
-    /// Whether the given album is currently pinned.
-    pub fn is_pinned(&self, album_id: &str) -> bool {
-        self.imp()
-            .pinned_ids
-            .borrow()
-            .iter()
-            .any(|id| id == album_id)
+        debug!(count = pinned_model.n_items(), "pinned albums rebuilt");
     }
 
     /// Update the Trash badge with the current count.
