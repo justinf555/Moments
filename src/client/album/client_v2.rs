@@ -6,10 +6,11 @@ use gtk::gio;
 use gtk::glib;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
-use tracing::{debug, error, instrument};
+use tokio::sync::mpsc;
+use tracing::{debug, error, instrument, warn};
 
 use super::model::AlbumItemObject;
-use crate::library::album::{Album, AlbumId};
+use crate::library::album::{Album, AlbumEvent, AlbumId};
 use crate::library::error::LibraryError;
 use crate::library::media::MediaId;
 use crate::library::Library;
@@ -87,11 +88,23 @@ impl AlbumClientV2 {
         glib::Object::builder().build()
     }
 
-    /// Set the dependencies required for album operations.
+    /// Set the dependencies required for album operations and start
+    /// listening for service events.
     ///
     /// Must be called once after construction, before any other method.
-    pub fn configure(&self, library: Arc<Library>, tokio: tokio::runtime::Handle) {
-        *self.imp().deps.borrow_mut() = Some(AlbumDeps { library, tokio });
+    pub fn configure(
+        &self,
+        library: Arc<Library>,
+        tokio: tokio::runtime::Handle,
+        events_rx: mpsc::UnboundedReceiver<AlbumEvent>,
+    ) {
+        *self.imp().deps.borrow_mut() = Some(AlbumDeps {
+            library: Arc::clone(&library),
+            tokio: tokio.clone(),
+        });
+
+        let client_weak: glib::SendWeakRef<AlbumClientV2> = self.downgrade().into();
+        tokio.spawn(Self::listen(events_rx, library, client_weak));
     }
 
     fn deps(&self) -> (Arc<Library>, tokio::runtime::Handle) {
@@ -100,6 +113,71 @@ impl AlbumClientV2 {
             .as_ref()
             .expect("AlbumClientV2::configure() not called");
         (deps.library.clone(), deps.tokio.clone())
+    }
+
+    // ── Event listener ─────────────────────────────────────────────────
+
+    /// Background task that receives `AlbumEvent`s from the service and
+    /// dispatches model patches on the GTK thread.
+    async fn listen(
+        mut rx: mpsc::UnboundedReceiver<AlbumEvent>,
+        library: Arc<Library>,
+        client_weak: glib::SendWeakRef<AlbumClientV2>,
+    ) {
+        while let Some(event) = rx.recv().await {
+            match event {
+                AlbumEvent::AlbumAdded(id) => {
+                    let album = library.albums().get_album(&id).await;
+                    let weak = client_weak.clone();
+                    glib::idle_add_once(move || {
+                        if let Some(client) = weak.upgrade() {
+                            match album {
+                                Ok(Some(a)) => {
+                                    let album_id = a.id.clone();
+                                    client.insert_into_models(a);
+                                    client.load_cover_thumbnails(&album_id);
+                                }
+                                Ok(None) => {
+                                    warn!(album_id = %id, "album not found after add event")
+                                }
+                                Err(e) => {
+                                    error!("failed to fetch added album: {e}");
+                                    crate::client::show_error_toast(&e);
+                                }
+                            }
+                        }
+                    });
+                }
+                AlbumEvent::AlbumUpdated(id) => {
+                    let album = library.albums().get_album(&id).await;
+                    let weak = client_weak.clone();
+                    glib::idle_add_once(move || {
+                        if let Some(client) = weak.upgrade() {
+                            match album {
+                                Ok(Some(a)) => client.update_album_in_models(&a),
+                                Ok(None) => {
+                                    warn!(album_id = %id, "album not found after update event")
+                                }
+                                Err(e) => {
+                                    error!("failed to fetch updated album: {e}");
+                                    crate::client::show_error_toast(&e);
+                                }
+                            }
+                        }
+                    });
+                }
+                AlbumEvent::AlbumRemoved(id) => {
+                    let weak = client_weak.clone();
+                    glib::idle_add_once(move || {
+                        if let Some(client) = weak.upgrade() {
+                            client.remove_from_models(&id);
+                            client.emit_by_name::<()>("album-deleted", &[&id.as_str().to_string()]);
+                        }
+                    });
+                }
+            }
+        }
+        debug!("album event listener shutting down");
     }
 
     // ── Commands ──────────────────────────────────────────────────────
