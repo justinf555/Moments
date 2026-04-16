@@ -4,6 +4,8 @@ use adw::prelude::*;
 use gettextrs::gettext;
 use gtk::gio;
 
+use tracing::debug;
+
 use crate::application::MomentsApplication;
 use crate::library::album::AlbumId;
 use crate::library::media::MediaFilter;
@@ -130,6 +132,7 @@ pub(crate) fn show_context_menu(
         let ac = album_client.clone();
         let aid = album_id_str.clone();
         pin_action.connect_activate(move |_, _| {
+            debug!(album_id = %aid, "pin action activated");
             ac.pin_album(AlbumId::from_raw(aid.clone()));
         });
     }

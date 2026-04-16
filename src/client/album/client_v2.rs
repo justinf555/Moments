@@ -289,11 +289,13 @@ impl AlbumClientV2 {
 
     /// Pin an album to the sidebar.
     pub fn pin_album(&self, id: AlbumId) {
+        debug!(album_id = %id, "pin_album called");
         self.set_pinned(id, true);
     }
 
     /// Unpin an album from the sidebar.
     pub fn unpin_album(&self, id: AlbumId) {
+        debug!(album_id = %id, "unpin_album called");
         self.set_pinned(id, false);
     }
 
