@@ -370,6 +370,29 @@ impl AlbumClientV2 {
         });
     }
 
+    /// Return a snapshot of all album items from the first live model.
+    ///
+    /// Useful for dialogs that need a point-in-time list without creating
+    /// their own model. Returns an empty vec if no models are populated.
+    pub fn album_snapshot(&self) -> Vec<AlbumItemObject> {
+        let models = self.imp().models.borrow();
+        for weak in models.iter() {
+            if let Some(store) = weak.upgrade() {
+                let mut items = Vec::with_capacity(store.n_items() as usize);
+                for i in 0..store.n_items() {
+                    if let Some(obj) = store
+                        .item(i)
+                        .and_then(|o| o.downcast::<AlbumItemObject>().ok())
+                    {
+                        items.push(obj);
+                    }
+                }
+                return items;
+            }
+        }
+        Vec::new()
+    }
+
     // ── Queries ─────────────────────────────────────────────────────────
 
     /// Check which albums already contain the given media items.

@@ -32,7 +32,7 @@ pub(super) fn wire_album_controls(ctx: &ActionContext, album_btn: &gtk::Button) 
         if ids.is_empty() {
             return;
         }
-        crate::ui::album_picker_dialog::show_album_picker_dialog(btn, ids, bus_tx.clone());
+        crate::ui::album_picker_dialog::show_album_picker_dialog(btn, ids);
     });
 }
 

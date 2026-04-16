@@ -1,18 +1,19 @@
 //! Album picker dialog widget.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::glib;
 use tracing::debug;
 
-use crate::app_event::AppEvent;
-use crate::event_bus::EventSender;
+use crate::client::album::AlbumEntry;
+use crate::client::AlbumClientV2;
 use crate::library::album::AlbumId;
+use crate::library::media::MediaId;
 
 use super::album_row::AlbumRow;
-use crate::client::album::AlbumPickerData;
 
 struct DialogInner {
     dialog: adw::Dialog,
@@ -20,8 +21,8 @@ struct DialogInner {
     add_button: gtk::Button,
     rows: Vec<AlbumRow>,
     selected_album_id: RefCell<Option<AlbumId>>,
-    media_ids: Vec<crate::library::media::MediaId>,
-    bus_sender: EventSender,
+    media_ids: Vec<MediaId>,
+    album_client: AlbumClientV2,
 }
 
 struct NewAlbumWidgets {
@@ -32,9 +33,32 @@ struct NewAlbumWidgets {
     create_button: gtk::Button,
 }
 
-pub fn present(data: AlbumPickerData, bus_sender: EventSender, parent: &gtk::Widget) {
-    let total_selected = data.media_ids.len();
-    let is_empty = data.albums.is_empty();
+pub fn present(
+    album_client: AlbumClientV2,
+    media_ids: Vec<MediaId>,
+    membership: HashMap<AlbumId, usize>,
+    parent: &gtk::Widget,
+) {
+    let total_selected = media_ids.len();
+
+    // Build album entries from an already-populated model.
+    let entries: Vec<AlbumEntry> = album_client
+        .album_snapshot()
+        .into_iter()
+        .map(|obj| {
+            let aid = AlbumId::from_raw(obj.id());
+            let already = membership.get(&aid).copied().unwrap_or(0);
+            AlbumEntry {
+                id: aid,
+                name: obj.name(),
+                media_count: obj.media_count(),
+                thumbnail_rgba: None,
+                already_added_count: already,
+            }
+        })
+        .collect();
+
+    let is_empty = entries.is_empty();
 
     let dialog = adw::Dialog::builder()
         .title("Add to Album")
@@ -66,7 +90,7 @@ pub fn present(data: AlbumPickerData, bus_sender: EventSender, parent: &gtk::Wid
     list_box.add_css_class("boxed-list");
 
     let mut rows: Vec<AlbumRow> = Vec::new();
-    for entry in &data.albums {
+    for entry in &entries {
         let album_row = AlbumRow::new(entry, total_selected);
         list_box.append(&album_row.row);
         rows.push(album_row);
@@ -107,8 +131,8 @@ pub fn present(data: AlbumPickerData, bus_sender: EventSender, parent: &gtk::Wid
         add_button: add_button.clone(),
         rows,
         selected_album_id: RefCell::new(None),
-        media_ids: data.media_ids,
-        bus_sender,
+        media_ids,
+        album_client,
     });
 
     connect_signals(
@@ -249,10 +273,8 @@ fn connect_signals(
             let album_id = i.selected_album_id.borrow().clone();
             if let Some(album_id) = album_id {
                 debug!(%album_id, count = i.media_ids.len(), "adding to album");
-                i.bus_sender.send(AppEvent::AddToAlbumRequested {
-                    album_id,
-                    ids: i.media_ids.clone(),
-                });
+                i.album_client
+                    .add_to_album(album_id, i.media_ids.clone());
                 i.dialog.close();
             }
         });
@@ -282,10 +304,8 @@ fn connect_signals(
                 return;
             }
             debug!(%name, count = i.media_ids.len(), "creating album and adding");
-            i.bus_sender.send(AppEvent::CreateAlbumRequested {
-                name,
-                ids: i.media_ids.clone(),
-            });
+            i.album_client
+                .create_album(name, i.media_ids.clone());
             i.dialog.close();
         };
 
@@ -340,7 +360,7 @@ fn connect_signals(
             alert.set_extra_child(Some(&entry));
 
             let ids = i.media_ids.clone();
-            let tx = i.bus_sender.clone();
+            let ac = i.album_client.clone();
             let d2 = d.clone();
             alert.connect_response(None, move |_, response| {
                 if response != "create" {
@@ -350,10 +370,7 @@ fn connect_signals(
                 if name.is_empty() {
                     return;
                 }
-                tx.send(AppEvent::CreateAlbumRequested {
-                    name,
-                    ids: ids.clone(),
-                });
+                ac.create_album(name, ids.clone());
                 d2.close();
             });
 

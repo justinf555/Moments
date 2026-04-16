@@ -135,7 +135,6 @@ pub(super) fn wire_overflow_menu(
             crate::ui::album_picker_dialog::show_album_picker_dialog(
                 viewer.upcast_ref::<gtk::Widget>(),
                 vec![id],
-                imp.bus_sender().clone(),
             );
         });
     }

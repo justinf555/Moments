@@ -7,7 +7,7 @@ use gettextrs::gettext;
 use gtk::{gio, glib};
 use tracing::debug;
 
-use crate::client::AlbumClient;
+use crate::client::AlbumClientV2;
 use crate::library::album::AlbumId;
 use crate::ui::album_dialogs;
 use crate::ui::photo_grid::texture_cache::TextureCache;
@@ -57,7 +57,7 @@ mod imp {
         pub action_bar: TemplateChild<gtk::ActionBar>,
 
         // Service dependencies
-        pub album_client: OnceCell<AlbumClient>,
+        pub album_client: OnceCell<AlbumClientV2>,
 
         // State
         pub(super) store: OnceCell<gio::ListStore>,
@@ -98,7 +98,7 @@ mod imp {
                 return;
             };
 
-            album_client.populate(store);
+            album_client.list_albums(store);
         }
     }
 }
@@ -129,8 +129,8 @@ impl AlbumGridView {
         let imp = self.imp();
 
         let album_client = crate::application::MomentsApplication::default()
-            .album_client()
-            .expect("album client available after library load");
+            .album_client_v2()
+            .expect("album client v2 available after library load");
         assert!(
             imp.album_client.set(album_client.clone()).is_ok(),
             "setup called twice"
@@ -168,7 +168,6 @@ impl AlbumGridView {
 
         imp.grid_view.set_model(Some(&multi_selection));
         imp.grid_view.set_factory(Some(&factory::build_factory(
-            album_client.clone(),
             Rc::clone(&selection_mode),
             multi_selection.clone(),
             enter_selection.clone(),
@@ -223,7 +222,7 @@ impl AlbumGridView {
             let connect_create = move |btn: &gtk::Button| {
                 let ac = ac.clone();
                 album_dialogs::show_create_album_dialog(btn, move |name| {
-                    ac.create_album(name);
+                    ac.create_album(name, vec![]);
                 });
             };
 
@@ -285,7 +284,7 @@ impl AlbumGridView {
     pub fn reload(&self) {
         let imp = self.imp();
         if let (Some(store), Some(album_client)) = (imp.store.get(), imp.album_client.get()) {
-            album_client.populate(store);
+            album_client.list_albums(store);
         }
     }
 }

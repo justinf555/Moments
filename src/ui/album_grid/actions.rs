@@ -2,10 +2,9 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use gettextrs::gettext;
-use gtk::subclass::prelude::*;
 
 use crate::application::MomentsApplication;
-use crate::client::AlbumClient;
+use crate::client::AlbumClientV2;
 use crate::library::album::AlbumId;
 use crate::library::media::MediaFilter;
 use crate::ui::album_dialogs;
@@ -111,7 +110,7 @@ pub(crate) fn show_context_menu(
     // Pin to sidebar.
     let pin_btn = gtk::Button::with_label(&gettext("Pin to Sidebar"));
     pin_btn.add_css_class("flat");
-    configure_pin_button(&pin_btn, &album_id_str);
+    configure_pin_button(&pin_btn, &obj);
     vbox.append(&pin_btn);
 
     // Share (stub)
@@ -134,8 +133,12 @@ pub(crate) fn show_context_menu(
     popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
     popover.set_has_arrow(true);
 
+    let album_client = MomentsApplication::default()
+        .album_client_v2()
+        .expect("album client v2 available");
+
     // Wire Pin to sidebar.
-    wire_pin_button(&pin_btn, &popover, &album_id_str, &album_name);
+    wire_pin_button(&pin_btn, &popover, &album_client, &album_id_str);
 
     // Wire Open.
     wire_open_button(
@@ -150,9 +153,6 @@ pub(crate) fn show_context_menu(
     );
 
     // Wire Rename.
-    let album_client = MomentsApplication::default()
-        .album_client()
-        .expect("album client available");
     wire_rename_button(
         &rename_btn,
         &popover,
@@ -166,7 +166,7 @@ pub(crate) fn show_context_menu(
     wire_delete_button(
         &delete_btn,
         &popover,
-        bus_sender,
+        &album_client,
         grid_view,
         &album_id_str,
         &album_name,
@@ -178,22 +178,11 @@ pub(crate) fn show_context_menu(
     popover.popup();
 }
 
-/// Check pin state and disable the button if already pinned or at limit.
-fn configure_pin_button(pin_btn: &gtk::Button, album_id_str: &str) {
-    // TODO: replace widget-tree walk with AppEvent bus pattern.
-    let app = crate::application::MomentsApplication::default();
-    if let Some(win) = app.active_window() {
-        if let Some(win) = win.downcast_ref::<crate::ui::MomentsWindow>() {
-            if let Some(sb) = win.sidebar() {
-                if sb.is_pinned(album_id_str) {
-                    pin_btn.set_label(&gettext("Pinned"));
-                    pin_btn.set_sensitive(false);
-                } else if sb.pinned_count() >= 5 {
-                    pin_btn.set_sensitive(false);
-                    pin_btn.set_tooltip_text(Some(&gettext("Unpin an album to pin another")));
-                }
-            }
-        }
+/// Check pin state and disable the button if already pinned.
+fn configure_pin_button(pin_btn: &gtk::Button, obj: &crate::client::AlbumItemObject) {
+    if obj.pinned() {
+        pin_btn.set_label(&gettext("Pinned"));
+        pin_btn.set_sensitive(false);
     }
 }
 
@@ -201,27 +190,17 @@ fn configure_pin_button(pin_btn: &gtk::Button, album_id_str: &str) {
 fn wire_pin_button(
     pin_btn: &gtk::Button,
     popover: &gtk::Popover,
+    album_client: &AlbumClientV2,
     album_id_str: &str,
-    album_name: &str,
 ) {
-    // TODO: replace widget-tree walk with AppEvent bus pattern.
     let pop = popover.downgrade();
+    let ac = album_client.clone();
     let aid = album_id_str.to_owned();
-    let aname = album_name.to_owned();
     pin_btn.connect_clicked(move |_| {
         if let Some(p) = pop.upgrade() {
             p.popdown();
         }
-        let app = crate::application::MomentsApplication::default();
-        if let Some(settings) = app.imp().settings.get() {
-            if let Some(win) = app.active_window() {
-                if let Some(win) = win.downcast_ref::<crate::ui::MomentsWindow>() {
-                    if let Some(sb) = win.sidebar() {
-                        sb.pin_album(&aid, &aname, settings);
-                    }
-                }
-            }
-        }
+        ac.pin_album(AlbumId::from_raw(aid.clone()));
     });
 }
 
@@ -257,7 +236,7 @@ fn wire_open_button(
 fn wire_rename_button(
     rename_btn: &gtk::Button,
     popover: &gtk::Popover,
-    album_client: &AlbumClient,
+    album_client: &AlbumClientV2,
     grid_view: &gtk::GridView,
     album_id_str: &str,
     album_name: &str,
@@ -285,13 +264,13 @@ fn wire_rename_button(
 fn wire_delete_button(
     delete_btn: &gtk::Button,
     popover: &gtk::Popover,
-    bus_sender: &crate::event_bus::EventSender,
+    album_client: &AlbumClientV2,
     grid_view: &gtk::GridView,
     album_id_str: &str,
     album_name: &str,
 ) {
     let pop = popover.downgrade();
-    let bs = bus_sender.clone();
+    let ac = album_client.clone();
     let aid = album_id_str.to_owned();
     let aname = album_name.to_owned();
     let gv_ref = grid_view.clone();
@@ -299,13 +278,11 @@ fn wire_delete_button(
         if let Some(p) = pop.upgrade() {
             p.popdown();
         }
-        let bs = bs.clone();
+        let ac = ac.clone();
         let aid = aid.clone();
         if let Some(win) = gv_ref.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
             album_dialogs::show_delete_album_dialog(&win, &aname, move || {
-                bs.send(crate::app_event::AppEvent::DeleteAlbumRequested {
-                    ids: vec![AlbumId::from_raw(aid.clone())],
-                });
+                ac.delete_album(vec![AlbumId::from_raw(aid.clone())]);
             });
         }
     });
