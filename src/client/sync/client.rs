@@ -210,11 +210,14 @@ impl SyncClient {
                             client.set_items_processed(items as u32);
                             client.set_errors(errors as u32);
                             client.set_state(SyncState::Complete);
+                        } else if client.state() == SyncState::Syncing {
+                            // Sync processed non-asset entities only (exif,
+                            // albums, etc.) — return to idle so the spinner
+                            // stops.
+                            client.set_state(SyncState::Idle);
                         }
-                        // items == 0 && errors == 0: silent update of
-                        // last_synced_at only — don't change state so we
-                        // don't overwrite a concurrent Complete from the
-                        // other sync direction.
+                        // If already Idle (empty stream, no Processing
+                        // event), just update last_synced_at silently.
                     }
                     SyncEvent::Error { message } => {
                         client.set_error_message(&message);

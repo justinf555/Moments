@@ -1,5 +1,4 @@
 pub mod route;
-mod status_bar;
 
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -9,8 +8,6 @@ use gettextrs::{gettext, ngettext};
 use gtk::{gio, glib, subclass::prelude::*};
 use tracing::debug;
 
-pub use status_bar::StatusBar;
-
 use route::ROUTES;
 
 mod imp {
@@ -18,8 +15,16 @@ mod imp {
     use std::cell::OnceCell;
     use std::rc::Rc;
 
+    use gtk::CompositeTemplate;
+
+    #[derive(Default, CompositeTemplate)]
+    #[template(resource = "/io/github/justinf555/Moments/ui/sidebar/sidebar.ui")]
     pub struct MomentsSidebar {
-        pub sidebar: OnceCell<adw::Sidebar>,
+        #[template_child]
+        pub sidebar: TemplateChild<adw::Sidebar>,
+        #[template_child]
+        pub toolbar_view: TemplateChild<adw::ToolbarView>,
+
         pub route_section: OnceCell<adw::SidebarSection>,
         pub people_item: OnceCell<adw::SidebarItem>,
         /// Route IDs in display order (matches sidebar item indices).
@@ -34,33 +39,8 @@ mod imp {
         pub trash_badge: OnceCell<gtk::Label>,
         pub trash_count: Cell<u32>,
 
-        /// Status bar controller (sync/upload/idle states).
-        pub status_bar: OnceCell<super::StatusBar>,
-
         /// Keeps the event bus subscription alive for this sidebar's lifetime.
         pub _subscription: RefCell<Option<crate::event_bus::Subscription>>,
-        /// Signal handler IDs for ImportClient property notifications.
-        pub _import_handlers: RefCell<Vec<glib::SignalHandlerId>>,
-    }
-
-    impl Default for MomentsSidebar {
-        fn default() -> Self {
-            Self {
-                sidebar: OnceCell::new(),
-                route_section: OnceCell::new(),
-                people_item: OnceCell::new(),
-                active_routes: RefCell::new(Vec::new()),
-                pinned_section: OnceCell::new(),
-                pinned_store: OnceCell::new(),
-                pinned_filter: OnceCell::new(),
-                pinned_model: OnceCell::new(),
-                trash_badge: OnceCell::new(),
-                trash_count: Cell::new(0),
-                status_bar: OnceCell::new(),
-                _subscription: RefCell::new(None),
-                _import_handlers: RefCell::new(Vec::new()),
-            }
-        }
     }
 
     #[glib::object_subclass]
@@ -68,19 +48,24 @@ mod imp {
         const NAME: &'static str = "MomentsSidebar";
         type Type = super::MomentsSidebar;
         type ParentType = adw::NavigationPage;
+
+        fn class_init(klass: &mut Self::Class) {
+            // Ensure ActivityIndicator type is registered before the
+            // template is bound, so the blueprint can instantiate it.
+            crate::ui::widgets::ActivityIndicator::ensure_type();
+            klass.bind_template();
+        }
+
+        fn instance_init(obj: &glib::subclass::InitializingObject<Self>) {
+            obj.init_template();
+        }
     }
 
     impl MomentsSidebar {
-        pub fn sidebar(&self) -> &adw::Sidebar {
-            self.sidebar.get().expect("sidebar not initialized")
-        }
         pub fn pinned_section(&self) -> &adw::SidebarSection {
             self.pinned_section
                 .get()
                 .expect("pinned_section not initialized")
-        }
-        pub fn status_bar(&self) -> &super::StatusBar {
-            self.status_bar.get().expect("status_bar not initialized")
         }
     }
 
@@ -89,23 +74,9 @@ mod imp {
             self.parent_constructed();
             let obj = self.obj();
 
-            obj.set_title("Moments");
-
-            let toolbar_view = adw::ToolbarView::new();
-            toolbar_view.add_top_bar(&build_header_bar());
-
-            let sidebar = adw::Sidebar::new();
-            sidebar.append(self.build_route_section());
-            self.build_pinned_section(&obj, &sidebar, &toolbar_view);
-            toolbar_view.set_content(Some(&sidebar));
-
-            let status_bar = super::StatusBar::new(&toolbar_view);
-            obj.set_child(Some(status_bar.bottom_sheet()));
-
-            self.sidebar.set(sidebar).expect("set once in constructed");
-            self.status_bar
-                .set(status_bar)
-                .expect("set once in constructed");
+            // Append dynamic sections to the template sidebar.
+            self.sidebar.append(self.build_route_section());
+            self.build_pinned_section(&obj);
         }
     }
 
@@ -143,12 +114,7 @@ mod imp {
             section
         }
 
-        fn build_pinned_section(
-            &self,
-            obj: &<Self as ObjectSubclass>::Type,
-            sidebar: &adw::Sidebar,
-            toolbar_view: &adw::ToolbarView,
-        ) {
+        fn build_pinned_section(&self, obj: &<Self as ObjectSubclass>::Type) {
             let pinned_section = adw::SidebarSection::new();
             pinned_section.set_title(Some(&gettext("Pinned")));
 
@@ -156,7 +122,7 @@ mod imp {
             unpin_menu.append(Some(&gettext("Unpin from Sidebar")), Some("sidebar.unpin"));
             pinned_section.set_menu_model(Some(&unpin_menu));
 
-            sidebar.append(pinned_section.clone());
+            self.sidebar.append(pinned_section.clone());
             let _ = self.pinned_section.set(pinned_section.clone());
 
             // Build the filtered model — populated later in setup_pinned_albums.
@@ -174,7 +140,7 @@ mod imp {
             {
                 let mti = Rc::clone(&menu_target_index);
                 let ps = pinned_section.clone();
-                sidebar.connect_setup_menu(move |_, item| {
+                self.sidebar.connect_setup_menu(move |_, item| {
                     if let Some(item) = item {
                         let n = ps.items().n_items();
                         for i in 0..n {
@@ -217,31 +183,9 @@ mod imp {
 
             let sidebar_action_group = gio::SimpleActionGroup::new();
             sidebar_action_group.add_action(&unpin_action);
-            toolbar_view.insert_action_group("sidebar", Some(&sidebar_action_group));
+            self.toolbar_view
+                .insert_action_group("sidebar", Some(&sidebar_action_group));
         }
-    }
-
-    fn build_header_bar() -> adw::HeaderBar {
-        let header = adw::HeaderBar::new();
-
-        let menu_button = gtk::MenuButton::builder()
-            .primary(true)
-            .icon_name("open-menu-symbolic")
-            .tooltip_text(gettext("Main Menu"))
-            .build();
-        let menu = gio::Menu::new();
-        let import_section = gio::Menu::new();
-        import_section.append(Some("_Import"), Some("app.import"));
-        menu.append_section(None, &import_section);
-        let app_section = gio::Menu::new();
-        app_section.append(Some("_Keyboard Shortcuts"), Some("app.shortcuts"));
-        app_section.append(Some("_About Moments"), Some("app.about"));
-        app_section.append(Some("_Preferences"), Some("app.preferences"));
-        menu.append_section(None, &app_section);
-        menu_button.set_menu_model(Some(&menu));
-        header.pack_end(&menu_button);
-
-        header
     }
 
     impl WidgetImpl for MomentsSidebar {
@@ -254,9 +198,6 @@ mod imp {
                     return;
                 };
                 match event {
-                    // Sync events are now handled by SyncClient — see
-                    // client/sync/. The StatusBar sync methods will be
-                    // removed when the ActivityIndicator replaces it.
                     crate::app_event::AppEvent::Trashed { ids } => {
                         sidebar.adjust_trash_count(ids.len() as i32);
                     }
@@ -270,63 +211,10 @@ mod imp {
                 }
             });
             *self._subscription.borrow_mut() = Some(sub);
-
-            // Connect to ImportClient property notifications.
-            if let Some(import_client) =
-                crate::application::MomentsApplication::default().import_client()
-            {
-                let mut handlers = self._import_handlers.borrow_mut();
-                let obj = self.obj().clone();
-
-                // Progress updates.
-                let weak = obj.downgrade();
-                handlers.push(import_client.connect_notify_local(
-                    Some("current"),
-                    move |client, _| {
-                        if let Some(sidebar) = weak.upgrade() {
-                            sidebar.imp().status_bar().show_upload_progress(
-                                client.current() as usize,
-                                client.total() as usize,
-                                client.imported() as usize,
-                                client.skipped() as usize,
-                                client.failed() as usize,
-                            );
-                        }
-                    },
-                ));
-
-                // State changes (completion).
-                let weak = obj.downgrade();
-                handlers.push(import_client.connect_notify_local(
-                    Some("state"),
-                    move |client, _| {
-                        if let Some(sidebar) = weak.upgrade() {
-                            if client.state() == crate::client::ImportState::Complete {
-                                let summary = crate::importer::ImportSummary {
-                                    imported: client.imported() as usize,
-                                    skipped_duplicates: client.skipped() as usize,
-                                    skipped_unsupported: 0,
-                                    failed: client.failed() as usize,
-                                    elapsed_secs: client.elapsed_secs(),
-                                };
-                                sidebar.imp().status_bar().show_upload_complete(&summary);
-                            }
-                        }
-                    },
-                ));
-            }
         }
 
         fn unrealize(&self) {
             self._subscription.borrow_mut().take();
-            // Disconnect ImportClient signal handlers.
-            if let Some(import_client) =
-                crate::application::MomentsApplication::default().import_client()
-            {
-                for handler_id in self._import_handlers.borrow_mut().drain(..) {
-                    import_client.disconnect(handler_id);
-                }
-            }
             self.parent_unrealize();
         }
     }
@@ -352,10 +240,10 @@ impl MomentsSidebar {
 
     /// Connect a callback that fires when the user activates a sidebar item.
     ///
-    /// System routes (index 0–5) map to `ROUTES[index].id`.
+    /// System routes (index 0-5) map to `ROUTES[index].id`.
     /// Pinned album items (index 6+) map to `"album:{album_id}"`.
     pub fn connect_route_selected<F: Fn(&str) + 'static>(&self, f: F) {
-        let sidebar = self.imp().sidebar().clone();
+        let sidebar = self.imp().sidebar.clone();
         let weak = self.downgrade();
         sidebar.connect_activated(move |_, index| {
             let Some(sb) = weak.upgrade() else { return };
@@ -395,7 +283,7 @@ impl MomentsSidebar {
 
     /// Pre-select the first item (Photos) so the shell always has an active route.
     pub fn select_first(&self) {
-        self.imp().sidebar().set_selected(0);
+        self.imp().sidebar.set_selected(0);
     }
 
     /// Set the initial trash count (called once at startup after querying the library).
