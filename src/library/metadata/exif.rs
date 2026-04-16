@@ -146,9 +146,7 @@ fn rational_or_short_u32(exif: &exif::Exif, tag: exif::Tag) -> Option<u32> {
     match &field.value {
         exif::Value::Long(v) => v.first().copied(),
         exif::Value::Short(v) => v.first().map(|&x| x as u32),
-        exif::Value::Rational(v) => v
-            .first()
-            .map(|r| if r.denom != 0 { r.num / r.denom } else { 0 }),
+        exif::Value::Rational(v) => v.first().map(|r| r.num.checked_div(r.denom).unwrap_or(0)),
         _ => None,
     }
 }

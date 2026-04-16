@@ -18,22 +18,7 @@ use crate::library::media::{MediaId, MediaItem};
 #[derive(Debug, Clone)]
 pub enum AppEvent {
     // ── Lifecycle ────────────────────────────────────────────────────────────
-    Ready,
-    ShutdownComplete,
     Error(String),
-
-    // ── Import (legacy — used by ImmichImportJob, will be removed when
-    //    Immich import moves to sync) ─────────────────────────────────────────
-    ImportProgress {
-        current: usize,
-        total: usize,
-        imported: usize,
-        skipped: usize,
-        failed: usize,
-    },
-    ImportComplete {
-        summary: crate::importer::ImportSummary,
-    },
 
     // ── Thumbnails ───────────────────────────────────────────────────────────
     ThumbnailReady {

@@ -18,7 +18,7 @@ mod imp {
         pub counts_label: TemplateChild<gtk::Label>,
         #[template_child]
         pub action_button: TemplateChild<gtk::Button>,
-        /// True once `ImportComplete` has been received.
+        /// True once the import has finished.
         pub complete: Cell<bool>,
         /// Signal handler IDs for ImportClient property notifications.
         pub _import_handlers: RefCell<Vec<glib::SignalHandlerId>>,
