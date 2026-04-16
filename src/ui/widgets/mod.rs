@@ -1,4 +1,7 @@
-//! Shared reusable UI components used across the info and edit panels.
+//! Shared reusable UI components.
+
+pub mod context_menu_bin;
+pub use context_menu_bin::ContextMenuBin;
 
 use adw::prelude::*;
 use gettextrs::gettext;

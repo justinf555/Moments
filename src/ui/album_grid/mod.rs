@@ -145,7 +145,14 @@ impl AlbumGridView {
         let multi_selection = gtk::MultiSelection::new(Some(sort_model.clone()));
 
         let action_group = self.wire_sort(&settings, &sort_order, &sort_model);
-        self.wire_grid(&multi_selection, &selection_mode, &enter_selection);
+        self.wire_grid(
+            &multi_selection,
+            &selection_mode,
+            &enter_selection,
+            &settings,
+            &texture_cache,
+            &bus_sender,
+        );
         self.wire_selection(
             &enter_selection,
             &multi_selection,
@@ -156,7 +163,6 @@ impl AlbumGridView {
         self.wire_empty_toggle(&store);
         self.wire_create_buttons(&album_client);
         self.wire_activation(&settings, &texture_cache, &bus_sender, &store);
-        self.wire_context_menu(&settings, &texture_cache, &bus_sender);
 
         imp.toolbar_view
             .insert_action_group("album", Some(&action_group));
@@ -211,6 +217,9 @@ impl AlbumGridView {
         multi_selection: &gtk::MultiSelection,
         selection_mode: &Rc<Cell<bool>>,
         enter_selection: &gio::SimpleAction,
+        settings: &gio::Settings,
+        texture_cache: &Rc<TextureCache>,
+        bus_sender: &crate::event_bus::EventSender,
     ) {
         let imp = self.imp();
         imp.grid_view.set_model(Some(multi_selection));
@@ -218,6 +227,10 @@ impl AlbumGridView {
             Rc::clone(selection_mode),
             multi_selection.clone(),
             enter_selection.clone(),
+            settings.clone(),
+            Rc::clone(texture_cache),
+            bus_sender.clone(),
+            imp.nav_view.clone(),
         )));
     }
 
@@ -298,29 +311,6 @@ impl AlbumGridView {
         });
     }
 
-    fn wire_context_menu(
-        &self,
-        settings: &gio::Settings,
-        texture_cache: &Rc<TextureCache>,
-        bus_sender: &crate::event_bus::EventSender,
-    ) {
-        let imp = self.imp();
-        let gesture = gtk::GestureClick::new();
-        gesture.set_button(3);
-
-        let gv = imp.grid_view.clone();
-        let nav = imp.nav_view.clone();
-        let s = settings.clone();
-        let tc = Rc::clone(texture_cache);
-        let bs = bus_sender.clone();
-
-        gesture.connect_pressed(move |gesture, _, x, y| {
-            actions::show_context_menu(&gv, &s, &tc, &bs, &nav, x, y);
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-        });
-
-        imp.grid_view.add_controller(gesture);
-    }
 }
 
 // ── Free functions ───────────────────────────────────────────────────────────
