@@ -189,7 +189,11 @@ pub(crate) fn show_context_menu(
     popover.set_has_arrow(true);
 
     let nav = nav_view.clone();
+    let _keep_alive = action_group;
     popover.connect_closed(move |p| {
+        // _keep_alive is captured here to prevent the action group from
+        // being dropped before the popover closes.
+        let _ = &_keep_alive;
         nav.insert_action_group("ctx", None::<&gtk::gio::SimpleActionGroup>);
         p.unparent();
     });
