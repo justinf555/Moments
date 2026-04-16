@@ -157,9 +157,9 @@ pub(crate) fn show_context_menu(
     }
     action_group.add_action(&delete_action);
 
-    // Install on nav_view — high enough in the tree for PopoverMenu
-    // action resolution to find it.
-    nav_view.insert_action_group("ctx", Some(&action_group));
+    // Install on grid_view — the popover's direct parent, matching
+    // Fractal's pattern of action group on the popover's parent widget.
+    grid_view.insert_action_group("ctx", Some(&action_group));
 
     // ── Menu model ──────────────────────────────────────────────────────
     let menu = gtk::gio::Menu::new();
@@ -188,13 +188,11 @@ pub(crate) fn show_context_menu(
     popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
     popover.set_has_arrow(true);
 
-    let nav = nav_view.clone();
+    let gv = grid_view.clone();
     let _keep_alive = action_group;
     popover.connect_closed(move |p| {
-        // _keep_alive is captured here to prevent the action group from
-        // being dropped before the popover closes.
         let _ = &_keep_alive;
-        nav.insert_action_group("ctx", None::<&gtk::gio::SimpleActionGroup>);
+        gv.insert_action_group("ctx", None::<&gtk::gio::SimpleActionGroup>);
         p.unparent();
     });
     popover.popup();
