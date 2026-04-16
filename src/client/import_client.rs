@@ -135,6 +135,7 @@ impl ImportClient {
     /// Set the dependencies required for building import pipelines.
     ///
     /// Must be called once after construction, before the first `import()` call.
+    #[allow(clippy::too_many_arguments)]
     pub fn configure(
         &self,
         library: Arc<Library>,

@@ -508,7 +508,7 @@ impl MomentsSidebar {
                 .and_then(|o| o.downcast::<crate::client::AlbumItemObject>().ok())
             {
                 let item = adw::SidebarItem::builder()
-                    .title(&obj.name())
+                    .title(obj.name())
                     .icon_name("folder-symbolic")
                     .build();
                 section.append(item);

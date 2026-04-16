@@ -44,6 +44,12 @@ pub struct RenderPipeline {
     formats: Arc<FormatRegistry>,
 }
 
+impl Default for RenderPipeline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RenderPipeline {
     /// Create a pipeline with all supported format handlers registered.
     pub fn new() -> Self {

@@ -24,7 +24,6 @@ pub(super) struct ActionContext {
 /// Wire the "Add to Album" button to open the album picker dialog.
 pub(super) fn wire_album_controls(ctx: &ActionContext, album_btn: &gtk::Button) {
     let selection = ctx.selection.clone();
-    let bus_tx = ctx.bus_sender.clone();
 
     album_btn.connect_clicked(move |btn: &gtk::Button| {
         debug!("album button clicked");

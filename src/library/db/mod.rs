@@ -57,6 +57,12 @@ pub struct Database {
     pool: std::sync::Arc<tokio::sync::OnceCell<SqlitePool>>,
 }
 
+impl Default for Database {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Database {
     /// Create an uninitialised database handle.
     ///
