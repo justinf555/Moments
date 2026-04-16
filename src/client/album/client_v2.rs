@@ -525,13 +525,18 @@ impl AlbumClientV2 {
     fn update_in_models(&self, id: &AlbumId, update: impl Fn(&AlbumItemObject)) {
         let id_str = id.as_str();
         let models = self.imp().models.borrow();
+        let mut updated = 0u32;
+        let mut live = 0u32;
         for weak in models.iter() {
             if let Some(store) = weak.upgrade() {
+                live += 1;
                 if let Some((_, item)) = find_by_id(&store, id_str) {
                     update(&item);
+                    updated += 1;
                 }
             }
         }
+        debug!(album_id = %id, live_models = live, updated_models = updated, "update_in_models");
     }
 
     /// Remove an album by ID from all tracked models.
