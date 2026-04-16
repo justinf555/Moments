@@ -641,9 +641,6 @@ impl MomentsApplication {
                         // Store library on the application.
                         *app.imp().library.borrow_mut() = Some(Arc::clone(&library));
 
-                        // Notify the UI that the library is ready.
-                        bus.sender().send(AppEvent::Ready);
-
                         // Create the import client (GObject singleton).
                         let sync_thumbnails_dir = thumbnails_dir.clone();
                         {
