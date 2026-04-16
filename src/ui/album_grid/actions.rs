@@ -87,79 +87,33 @@ pub(crate) fn show_context_menu(
         .album_client_v2()
         .expect("album client v2 available");
 
-    // ── Build popover ──────────────────────────────────────────────────
-    let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    vbox.set_margin_top(6);
-    vbox.set_margin_bottom(6);
-    vbox.set_margin_start(6);
-    vbox.set_margin_end(6);
-
-    let popover = gtk::Popover::new();
+    // ── Actions ─────────────────────────────────────────────────────────
+    let action_group = gtk::gio::SimpleActionGroup::new();
 
     // Open
-    let open_btn = gtk::Button::with_label(&gettext("Open"));
-    open_btn.add_css_class("flat");
-    vbox.append(&open_btn);
-
-    // Rename
-    let rename_btn = gtk::Button::with_label(&gettext("Rename\u{2026}"));
-    rename_btn.add_css_class("flat");
-    vbox.append(&rename_btn);
-
-    vbox.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-
-    // Pin to sidebar
-    let pin_label = if is_pinned {
-        gettext("Pinned")
-    } else {
-        gettext("Pin to Sidebar")
-    };
-    let pin_btn = gtk::Button::with_label(&pin_label);
-    pin_btn.add_css_class("flat");
-    if is_pinned {
-        pin_btn.set_sensitive(false);
-    }
-    vbox.append(&pin_btn);
-
-    vbox.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-
-    // Delete
-    let delete_btn = gtk::Button::with_label(&gettext("Delete Album\u{2026}"));
-    delete_btn.add_css_class("flat");
-    delete_btn.add_css_class("error");
-    vbox.append(&delete_btn);
-
-    popover.set_child(Some(&vbox));
-    popover.set_parent(grid_view);
-    popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
-    popover.set_has_arrow(true);
-
-    // ── Wire handlers ──────────────────────────────────────────────────
-
-    // Open
+    let open_action = gtk::gio::SimpleAction::new("open", None);
     {
-        let pop = popover.downgrade();
         let s = settings.clone();
         let tc = Rc::clone(texture_cache);
         let bs = bus_sender.clone();
         let nav = nav_view.clone();
         let aid = album_id_str.clone();
         let aname = album_name.clone();
-        open_btn.connect_clicked(move |_| {
-            if let Some(p) = pop.upgrade() { p.popdown(); }
+        open_action.connect_activate(move |_, _| {
+            debug!("open action activated");
             open_album_drilldown(&s, &tc, &bs, &nav, AlbumId::from_raw(aid.clone()), &aname);
         });
     }
+    action_group.add_action(&open_action);
 
     // Rename
+    let rename_action = gtk::gio::SimpleAction::new("rename", None);
     {
-        let pop = popover.downgrade();
         let ac = album_client.clone();
         let aid = album_id_str.clone();
         let aname = album_name.clone();
         let gv = grid_view.clone();
-        rename_btn.connect_clicked(move |_| {
-            if let Some(p) = pop.upgrade() { p.popdown(); }
+        rename_action.connect_activate(move |_, _| {
             let ac = ac.clone();
             let aid = aid.clone();
             if let Some(win) = gv.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
@@ -169,28 +123,29 @@ pub(crate) fn show_context_menu(
             }
         });
     }
+    action_group.add_action(&rename_action);
 
     // Pin
+    let pin_action = gtk::gio::SimpleAction::new("pin", None);
+    pin_action.set_enabled(!is_pinned);
     {
-        let pop = popover.downgrade();
         let ac = album_client.clone();
         let aid = album_id_str.clone();
-        pin_btn.connect_clicked(move |_| {
-            if let Some(p) = pop.upgrade() { p.popdown(); }
+        pin_action.connect_activate(move |_, _| {
             debug!(album_id = %aid, "pin action activated");
             ac.pin_album(AlbumId::from_raw(aid.clone()));
         });
     }
+    action_group.add_action(&pin_action);
 
     // Delete
+    let delete_action = gtk::gio::SimpleAction::new("delete", None);
     {
-        let pop = popover.downgrade();
         let ac = album_client.clone();
         let aid = album_id_str.clone();
         let aname = album_name.clone();
         let gv = grid_view.clone();
-        delete_btn.connect_clicked(move |_| {
-            if let Some(p) = pop.upgrade() { p.popdown(); }
+        delete_action.connect_activate(move |_, _| {
             let ac = ac.clone();
             let aid = aid.clone();
             if let Some(win) = gv.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
@@ -200,8 +155,42 @@ pub(crate) fn show_context_menu(
             }
         });
     }
+    action_group.add_action(&delete_action);
 
-    popover.connect_closed(|p| {
+    // Install on nav_view — high enough in the tree for PopoverMenu
+    // action resolution to find it.
+    nav_view.insert_action_group("ctx", Some(&action_group));
+
+    // ── Menu model ──────────────────────────────────────────────────────
+    let menu = gtk::gio::Menu::new();
+
+    let main_section = gtk::gio::Menu::new();
+    main_section.append(Some(&gettext("Open")), Some("ctx.open"));
+    main_section.append(Some(&gettext("Rename\u{2026}")), Some("ctx.rename"));
+    menu.append_section(None, &main_section);
+
+    let pin_section = gtk::gio::Menu::new();
+    let pin_label = if is_pinned {
+        gettext("Pinned")
+    } else {
+        gettext("Pin to Sidebar")
+    };
+    pin_section.append(Some(&pin_label), Some("ctx.pin"));
+    menu.append_section(None, &pin_section);
+
+    let delete_section = gtk::gio::Menu::new();
+    delete_section.append(Some(&gettext("Delete Album\u{2026}")), Some("ctx.delete"));
+    menu.append_section(None, &delete_section);
+
+    // ── Popover ─────────────────────────────────────────────────────────
+    let popover = gtk::PopoverMenu::from_model(Some(&menu));
+    popover.set_parent(grid_view);
+    popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+    popover.set_has_arrow(true);
+
+    let nav = nav_view.clone();
+    popover.connect_closed(move |p| {
+        nav.insert_action_group("ctx", None::<&gtk::gio::SimpleActionGroup>);
         p.unparent();
     });
     popover.popup();
