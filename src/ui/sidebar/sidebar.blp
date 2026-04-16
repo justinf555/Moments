@@ -1,0 +1,36 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $MomentsSidebar : Adw.NavigationPage {
+  title: "Moments";
+
+  child: Adw.ToolbarView toolbar_view {
+    [top]
+    Adw.HeaderBar {
+      [start]
+      $MomentsActivityIndicator activity_indicator {}
+
+      [end]
+      Gtk.MenuButton {
+        primary: true;
+        icon-name: "open-menu-symbolic";
+        tooltip-text: _("Main Menu");
+        menu-model: primary_menu;
+      }
+    }
+
+    content: Adw.Sidebar sidebar {};
+  };
+}
+
+menu primary_menu {
+  section {
+    item (_("_Import"), "app.import")
+  }
+
+  section {
+    item (_("_Keyboard Shortcuts"), "app.shortcuts")
+    item (_("_About Moments"), "app.about")
+    item (_("_Preferences"), "app.preferences")
+  }
+}

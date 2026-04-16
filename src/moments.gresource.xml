@@ -26,6 +26,8 @@
     <file preprocess="xml-stripblanks">ui/photo_grid/cell.ui</file>
     <file preprocess="xml-stripblanks">ui/album_grid/card/card.ui</file>
     <file preprocess="xml-stripblanks">ui/people_grid/cell.ui</file>
+    <file preprocess="xml-stripblanks">ui/sidebar/sidebar.ui</file>
+    <file preprocess="xml-stripblanks">ui/widgets/activity_indicator/activity_indicator.ui</file>
     <file preprocess="xml-stripblanks">shortcuts-dialog.ui</file>
     <file>style.css</file>
   </gresource>

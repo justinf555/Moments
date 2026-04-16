@@ -1,0 +1,100 @@
+using Gtk 4.0;
+
+template $MomentsActivityIndicator : Gtk.Widget {
+  Gtk.MenuButton menu_button {
+    visible: false;
+
+    styles ["flat"]
+
+    child: Gtk.Stack stack {
+      transition-type: crossfade;
+      transition-duration: 200;
+      visible-child-name: "hidden";
+
+      Gtk.StackPage {
+        name: "active";
+        child: Gtk.Spinner spinner {
+          spinning: true;
+        };
+      }
+
+      Gtk.StackPage {
+        name: "status";
+        child: Gtk.Image status_icon {
+          icon-name: "object-select-symbolic";
+        };
+      }
+
+      Gtk.StackPage {
+        name: "hidden";
+        child: Gtk.Box {};
+      }
+    };
+
+    popover: Gtk.Popover popover {
+      child: Gtk.Box popover_box {
+        orientation: vertical;
+        spacing: 8;
+        margin-start: 8;
+        margin-end: 8;
+        margin-top: 8;
+        margin-bottom: 8;
+
+        Gtk.Box sync_row {
+          orientation: horizontal;
+          spacing: 8;
+          visible: false;
+
+          Gtk.Image sync_icon {
+            icon-name: "emblem-synchronizing-symbolic";
+          }
+
+          Gtk.Label sync_label {
+            xalign: 0;
+            hexpand: true;
+          }
+        }
+
+        Gtk.Box import_row {
+          orientation: vertical;
+          spacing: 4;
+          visible: false;
+
+          Gtk.Box {
+            orientation: horizontal;
+            spacing: 8;
+
+            Gtk.Image import_icon {
+              icon-name: "document-open-symbolic";
+            }
+
+            Gtk.Label import_label {
+              xalign: 0;
+              hexpand: true;
+            }
+          }
+
+          Gtk.ProgressBar import_progress {
+            visible: false;
+          }
+        }
+
+        Gtk.Box error_row {
+          orientation: horizontal;
+          spacing: 8;
+          visible: false;
+
+          Gtk.Image error_icon {
+            icon-name: "dialog-warning-symbolic";
+          }
+
+          Gtk.Label error_label {
+            xalign: 0;
+            hexpand: true;
+            wrap: true;
+          }
+        }
+      };
+    };
+  }
+}

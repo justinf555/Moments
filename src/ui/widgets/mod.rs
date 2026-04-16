@@ -1,6 +1,8 @@
 //! Shared reusable UI components.
 
+pub mod activity_indicator;
 pub mod context_menu_bin;
+pub use activity_indicator::ActivityIndicator;
 pub use context_menu_bin::ContextMenuBin;
 
 use adw::prelude::*;

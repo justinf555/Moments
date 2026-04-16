@@ -70,23 +70,52 @@ impl PullManager {
     pub async fn run(&self) -> Result<(), LibraryError> {
         info!("pull manager starting");
 
+        // Cumulative asset count across continuous batches, reset when
+        // the stream is exhausted and we go to sleep.
+        let mut cumulative_assets: usize = 0;
+        let mut cumulative_errors: usize = 0;
+
         loop {
             if *self.shutdown_rx.borrow() {
                 info!("pull manager shutting down");
                 break;
             }
 
-            if let Err(e) = self.run_sync().await {
-                error!("sync cycle failed: {e}");
-                let sync_event = if crate::sync::event::is_connectivity_error(&e) {
-                    SyncEvent::Offline
-                } else {
-                    SyncEvent::Error {
-                        message: e.to_string(),
-                    }
-                };
-                let _ = self.sync_events.send(sync_event);
+            let had_items = match self.run_sync().await {
+                Ok((total, assets)) => {
+                    cumulative_assets += assets;
+                    total > 0
+                }
+                Err(e) => {
+                    error!("sync cycle failed: {e}");
+                    cumulative_errors += 1;
+                    let sync_event = if crate::sync::event::is_connectivity_error(&e) {
+                        SyncEvent::Offline
+                    } else {
+                        SyncEvent::Error {
+                            message: e.to_string(),
+                        }
+                    };
+                    let _ = self.sync_events.send(sync_event);
+                    false
+                }
+            };
+
+            // If items were processed, immediately loop back for the
+            // next batch — don't wait for the polling interval. This
+            // makes initial sync of large libraries continuous.
+            if had_items {
+                debug!("items processed, continuing immediately");
+                continue;
             }
+
+            // Stream exhausted — emit Complete with cumulative counts.
+            let _ = self.sync_events.send(SyncEvent::Complete {
+                items: cumulative_assets,
+                errors: cumulative_errors,
+            });
+            cumulative_assets = 0;
+            cumulative_errors = 0;
 
             let interval_secs: u64 = {
                 let mut rx = self.interval_rx.lock().await;
@@ -115,9 +144,9 @@ impl PullManager {
         Ok(())
     }
 
-    /// Execute a single sync cycle.
+    /// Execute a single sync cycle. Returns `(total_entities, assets)`.
     #[instrument(skip(self))]
-    async fn run_sync(&self) -> Result<(), LibraryError> {
+    async fn run_sync(&self) -> Result<(usize, usize), LibraryError> {
         let request = SyncStreamRequest {
             types: vec![
                 "AssetsV1".to_string(),
@@ -209,10 +238,14 @@ impl PullManager {
                         acks.push(sync_line.ack);
                         counters.increment(result.counter);
 
-                        // Notify UI on first processed item so the spinner
-                        // shows immediately, even for small syncs.
-                        if !notified_processing {
-                            let _ = self.sync_events.send(SyncEvent::Processing { items: 1 });
+                        // Notify UI when the first asset is processed so the
+                        // spinner shows immediately, even for small syncs.
+                        // Non-asset entities (exif, albums, people) don't
+                        // trigger the spinner.
+                        if !notified_processing && counters.assets > 0 {
+                            let _ = self.sync_events.send(SyncEvent::Processing {
+                                items: counters.assets,
+                            });
                             notified_processing = true;
                         }
 
@@ -260,9 +293,11 @@ impl PullManager {
 
             if acks.len() >= ACK_FLUSH_THRESHOLD {
                 self.flush_acks(&mut acks).await?;
-                let _ = self.sync_events.send(SyncEvent::Processing {
-                    items: counters.assets + counters.albums + counters.people + counters.faces,
-                });
+                if counters.assets > 0 {
+                    let _ = self.sync_events.send(SyncEvent::Processing {
+                        items: counters.assets,
+                    });
+                }
             }
         }
 
@@ -278,7 +313,7 @@ impl PullManager {
         existing_ids: Option<HashSet<String>>,
         acks: &mut Vec<String>,
         counters: &SyncCounters,
-    ) -> Result<(), LibraryError> {
+    ) -> Result<(usize, usize), LibraryError> {
         if is_reset {
             if let Some(orphaned_ids) = existing_ids {
                 if !orphaned_ids.is_empty() {
@@ -296,23 +331,19 @@ impl PullManager {
             self.flush_acks(acks).await?;
         }
 
-        let total_items = counters.assets + counters.albums + counters.people + counters.faces;
-        let _ = self.sync_events.send(SyncEvent::Complete {
-            items: total_items,
-            errors: counters.errors,
-        });
-
-        if counters.assets > 0 || counters.errors > 0 {
+        let total = counters.assets + counters.albums + counters.people + counters.faces;
+        if total > 0 || counters.errors > 0 {
             info!(
                 synced = counters.assets,
                 errors = counters.errors,
-                "sync complete"
+                total,
+                "sync batch complete"
             );
         } else {
             debug!("sync complete — no new assets");
         }
 
-        Ok(())
+        Ok((total, counters.assets))
     }
 
     async fn flush_acks(&self, acks: &mut Vec<String>) -> Result<(), LibraryError> {

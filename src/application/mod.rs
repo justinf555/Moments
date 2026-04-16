@@ -73,7 +73,34 @@ mod imp {
         type ParentType = adw::Application;
     }
 
+    // TODO: convert all client fields to proper GObject properties
+    // during the Application refactor. For now we only register
+    // sync-client and import-client so ActivityIndicator can listen
+    // for notify signals.
     impl ObjectImpl for MomentsApplication {
+        fn properties() -> &'static [glib::ParamSpec] {
+            use std::sync::OnceLock;
+            static PROPERTIES: OnceLock<Vec<glib::ParamSpec>> = OnceLock::new();
+            PROPERTIES.get_or_init(|| {
+                vec![
+                    glib::ParamSpecObject::builder::<crate::client::SyncClient>("sync-client")
+                        .read_only()
+                        .build(),
+                    glib::ParamSpecObject::builder::<crate::client::ImportClient>("import-client")
+                        .read_only()
+                        .build(),
+                ]
+            })
+        }
+
+        fn property(&self, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
+            match pspec.name() {
+                "sync-client" => self.sync_client.borrow().to_value(),
+                "import-client" => self.import_client.borrow().to_value(),
+                _ => unimplemented!(),
+            }
+        }
+
         fn constructed(&self) {
             self.parent_constructed();
             let obj = self.obj();
@@ -239,6 +266,18 @@ impl MomentsApplication {
     /// Returns `None` for local libraries or if no library is open yet.
     pub fn sync_client(&self) -> Option<crate::client::SyncClient> {
         self.imp().sync_client.borrow().clone()
+    }
+
+    /// Store the sync client and notify listeners.
+    pub fn set_sync_client(&self, client: crate::client::SyncClient) {
+        *self.imp().sync_client.borrow_mut() = Some(client);
+        self.notify("sync-client");
+    }
+
+    /// Store the import client and notify listeners.
+    pub fn set_import_client(&self, client: crate::client::ImportClient) {
+        *self.imp().import_client.borrow_mut() = Some(client);
+        self.notify("import-client");
     }
 
     /// Update the sync polling interval. No-op if no sync engine is running.
@@ -623,7 +662,7 @@ impl MomentsApplication {
                                 storage_mode,
                                 tokio.clone(),
                             );
-                            *app.imp().import_client.borrow_mut() = Some(import_client);
+                            app.set_import_client(import_client);
                         }
 
                         // Create the album client (GObject singleton).
@@ -749,7 +788,7 @@ impl MomentsApplication {
 
                             let sync_client = crate::client::SyncClient::new();
                             sync_client.configure(sync_events_rx, tokio.clone());
-                            *app.imp().sync_client.borrow_mut() = Some(sync_client);
+                            app.set_sync_client(sync_client);
                         }
 
                         // Store bus for shutdown cleanup.

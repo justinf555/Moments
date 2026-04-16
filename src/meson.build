@@ -30,6 +30,8 @@ blueprints = custom_target(
     'ui/photo_grid/cell.blp',
     'ui/album_grid/card/card.blp',
     'ui/people_grid/cell.blp',
+    'ui/sidebar/sidebar.blp',
+    'ui/widgets/activity_indicator/activity_indicator.blp',
   ),
   output: '.',
   command: [
