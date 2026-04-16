@@ -83,6 +83,23 @@ impl FacesRepository {
             .collect())
     }
 
+    /// Fetch a single person by ID.
+    pub async fn get_person(&self, id: &str) -> Result<Option<Person>, LibraryError> {
+        let row: Option<PersonRow> =
+            sqlx::query_as("SELECT id, name, face_count, is_hidden FROM people WHERE id = ?")
+                .bind(id)
+                .fetch_optional(self.db.pool())
+                .await
+                .map_err(LibraryError::Db)?;
+
+        Ok(row.map(|r| Person {
+            id: PersonId::from_raw(r.id),
+            name: r.name,
+            face_count: r.face_count as u32,
+            is_hidden: r.is_hidden,
+        }))
+    }
+
     /// List media IDs for all assets containing a specific person.
     pub async fn list_media_for_person(
         &self,

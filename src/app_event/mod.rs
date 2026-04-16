@@ -126,5 +126,4 @@ pub enum AppEvent {
         faces: usize,
         errors: usize,
     },
-    PeopleSyncComplete,
 }

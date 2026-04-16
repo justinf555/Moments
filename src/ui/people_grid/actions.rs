@@ -5,7 +5,7 @@ use gettextrs::gettext;
 use gtk::gio;
 use tracing::debug;
 
-use crate::client::{PeopleClient, PersonItemObject};
+use crate::client::{PeopleClientV2, PersonItemObject};
 use crate::library::faces::PersonId;
 use crate::library::media::MediaFilter;
 use crate::ui::photo_grid::texture_cache::TextureCache;
@@ -14,7 +14,7 @@ use crate::ui::photo_grid::PhotoGridView;
 /// Wire item activation — clicking a person pushes a filtered PhotoGridView.
 pub(super) fn wire_activation(
     grid_view: &gtk::GridView,
-    store: &gio::ListStore,
+    filter_model: &gtk::FilterListModel,
     nav_view: &adw::NavigationView,
     settings: &gio::Settings,
     texture_cache: &Rc<TextureCache>,
@@ -24,10 +24,10 @@ pub(super) fn wire_activation(
     let s = settings.clone();
     let tc = Rc::clone(texture_cache);
     let bs = bus_sender.clone();
-    let store_ref = store.clone();
+    let fm = filter_model.clone();
 
     grid_view.connect_activate(move |_, position| {
-        let Some(obj) = store_ref
+        let Some(obj) = fm
             .item(position)
             .and_then(|o| o.downcast::<PersonItemObject>().ok())
         else {
@@ -68,22 +68,22 @@ pub(super) fn wire_activation(
 /// Wire the right-click context menu on people grid cells.
 pub(super) fn wire_context_menu(
     grid_view: &gtk::GridView,
-    store: &gio::ListStore,
-    people_client: &PeopleClient,
+    filter_model: &gtk::FilterListModel,
+    people_client: &PeopleClientV2,
 ) {
     let gesture = gtk::GestureClick::new();
     gesture.set_button(3);
 
     let gv = grid_view.clone();
-    let store_ctx = store.clone();
+    let fm = filter_model.clone();
     let pc = people_client.clone();
 
     gesture.connect_pressed(move |gesture, _, x, y| {
-        let Some(pos) = find_clicked_position(&gv, &store_ctx, x, y) else {
+        let Some(pos) = find_clicked_position(&gv, &fm, x, y) else {
             return;
         };
 
-        let Some(obj) = store_ctx
+        let Some(obj) = fm
             .item(pos)
             .and_then(|o| o.downcast::<PersonItemObject>().ok())
         else {
@@ -121,7 +121,7 @@ pub(super) fn wire_context_menu(
         wire_rename_button(&rename_btn, &popover, &gv, &pc, &person_id, &current_name);
 
         // Wire hide/unhide.
-        wire_hide_button(&hide_btn, &popover, &gv, &pc, &person_id, is_hidden);
+        wire_hide_button(&hide_btn, &popover, &pc, &person_id, is_hidden);
 
         popover.set_child(Some(&vbox));
         popover.set_parent(&gv);
@@ -139,11 +139,11 @@ pub(super) fn wire_context_menu(
     grid_view.add_controller(gesture);
 }
 
-/// Find the store position of the item at (x, y) by resolving the cell's
-/// bound data.
+/// Find the filtered model position of the item at (x, y) by resolving
+/// the cell's bound data.
 fn find_clicked_position(
     grid_view: &gtk::GridView,
-    store: &gio::ListStore,
+    filter_model: &gtk::FilterListModel,
     x: f64,
     y: f64,
 ) -> Option<u32> {
@@ -154,8 +154,8 @@ fn find_clicked_position(
         if let Some(cell) = w.downcast_ref::<super::cell::PeopleGridCell>() {
             let item = cell.bound_item()?;
             let target_id = item.id();
-            for i in 0..store.n_items() {
-                if let Some(obj) = store
+            for i in 0..filter_model.n_items() {
+                if let Some(obj) = filter_model
                     .item(i)
                     .and_then(|o| o.downcast::<PersonItemObject>().ok())
                 {
@@ -176,7 +176,7 @@ fn wire_rename_button(
     btn: &gtk::Button,
     popover: &gtk::Popover,
     grid_view: &gtk::GridView,
-    people_client: &PeopleClient,
+    people_client: &PeopleClientV2,
     person_id: &str,
     current_name: &str,
 ) {
@@ -207,7 +207,6 @@ fn wire_rename_button(
 
         let pc = pc.clone();
         let pid = pid.clone();
-        let gv_toast = gv_ref.clone();
         dialog.connect_response(None, move |_, response| {
             if response != "rename" {
                 return;
@@ -217,14 +216,7 @@ fn wire_rename_button(
                 return;
             }
             debug!(person_id = %pid, name = %new_name, "renaming person");
-            let gv_toast = gv_toast.clone();
-            pc.rename_person(PersonId::from_raw(pid.clone()), new_name, move |msg| {
-                let _ = gv_toast.activate_action(
-                    "win.show-toast",
-                    Some(&gettext("Failed to rename person").to_variant()),
-                );
-                tracing::error!("{msg}");
-            });
+            pc.rename_person(PersonId::from_raw(pid.clone()), new_name);
         });
         dialog.present(
             gv_ref
@@ -239,15 +231,13 @@ fn wire_rename_button(
 fn wire_hide_button(
     btn: &gtk::Button,
     popover: &gtk::Popover,
-    grid_view: &gtk::GridView,
-    people_client: &PeopleClient,
+    people_client: &PeopleClientV2,
     person_id: &str,
     is_hidden: bool,
 ) {
     let pop_weak = popover.downgrade();
     let pc = people_client.clone();
     let new_hidden = !is_hidden;
-    let gv_hide = grid_view.clone();
     let pid = person_id.to_owned();
 
     btn.connect_clicked(move |_| {
@@ -256,13 +246,6 @@ fn wire_hide_button(
         }
         let action = if new_hidden { "hiding" } else { "unhiding" };
         debug!(person_id = %pid, action, "toggling person visibility");
-        let gv_hide = gv_hide.clone();
-        pc.set_person_hidden(PersonId::from_raw(pid.clone()), new_hidden, move |msg| {
-            let _ = gv_hide.activate_action(
-                "win.show-toast",
-                Some(&gettext("Failed to update person visibility").to_variant()),
-            );
-            tracing::error!("{msg}");
-        });
+        pc.set_person_hidden(PersonId::from_raw(pid.clone()), new_hidden);
     });
 }

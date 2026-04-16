@@ -26,31 +26,6 @@ use gtk::prelude::*;
 use gtk::{gio, glib};
 use tracing::{debug, instrument, warn};
 
-/// Wrapper for a reload callback that implements `Debug` and `Default`.
-pub struct ReloadCallback(Box<dyn Fn()>);
-
-impl ReloadCallback {
-    pub fn new(f: impl Fn() + 'static) -> Self {
-        Self(Box::new(f))
-    }
-
-    pub fn call(&self) {
-        (self.0)();
-    }
-}
-
-impl std::fmt::Debug for ReloadCallback {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("ReloadCallback(..)")
-    }
-}
-
-impl Default for ReloadCallback {
-    fn default() -> Self {
-        Self(Box::new(|| {}))
-    }
-}
-
 use crate::ui::coordinator::ContentCoordinator;
 use crate::ui::empty_library::EmptyLibraryView;
 use crate::ui::people_grid::PeopleGridView;
@@ -80,10 +55,6 @@ mod imp {
 
         /// GSettings instance for persisting window geometry.
         pub settings: OnceCell<gio::Settings>,
-
-        /// Callback to reload the People collection grid after sync.
-        #[allow(missing_debug_implementations)]
-        pub people_reload: RefCell<Option<super::ReloadCallback>>,
 
         /// Event bus subscriptions kept alive for the window's lifetime.
         pub _subscriptions: RefCell<Vec<crate::event_bus::Subscription>>,
@@ -270,20 +241,6 @@ impl MomentsWindow {
                 }
             }
         }));
-
-        // Reload the People collection grid after sync completes.
-        // Deferred to avoid bus re-entrancy if reload triggers realization.
-        let weak = self.downgrade();
-        subs.push(bus.subscribe(move |event| {
-            if matches!(event, AppEvent::PeopleSyncComplete) {
-                let weak = weak.clone();
-                glib::idle_add_local_once(move || {
-                    if let Some(win) = weak.upgrade() {
-                        win.reload_people();
-                    }
-                });
-            }
-        }));
     }
 
     fn setup_sidebar(&self) -> MomentsSidebar {
@@ -420,16 +377,9 @@ impl MomentsWindow {
             let s = settings.clone();
             let tc = Rc::clone(texture_cache);
             let bs = bus_sender.clone();
-            let win_weak = self.downgrade();
             coordinator.register_lazy("people", move || {
                 let view = PeopleGridView::new();
                 view.setup_people(s, tc, bs);
-                if let Some(win) = win_weak.upgrade() {
-                    let view_clone = view.clone();
-                    *win.imp().people_reload.borrow_mut() = Some(ReloadCallback::new(move || {
-                        view_clone.reload();
-                    }));
-                }
                 view.upcast()
             });
         }
@@ -521,12 +471,6 @@ impl MomentsWindow {
     }
 
     /// Reload the People collection grid if it has been materialised.
-    pub fn reload_people(&self) {
-        if let Some(reload) = self.imp().people_reload.borrow().as_ref() {
-            reload.call();
-        }
-    }
-
     /// Show a toast message in the window's toast overlay.
     ///
     /// Auto-dismisses after 5 seconds.

@@ -6,7 +6,7 @@ pub mod people;
 pub use album::{AlbumClientV2, AlbumItemObject};
 pub use import_client::{ImportClient, ImportState};
 pub use media::{MediaClient, MediaItemObject};
-pub use people::{PeopleClient, PersonItemObject};
+pub use people::{PeopleClientV2, PersonItemObject};
 
 use std::future::Future;
 
