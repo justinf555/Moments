@@ -8,6 +8,7 @@ use tracing::{debug, error, info, instrument, warn};
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
 use crate::library::mutation::Mutation;
+use crate::sync::event::SyncEvent;
 
 use super::client::ImmichClient;
 
@@ -37,6 +38,8 @@ const BATCH_SIZE: i64 = 100;
 pub(crate) struct PushManager {
     pub client: ImmichClient,
     pub db: Database,
+    /// Channel for UI state updates (sync progress, errors).
+    pub sync_events: tokio::sync::mpsc::UnboundedSender<SyncEvent>,
     pub shutdown_rx: tokio::sync::watch::Receiver<bool>,
     pub interval_rx: tokio::sync::Mutex<tokio::sync::watch::Receiver<u64>>,
 }
@@ -55,6 +58,14 @@ impl PushManager {
 
             if let Err(e) = self.push_pending().await {
                 error!("push cycle failed: {e}");
+                let sync_event = if crate::sync::event::is_connectivity_error(&e) {
+                    SyncEvent::Offline
+                } else {
+                    SyncEvent::Error {
+                        message: e.to_string(),
+                    }
+                };
+                let _ = self.sync_events.send(sync_event);
             }
 
             // Purge completed entries periodically.
@@ -96,12 +107,19 @@ impl PushManager {
             return Ok(());
         }
 
-        info!(count = entries.len(), "pushing outbox entries");
+        let total = entries.len();
+        info!(count = total, "pushing outbox entries");
+        let _ = self
+            .sync_events
+            .send(SyncEvent::Processing { items: total });
 
+        let mut pushed = 0usize;
+        let mut errors = 0usize;
         for entry in &entries {
             match self.push_entry(entry).await {
                 Ok(()) => {
                     self.mark_done(entry.id).await?;
+                    pushed += 1;
                 }
                 Err(e) => {
                     warn!(
@@ -112,9 +130,15 @@ impl PushManager {
                         "push failed, marking as failed"
                     );
                     self.mark_failed(entry.id, &e.to_string()).await?;
+                    errors += 1;
                 }
             }
         }
+
+        let _ = self.sync_events.send(SyncEvent::Complete {
+            items: pushed,
+            errors,
+        });
 
         Ok(())
     }
@@ -527,10 +551,12 @@ mod tests {
 
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let (_interval_tx, interval_rx) = tokio::sync::watch::channel(60u64);
+        let (sync_events, _rx) = tokio::sync::mpsc::unbounded_channel();
 
         PushManager {
             client,
             db,
+            sync_events,
             shutdown_rx,
             interval_rx: tokio::sync::Mutex::new(interval_rx),
         }

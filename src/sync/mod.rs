@@ -9,13 +9,14 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tracing::{error, info};
 
 use crate::event_bus::EventSender;
 use crate::library::db::Database;
 use crate::library::Library;
 
+pub mod event;
 pub mod outbox;
 pub mod providers;
 
@@ -37,11 +38,13 @@ impl SyncHandle {
     /// - **PushManager**: drains the outbox, pushes local mutations to Immich
     ///
     /// Returns a handle for shutdown and interval control.
+    #[allow(clippy::too_many_arguments)]
     pub fn start(
         client: providers::immich::client::ImmichClient,
         library: Arc<Library>,
         db: Database,
         events: EventSender,
+        sync_events: mpsc::UnboundedSender<event::SyncEvent>,
         thumbnails_dir: PathBuf,
         initial_interval_secs: u64,
         tokio: tokio::runtime::Handle,
@@ -57,6 +60,7 @@ impl SyncHandle {
             library: Arc::clone(&library),
             db: db.clone(),
             events: events.clone(),
+            sync_events: sync_events.clone(),
             shutdown_rx: shutdown_rx.clone(),
             thumbnails_dir,
             interval_rx: tokio::sync::Mutex::new(interval_rx.clone()),
@@ -71,6 +75,7 @@ impl SyncHandle {
         let push_mgr = push::PushManager {
             client,
             db,
+            sync_events,
             shutdown_rx,
             interval_rx: tokio::sync::Mutex::new(interval_rx),
         };

@@ -254,22 +254,9 @@ mod imp {
                     return;
                 };
                 match event {
-                    crate::app_event::AppEvent::SyncStarted => {
-                        sidebar.imp().status_bar().show_sync_started();
-                    }
-                    crate::app_event::AppEvent::SyncProgress {
-                        assets,
-                        people,
-                        faces,
-                    } => {
-                        sidebar
-                            .imp()
-                            .status_bar()
-                            .show_sync_progress(*assets, *people, *faces);
-                    }
-                    crate::app_event::AppEvent::SyncComplete { .. } => {
-                        sidebar.imp().status_bar().show_sync_complete();
-                    }
+                    // Sync events are now handled by SyncClient — see
+                    // client/sync/. The StatusBar sync methods will be
+                    // removed when the ActivityIndicator replaces it.
                     crate::app_event::AppEvent::Trashed { ids } => {
                         sidebar.adjust_trash_count(ids.len() as i32);
                     }

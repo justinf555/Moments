@@ -51,6 +51,7 @@ mod imp {
         pub album_client_v2: RefCell<Option<crate::client::AlbumClientV2>>,
         pub people_client: RefCell<Option<crate::client::PeopleClientV2>>,
         pub media_client: RefCell<Option<crate::client::MediaClient>>,
+        pub sync_client: RefCell<Option<crate::client::SyncClient>>,
         pub render_pipeline: RefCell<Option<Arc<crate::renderer::pipeline::RenderPipeline>>>,
         pub is_immich: Cell<bool>,
         pub immich_server_url: RefCell<Option<String>>,
@@ -223,6 +224,13 @@ impl MomentsApplication {
     /// Returns `None` if no library is open yet.
     pub fn media_client(&self) -> Option<crate::client::MediaClient> {
         self.imp().media_client.borrow().clone()
+    }
+
+    /// Access the sync client singleton (Immich only).
+    ///
+    /// Returns `None` for local libraries or if no library is open yet.
+    pub fn sync_client(&self) -> Option<crate::client::SyncClient> {
+        self.imp().sync_client.borrow().clone()
     }
 
     /// Update the sync polling interval. No-op if no sync engine is running.
@@ -704,7 +712,7 @@ impl MomentsApplication {
                             *app.imp().purge_handle.borrow_mut() = Some(handle);
                         }
 
-                        // Start Immich sync engine if applicable.
+                        // Start Immich sync engine and sync client.
                         if let Some(client) = immich_client {
                             let lib = Arc::clone(
                                 app.imp().library.borrow().as_ref().expect("library set"),
@@ -716,16 +724,25 @@ impl MomentsApplication {
                                 .expect("settings initialised")
                                 .uint("sync-interval-seconds")
                                 as u64;
+
+                            let (sync_events_tx, sync_events_rx) =
+                                tokio::sync::mpsc::unbounded_channel();
+
                             let handle = crate::sync::SyncHandle::start(
                                 client,
                                 lib,
                                 db_for_sync,
                                 bus.sender(),
+                                sync_events_tx,
                                 sync_thumbnails_dir,
                                 sync_interval,
                                 tokio.clone(),
                             );
                             *app.imp().sync_handle.borrow_mut() = Some(handle);
+
+                            let sync_client = crate::client::SyncClient::new();
+                            sync_client.configure(sync_events_rx, tokio.clone());
+                            *app.imp().sync_client.borrow_mut() = Some(sync_client);
                         }
 
                         // Store bus for shutdown cleanup.

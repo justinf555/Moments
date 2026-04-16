@@ -11,12 +11,12 @@ use futures_util::TryStreamExt;
 use tokio::io::AsyncBufReadExt;
 use tracing::{debug, error, info, instrument, warn};
 
-use crate::app_event::AppEvent;
 use crate::event_bus::EventSender;
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
 use crate::library::media::MediaId;
 use crate::library::Library;
+use crate::sync::event::SyncEvent;
 
 use super::client::ImmichClient;
 use super::handlers::{self, CounterKind, SyncContext};
@@ -56,6 +56,8 @@ pub(crate) struct PullManager {
     /// Database handle for sync infrastructure (checkpoints, audit).
     pub db: Database,
     pub events: EventSender,
+    /// Channel for UI state updates (sync progress, errors).
+    pub sync_events: tokio::sync::mpsc::UnboundedSender<SyncEvent>,
     pub shutdown_rx: tokio::sync::watch::Receiver<bool>,
     pub thumbnails_dir: PathBuf,
     pub interval_rx: tokio::sync::Mutex<tokio::sync::watch::Receiver<u64>>,
@@ -76,6 +78,14 @@ impl PullManager {
 
             if let Err(e) = self.run_sync().await {
                 error!("sync cycle failed: {e}");
+                let sync_event = if crate::sync::event::is_connectivity_error(&e) {
+                    SyncEvent::Offline
+                } else {
+                    SyncEvent::Error {
+                        message: e.to_string(),
+                    }
+                };
+                let _ = self.sync_events.send(sync_event);
             }
 
             let interval_secs: u64 = {
@@ -120,7 +130,6 @@ impl PullManager {
         };
 
         debug!("starting sync stream");
-        self.events.send(AppEvent::SyncStarted);
         let response = self.client.post_stream("/sync/stream", &request).await?;
 
         let byte_stream = response.bytes_stream().map_err(std::io::Error::other);
@@ -243,10 +252,8 @@ impl PullManager {
 
             if acks.len() >= ACK_FLUSH_THRESHOLD {
                 self.flush_acks(&mut acks).await?;
-                self.events.send(AppEvent::SyncProgress {
-                    assets: counters.assets,
-                    people: counters.people,
-                    faces: counters.faces,
+                let _ = self.sync_events.send(SyncEvent::Processing {
+                    items: counters.assets + counters.albums + counters.people + counters.faces,
                 });
             }
         }
@@ -281,10 +288,9 @@ impl PullManager {
             self.flush_acks(acks).await?;
         }
 
-        self.events.send(AppEvent::SyncComplete {
-            assets: counters.assets,
-            people: counters.people,
-            faces: counters.faces,
+        let total_items = counters.assets + counters.albums + counters.people + counters.faces;
+        let _ = self.sync_events.send(SyncEvent::Complete {
+            items: total_items,
             errors: counters.errors,
         });
 

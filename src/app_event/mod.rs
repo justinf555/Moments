@@ -112,18 +112,6 @@ pub enum AppEvent {
     AlbumMediaChanged {
         album_id: AlbumId,
     },
-
-    // ── Sync ─────────────────────────────────────────────────────────────────
-    SyncStarted,
-    SyncProgress {
-        assets: usize,
-        people: usize,
-        faces: usize,
-    },
-    SyncComplete {
-        assets: usize,
-        people: usize,
-        faces: usize,
-        errors: usize,
-    },
+    // Sync events (SyncStarted, SyncProgress, SyncComplete) moved to
+    // SyncEvent in sync/event.rs, consumed by SyncClient.
 }
