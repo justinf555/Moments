@@ -48,7 +48,6 @@ mod imp {
         pub tokio: OnceCell<tokio::runtime::Handle>,
         pub library: RefCell<Option<Arc<Library>>>,
         pub import_client: RefCell<Option<crate::client::import_client::ImportClient>>,
-        pub album_client: RefCell<Option<crate::client::AlbumClient>>,
         pub album_client_v2: RefCell<Option<crate::client::AlbumClientV2>>,
         pub people_client: RefCell<Option<crate::client::PeopleClient>>,
         pub media_client: RefCell<Option<crate::client::MediaClient>>,
@@ -100,7 +99,6 @@ mod imp {
             // (and the SqlitePool it wraps) is freed before drop(tokio)
             // in main() tries to shut down the runtime.
             self.event_bus.borrow_mut().take();
-            self.album_client.borrow_mut().take();
             self.album_client_v2.borrow_mut().take();
             self.people_client.borrow_mut().take();
             self.media_client.borrow_mut().take();
@@ -204,14 +202,6 @@ impl MomentsApplication {
     }
 
     /// Access the album client singleton.
-    ///
-    /// Available from anywhere via `MomentsApplication::default().album_client()`.
-    /// Returns `None` if no library is open yet.
-    pub fn album_client(&self) -> Option<crate::client::AlbumClient> {
-        self.imp().album_client.borrow().clone()
-    }
-
-    /// Access the album client v2 singleton.
     ///
     /// Available from anywhere via `MomentsApplication::default().album_client_v2()`.
     /// Returns `None` if no library is open yet.
@@ -622,17 +612,6 @@ impl MomentsApplication {
                         }
 
                         // Create the album client (GObject singleton).
-                        {
-                            let album_client = crate::client::AlbumClient::new();
-                            album_client.configure(
-                                Arc::clone(&library),
-                                tokio.clone(),
-                                bus.sender(),
-                            );
-                            *app.imp().album_client.borrow_mut() = Some(album_client);
-                        }
-
-                        // Create the album client v2 (GObject singleton).
                         {
                             let album_client_v2 = crate::client::AlbumClientV2::new();
                             album_client_v2.configure(
