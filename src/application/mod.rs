@@ -18,6 +18,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+pub mod keyring;
+
 use std::cell::{Cell, OnceCell, RefCell};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -33,7 +35,6 @@ use crate::config::{APP_ID, PROFILE, VERSION};
 use crate::event_bus::EventBus;
 use crate::library::bundle::Bundle;
 use crate::library::config::LibraryConfig;
-use crate::library::factory::LibraryFactory;
 use crate::library::Library;
 use crate::ui::MomentsSetupWindow;
 use crate::ui::MomentsWindow;
@@ -45,7 +46,12 @@ mod imp {
     pub struct MomentsApplication {
         pub settings: OnceCell<gio::Settings>,
         pub tokio: OnceCell<tokio::runtime::Handle>,
-        pub library: RefCell<Option<Arc<dyn Library>>>,
+        pub library: RefCell<Option<Arc<Library>>>,
+        pub import_client: RefCell<Option<crate::client::import_client::ImportClient>>,
+        pub album_client_v2: RefCell<Option<crate::client::AlbumClientV2>>,
+        pub people_client: RefCell<Option<crate::client::PeopleClient>>,
+        pub media_client: RefCell<Option<crate::client::MediaClient>>,
+        pub render_pipeline: RefCell<Option<Arc<crate::renderer::pipeline::RenderPipeline>>>,
         pub is_immich: Cell<bool>,
         pub immich_server_url: RefCell<Option<String>>,
         /// Centralised event bus for fan-out event delivery.
@@ -53,6 +59,10 @@ mod imp {
         pub event_bus: RefCell<Option<EventBus>>,
         /// App-lifetime event bus subscriptions (error toasts, etc.).
         pub subscriptions: RefCell<Vec<crate::event_bus::Subscription>>,
+        /// Background task handle for periodic trash purge.
+        pub purge_handle: RefCell<Option<tokio::task::JoinHandle<()>>>,
+        /// Sync engine handle (Immich only).
+        pub sync_handle: RefCell<Option<crate::sync::SyncHandle>>,
     }
 
     #[glib::object_subclass]
@@ -85,10 +95,13 @@ mod imp {
         fn shutdown(&self) {
             info!("application shutting down");
 
-            // Drop all library-related state so the Arc<dyn Library>
+            // Drop all library-related state so the Arc<Library>
             // (and the SqlitePool it wraps) is freed before drop(tokio)
             // in main() tries to shut down the runtime.
             self.event_bus.borrow_mut().take();
+            self.album_client_v2.borrow_mut().take();
+            self.people_client.borrow_mut().take();
+            self.media_client.borrow_mut().take();
             self.library.borrow_mut().take();
 
             self.parent_shutdown();
@@ -172,6 +185,53 @@ impl MomentsApplication {
         self.imp().tokio.get().expect("tokio handle set").clone()
     }
 
+    /// Access the import client singleton.
+    ///
+    /// Available from anywhere via `MomentsApplication::default().import_client()`.
+    /// Returns `None` if no library is open yet.
+    pub fn import_client(&self) -> Option<crate::client::import_client::ImportClient> {
+        self.imp().import_client.borrow().clone()
+    }
+
+    /// Access the shared render pipeline.
+    ///
+    /// Available from anywhere via `MomentsApplication::default().render_pipeline()`.
+    /// Returns `None` if no library is open yet.
+    pub fn render_pipeline(&self) -> Option<Arc<crate::renderer::pipeline::RenderPipeline>> {
+        self.imp().render_pipeline.borrow().clone()
+    }
+
+    /// Access the album client singleton.
+    ///
+    /// Available from anywhere via `MomentsApplication::default().album_client_v2()`.
+    /// Returns `None` if no library is open yet.
+    pub fn album_client_v2(&self) -> Option<crate::client::AlbumClientV2> {
+        self.imp().album_client_v2.borrow().clone()
+    }
+
+    /// Access the people client singleton.
+    ///
+    /// Available from anywhere via `MomentsApplication::default().people_client()`.
+    /// Returns `None` if no library is open yet.
+    pub fn people_client(&self) -> Option<crate::client::PeopleClient> {
+        self.imp().people_client.borrow().clone()
+    }
+
+    /// Access the media client singleton.
+    ///
+    /// Available from anywhere via `MomentsApplication::default().media_client()`.
+    /// Returns `None` if no library is open yet.
+    pub fn media_client(&self) -> Option<crate::client::MediaClient> {
+        self.imp().media_client.borrow().clone()
+    }
+
+    /// Update the sync polling interval. No-op if no sync engine is running.
+    pub fn set_sync_interval(&self, secs: u64) {
+        if let Some(ref handle) = *self.imp().sync_handle.borrow() {
+            handle.set_interval(secs);
+        }
+    }
+
     /// Get the singleton application instance.
     #[allow(clippy::should_implement_trait)]
     pub fn default() -> Self {
@@ -251,12 +311,9 @@ impl MomentsApplication {
             .expect("settings initialised")
             .clone();
         let is_immich = self.imp().is_immich.get();
-        let library = self.imp().library.borrow().clone();
         let immich_url = self.imp().immich_server_url.borrow().clone();
 
-        crate::ui::preferences_dialog::show_preferences(
-            &window, &settings, is_immich, library, immich_url,
-        );
+        crate::ui::preferences_dialog::show_preferences(&window, &settings, is_immich, immich_url);
     }
 
     /// Show the first-run setup window.
@@ -304,7 +361,7 @@ impl MomentsApplication {
         // For Immich configs, inject the session token from the keyring.
         let config = match config {
             LibraryConfig::Immich { server_url, .. } => {
-                let access_token = crate::library::keyring::lookup_access_token(&server_url)
+                let access_token = keyring::lookup_access_token(&server_url)
                     .ok()
                     .flatten()
                     .unwrap_or_default();
@@ -364,7 +421,7 @@ impl MomentsApplication {
         // For Immich configs, inject the session token from the keyring.
         let config = match config {
             LibraryConfig::Immich { server_url, .. } => {
-                let access_token = crate::library::keyring::lookup_access_token(&server_url)
+                let access_token = keyring::lookup_access_token(&server_url)
                     .ok()
                     .flatten()
                     .unwrap_or_default();
@@ -417,17 +474,12 @@ impl MomentsApplication {
     /// returns. Using `gio::File::enumerate_children` on the original object
     /// respects the portal grant.
     fn run_import(&self, folder: gio::File) {
-        let library = match self.imp().library.borrow().clone() {
-            Some(l) => l,
+        let import_client = match self.imp().import_client.borrow().clone() {
+            Some(c) => c,
             None => {
                 error!("import requested but no library is open");
                 return;
             }
-        };
-        let tokio = self.imp().tokio.get().expect("tokio handle set").clone();
-        let window = match self.active_window() {
-            Some(w) => w,
-            None => return,
         };
 
         let display_path = folder
@@ -444,19 +496,7 @@ impl MomentsApplication {
         }
         debug!(count = sources.len(), "resolved import sources via GIO");
 
-        let win_weak = window.downgrade();
-        glib::MainContext::default().spawn_local(async move {
-            let result = tokio
-                .spawn(async move { library.import(sources).await })
-                .await;
-            if let Ok(Err(e)) = result {
-                error!("import pipeline error: {e}");
-                if let Some(win) = win_weak.upgrade() {
-                    let _ =
-                        win.activate_action("win.show-toast", Some(&"Import failed".to_variant()));
-                }
-            }
-        });
+        import_client.import(sources);
     }
 
     /// Spawn the async factory call on the glib main context.
@@ -466,11 +506,29 @@ impl MomentsApplication {
     ///  2. Wires the shell (sidebar, views, command dispatcher).
     ///  3. Switches the window to its content page.
     fn load_library_async(&self, bundle: Bundle, config: LibraryConfig, window: MomentsWindow) {
+        // Extract Immich connection info before the config is consumed.
+        let immich_info = match &config {
+            LibraryConfig::Immich {
+                server_url,
+                access_token,
+            } => Some((server_url.clone(), access_token.clone())),
+            _ => None,
+        };
+
         // Store backend type for preferences dialog.
-        if let LibraryConfig::Immich { ref server_url, .. } = config {
+        if let Some((ref server_url, _)) = immich_info {
             self.imp().is_immich.set(true);
             *self.imp().immich_server_url.borrow_mut() = Some(server_url.clone());
         }
+
+        // Extract paths and mode for the ImportClient before the factory
+        // consumes the bundle and config.
+        let originals_dir = bundle.originals.clone();
+        let thumbnails_dir = bundle.thumbnails.clone();
+        let storage_mode = match &config {
+            LibraryConfig::Local { mode } => mode.clone(),
+            LibraryConfig::Immich { .. } => crate::library::config::LocalStorageMode::Managed,
+        };
 
         glib::MainContext::default().spawn_local(glib::clone!(
             #[weak(rename_to = app)]
@@ -480,17 +538,103 @@ impl MomentsApplication {
             async move {
                 let tokio = app.imp().tokio.get().expect("tokio handle set").clone();
 
-                // Create the event bus early so LibraryFactory can pass
-                // its sender into the backend for direct event delivery.
                 let bus = EventBus::new();
-                let bus_tx = bus.sender();
 
-                match LibraryFactory::create(bundle, config, bus_tx, tokio.clone()).await {
+                let import_mode = storage_mode.clone();
+                let db = crate::library::db::Database::new();
+
+                // Build Immich client + recorder + resolver based on config.
+                let immich_client = immich_info.as_ref().and_then(|(url, token)| {
+                    crate::sync::providers::immich::client::ImmichClient::new(url, token).ok()
+                });
+
+                let recorder: std::sync::Arc<dyn crate::library::recorder::MutationRecorder> =
+                    if immich_client.is_some() {
+                        std::sync::Arc::new(crate::sync::outbox::QueueWriterOutbox::new(db.clone()))
+                    } else {
+                        std::sync::Arc::new(crate::sync::outbox::NoOpRecorder)
+                    };
+
+                let resolver: std::sync::Arc<dyn crate::library::resolver::OriginalResolver> =
+                    if let Some(ref client) = immich_client {
+                        std::sync::Arc::new(
+                            crate::sync::providers::immich::resolver::CachedResolver::new(
+                                std::sync::Arc::new(client.clone()),
+                                originals_dir.clone(),
+                            ),
+                        )
+                    } else {
+                        std::sync::Arc::new(crate::library::resolver::LocalResolver::new(
+                            originals_dir.clone(),
+                            import_mode.clone(),
+                        ))
+                    };
+
+                let db_for_sync = db.clone();
+                let open_result = tokio
+                    .spawn(async move {
+                        Library::open(bundle, storage_mode, db, recorder, resolver).await
+                    })
+                    .await
+                    .map_err(|e| crate::library::error::LibraryError::Runtime(e.to_string()));
+                let storage_mode = import_mode;
+                match open_result.and_then(|r| r) {
                     Ok(library) => {
+                        let library = Arc::new(library);
                         info!("library ready");
 
                         // Store library on the application.
                         *app.imp().library.borrow_mut() = Some(Arc::clone(&library));
+
+                        // Notify the UI that the library is ready.
+                        bus.sender().send(AppEvent::Ready);
+
+                        // Create the import client (GObject singleton).
+                        let sync_thumbnails_dir = thumbnails_dir.clone();
+                        {
+                            let render_pipeline = std::sync::Arc::new(
+                                crate::renderer::pipeline::RenderPipeline::new(),
+                            );
+                            *app.imp().render_pipeline.borrow_mut() =
+                                Some(Arc::clone(&render_pipeline));
+
+                            let import_client = crate::client::import_client::ImportClient::new();
+                            import_client.configure(
+                                Arc::clone(&library),
+                                originals_dir,
+                                thumbnails_dir,
+                                Arc::clone(&render_pipeline),
+                                storage_mode,
+                                tokio.clone(),
+                                bus.sender(),
+                            );
+                            *app.imp().import_client.borrow_mut() = Some(import_client);
+                        }
+
+                        // Create the album client (GObject singleton).
+                        {
+                            let album_client_v2 = crate::client::AlbumClientV2::new();
+                            album_client_v2.configure(Arc::clone(&library), tokio.clone());
+                            *app.imp().album_client_v2.borrow_mut() = Some(album_client_v2);
+                        }
+
+                        // Create the people client (GObject singleton).
+                        {
+                            let people_client = crate::client::PeopleClient::new();
+                            people_client.configure(Arc::clone(&library), tokio.clone());
+                            *app.imp().people_client.borrow_mut() = Some(people_client);
+                        }
+
+                        // Create the media client (GObject singleton).
+                        {
+                            let media_client = crate::client::MediaClient::new();
+                            media_client.configure(
+                                Arc::clone(&library),
+                                tokio.clone(),
+                                bus.sender(),
+                            );
+                            *app.imp().media_client.borrow_mut() = Some(media_client);
+                        }
 
                         // Wire the shell: builds sidebar, registers views,
                         // and switches to the content page. All components
@@ -501,7 +645,7 @@ impl MomentsApplication {
                             .get()
                             .expect("settings initialised")
                             .clone();
-                        window.setup(library, tokio.clone(), settings, &bus);
+                        window.setup(settings, &bus);
 
                         // Subscribe for command events — routes *Requested
                         // events to library calls on the Tokio runtime.
@@ -530,6 +674,50 @@ impl MomentsApplication {
                                 }
                             });
                             app.imp().subscriptions.borrow_mut().push(sub);
+                        }
+
+                        // Start periodic trash purge task.
+                        {
+                            let lib = Arc::clone(
+                                app.imp().library.borrow().as_ref().expect("library set"),
+                            );
+                            let retention_days = app
+                                .imp()
+                                .settings
+                                .get()
+                                .expect("settings initialised")
+                                .uint("trash-retention-days");
+                            let handle = crate::tasks::purge_trash::start(
+                                lib,
+                                bus.sender(),
+                                retention_days,
+                                tokio.clone(),
+                            );
+                            *app.imp().purge_handle.borrow_mut() = Some(handle);
+                        }
+
+                        // Start Immich sync engine if applicable.
+                        if let Some(client) = immich_client {
+                            let lib = Arc::clone(
+                                app.imp().library.borrow().as_ref().expect("library set"),
+                            );
+                            let sync_interval = app
+                                .imp()
+                                .settings
+                                .get()
+                                .expect("settings initialised")
+                                .uint("sync-interval-seconds")
+                                as u64;
+                            let handle = crate::sync::SyncHandle::start(
+                                client,
+                                lib,
+                                db_for_sync,
+                                bus.sender(),
+                                sync_thumbnails_dir,
+                                sync_interval,
+                                tokio.clone(),
+                            );
+                            *app.imp().sync_handle.borrow_mut() = Some(handle);
                         }
 
                         // Store bus for shutdown cleanup.

@@ -1,6 +1,5 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
@@ -9,8 +8,8 @@ use gtk::{gio, glib};
 use tracing::instrument;
 
 use crate::app_event::AppEvent;
+use crate::client::MediaItemObject;
 use crate::library::media::{MediaFilter, MediaType};
-use crate::library::Library;
 use crate::ui::video_viewer::VideoViewer;
 use crate::ui::viewer::PhotoViewer;
 
@@ -18,11 +17,7 @@ pub mod action_bar;
 pub mod actions;
 pub mod cell;
 pub mod factory;
-pub mod item;
-pub mod model;
 pub mod texture_cache;
-
-pub use model::PhotoGridModel;
 
 /// Available cell sizes (px), smallest to largest.
 const ZOOM_SIZES: &[i32] = &[96, 128, 160, 200, 256, 320];
@@ -41,12 +36,9 @@ mod photo_grid_imp {
         pub grid_view: OnceCell<gtk::GridView>,
         pub empty_page: OnceCell<adw::StatusPage>,
         pub selection: RefCell<Option<gtk::MultiSelection>>,
-        /// Kept alive so lazy-loading stays wired after `set_model`.
-        pub model: RefCell<Option<PhotoGridModel>>,
+        pub store: RefCell<Option<gio::ListStore>>,
         pub zoom_level: Cell<usize>,
-        /// Library reference for the factory (star button persist).
-        pub library: OnceCell<Arc<dyn Library>>,
-        pub tokio: OnceCell<tokio::runtime::Handle>,
+        pub media_client: OnceCell<crate::client::MediaClient>,
         pub bus_sender: OnceCell<crate::event_bus::EventSender>,
         pub filter: RefCell<crate::library::media::MediaFilter>,
         pub texture_cache: OnceCell<Rc<super::texture_cache::TextureCache>>,
@@ -64,10 +56,9 @@ mod photo_grid_imp {
                 grid_view: OnceCell::default(),
                 empty_page: OnceCell::default(),
                 selection: RefCell::default(),
-                model: RefCell::default(),
+                store: RefCell::default(),
                 zoom_level: Cell::new(DEFAULT_ZOOM_INDEX),
-                library: OnceCell::default(),
-                tokio: OnceCell::default(),
+                media_client: OnceCell::default(),
                 bus_sender: OnceCell::default(),
                 filter: RefCell::new(crate::library::media::MediaFilter::All),
                 texture_cache: OnceCell::default(),
@@ -104,11 +95,10 @@ mod photo_grid_imp {
                 .get()
                 .expect("content_stack not initialized")
         }
-        pub fn library(&self) -> &Arc<dyn Library> {
-            self.library.get().expect("library not initialized")
-        }
-        pub fn tokio(&self) -> &tokio::runtime::Handle {
-            self.tokio.get().expect("tokio not initialized")
+        pub fn media_client(&self) -> &crate::client::MediaClient {
+            self.media_client
+                .get()
+                .expect("media_client not initialized")
         }
         pub fn bus_sender(&self) -> &crate::event_bus::EventSender {
             self.bus_sender.get().expect("bus_sender not initialized")
@@ -218,8 +208,7 @@ impl PhotoGrid {
     fn apply_zoom(&self) {
         let imp = self.imp();
         let grid_view = imp.grid_view();
-        let library = imp.library().clone();
-        let tokio = imp.tokio().clone();
+        let media_client = imp.media_client().clone();
         let bus_sender = imp.bus_sender().clone();
         let filter = imp.filter.borrow().clone();
         let cache = imp.texture_cache().clone();
@@ -228,9 +217,8 @@ impl PhotoGrid {
         let enter = imp.enter_selection.borrow().clone().unwrap();
         grid_view.set_factory(Some(&factory::build_factory(
             self.current_cell_size(),
-            library,
-            tokio,
-            bus_sender.clone(),
+            media_client,
+            bus_sender,
             filter,
             cache,
             sm,
@@ -239,22 +227,20 @@ impl PhotoGrid {
         )));
     }
 
-    /// Attach a `PhotoGridModel` to the grid.
+    /// Attach a media list store to the grid.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
-    pub fn set_model(
+    pub fn set_store(
         &self,
-        model: PhotoGridModel,
-        library: Arc<dyn Library>,
-        tokio: tokio::runtime::Handle,
+        store: gio::ListStore,
+        media_client: crate::client::MediaClient,
         bus_sender: crate::event_bus::EventSender,
         filter: crate::library::media::MediaFilter,
         cache: Rc<texture_cache::TextureCache>,
-        on_activate: impl Fn(Vec<item::MediaItemObject>, usize) + 'static,
+        on_activate: impl Fn(Vec<MediaItemObject>, usize) + 'static,
     ) {
         let imp = self.imp();
-        let _ = imp.library.set(Arc::clone(&library));
-        let _ = imp.tokio.set(tokio.clone());
+        let _ = imp.media_client.set(media_client.clone());
         let _ = imp.bus_sender.set(bus_sender.clone());
         let _ = imp.texture_cache.set(Rc::clone(&cache));
         *imp.filter.borrow_mut() = filter.clone();
@@ -262,7 +248,7 @@ impl PhotoGrid {
         let grid_view = imp.grid_view();
         let scrolled = imp.scrolled();
 
-        let selection = gtk::MultiSelection::new(Some(model.store().clone()));
+        let selection = gtk::MultiSelection::new(Some(store.clone()));
         grid_view.set_model(Some(&selection));
         *imp.selection.borrow_mut() = Some(selection.clone());
 
@@ -270,8 +256,7 @@ impl PhotoGrid {
         let enter = imp.enter_selection.borrow().clone().unwrap();
         grid_view.set_factory(Some(&factory::build_factory(
             self.current_cell_size(),
-            Arc::clone(&library),
-            tokio,
+            media_client.clone(),
             bus_sender,
             filter.clone(),
             cache,
@@ -285,63 +270,48 @@ impl PhotoGrid {
         let stack = imp.content_stack();
         set_empty_state_for_filter(empty_page, &filter);
 
-        let update_empty: Rc<dyn Fn()> = {
+        // Toggle empty ↔ grid based on store count.
+        {
             let stack = stack.clone();
-            let store = model.store().clone();
-            Rc::new(move || {
-                let name = if store.n_items() == 0 {
+            let store_ref = store.clone();
+            store.connect_items_changed(move |_, _, _, _| {
+                let name = if store_ref.n_items() == 0 {
                     "empty"
                 } else {
                     "grid"
                 };
                 stack.set_visible_child_name(name);
-            })
-        };
-        {
-            let update = Rc::clone(&update_empty);
-            model
-                .store()
-                .connect_items_changed(move |_, _, _, _| update());
+            });
         }
 
-        let model_scroll = model.clone();
-        let adj = scrolled.vadjustment();
-        adj.connect_value_changed(move |adj| {
-            let visible_end = adj.value() + adj.page_size();
-            let trigger_point = adj.upper() * 0.75;
-            if visible_end >= trigger_point {
-                model_scroll.load_more();
-            }
-        });
-
-        let model_weak = model.downgrade();
-        let adj_ready = scrolled.vadjustment();
-        let update_on_ready = Rc::clone(&update_empty);
-        model.set_on_page_ready(move || {
-            update_on_ready();
-            let visible_end = adj_ready.value() + adj_ready.page_size();
-            let trigger_point = adj_ready.upper() * 0.75;
-            if visible_end >= trigger_point {
-                if let Some(model) = model_weak.upgrade() {
-                    model.load_more();
+        // Infinite scroll — load more when nearing the bottom.
+        {
+            let mc = media_client.clone();
+            let store_scroll = store.clone();
+            let adj = scrolled.vadjustment();
+            adj.connect_value_changed(move |adj| {
+                let visible_end = adj.value() + adj.page_size();
+                let trigger_point = adj.upper() * 0.75;
+                if visible_end >= trigger_point {
+                    mc.load_more(&store_scroll);
                 }
-            }
-        });
+            });
+        }
 
         let selection_ref = selection.clone();
         grid_view.connect_activate(move |_, position| {
             let n = selection_ref.n_items();
-            let items: Vec<item::MediaItemObject> = (0..n)
+            let items: Vec<MediaItemObject> = (0..n)
                 .filter_map(|i| {
                     selection_ref
                         .item(i)
-                        .and_then(|obj| obj.downcast::<item::MediaItemObject>().ok())
+                        .and_then(|obj| obj.downcast::<MediaItemObject>().ok())
                 })
                 .collect();
             on_activate(items, position as usize);
         });
 
-        *imp.model.borrow_mut() = Some(model);
+        *imp.store.borrow_mut() = Some(store);
     }
 }
 
@@ -382,8 +352,6 @@ mod view_imp {
         pub empty_trash_btn: TemplateChild<gtk::Button>,
 
         // Service dependencies
-        pub library: OnceCell<Arc<dyn Library>>,
-        pub tokio: OnceCell<tokio::runtime::Handle>,
         pub bus_sender: OnceCell<crate::event_bus::EventSender>,
         pub texture_cache: OnceCell<Rc<texture_cache::TextureCache>>,
 
@@ -402,12 +370,6 @@ mod view_imp {
     }
 
     impl PhotoGridView {
-        pub fn library(&self) -> &Arc<dyn Library> {
-            self.library.get().expect("library not initialized")
-        }
-        pub fn tokio(&self) -> &tokio::runtime::Handle {
-            self.tokio.get().expect("tokio not initialized")
-        }
         pub fn bus_sender(&self) -> &crate::event_bus::EventSender {
             self.bus_sender.get().expect("bus_sender not initialized")
         }
@@ -468,10 +430,12 @@ mod view_imp {
         fn realize(&self) {
             self.parent_realize();
 
-            // Activate the model's bus subscription and trigger initial load.
-            if let Some(model) = self.photo_grid.imp().model.borrow().as_ref() {
-                model.activate();
-                model.load_more();
+            // Trigger initial page load via MediaClient.
+            if let (Some(store), Some(mc)) = (
+                self.photo_grid.imp().store.borrow().as_ref(),
+                self.photo_grid.imp().media_client.get(),
+            ) {
+                mc.populate(store);
             }
 
             // Subscribe for exit-selection on result events.
@@ -493,11 +457,6 @@ mod view_imp {
 
         fn unrealize(&self) {
             self._subscription.borrow_mut().take();
-
-            if let Some(model) = self.photo_grid.imp().model.borrow().as_ref() {
-                model.deactivate();
-            }
-
             self.parent_unrealize();
         }
     }
@@ -522,18 +481,11 @@ impl PhotoGridView {
 
     pub fn setup(
         &self,
-        library: Arc<dyn Library>,
-        tokio: tokio::runtime::Handle,
         settings: gio::Settings,
         texture_cache: Rc<texture_cache::TextureCache>,
         bus_sender: crate::event_bus::EventSender,
     ) {
         let imp = self.imp();
-        assert!(
-            imp.library.set(Arc::clone(&library)).is_ok(),
-            "setup called twice"
-        );
-        assert!(imp.tokio.set(tokio.clone()).is_ok(), "setup called twice");
         assert!(
             imp.bus_sender.set(bus_sender.clone()).is_ok(),
             "setup called twice"
@@ -545,9 +497,9 @@ impl PhotoGridView {
 
         // Viewers.
         let photo_viewer = PhotoViewer::new();
-        photo_viewer.setup(Arc::clone(&library), tokio.clone(), bus_sender.clone());
+        photo_viewer.setup(bus_sender.clone());
         let video_viewer = VideoViewer::new();
-        video_viewer.setup(Arc::clone(&library), tokio.clone(), bus_sender.clone());
+        video_viewer.setup(bus_sender.clone());
         assert!(imp.photo_viewer.set(photo_viewer).is_ok());
         assert!(imp.video_viewer.set(video_viewer).is_ok());
 
@@ -725,18 +677,17 @@ impl PhotoGridView {
             .insert_action_group("view", Some(&action_group));
     }
 
-    pub fn set_model(&self, model: PhotoGridModel) {
+    pub fn set_store(&self, store: gio::ListStore, filter: MediaFilter) {
         let imp = self.imp();
-        let library = Arc::clone(imp.library());
-        let tokio = imp.tokio().clone();
+        let media_client = crate::application::MomentsApplication::default()
+            .media_client()
+            .expect("media client available");
         let bus_sender = imp.bus_sender().clone();
         let texture_cache = Rc::clone(imp.texture_cache());
-        let filter = model.filter();
 
-        imp.photo_grid.set_model(
-            model.clone(),
-            Arc::clone(&library),
-            tokio.clone(),
+        imp.photo_grid.set_store(
+            store.clone(),
+            media_client,
             bus_sender.clone(),
             filter.clone(),
             Rc::clone(&texture_cache),
@@ -744,7 +695,7 @@ impl PhotoGridView {
                 let nav_view = imp.nav_view.clone();
                 let photo_viewer = imp.photo_viewer().clone();
                 let video_viewer = imp.video_viewer().clone();
-                move |items, index| {
+                move |items: Vec<MediaItemObject>, index: usize| {
                     let media_type = items
                         .get(index)
                         .map(|obj| obj.item().media_type)
@@ -783,8 +734,6 @@ impl PhotoGridView {
 
         let ctx = actions::ActionContext {
             selection: selection.clone(),
-            library: Arc::clone(&library),
-            tokio,
             filter: filter.clone(),
             grid_view,
             bus_sender: bus_sender.clone(),
@@ -812,9 +761,9 @@ impl PhotoGridView {
             let restore_btn = imp.restore_all_btn.clone();
             let empty_btn = imp.empty_trash_btn.clone();
             let update_trash_buttons: Rc<dyn Fn()> = {
-                let store = model.store().clone();
+                let store_ref = store.clone();
                 Rc::new(move || {
-                    let has_items = store.n_items() > 0;
+                    let has_items = store_ref.n_items() > 0;
                     restore_btn.set_visible(has_items);
                     empty_btn.set_visible(has_items);
                 })
@@ -822,9 +771,7 @@ impl PhotoGridView {
             update_trash_buttons();
             {
                 let update = Rc::clone(&update_trash_buttons);
-                model
-                    .store()
-                    .connect_items_changed(move |_, _, _, _| update());
+                store.connect_items_changed(move |_, _, _, _| update());
             }
 
             {
@@ -898,7 +845,7 @@ impl PhotoGridView {
                         let bitset = sel.selection();
                         let all_fav = (0..bitset.size() as u32).all(|i| {
                             sel.item(bitset.nth(i))
-                                .and_then(|o| o.downcast::<item::MediaItemObject>().ok())
+                                .and_then(|o| o.downcast::<MediaItemObject>().ok())
                                 .map(|o| o.is_favorite())
                                 .unwrap_or(false)
                         });
@@ -925,7 +872,7 @@ pub(super) fn collect_selected_ids(
         let pos = bitset.nth(i as u32);
         if let Some(obj) = selection
             .item(pos)
-            .and_then(|o| o.downcast::<item::MediaItemObject>().ok())
+            .and_then(|o| o.downcast::<MediaItemObject>().ok())
         {
             ids.push(obj.item().id.clone());
         }

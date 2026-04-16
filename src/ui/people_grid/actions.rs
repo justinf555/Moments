@@ -1,36 +1,26 @@
 use std::rc::Rc;
-use std::sync::Arc;
 
 use adw::prelude::*;
 use gettextrs::gettext;
-use gtk::{gio, glib};
-use tracing::{debug, info};
+use gtk::gio;
+use tracing::debug;
 
+use crate::client::{PeopleClient, PersonItemObject};
 use crate::library::faces::PersonId;
 use crate::library::media::MediaFilter;
-use crate::library::Library;
-use crate::ui::photo_grid::model::PhotoGridModel;
 use crate::ui::photo_grid::texture_cache::TextureCache;
 use crate::ui::photo_grid::PhotoGridView;
 
-use super::item::{PersonItemData, PersonItemObject};
-use super::PeopleFilter;
-
 /// Wire item activation — clicking a person pushes a filtered PhotoGridView.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn wire_activation(
     grid_view: &gtk::GridView,
     store: &gio::ListStore,
     nav_view: &adw::NavigationView,
-    library: &Arc<dyn Library>,
-    tokio: &tokio::runtime::Handle,
     settings: &gio::Settings,
     texture_cache: &Rc<TextureCache>,
     bus_sender: &crate::event_bus::EventSender,
 ) {
     let nav = nav_view.clone();
-    let lib = Arc::clone(library);
-    let tk = tokio.clone();
     let s = settings.clone();
     let tc = Rc::clone(texture_cache);
     let bs = bus_sender.clone();
@@ -44,32 +34,29 @@ pub(super) fn wire_activation(
             return;
         };
 
-        let data = obj.data();
-        let person_id = PersonId::from_raw(data.id.clone());
-        debug!(person = %data.name, id = %data.id, "person activated");
+        let person_id = PersonId::from_raw(obj.id());
+        let name = obj.name();
+        debug!(person = %name, id = %obj.id(), "person activated");
 
         let filter = MediaFilter::Person {
             person_id: person_id.clone(),
         };
-        let model = PhotoGridModel::new(Arc::clone(&lib), tk.clone(), filter, bs.clone());
+        let mc = crate::application::MomentsApplication::default()
+            .media_client()
+            .expect("media client available");
+        let store = mc.create_model(filter.clone());
         let view = PhotoGridView::new();
-        view.setup(
-            Arc::clone(&lib),
-            tk.clone(),
-            s.clone(),
-            Rc::clone(&tc),
-            bs.clone(),
-        );
-        view.set_model(model.clone());
+        view.setup(s.clone(), Rc::clone(&tc), bs.clone());
+        view.set_store(store, filter);
 
-        let display_name = if data.name.is_empty() {
+        let display_name = if name.is_empty() {
             gettext("Unnamed")
         } else {
-            data.name.clone()
+            name
         };
 
         let person_page = adw::NavigationPage::builder()
-            .tag(format!("person:{}", data.id))
+            .tag(format!("person:{}", obj.id()))
             .title(&display_name)
             .child(&view)
             .build();
@@ -79,22 +66,17 @@ pub(super) fn wire_activation(
 }
 
 /// Wire the right-click context menu on people grid cells.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn wire_context_menu(
     grid_view: &gtk::GridView,
     store: &gio::ListStore,
-    library: &Arc<dyn Library>,
-    tokio: &tokio::runtime::Handle,
-    filter: &Rc<PeopleFilter>,
+    people_client: &PeopleClient,
 ) {
     let gesture = gtk::GestureClick::new();
     gesture.set_button(3);
 
     let gv = grid_view.clone();
-    let lib = Arc::clone(library);
-    let tk = tokio.clone();
     let store_ctx = store.clone();
-    let filter_ctx = Rc::clone(filter);
+    let pc = people_client.clone();
 
     gesture.connect_pressed(move |gesture, _, x, y| {
         let Some(pos) = find_clicked_position(&gv, &store_ctx, x, y) else {
@@ -108,9 +90,9 @@ pub(super) fn wire_context_menu(
             return;
         };
 
-        let data = obj.data();
-        let person_id = data.id.clone();
-        let is_hidden = data.is_hidden;
+        let person_id = obj.id();
+        let current_name = obj.name();
+        let is_hidden = obj.is_hidden();
 
         let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
         vbox.set_margin_top(6);
@@ -136,20 +118,10 @@ pub(super) fn wire_context_menu(
         vbox.append(&hide_btn);
 
         // Wire rename.
-        wire_rename_button(&rename_btn, &popover, &gv, &lib, &tk, &store_ctx, data);
+        wire_rename_button(&rename_btn, &popover, &gv, &pc, &person_id, &current_name);
 
         // Wire hide/unhide.
-        wire_hide_button(
-            &hide_btn,
-            &popover,
-            &gv,
-            &lib,
-            &tk,
-            &store_ctx,
-            &filter_ctx,
-            &person_id,
-            is_hidden,
-        );
+        wire_hide_button(&hide_btn, &popover, &gv, &pc, &person_id, is_hidden);
 
         popover.set_child(Some(&vbox));
         popover.set_parent(&gv);
@@ -168,8 +140,7 @@ pub(super) fn wire_context_menu(
 }
 
 /// Find the store position of the item at (x, y) by resolving the cell's
-/// bound data. This is correct even when the grid is scrolled (unlike
-/// counting siblings, which only works for non-virtualized lists).
+/// bound data.
 fn find_clicked_position(
     grid_view: &gtk::GridView,
     store: &gio::ListStore,
@@ -178,19 +149,17 @@ fn find_clicked_position(
 ) -> Option<u32> {
     let picked = grid_view.pick(x, y, gtk::PickFlags::DEFAULT)?;
 
-    // Walk up from the picked widget to find the PeopleGridCell.
     let mut widget = Some(picked);
     while let Some(ref w) = widget {
         if let Some(cell) = w.downcast_ref::<super::cell::PeopleGridCell>() {
             let item = cell.bound_item()?;
-            let target_id = item.data().id.clone();
-            // Search the store for the matching item.
+            let target_id = item.id();
             for i in 0..store.n_items() {
                 if let Some(obj) = store
                     .item(i)
                     .and_then(|o| o.downcast::<PersonItemObject>().ok())
                 {
-                    if obj.data().id == target_id {
+                    if obj.id() == target_id {
                         return Some(i);
                     }
                 }
@@ -203,24 +172,18 @@ fn find_clicked_position(
 }
 
 /// Wire the Rename button to show a rename dialog.
-#[allow(clippy::too_many_arguments)]
 fn wire_rename_button(
     btn: &gtk::Button,
     popover: &gtk::Popover,
     grid_view: &gtk::GridView,
-    library: &Arc<dyn Library>,
-    tokio: &tokio::runtime::Handle,
-    store: &gio::ListStore,
-    data: &PersonItemData,
+    people_client: &PeopleClient,
+    person_id: &str,
+    current_name: &str,
 ) {
     let pop_weak = popover.downgrade();
-    let lib = Arc::clone(library);
-    let tk = tokio.clone();
-    let store = store.clone();
-    let person_id = data.id.clone();
-    let current_name = data.name.clone();
-    let thumb = data.thumbnail_path.clone();
-    let hidden = data.is_hidden;
+    let pc = people_client.clone();
+    let pid = person_id.to_owned();
+    let current_name = current_name.to_owned();
     let gv_ref = grid_view.clone();
 
     btn.connect_clicked(move |_| {
@@ -242,11 +205,8 @@ fn wire_rename_button(
         entry.set_activates_default(true);
         dialog.set_extra_child(Some(&entry));
 
-        let lib = Arc::clone(&lib);
-        let tk = tk.clone();
-        let store = store.clone();
-        let pid = person_id.clone();
-        let thumb = thumb.clone();
+        let pc = pc.clone();
+        let pid = pid.clone();
         let gv_toast = gv_ref.clone();
         dialog.connect_response(None, move |_, response| {
             if response != "rename" {
@@ -256,42 +216,14 @@ fn wire_rename_button(
             if new_name.is_empty() {
                 return;
             }
-            let pid_str = pid.clone();
-            let pid = PersonId::from_raw(pid.clone());
-            let lib = Arc::clone(&lib);
-            let tk = tk.clone();
-            let store = store.clone();
-            let thumb = thumb.clone();
-            let gv_toast = gv_toast.clone();
             debug!(person_id = %pid, name = %new_name, "renaming person");
-            glib::MainContext::default().spawn_local(async move {
-                let name = new_name.clone();
-                let result = tk
-                    .spawn(async move { lib.rename_person(&pid, &name).await })
-                    .await;
-                match result {
-                    Ok(Ok(())) => {
-                        info!("person renamed successfully");
-                        super::replace_item(
-                            &store,
-                            &pid_str,
-                            PersonItemData {
-                                id: pid_str.clone(),
-                                name: new_name,
-                                thumbnail_path: thumb,
-                                is_hidden: hidden,
-                            },
-                        );
-                    }
-                    Ok(Err(e)) => {
-                        tracing::error!("rename_person failed: {e}");
-                        let _ = gv_toast.activate_action(
-                            "win.show-toast",
-                            Some(&gettext("Failed to rename person").to_variant()),
-                        );
-                    }
-                    Err(e) => tracing::error!("rename_person join failed: {e}"),
-                }
+            let gv_toast = gv_toast.clone();
+            pc.rename_person(PersonId::from_raw(pid.clone()), new_name, move |msg| {
+                let _ = gv_toast.activate_action(
+                    "win.show-toast",
+                    Some(&gettext("Failed to rename person").to_variant()),
+                );
+                tracing::error!("{msg}");
             });
         });
         dialog.present(
@@ -304,60 +236,33 @@ fn wire_rename_button(
 }
 
 /// Wire the Hide/Unhide button.
-#[allow(clippy::too_many_arguments)]
 fn wire_hide_button(
     btn: &gtk::Button,
     popover: &gtk::Popover,
     grid_view: &gtk::GridView,
-    library: &Arc<dyn Library>,
-    tokio: &tokio::runtime::Handle,
-    store: &gio::ListStore,
-    filter: &Rc<PeopleFilter>,
+    people_client: &PeopleClient,
     person_id: &str,
     is_hidden: bool,
 ) {
     let pop_weak = popover.downgrade();
-    let lib = Arc::clone(library);
-    let tk = tokio.clone();
-    let store = store.clone();
-    let f = Rc::clone(filter);
+    let pc = people_client.clone();
     let new_hidden = !is_hidden;
     let gv_hide = grid_view.clone();
-    let pid_str = person_id.to_owned();
+    let pid = person_id.to_owned();
 
     btn.connect_clicked(move |_| {
         if let Some(p) = pop_weak.upgrade() {
             p.popdown();
         }
-        let pid = PersonId::from_raw(pid_str.clone());
-        let lib = Arc::clone(&lib);
-        let tk = tk.clone();
-        let store = store.clone();
-        let f = Rc::clone(&f);
         let action = if new_hidden { "hiding" } else { "unhiding" };
         debug!(person_id = %pid, action, "toggling person visibility");
-        let pid_for_remove = pid.to_string();
         let gv_hide = gv_hide.clone();
-        glib::MainContext::default().spawn_local(async move {
-            let result = tk
-                .spawn(async move { lib.set_person_hidden(&pid, new_hidden).await })
-                .await;
-            match result {
-                Ok(Ok(())) => {
-                    info!("person visibility changed successfully");
-                    if new_hidden && !f.include_hidden.get() {
-                        super::remove_by_id(&store, &pid_for_remove);
-                    }
-                }
-                Ok(Err(e)) => {
-                    tracing::error!("set_person_hidden failed: {e}");
-                    let _ = gv_hide.activate_action(
-                        "win.show-toast",
-                        Some(&gettext("Failed to update person visibility").to_variant()),
-                    );
-                }
-                Err(e) => tracing::error!("set_person_hidden join failed: {e}"),
-            }
+        pc.set_person_hidden(PersonId::from_raw(pid.clone()), new_hidden, move |msg| {
+            let _ = gv_hide.activate_action(
+                "win.show-toast",
+                Some(&gettext("Failed to update person visibility").to_variant()),
+            );
+            tracing::error!("{msg}");
         });
     });
 }

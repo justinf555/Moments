@@ -4,7 +4,8 @@ use adw::subclass::prelude::*;
 use gtk::prelude::*;
 use gtk::{gio, glib};
 
-use crate::library::media::{MediaItem, MediaMetadataRecord};
+use crate::library::media::MediaItem;
+use crate::library::metadata::MediaMetadataRecord;
 
 mod imp {
     use super::*;

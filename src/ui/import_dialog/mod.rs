@@ -2,7 +2,7 @@ use adw::{prelude::*, subclass::prelude::*};
 use gtk::glib;
 use std::cell::{Cell, RefCell};
 
-use crate::library::import::ImportSummary;
+use crate::importer::ImportSummary;
 
 mod imp {
     use super::*;
@@ -20,8 +20,8 @@ mod imp {
         pub action_button: TemplateChild<gtk::Button>,
         /// True once `ImportComplete` has been received.
         pub complete: Cell<bool>,
-        /// Event bus subscription — alive while the dialog is realized.
-        pub _subscription: RefCell<Option<crate::event_bus::Subscription>>,
+        /// Signal handler IDs for ImportClient property notifications.
+        pub _import_handlers: RefCell<Vec<glib::SignalHandlerId>>,
     }
 
     #[glib::object_subclass]
@@ -59,26 +59,54 @@ mod imp {
         fn realize(&self) {
             self.parent_realize();
 
-            let weak = self.obj().downgrade();
-            let sub = crate::event_bus::subscribe(move |event| {
-                let Some(dialog) = weak.upgrade() else {
-                    return;
-                };
-                match event {
-                    crate::app_event::AppEvent::ImportProgress { current, total, .. } => {
-                        dialog.set_progress(*current, *total);
-                    }
-                    crate::app_event::AppEvent::ImportComplete { summary } => {
-                        dialog.set_complete(summary);
-                    }
-                    _ => {}
-                }
-            });
-            *self._subscription.borrow_mut() = Some(sub);
+            if let Some(import_client) =
+                crate::application::MomentsApplication::default().import_client()
+            {
+                let mut handlers = self._import_handlers.borrow_mut();
+                let obj = self.obj().clone();
+
+                // Progress updates.
+                let weak = obj.downgrade();
+                handlers.push(import_client.connect_notify_local(
+                    Some("current"),
+                    move |client, _| {
+                        if let Some(dialog) = weak.upgrade() {
+                            dialog.set_progress(client.current() as usize, client.total() as usize);
+                        }
+                    },
+                ));
+
+                // State changes (completion).
+                let weak = obj.downgrade();
+                handlers.push(import_client.connect_notify_local(
+                    Some("state"),
+                    move |client, _| {
+                        if let Some(dialog) = weak.upgrade() {
+                            if client.state() == crate::client::import_client::ImportState::Complete
+                            {
+                                let summary = crate::importer::ImportSummary {
+                                    imported: client.imported() as usize,
+                                    skipped_duplicates: client.skipped() as usize,
+                                    skipped_unsupported: 0,
+                                    failed: client.failed() as usize,
+                                    elapsed_secs: client.elapsed_secs(),
+                                };
+                                dialog.set_complete(&summary);
+                            }
+                        }
+                    },
+                ));
+            }
         }
 
         fn unrealize(&self) {
-            self._subscription.borrow_mut().take();
+            if let Some(import_client) =
+                crate::application::MomentsApplication::default().import_client()
+            {
+                for handler_id in self._import_handlers.borrow_mut().drain(..) {
+                    import_client.disconnect(handler_id);
+                }
+            }
             self.parent_unrealize();
         }
     }

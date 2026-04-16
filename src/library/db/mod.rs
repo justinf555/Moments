@@ -10,12 +10,10 @@ use super::error::LibraryError;
 mod albums;
 mod edits;
 pub(crate) mod faces;
-mod media;
-mod media_write;
-mod stats;
+pub(crate) mod media;
+mod metadata;
 mod sync;
 mod thumbnails;
-mod upload;
 
 /// Aggregate library statistics for the preferences overview.
 #[derive(Debug, Clone, Default)]
@@ -51,23 +49,36 @@ pub struct ServerStats {
 
 /// Manages the library's SQLite database.
 ///
-/// Wraps a [`SqlitePool`] and provides typed CRUD methods. Backend-agnostic —
-/// both `LocalLibrary` and future backends share this type.
-///
-/// Obtain via [`Database::open`], which creates the database file if needed
-/// and runs all outstanding migrations before returning.
+/// Wraps a [`SqlitePool`] behind an [`Arc`] so that clones share the same
+/// connection pool. Create with [`Database::new`], then call [`Database::open`]
+/// to connect and run migrations. All clones become active once `open()` returns.
 #[derive(Clone)]
 pub struct Database {
-    pool: SqlitePool,
+    pool: std::sync::Arc<tokio::sync::OnceCell<SqlitePool>>,
+}
+
+impl Default for Database {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Database {
-    /// Open (or create) the database at `db_path`.
+    /// Create an uninitialised database handle.
     ///
-    /// Creates the parent directory if it does not exist, then runs all
-    /// pending migrations. Must be called from a Tokio async context.
-    #[instrument(fields(path = %db_path.display()))]
-    pub async fn open(db_path: &Path) -> Result<Self, LibraryError> {
+    /// The handle can be cloned and shared immediately. Call [`open`] to
+    /// connect and run migrations — all clones share the same pool.
+    pub fn new() -> Self {
+        Self {
+            pool: std::sync::Arc::new(tokio::sync::OnceCell::new()),
+        }
+    }
+
+    /// Connect to (or create) the database at `db_path` and run migrations.
+    ///
+    /// Must be called exactly once. All clones of this handle become active.
+    #[instrument(skip(self), fields(path = %db_path.display()))]
+    pub async fn open(&self, db_path: &Path) -> Result<(), LibraryError> {
         if let Some(parent) = db_path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
@@ -93,13 +104,25 @@ impl Database {
             .await
             .map_err(|e| LibraryError::Db(e.into()))?;
 
+        self.pool
+            .set(pool)
+            .map_err(|_| LibraryError::Runtime("database already opened".to_string()))?;
+
         info!("database ready");
-        Ok(Self { pool })
+        Ok(())
+    }
+
+    /// Access the connection pool.
+    ///
+    /// # Panics
+    /// Panics if [`open`] has not been called — this is a programming error.
+    pub(crate) fn pool(&self) -> &SqlitePool {
+        self.pool.get().expect("database not opened")
     }
 }
 
 /// Build a comma-separated list of `?` placeholders for an `IN (...)` clause.
-fn id_placeholders(count: usize) -> String {
+pub(crate) fn id_placeholders(count: usize) -> String {
     let mut s = String::with_capacity(count * 3);
     for i in 0..count {
         if i > 0 {
@@ -117,12 +140,16 @@ pub(crate) mod test_helpers {
     use crate::library::media::{MediaId, MediaRecord, MediaType};
 
     pub async fn open_test_db(dir: &std::path::Path) -> Database {
-        Database::open(&dir.join("test.db")).await.unwrap()
+        let db = Database::new();
+        db.open(&dir.join("test.db")).await.unwrap();
+        db
     }
 
     pub fn test_record(id: MediaId) -> MediaRecord {
         MediaRecord {
             id,
+            content_hash: None,
+            external_id: None,
             relative_path: "2025/01/15/photo.jpg".to_string(),
             original_filename: "photo.jpg".to_string(),
             file_size: 1024,
@@ -142,6 +169,8 @@ pub(crate) mod test_helpers {
     pub fn record_with_taken_at(id: MediaId, path: &str, taken_at: Option<i64>) -> MediaRecord {
         MediaRecord {
             id,
+            content_hash: None,
+            external_id: None,
             relative_path: path.to_string(),
             original_filename: path
                 .split('/')
@@ -163,6 +192,7 @@ pub(crate) mod test_helpers {
     }
 
     /// Query the audit action and error_msg for a given entity_id (test helper).
+    #[allow(dead_code)] // used by sync tests, will return in phase 4
     pub async fn get_audit_record(
         db: &Database,
         entity_id: &str,
@@ -171,14 +201,17 @@ pub(crate) mod test_helpers {
             "SELECT action, error_msg FROM sync_audit WHERE entity_id = ?",
         )
         .bind(entity_id)
-        .fetch_optional(&db.pool)
+        .fetch_optional(db.pool())
         .await
         .unwrap()
     }
 
+    #[allow(dead_code)] // used by db/media.rs filter tests when re-added
     pub fn record_with_imported_at(id: MediaId, path: &str, imported_at: i64) -> MediaRecord {
         MediaRecord {
             id,
+            content_hash: None,
+            external_id: None,
             relative_path: path.to_string(),
             original_filename: path
                 .split('/')
@@ -209,7 +242,8 @@ mod tests {
     async fn open_creates_database_file() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("sub").join("moments.db");
-        Database::open(&db_path).await.unwrap();
+        let db = Database::new();
+        db.open(&db_path).await.unwrap();
         assert!(db_path.exists());
     }
 }

@@ -1,15 +1,13 @@
-use std::sync::Arc;
-
 use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gdk, gio, glib};
 use tracing::debug;
 
 use crate::app_event::AppEvent;
+use crate::client::MediaItemObject;
 use crate::event_bus::EventSender;
-use crate::library::media::{MediaId, MediaMetadataRecord};
-use crate::library::Library;
-use crate::ui::photo_grid::item::MediaItemObject;
+use crate::library::media::MediaId;
+use crate::library::metadata::MediaMetadataRecord;
 use crate::ui::viewer::info_panel::InfoPanel;
 
 // ── GObject subclass ─────────────────────────────────────────────────────────
@@ -44,8 +42,6 @@ mod imp {
         pub menu_btn: TemplateChild<gtk::MenuButton>,
 
         // Service dependencies (set once in setup)
-        pub library: OnceCell<Arc<dyn Library>>,
-        pub tokio: OnceCell<tokio::runtime::Handle>,
         pub bus_sender: OnceCell<EventSender>,
 
         // Owned sub-panel (set in setup, not GObject yet)
@@ -65,12 +61,6 @@ mod imp {
     }
 
     impl VideoViewer {
-        pub fn library(&self) -> &Arc<dyn Library> {
-            self.library.get().expect("library not initialized")
-        }
-        pub fn tokio(&self) -> &tokio::runtime::Handle {
-            self.tokio.get().expect("tokio not initialized")
-        }
         pub fn bus_sender(&self) -> &EventSender {
             self.bus_sender.get().expect("bus_sender not initialized")
         }
@@ -144,17 +134,9 @@ impl VideoViewer {
     }
 
     /// Inject service dependencies, build info panel, and wire signal handlers.
-    pub fn setup(
-        &self,
-        library: Arc<dyn Library>,
-        tokio: tokio::runtime::Handle,
-        bus_sender: EventSender,
-    ) {
+    pub fn setup(&self, bus_sender: EventSender) {
         let imp = self.imp();
 
-        // Store service deps.
-        assert!(imp.library.set(library).is_ok(), "setup called twice");
-        assert!(imp.tokio.set(tokio).is_ok(), "setup called twice");
         assert!(imp.bus_sender.set(bus_sender).is_ok(), "setup called twice");
 
         // Build info panel and set as sidebar.
@@ -230,39 +212,29 @@ impl VideoViewer {
 
     fn load_video(&self, gen: u64, id: MediaId) {
         let imp = self.imp();
-        let library = Arc::clone(imp.library());
-        let tokio = imp.tokio().clone();
         let bus_sender = imp.bus_sender().clone();
 
         debug!(%id, "load_video: resolving path");
 
-        // Stop any current playback and show loading spinner.
         imp.video.set_file(None::<&gio::File>);
         imp.spinner.set_spinning(true);
         imp.spinner.set_visible(true);
 
+        let mc = crate::application::MomentsApplication::default()
+            .media_client()
+            .expect("media client available");
+
         let weak = self.downgrade();
-        glib::MainContext::default().spawn_local(async move {
-            let path = match tokio
-                .spawn(async move { library.original_path(&id).await })
-                .await
-                .ok()
-                .and_then(|r| r.ok())
-                .flatten()
-            {
-                Some(p) => p,
-                None => {
-                    if let Some(viewer) = weak.upgrade() {
-                        let imp = viewer.imp();
-                        imp.spinner.set_spinning(false);
-                        imp.spinner.set_visible(false);
-                    }
-                    tracing::warn!("load_video: could not resolve original path");
-                    bus_sender.send(AppEvent::Error(
-                        "Could not find original video".into(),
-                    ));
-                    return;
+        mc.original_path(&id, move |path| {
+            let Some(path) = path else {
+                if let Some(viewer) = weak.upgrade() {
+                    let imp = viewer.imp();
+                    imp.spinner.set_spinning(false);
+                    imp.spinner.set_visible(false);
                 }
+                tracing::warn!("load_video: could not resolve original path");
+                bus_sender.send(AppEvent::Error("Could not find original video".into()));
+                return;
             };
 
             let Some(viewer) = weak.upgrade() else { return };
@@ -285,19 +257,12 @@ impl VideoViewer {
     }
 
     fn load_metadata_async(&self, gen: u64, id: MediaId) {
-        let imp = self.imp();
-        let library = Arc::clone(imp.library());
-        let tokio = imp.tokio().clone();
+        let mc = crate::application::MomentsApplication::default()
+            .media_client()
+            .expect("media client available");
 
         let weak = self.downgrade();
-        glib::MainContext::default().spawn_local(async move {
-            let metadata = tokio
-                .spawn(async move { library.media_metadata(&id).await })
-                .await
-                .ok()
-                .and_then(|r| r.ok())
-                .flatten();
-
+        mc.media_metadata(&id, move |metadata| {
             let Some(viewer) = weak.upgrade() else { return };
             let imp = viewer.imp();
 
@@ -515,9 +480,6 @@ fn wire_overflow_menu(
             crate::ui::album_picker_dialog::show_album_picker_dialog(
                 viewer.upcast_ref::<gtk::Widget>(),
                 vec![id],
-                Arc::clone(imp.library()),
-                imp.tokio().clone(),
-                imp.bus_sender().clone(),
             );
         });
     }

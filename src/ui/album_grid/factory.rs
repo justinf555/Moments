@@ -1,40 +1,50 @@
 use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::Arc;
 
-use gettextrs::gettext;
-use gtk::{prelude::*, subclass::prelude::*};
-use tracing::warn;
-
-use crate::library::album::AlbumId;
-use crate::library::Library;
+use gettextrs::{gettext, ngettext};
+use gtk::{gio, prelude::*, subclass::prelude::*};
 
 use super::card::AlbumCard;
-use super::item::AlbumItemObject;
+use crate::application::MomentsApplication;
+use crate::client::AlbumItemObject;
+use crate::library::album::AlbumId;
+use crate::ui::album_dialogs;
+use crate::ui::photo_grid::texture_cache::TextureCache;
+use crate::ui::widgets::ContextMenuBin;
 
 /// Build a `SignalListItemFactory` for the album grid.
+///
+/// Each card is wrapped in a `ContextMenuBin` for right-click support.
+/// Thumbnail loading is handled by `AlbumClientV2` via model patching.
 pub fn build_factory(
-    library: Arc<dyn Library>,
-    tokio: tokio::runtime::Handle,
     selection_mode: Rc<Cell<bool>>,
     selection: gtk::MultiSelection,
-    enter_selection: gtk::gio::SimpleAction,
+    enter_selection: gio::SimpleAction,
+    settings: gio::Settings,
+    texture_cache: Rc<TextureCache>,
+    bus_sender: crate::event_bus::EventSender,
+    nav_view: adw::NavigationView,
 ) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
 
     factory.connect_setup(move |_, obj| {
         let list_item = obj.downcast_ref::<gtk::ListItem>().expect("is ListItem");
+        let bin = ContextMenuBin::new();
         let card = AlbumCard::new();
-        card.set_size_request(205, 205 + 52); // Cover + labels.
-        list_item.set_child(Some(&card));
+        bin.set_child(Some(&card));
+        list_item.set_child(Some(&bin));
     });
 
     factory.connect_bind(move |_, obj| {
         let list_item = obj.downcast_ref::<gtk::ListItem>().expect("is ListItem");
-        let card = list_item
+        let bin = list_item
+            .child()
+            .and_downcast::<ContextMenuBin>()
+            .expect("child is ContextMenuBin");
+        let card = bin
             .child()
             .and_downcast::<AlbumCard>()
-            .expect("child is AlbumCard");
+            .expect("bin child is AlbumCard");
         let item = list_item
             .item()
             .and_downcast::<AlbumItemObject>()
@@ -45,15 +55,14 @@ pub fn build_factory(
         card.set_checked(list_item.is_selected());
         card.bind(&item);
 
-        // Accessibility: label the card and its checkbox.
-        let album = item.album();
-        let card_label = if album.media_count == 1 {
-            format!("{}, 1 photo", album.name)
-        } else {
-            format!("{}, {} photos", album.name, album.media_count)
-        };
-        card.update_property(&[gtk::accessible::Property::Label(&card_label)]);
-        let checkbox_label = format!("{} {}", gettext("Select"), album.name);
+        // Accessibility labels.
+        let name = item.name();
+        let count = item.media_count();
+        let photos = ngettext("{} photo", "{} photos", count).replace("{}", &count.to_string());
+        card.update_property(&[gtk::accessible::Property::Label(&format!(
+            "{name}, {photos}"
+        ))]);
+        let checkbox_label = format!("{} {name}", gettext("Select"));
         card.imp()
             .checkbox
             .update_property(&[gtk::accessible::Property::Label(&checkbox_label)]);
@@ -77,104 +86,33 @@ pub fn build_factory(
             card.imp().checkbox_handler.borrow_mut().replace(handler_id);
         }
 
-        // Load mosaic thumbnails.
-        if item.mosaic_texture(0).is_none() {
-            let album_id = AlbumId::from_raw(item.album().id.as_str().to_owned());
-            let lib = Arc::clone(&library);
-            let tk = tokio.clone();
-            let item_weak = item.downgrade();
-
-            gtk::glib::MainContext::default().spawn_local(async move {
-                let lib_for_ids = Arc::clone(&lib);
-                let aid = album_id.clone();
-                let cover_ids = match tk
-                    .spawn(async move { lib_for_ids.album_cover_media_ids(&aid, 4).await })
-                    .await
-                {
-                    Ok(Ok(ids)) => ids,
-                    Ok(Err(e)) => {
-                        warn!("failed to fetch album cover IDs: {e}");
-                        return;
-                    }
-                    Err(e) => {
-                        warn!("tokio join error fetching cover IDs: {e}");
-                        return;
-                    }
-                };
-
-                if cover_ids.is_empty() {
-                    return;
-                }
-
-                // Decode all cover thumbnails in parallel to avoid
-                // visible flicker as each one loads sequentially.
-                let mut futures = Vec::new();
-                for media_id in &cover_ids {
-                    let path = lib.thumbnail_path(media_id);
-                    let tk2 = tk.clone();
-                    futures.push(async move {
-                        tk2.spawn(async move {
-                            tokio::task::spawn_blocking(move || -> Option<(Vec<u8>, u32, u32)> {
-                                let data = std::fs::read(&path).ok()?;
-                                let img = image::load_from_memory(&data).ok()?;
-                                let rgba = img.to_rgba8();
-                                let (w, h) = rgba.dimensions();
-                                Some((rgba.into_raw(), w, h))
-                            })
-                            .await
-                            .ok()?
-                        })
-                        .await
-                        .ok()
-                        .flatten()
-                    });
-                }
-
-                let results = futures_util::future::join_all(futures).await;
-
-                // Apply all textures in a single pass — no flicker.
-                if let Some(item) = item_weak.upgrade() {
-                    for (i, result) in results.into_iter().enumerate() {
-                        if let Some((pixels, width, height)) = result {
-                            let gbytes = gtk::glib::Bytes::from_owned(pixels);
-                            let texture = gtk::gdk::MemoryTexture::new(
-                                width as i32,
-                                height as i32,
-                                gtk::gdk::MemoryFormat::R8g8b8a8,
-                                &gbytes,
-                                (width as usize) * 4,
-                            );
-                            item.set_mosaic_texture(i, texture.upcast());
-                        }
-                    }
-                }
-            });
-        }
+        // Set up per-item context menu on the ContextMenuBin.
+        setup_context_menu(
+            &bin,
+            &item,
+            &settings,
+            &texture_cache,
+            &bus_sender,
+            &nav_view,
+        );
     });
 
     factory.connect_unbind(|_, obj| {
         let list_item = obj.downcast_ref::<gtk::ListItem>().expect("is ListItem");
-        let card = list_item
+        let bin = list_item
+            .child()
+            .and_downcast::<ContextMenuBin>()
+            .expect("child is ContextMenuBin");
+        let card = bin
             .child()
             .and_downcast::<AlbumCard>()
-            .expect("child is AlbumCard");
+            .expect("bin child is AlbumCard");
 
-        // Disconnect checkbox handler.
         if let Some(handler) = card.imp().checkbox_handler.borrow_mut().take() {
             card.imp().checkbox.disconnect(handler);
         }
-
         card.unbind();
-
-        if let Some(item) = list_item
-            .item()
-            .and_then(|o| o.downcast::<AlbumItemObject>().ok())
-        {
-            item.set_texture0(None::<gtk::gdk::Texture>);
-            item.set_texture1(None::<gtk::gdk::Texture>);
-            item.set_texture2(None::<gtk::gdk::Texture>);
-            item.set_texture3(None::<gtk::gdk::Texture>);
-        }
+        bin.clear_context_menu("album");
     });
 
     factory.connect_teardown(|_, obj| {
@@ -183,4 +121,124 @@ pub fn build_factory(
     });
 
     factory
+}
+
+/// Build the context menu model and action group for a specific album item.
+fn setup_context_menu(
+    bin: &ContextMenuBin,
+    item: &AlbumItemObject,
+    settings: &gio::Settings,
+    texture_cache: &Rc<TextureCache>,
+    bus_sender: &crate::event_bus::EventSender,
+    nav_view: &adw::NavigationView,
+) {
+    let album_id_str = item.id();
+    let album_name = item.name();
+    let is_pinned = item.pinned();
+
+    let album_client = MomentsApplication::default()
+        .album_client_v2()
+        .expect("album client v2 available");
+
+    let action_group = gio::SimpleActionGroup::new();
+
+    // Open
+    let open_action = gio::SimpleAction::new("open", None);
+    {
+        let s = settings.clone();
+        let tc = Rc::clone(texture_cache);
+        let bs = bus_sender.clone();
+        let nav = nav_view.clone();
+        let aid = album_id_str.clone();
+        let aname = album_name.clone();
+        open_action.connect_activate(move |_, _| {
+            super::actions::open_album_drilldown(
+                &s,
+                &tc,
+                &bs,
+                &nav,
+                AlbumId::from_raw(aid.clone()),
+                &aname,
+            );
+        });
+    }
+    action_group.add_action(&open_action);
+
+    // Rename
+    let rename_action = gio::SimpleAction::new("rename", None);
+    {
+        let ac = album_client.clone();
+        let aid = album_id_str.clone();
+        let aname = album_name.clone();
+        let bin_weak = bin.downgrade();
+        rename_action.connect_activate(move |_, _| {
+            let ac = ac.clone();
+            let aid = aid.clone();
+            if let Some(bin) = bin_weak.upgrade() {
+                if let Some(win) = bin.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
+                    album_dialogs::show_rename_album_dialog(&win, &aname, move |new_name| {
+                        ac.rename_album(AlbumId::from_raw(aid.clone()), new_name);
+                    });
+                }
+            }
+        });
+    }
+    action_group.add_action(&rename_action);
+
+    // Pin
+    let pin_action = gio::SimpleAction::new("pin", None);
+    pin_action.set_enabled(!is_pinned);
+    {
+        let ac = album_client.clone();
+        let aid = album_id_str.clone();
+        pin_action.connect_activate(move |_, _| {
+            tracing::debug!(album_id = %aid, "pin action activated");
+            ac.pin_album(AlbumId::from_raw(aid.clone()));
+        });
+    }
+    action_group.add_action(&pin_action);
+
+    // Delete
+    let delete_action = gio::SimpleAction::new("delete", None);
+    {
+        let ac = album_client.clone();
+        let aid = album_id_str.clone();
+        let aname = album_name.clone();
+        let bin_weak = bin.downgrade();
+        delete_action.connect_activate(move |_, _| {
+            let ac = ac.clone();
+            let aid = aid.clone();
+            if let Some(bin) = bin_weak.upgrade() {
+                if let Some(win) = bin.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
+                    album_dialogs::show_delete_album_dialog(&win, &aname, move || {
+                        ac.delete_album(vec![AlbumId::from_raw(aid.clone())]);
+                    });
+                }
+            }
+        });
+    }
+    action_group.add_action(&delete_action);
+
+    // Menu model.
+    let menu = gio::Menu::new();
+
+    let main_section = gio::Menu::new();
+    main_section.append(Some(&gettext("Open")), Some("album.open"));
+    main_section.append(Some(&gettext("Rename\u{2026}")), Some("album.rename"));
+    menu.append_section(None, &main_section);
+
+    let pin_section = gio::Menu::new();
+    let pin_label = if is_pinned {
+        gettext("Pinned")
+    } else {
+        gettext("Pin to Sidebar")
+    };
+    pin_section.append(Some(&pin_label), Some("album.pin"));
+    menu.append_section(None, &pin_section);
+
+    let delete_section = gio::Menu::new();
+    delete_section.append(Some(&gettext("Delete Album\u{2026}")), Some("album.delete"));
+    menu.append_section(None, &delete_section);
+
+    bin.set_context_menu(&menu.upcast(), action_group, "album");
 }

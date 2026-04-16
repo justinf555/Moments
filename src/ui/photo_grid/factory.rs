@@ -8,12 +8,11 @@ use tokio::sync::Semaphore;
 use tracing::debug;
 
 use crate::app_event::AppEvent;
+use crate::client::{MediaClient, MediaItemObject};
 use crate::event_bus::EventSender;
 use crate::library::media::{MediaFilter, MediaItem};
-use crate::library::Library;
 
 use super::cell::PhotoGridCell;
-use super::item::MediaItemObject;
 use super::texture_cache::TextureCache;
 
 /// Concurrent thumbnail decodes: half of available cores, minimum 2.
@@ -26,27 +25,10 @@ fn max_decode_workers() -> usize {
 }
 
 /// Build the `SignalListItemFactory` for the photo grid.
-///
-/// `cell_size` sets the uniform cell dimensions (px). Each cell is created
-/// as a square of this size; GTK's `GridView` computes column count from the
-/// available width.
-///
-/// `library` and `tokio` are captured by the `bind` callback so the star
-/// button can persist favourite toggles without the cell needing to know
-/// about the backend.
-///
-/// In GTK 4.12+, factory callbacks receive `&glib::Object` which may be a
-/// `ListItem` or a `ListHeader`. We downcast to `gtk::ListItem` explicitly.
-///
-/// `setup`    — creates a fresh `PhotoGridCell` and attaches it to the list item.
-/// `bind`     — connects the cell to its `MediaItemObject`, reflecting current state.
-/// `unbind`   — disconnects signals and resets the cell to its idle state.
-/// `teardown` — removes the child widget so GTK can reclaim the list item slot.
 #[allow(clippy::too_many_arguments)]
 pub fn build_factory(
     cell_size: i32,
-    library: Arc<dyn Library>,
-    tokio: tokio::runtime::Handle,
+    media_client: MediaClient,
     bus_sender: EventSender,
     filter: MediaFilter,
     cache: Rc<TextureCache>,
@@ -56,6 +38,7 @@ pub fn build_factory(
 ) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
     let decode_semaphore = Arc::new(Semaphore::new(max_decode_workers()));
+    let tokio = crate::application::MomentsApplication::default().tokio_handle();
 
     factory.connect_setup(move |_, obj| {
         let list_item = obj.downcast_ref::<gtk::ListItem>().expect("is ListItem");
@@ -66,7 +49,7 @@ pub fn build_factory(
 
     factory.connect_bind(glib::clone!(
         #[strong]
-        library,
+        media_client,
         #[strong]
         tokio,
         #[strong]
@@ -119,7 +102,6 @@ pub fn build_factory(
                 let id = item.item().id.clone();
 
                 // Fast path: cache hit — create GdkTexture from cached RGBA bytes.
-                // glib::Bytes clone is a refcount bump — zero data copy.
                 if let Some((gbytes, width, height)) = cache.get(&id) {
                     let texture = gtk::gdk::MemoryTexture::new(
                         width as i32,
@@ -131,8 +113,7 @@ pub fn build_factory(
                     item.set_texture(Some(texture.upcast::<gtk::gdk::Texture>()));
                 } else {
                     // Cache miss: decode immediately on the Tokio blocking pool.
-                    // The semaphore limits concurrent decodes to avoid CPU contention.
-                    let path = library.thumbnail_path(&id);
+                    let path = media_client.thumbnail_path(&id);
                     let tk = tokio.clone();
                     let item_weak = item.downgrade();
                     let cache_insert = Rc::clone(&cache);
@@ -164,7 +145,6 @@ pub fn build_factory(
                                 decode_ms = decode_start.elapsed().as_millis(),
                                 "thumbnail decoded (cache miss)"
                             );
-                            // Insert takes ownership and returns shared glib::Bytes.
                             let gbytes = cache_insert.insert(id_for_cache, pixels, width, height);
 
                             if let Some(item) = item_weak.upgrade() {
@@ -198,7 +178,6 @@ pub fn build_factory(
                         return;
                     };
                     let new_fav = !item.is_favorite();
-                    // Optimistic: update the current item immediately.
                     item.set_is_favorite(new_fav);
                     let id = item.item().id.clone();
                     tx.send(AppEvent::FavoriteRequested {
@@ -240,7 +219,6 @@ pub fn build_factory(
             .child()
             .and_downcast::<PhotoGridCell>()
             .expect("child is PhotoGridCell");
-        // Disconnect handlers before unbinding signals.
         if let Some(handler) = cell.imp().star_click_handler.borrow_mut().take() {
             cell.imp().star_btn.disconnect(handler);
         }
@@ -249,9 +227,6 @@ pub fn build_factory(
         }
         cell.unbind();
 
-        // Release the GPU texture for off-screen items to bound VRAM usage.
-        // The texture will be reloaded by the bind callback when the cell
-        // becomes visible again.
         if let Some(item) = list_item
             .item()
             .and_then(|o| o.downcast::<MediaItemObject>().ok())
@@ -269,10 +244,7 @@ pub fn build_factory(
 }
 
 /// Build a human-readable accessible label from a media item's filename and
-/// capture date, e.g. "IMG_1319.jpeg, 7 September 2024".
-///
-/// Uses `glib::DateTime` instead of `chrono` so that month names respect the
-/// system locale (important for i18n / GNOME Circle).
+/// capture date.
 fn accessible_label_for_media(item: &MediaItem) -> String {
     if let Some(ts) = item.taken_at {
         let date_str = glib::DateTime::from_unix_utc(ts)

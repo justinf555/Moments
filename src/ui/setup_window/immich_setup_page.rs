@@ -6,10 +6,10 @@ use adw::subclass::prelude::*;
 use gtk::glib;
 use tracing::{debug, error, instrument};
 
+use crate::application::keyring;
 use crate::library::bundle::Bundle;
 use crate::library::config::LibraryConfig;
-use crate::library::immich_client::ImmichClient;
-use crate::library::keyring;
+use crate::sync::providers::immich::client::ImmichClient;
 
 mod imp {
     use super::*;
@@ -134,7 +134,6 @@ impl MomentsImmichSetupPage {
 
         let obj_weak = self.downgrade();
         glib::MainContext::default().spawn_local(async move {
-            // Step 1: Login to get a session token.
             let login_result = tokio
                 .spawn(async move { ImmichClient::login(&server_url, &email, &password).await })
                 .await;
@@ -162,7 +161,6 @@ impl MomentsImmichSetupPage {
                 }
             };
 
-            // Step 2: Use the token to validate and get server version.
             let token = login.access_token.clone();
             let user_name = login.name.clone();
             let server_url = imp.server_url_row.text().to_string();
@@ -194,8 +192,8 @@ impl MomentsImmichSetupPage {
                     *imp.access_token.borrow_mut() = Some(token);
                 }
                 Ok(Err(e)) => {
-                    error!("server validation failed: {e}");
-                    imp.status_label.set_text(&format!("Failed: {e}"));
+                    error!("validation failed: {e}");
+                    imp.status_label.set_text(&format!("Server error: {e}"));
                     imp.status_label.add_css_class("error");
                 }
                 Err(e) => {

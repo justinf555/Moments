@@ -20,12 +20,11 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use adw::subclass::prelude::*;
 use gtk::prelude::*;
 use gtk::{gio, glib};
-use tracing::{debug, error, instrument, warn};
+use tracing::{debug, instrument, warn};
 
 /// Wrapper for a reload callback that implements `Debug` and `Default`.
 pub struct ReloadCallback(Box<dyn Fn()>);
@@ -51,13 +50,12 @@ impl Default for ReloadCallback {
         Self(Box::new(|| {}))
     }
 }
-use crate::library::Library;
 
 use crate::ui::coordinator::ContentCoordinator;
 use crate::ui::empty_library::EmptyLibraryView;
 use crate::ui::people_grid::PeopleGridView;
 use crate::ui::photo_grid::texture_cache::TextureCache;
-use crate::ui::photo_grid::{PhotoGridModel, PhotoGridView};
+use crate::ui::photo_grid::PhotoGridView;
 use crate::ui::sidebar::MomentsSidebar;
 
 mod imp {
@@ -185,27 +183,19 @@ impl MomentsWindow {
     /// All models subscribe to the [`EventBus`] for event delivery.
     /// The caller does not need to forward events — components are
     /// self-contained.
-    pub fn setup(
-        &self,
-        library: Arc<dyn Library>,
-        tokio: tokio::runtime::Handle,
-        settings: gio::Settings,
-        bus: &crate::event_bus::EventBus,
-    ) {
+    pub fn setup(&self, settings: gio::Settings, bus: &crate::event_bus::EventBus) {
         let imp = self.imp();
         let bus_sender = bus.sender();
 
-        let sidebar = self.setup_sidebar(&library, &tokio, &settings);
+        let sidebar = self.setup_sidebar();
 
         let texture_cache = Rc::new(TextureCache::new());
 
         let (content_stack, coordinator, photos_model) =
-            self.build_coordinator(&library, &tokio, &settings, &texture_cache, &bus_sender);
+            self.build_coordinator(&settings, &texture_cache, &bus_sender);
 
         self.register_lazy_views(
             &mut coordinator.borrow_mut(),
-            &library,
-            &tokio,
             &settings,
             &texture_cache,
             &bus_sender,
@@ -225,14 +215,7 @@ impl MomentsWindow {
             .set(Rc::clone(&coordinator))
             .expect("coordinator set once in setup()");
 
-        self.connect_sidebar_navigation(
-            &sidebar,
-            &library,
-            &tokio,
-            &settings,
-            &texture_cache,
-            &bus_sender,
-        );
+        self.connect_sidebar_navigation(&sidebar, &settings, &texture_cache, &bus_sender);
 
         sidebar.select_first();
 
@@ -257,19 +240,22 @@ impl MomentsWindow {
 
         // Navigate to Recent Imports when an import completes.
         // Deferred via idle_add_local_once because navigate() can materialise
-        // a lazy view, which triggers realize → subscribe() on the new widget,
-        // and the bus's subscriber list is borrowed during dispatch.
-        let weak = self.downgrade();
-        subs.push(bus.subscribe(move |event| {
-            if matches!(event, AppEvent::ImportComplete { .. }) {
-                let weak = weak.clone();
-                glib::idle_add_local_once(move || {
-                    if let Some(win) = weak.upgrade() {
-                        win.navigate("recent");
-                    }
-                });
-            }
-        }));
+        // a lazy view, which triggers realize → subscribe() on the new widget.
+        if let Some(import_client) =
+            crate::application::MomentsApplication::default().import_client()
+        {
+            let weak = self.downgrade();
+            import_client.connect_notify_local(Some("state"), move |client, _| {
+                if client.state() == crate::client::import_client::ImportState::Complete {
+                    let weak = weak.clone();
+                    glib::idle_add_local_once(move || {
+                        if let Some(win) = weak.upgrade() {
+                            win.navigate("recent");
+                        }
+                    });
+                }
+            });
+        }
 
         // Unregister deleted album routes from the coordinator before
         // AlbumGridView processes the event (avoids a navigation race).
@@ -300,12 +286,7 @@ impl MomentsWindow {
         }));
     }
 
-    fn setup_sidebar(
-        &self,
-        library: &Arc<dyn Library>,
-        tokio: &tokio::runtime::Handle,
-        settings: &gio::Settings,
-    ) -> MomentsSidebar {
+    fn setup_sidebar(&self) -> MomentsSidebar {
         let imp = self.imp();
 
         let sidebar = MomentsSidebar::new();
@@ -322,38 +303,18 @@ impl MomentsWindow {
             .expect("sidebar set once in setup()");
 
         {
-            let lib = Arc::clone(library);
-            let tk = tokio.clone();
             let sb = sidebar.clone();
-            glib::MainContext::default().spawn_local(async move {
-                let result = tk.spawn(async move { lib.library_stats().await }).await;
-                match result {
-                    Ok(Ok(stats)) => sb.set_trash_count(stats.trashed_count as u32),
-                    Ok(Err(e)) => warn!("failed to load library stats: {e}"),
-                    Err(e) => error!("library stats task panicked: {e}"),
+            let media_client = crate::application::MomentsApplication::default()
+                .media_client()
+                .expect("media client available");
+            media_client.library_stats(move |result| {
+                if let Ok(stats) = result {
+                    sb.set_trash_count(stats.trashed_count as u32);
                 }
             });
         }
 
-        {
-            let lib = Arc::clone(library);
-            let tk = tokio.clone();
-            let sb = sidebar.clone();
-            let s = settings.clone();
-            glib::MainContext::default().spawn_local(async move {
-                match tk.spawn(async move { lib.list_albums().await }).await {
-                    Ok(Ok(albums)) => {
-                        let pairs: Vec<(String, String)> = albums
-                            .into_iter()
-                            .map(|a| (a.id.as_str().to_owned(), a.name))
-                            .collect();
-                        sb.load_pinned_albums(&s, &pairs);
-                    }
-                    Ok(Err(e)) => warn!("failed to load albums for sidebar: {e}"),
-                    Err(e) => error!("album load task panicked: {e}"),
-                }
-            });
-        }
+        sidebar.setup_pinned_albums();
 
         sidebar
     }
@@ -361,13 +322,15 @@ impl MomentsWindow {
     #[allow(clippy::type_complexity)]
     fn build_coordinator(
         &self,
-        library: &Arc<dyn Library>,
-        tokio: &tokio::runtime::Handle,
         settings: &gio::Settings,
         texture_cache: &Rc<TextureCache>,
         bus_sender: &crate::event_bus::EventSender,
-    ) -> (gtk::Stack, Rc<RefCell<ContentCoordinator>>, PhotoGridModel) {
+    ) -> (gtk::Stack, Rc<RefCell<ContentCoordinator>>, gio::ListStore) {
         use crate::library::media::MediaFilter;
+
+        let media_client = crate::application::MomentsApplication::default()
+            .media_client()
+            .expect("media client available");
 
         let content_stack = gtk::Stack::new();
         content_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
@@ -376,35 +339,26 @@ impl MomentsWindow {
         let empty = EmptyLibraryView::new();
         coordinator.register("empty", empty.widget());
 
-        let photos_model = PhotoGridModel::new(
-            Arc::clone(library),
-            tokio.clone(),
-            MediaFilter::All,
-            bus_sender.clone(),
-        );
+        let photos_store = media_client.create_model(MediaFilter::All);
         let photos_view = PhotoGridView::new();
         photos_view.setup(
-            Arc::clone(library),
-            tokio.clone(),
             settings.clone(),
             Rc::clone(texture_cache),
             bus_sender.clone(),
         );
-        photos_view.set_model(photos_model.clone());
+        photos_view.set_store(photos_store.clone(), MediaFilter::All);
         coordinator.register("photos", &photos_view);
 
         (
             content_stack,
             Rc::new(RefCell::new(coordinator)),
-            photos_model,
+            photos_store,
         )
     }
 
     fn register_lazy_views(
         &self,
         coordinator: &mut ContentCoordinator,
-        library: &Arc<dyn Library>,
-        tokio: &tokio::runtime::Handle,
         settings: &gio::Settings,
         texture_cache: &Rc<TextureCache>,
         bus_sender: &crate::event_bus::EventSender,
@@ -412,77 +366,64 @@ impl MomentsWindow {
         use crate::library::media::MediaFilter;
 
         {
-            let lib = Arc::clone(library);
-            let tk = tokio.clone();
             let s = settings.clone();
             let tc = Rc::clone(texture_cache);
             let bs = bus_sender.clone();
             coordinator.register_lazy("favorites", move || {
-                let model = PhotoGridModel::new(
-                    Arc::clone(&lib),
-                    tk.clone(),
-                    MediaFilter::Favorites,
-                    bs.clone(),
-                );
+                let mc = crate::application::MomentsApplication::default()
+                    .media_client()
+                    .expect("media client available");
+                let store = mc.create_model(MediaFilter::Favorites);
                 let view = PhotoGridView::new();
-                view.setup(lib, tk, s, tc, bs);
-                view.set_model(model.clone());
+                view.setup(s, tc, bs);
+                view.set_store(store, MediaFilter::Favorites);
                 view.upcast()
             });
         }
 
         {
-            let lib = Arc::clone(library);
-            let tk = tokio.clone();
             let s = settings.clone();
             let tc = Rc::clone(texture_cache);
             let bs = bus_sender.clone();
             coordinator.register_lazy("recent", move || {
                 let days = s.uint("recent-imports-days") as i64;
                 let since = chrono::Utc::now().timestamp() - days * 86400;
-                let model = PhotoGridModel::new(
-                    Arc::clone(&lib),
-                    tk.clone(),
-                    MediaFilter::RecentImports { since },
-                    bs.clone(),
-                );
+                let filter = MediaFilter::RecentImports { since };
+                let mc = crate::application::MomentsApplication::default()
+                    .media_client()
+                    .expect("media client available");
+                let store = mc.create_model(filter.clone());
                 let view = PhotoGridView::new();
-                view.setup(lib, tk, s, tc, bs);
-                view.set_model(model.clone());
+                view.setup(s, tc, bs);
+                view.set_store(store, filter);
                 view.upcast()
             });
         }
 
         {
-            let lib = Arc::clone(library);
-            let tk = tokio.clone();
             let s = settings.clone();
             let tc = Rc::clone(texture_cache);
             let bs = bus_sender.clone();
             coordinator.register_lazy("trash", move || {
-                let model = PhotoGridModel::new(
-                    Arc::clone(&lib),
-                    tk.clone(),
-                    MediaFilter::Trashed,
-                    bs.clone(),
-                );
+                let mc = crate::application::MomentsApplication::default()
+                    .media_client()
+                    .expect("media client available");
+                let store = mc.create_model(MediaFilter::Trashed);
                 let view = PhotoGridView::new();
-                view.setup(lib, tk, s, tc, bs);
-                view.set_model(model.clone());
+                view.setup(s, tc, bs);
+                view.set_store(store, MediaFilter::Trashed);
                 view.upcast()
             });
         }
 
         {
-            let lib = Arc::clone(library);
-            let tk = tokio.clone();
             let s = settings.clone();
             let tc = Rc::clone(texture_cache);
             let bs = bus_sender.clone();
             let win_weak = self.downgrade();
             coordinator.register_lazy("people", move || {
                 let view = PeopleGridView::new();
-                view.setup_people(lib, tk, s, tc, bs);
+                view.setup_people(s, tc, bs);
                 if let Some(win) = win_weak.upgrade() {
                     let view_clone = view.clone();
                     *win.imp().people_reload.borrow_mut() = Some(ReloadCallback::new(move || {
@@ -494,14 +435,12 @@ impl MomentsWindow {
         }
 
         {
-            let lib = Arc::clone(library);
-            let tk = tokio.clone();
             let s = settings.clone();
             let tc = Rc::clone(texture_cache);
             let bs = bus_sender.clone();
             coordinator.register_lazy("albums", move || {
                 let view = super::album_grid::AlbumGridView::new();
-                view.setup(lib, tk, s, tc, bs);
+                view.setup(s, tc, bs);
                 view.upcast()
             });
         }
@@ -512,35 +451,29 @@ impl MomentsWindow {
     /// Only switches on empty ↔ non-empty transitions — deliberately does NOT
     /// override the visible child if the user has navigated away from Photos
     /// (e.g. to Trash).
-    fn connect_empty_toggle(content_stack: &gtk::Stack, photos_model: &PhotoGridModel) {
+    fn connect_empty_toggle(content_stack: &gtk::Stack, photos_store: &gio::ListStore) {
         let stack = content_stack.clone();
         let was_empty = std::cell::Cell::new(true);
-        photos_model
-            .store()
-            .connect_items_changed(move |store, _, _, _| {
-                let is_empty = store.n_items() == 0;
-                if is_empty && !was_empty.get() {
-                    stack.set_visible_child_name("empty");
-                    was_empty.set(true);
-                } else if !is_empty && was_empty.get() {
-                    stack.set_visible_child_name("photos");
-                    was_empty.set(false);
-                }
-            });
+        photos_store.connect_items_changed(move |store, _, _, _| {
+            let is_empty = store.n_items() == 0;
+            if is_empty && !was_empty.get() {
+                stack.set_visible_child_name("empty");
+                was_empty.set(true);
+            } else if !is_empty && was_empty.get() {
+                stack.set_visible_child_name("photos");
+                was_empty.set(false);
+            }
+        });
     }
 
     fn connect_sidebar_navigation(
         &self,
         sidebar: &MomentsSidebar,
-        library: &Arc<dyn Library>,
-        tokio: &tokio::runtime::Handle,
         settings: &gio::Settings,
         texture_cache: &Rc<TextureCache>,
         bus_sender: &crate::event_bus::EventSender,
     ) {
         let obj_weak = self.downgrade();
-        let lib = Arc::clone(library);
-        let tk = tokio.clone();
         let s = settings.clone();
         let tc = Rc::clone(texture_cache);
         let bs = bus_sender.clone();
@@ -558,21 +491,14 @@ impl MomentsWindow {
                     use crate::library::album::AlbumId;
                     use crate::library::media::MediaFilter;
                     let album_id = AlbumId::from_raw(album_id_str.to_owned());
-                    let model = PhotoGridModel::new(
-                        Arc::clone(&lib),
-                        tk.clone(),
-                        MediaFilter::Album { album_id },
-                        bs.clone(),
-                    );
+                    let filter = MediaFilter::Album { album_id };
+                    let mc = crate::application::MomentsApplication::default()
+                        .media_client()
+                        .expect("media client available");
+                    let store = mc.create_model(filter.clone());
                     let view = PhotoGridView::new();
-                    view.setup(
-                        Arc::clone(&lib),
-                        tk.clone(),
-                        s.clone(),
-                        Rc::clone(&tc),
-                        bs.clone(),
-                    );
-                    view.set_model(model.clone());
+                    view.setup(s.clone(), Rc::clone(&tc), bs.clone());
+                    view.set_store(store, filter);
                     coord.register(id, &view);
                 }
                 coord.navigate(id);

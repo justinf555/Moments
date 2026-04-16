@@ -9,22 +9,20 @@ mod transforms;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gdk, glib};
 use image::DynamicImage;
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
 use adjust_section::EditAdjustSection;
 use filter_section::EditFilterSection;
 use transform_section::EditTransformSection;
 
-use crate::library::edit_renderer::apply_edits;
 use crate::library::editing::EditState;
 use crate::library::media::MediaId;
-use crate::library::Library;
+use crate::renderer::edits::apply_edits;
 use crate::ui::widgets::wire_single_expansion;
 
 /// Delay before auto-saving edit state to DB after the last change (milliseconds).
@@ -64,8 +62,6 @@ mod imp {
 
         // Service dependencies (set once in setup)
         pub picture: OnceCell<gtk::Picture>,
-        pub library: OnceCell<Arc<dyn Library>>,
-        pub tokio: OnceCell<tokio::runtime::Handle>,
         pub bus_sender: OnceCell<crate::event_bus::EventSender>,
 
         // Shared session — same Rc passed to all sections
@@ -80,12 +76,6 @@ mod imp {
     impl EditPanel {
         pub fn picture(&self) -> &gtk::Picture {
             self.picture.get().expect("picture not initialized")
-        }
-        pub fn library(&self) -> &Arc<dyn Library> {
-            self.library.get().expect("library not initialized")
-        }
-        pub fn tokio(&self) -> &tokio::runtime::Handle {
-            self.tokio.get().expect("tokio not initialized")
         }
         pub fn bus_sender(&self) -> &crate::event_bus::EventSender {
             self.bus_sender.get().expect("bus_sender not initialized")
@@ -141,17 +131,9 @@ impl EditPanel {
     }
 
     /// Inject service dependencies and wire signal handlers.
-    pub fn setup(
-        &self,
-        picture: gtk::Picture,
-        library: Arc<dyn Library>,
-        tokio: tokio::runtime::Handle,
-        bus_sender: crate::event_bus::EventSender,
-    ) {
+    pub fn setup(&self, picture: gtk::Picture, bus_sender: crate::event_bus::EventSender) {
         let imp = self.imp();
         assert!(imp.picture.set(picture).is_ok(), "setup called twice");
-        assert!(imp.library.set(library).is_ok(), "setup called twice");
-        assert!(imp.tokio.set(tokio).is_ok(), "setup called twice");
         assert!(imp.bus_sender.set(bus_sender).is_ok(), "setup called twice");
 
         // Create the shared session.
@@ -264,33 +246,18 @@ impl EditPanel {
 
             // Don't persist identity state — delete instead if it exists.
             if session.state.is_identity() {
-                let lib = Arc::clone(imp.library());
-                let tk = imp.tokio().clone();
                 let id_log = id.clone();
                 let tx = imp.bus_sender().clone();
-                glib::MainContext::default().spawn_local(async move {
-                    let start = Instant::now();
-                    let result = tk.spawn(async move { lib.revert_edits(&id).await }).await;
-                    let elapsed = start.elapsed();
-                    match result {
-                        Ok(Ok(())) => debug!(
-                            media_id = %id_log,
-                            elapsed_ms = elapsed.as_millis(),
-                            reason,
-                            "delete identity edit state"
-                        ),
-                        Ok(Err(e)) => {
-                            error!("delete edit state failed: {e}");
-                            tx.send(crate::app_event::AppEvent::Error(
-                                "Could not revert edits".into(),
-                            ));
-                        }
-                        Err(e) => {
-                            error!("delete edit state join failed: {e}");
-                            tx.send(crate::app_event::AppEvent::Error(
-                                "Could not revert edits".into(),
-                            ));
-                        }
+                let mc = crate::application::MomentsApplication::default()
+                    .media_client()
+                    .expect("media client available");
+                mc.revert_edits(&id, move |result| match result {
+                    Ok(()) => debug!(media_id = %id_log, reason, "delete identity edit state"),
+                    Err(e) => {
+                        error!("delete edit state failed: {e}");
+                        tx.send(crate::app_event::AppEvent::Error(
+                            "Could not revert edits".into(),
+                        ));
                     }
                 });
                 return;
@@ -305,49 +272,24 @@ impl EditPanel {
         }
 
         imp.save_in_flight.set(true);
-        let lib = Arc::clone(imp.library());
-        let tk = imp.tokio().clone();
         let id_log = id.clone();
         let tx = imp.bus_sender().clone();
+        let mc = crate::application::MomentsApplication::default()
+            .media_client()
+            .expect("media client available");
 
         let weak = self.downgrade();
-        glib::MainContext::default().spawn_local(async move {
-            let start = Instant::now();
-            let result = tk
-                .spawn(async move { lib.save_edit_state(&id, &state).await })
-                .await;
-            let elapsed = start.elapsed();
-
+        mc.save_edit_state(&id, &state, move |result| {
             if let Some(panel) = weak.upgrade() {
                 panel.imp().save_in_flight.set(false);
             }
 
             match result {
-                Ok(Ok(())) => {
-                    if elapsed.as_millis() > 20 {
-                        warn!(
-                            media_id = %id_log,
-                            elapsed_ms = elapsed.as_millis(),
-                            reason,
-                            "save edit state slow"
-                        );
-                    } else {
-                        debug!(
-                            media_id = %id_log,
-                            elapsed_ms = elapsed.as_millis(),
-                            reason,
-                            "save edit state"
-                        );
-                    }
-                }
-                Ok(Err(e)) => {
-                    error!("save edit state failed: {e}");
-                    tx.send(crate::app_event::AppEvent::Error(
-                        "Could not save edits".into(),
-                    ));
+                Ok(()) => {
+                    debug!(media_id = %id_log, reason, "save edit state");
                 }
                 Err(e) => {
-                    error!("save edit state join failed: {e}");
+                    error!("save edit state failed: {e}");
                     tx.send(crate::app_event::AppEvent::Error(
                         "Could not save edits".into(),
                     ));
@@ -399,7 +341,7 @@ impl EditPanel {
     fn render_to_picture(&self, preview: (Arc<DynamicImage>, EditState, u64)) {
         let imp = self.imp();
         let pic = imp.picture().clone();
-        let tk = imp.tokio().clone();
+        let tk = crate::application::MomentsApplication::default().tokio_handle();
         let (preview_img, state, gen) = preview;
 
         let weak = self.downgrade();
@@ -484,32 +426,18 @@ impl EditPanel {
             // Delete from DB.
             let id = imp.media_id.borrow().clone();
             if let Some(id) = id {
-                let lib = Arc::clone(imp.library());
-                let tk = imp.tokio().clone();
                 let id_log = id.clone();
                 let tx = imp.bus_sender().clone();
-                glib::MainContext::default().spawn_local(async move {
-                    let start = Instant::now();
-                    let result = tk.spawn(async move { lib.revert_edits(&id).await }).await;
-                    let elapsed = start.elapsed();
-                    match result {
-                        Ok(Ok(())) => debug!(
-                            media_id = %id_log,
-                            elapsed_ms = elapsed.as_millis(),
-                            "revert edits"
-                        ),
-                        Ok(Err(e)) => {
-                            error!("revert edits failed: {e}");
-                            tx.send(crate::app_event::AppEvent::Error(
-                                "Could not revert edits".into(),
-                            ));
-                        }
-                        Err(e) => {
-                            error!("revert edits join failed: {e}");
-                            tx.send(crate::app_event::AppEvent::Error(
-                                "Could not revert edits".into(),
-                            ));
-                        }
+                let mc = crate::application::MomentsApplication::default()
+                    .media_client()
+                    .expect("media client available");
+                mc.revert_edits(&id, move |result| match result {
+                    Ok(()) => debug!(media_id = %id_log, "revert edits"),
+                    Err(e) => {
+                        error!("revert edits failed: {e}");
+                        tx.send(crate::app_event::AppEvent::Error(
+                            "Could not revert edits".into(),
+                        ));
                     }
                 });
             }

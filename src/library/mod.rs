@@ -3,78 +3,200 @@ pub mod bundle;
 pub mod commands;
 pub mod config;
 pub mod db;
-pub mod edit_renderer;
 pub mod editing;
 pub mod error;
-pub mod exif;
 pub mod faces;
-pub mod factory;
-pub mod format;
-pub mod immich_client;
-pub mod immich_importer;
-pub mod import;
-pub mod importer;
-pub mod keyring;
 pub mod media;
-pub mod providers;
-pub mod storage;
-pub mod sync;
+pub mod metadata;
+pub mod mutation;
+pub mod recorder;
+pub mod resolver;
 pub mod thumbnail;
-pub mod thumbnailer;
-pub mod video_meta;
-pub mod viewer;
 
-use album::LibraryAlbums;
-use editing::LibraryEditing;
-use faces::LibraryFaces;
-use import::LibraryImport;
-use media::LibraryMedia;
-use storage::LibraryStorage;
-use thumbnail::LibraryThumbnail;
-use viewer::LibraryViewer;
+use std::sync::Arc;
 
-/// The public interface for a Moments library backend.
+use tracing::{debug, info, instrument};
+
+use album::AlbumService;
+use bundle::Bundle;
+use config::LocalStorageMode;
+use db::Database;
+use editing::EditingService;
+use error::LibraryError;
+use faces::FacesService;
+use media::{MediaId, MediaService};
+use metadata::MetadataService;
+use recorder::MutationRecorder;
+use thumbnail::ThumbnailService;
+
+/// The Moments library — a single concrete type composing all feature services.
 ///
-/// `Library` is a blanket-impl composition of feature sub-traits. The GTK
-/// application holds a `Box<dyn Library>` and calls methods on it directly.
-/// It never imports or references concrete backend types.
-///
-/// New capabilities are added as additional sub-traits per feature issue:
-/// - [`LibraryStorage`]   — lifecycle (open / close)
-/// - [`LibraryImport`]    — photo / video import (issue #5)
-/// - [`LibraryMedia`]     — media asset persistence (issue #25)
-/// - [`LibraryThumbnail`] — thumbnail generation and path resolution (issue #6)
-/// - [`LibraryViewer`]    — detail-view data access (issue #10)
-/// - [`LibraryAlbums`]    — album management (issue #11)
-/// - [`LibraryFaces`]     — face/people management (issue #178)
-/// - [`LibraryEditing`]   — non-destructive photo editing (issue #17)
-///
-/// `close()` is inherited from `LibraryStorage` and is not duplicated here.
-pub trait Library:
-    LibraryStorage
-    + LibraryImport
-    + LibraryMedia
-    + LibraryThumbnail
-    + LibraryViewer
-    + LibraryAlbums
-    + LibraryFaces
-    + LibraryEditing
-    + Send
-    + Sync
-{
+/// Constructed via [`Library::open`] with a validated [`Bundle`] and
+/// [`LocalStorageMode`]. All operations are accessed via service accessors
+/// (`media()`, `albums()`, `faces()`, etc.) or through the client layer
+/// (`MediaClient`, `AlbumClientV2`, `PeopleClient`).
+pub struct Library {
+    albums: AlbumService,
+    faces: FacesService,
+    editing: EditingService,
+    media: MediaService,
+    metadata: MetadataService,
+    thumbnails: ThumbnailService,
 }
 
-impl<
-        T: LibraryStorage
-            + LibraryImport
-            + LibraryMedia
-            + LibraryThumbnail
-            + LibraryViewer
-            + LibraryAlbums
-            + LibraryFaces
-            + LibraryEditing
-            + Send
-            + Sync,
-    > Library for T
-{
+impl Library {
+    /// Open a library from a validated bundle.
+    ///
+    /// The `db` handle must have been created with [`Database::new`] — this
+    /// method calls [`Database::open`] to connect and run migrations. All
+    /// clones of `db` (e.g. held by sync or outbox) become active.
+    #[instrument(skip_all, fields(path = %bundle.path.display(), mode = ?mode))]
+    pub async fn open(
+        bundle: Bundle,
+        mode: LocalStorageMode,
+        db: Database,
+        recorder: Arc<dyn MutationRecorder>,
+        resolver: Arc<dyn resolver::OriginalResolver>,
+    ) -> Result<Self, LibraryError> {
+        info!("opening library");
+
+        let db_path = bundle.database.join("moments.db");
+        db.open(&db_path).await?;
+
+        let albums = AlbumService::new(db.clone(), Arc::clone(&recorder));
+        let faces = FacesService::new(db.clone(), None, Arc::clone(&recorder));
+        let editing = EditingService::new(db.clone());
+        let media = MediaService::new(
+            db.clone(),
+            bundle.originals.clone(),
+            mode,
+            recorder,
+            resolver,
+        );
+        let metadata = MetadataService::new(db.clone());
+        let thumbnails = ThumbnailService::new(db, bundle.thumbnails.clone());
+
+        debug!("library ready");
+        Ok(Self {
+            albums,
+            faces,
+            editing,
+            media,
+            metadata,
+            thumbnails,
+        })
+    }
+
+    /// Gracefully shut down the library.
+    pub async fn close(&self) -> Result<(), LibraryError> {
+        info!("closing library");
+        Ok(())
+    }
+
+    // ── Service accessors ───────────────────────────────────────────
+
+    pub fn media(&self) -> &MediaService {
+        &self.media
+    }
+
+    pub fn metadata(&self) -> &MetadataService {
+        &self.metadata
+    }
+
+    pub fn thumbnails(&self) -> &ThumbnailService {
+        &self.thumbnails
+    }
+
+    pub fn albums(&self) -> &AlbumService {
+        &self.albums
+    }
+
+    pub fn faces(&self) -> &FacesService {
+        &self.faces
+    }
+
+    pub fn editing(&self) -> &EditingService {
+        &self.editing
+    }
+
+    // ── Cross-service operations ─────────────────────────────────────
+
+    /// Permanently delete assets: DB first, then best-effort file cleanup.
+    ///
+    /// Collects file paths before the transactional DB delete so that
+    /// a DB failure leaves files intact (recoverable orphans are
+    /// preferable to references pointing at deleted files).
+    pub async fn delete_permanently(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
+        let original_paths = self.media.collect_original_paths(ids).await;
+        self.media.delete_permanently(ids).await?;
+        self.cleanup_files(ids, &original_paths).await;
+        Ok(())
+    }
+
+    /// Permanently delete assets without recording to the outbox.
+    ///
+    /// Used by pull sync when processing server-driven deletions —
+    /// these should not be pushed back to the server.
+    pub async fn delete_permanently_from_sync(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
+        let original_paths = self.media.collect_original_paths(ids).await;
+        self.media.delete_permanently_no_record(ids).await?;
+        self.cleanup_files(ids, &original_paths).await;
+        Ok(())
+    }
+
+    /// Best-effort removal of original files and thumbnails from disk.
+    async fn cleanup_files(
+        &self,
+        ids: &[MediaId],
+        original_paths: &[(MediaId, std::path::PathBuf)],
+    ) {
+        for (id, path) in original_paths {
+            if let Err(e) = tokio::fs::remove_file(path).await {
+                tracing::debug!(id = %id, path = %path.display(), "original not on disk or already removed: {e}");
+            }
+        }
+        for id in ids {
+            let thumb = self.thumbnails.thumbnail_path(id);
+            if let Err(e) = tokio::fs::remove_file(&thumb).await {
+                tracing::debug!(id = %id, "thumbnail not on disk or already removed: {e}");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::library::config::LibraryConfig;
+
+    async fn open_test_library(bundle: Bundle) -> Library {
+        Library::open(
+            bundle,
+            LocalStorageMode::Managed,
+            Database::new(),
+            Arc::new(crate::sync::outbox::NoOpRecorder),
+            Arc::new(resolver::LocalResolver::new(
+                std::path::PathBuf::new(),
+                LocalStorageMode::Managed,
+            )),
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn open_creates_library() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle_path = dir.path().join("Test.library");
+        let bundle = Bundle::create(
+            &bundle_path,
+            &LibraryConfig::Local {
+                mode: LocalStorageMode::Managed,
+            },
+        )
+        .unwrap();
+
+        let library = open_test_library(bundle).await;
+        library.close().await.unwrap();
+    }
 }

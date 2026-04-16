@@ -4,42 +4,46 @@ use adw::prelude::*;
 use gettextrs::gettext;
 use gtk::gio;
 
+use crate::application::MomentsApplication;
 use crate::library::album::AlbumId;
 
 use super::card;
-use super::item::AlbumItemObject;
+use crate::client::AlbumItemObject;
+
+/// Configuration for wiring selection mode on the album grid.
+pub(crate) struct SelectionConfig<'a> {
+    pub enter_selection: &'a gio::SimpleAction,
+    pub header: &'a adw::HeaderBar,
+    pub new_album_btn: &'a gtk::Button,
+    pub menu_btn: &'a gtk::MenuButton,
+    pub cancel_btn: &'a gtk::Button,
+    pub action_bar: &'a gtk::ActionBar,
+    pub grid_view: &'a gtk::GridView,
+    pub multi_selection: &'a gtk::MultiSelection,
+    pub store: &'a gio::ListStore,
+    pub selection_mode: &'a Rc<std::cell::Cell<bool>>,
+}
 
 /// Wire up selection mode UI transitions and batch-delete button.
 ///
 /// `enter_selection` is created by the caller (needed by the factory before
 /// the grid view exists). This function wires its activate handler and
-/// creates + returns the `exit_selection` action.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn wire_selection_mode(
-    enter_selection: &gio::SimpleAction,
-    header: &adw::HeaderBar,
-    new_album_btn: &gtk::Button,
-    menu_btn: &gtk::MenuButton,
-    cancel_btn: &gtk::Button,
-    selection_title: &gtk::Label,
-    action_bar: &gtk::ActionBar,
-    grid_view: &gtk::GridView,
-    multi_selection: &gtk::MultiSelection,
-    store: &gio::ListStore,
-    selection_mode: &Rc<std::cell::Cell<bool>>,
-    bus_sender: &crate::event_bus::EventSender,
-) {
+/// creates the `exit_selection` action.
+pub(crate) fn wire_selection_mode(cfg: &SelectionConfig<'_>) {
+    let selection_title = gtk::Label::new(Some("0 selected"));
+    selection_title.add_css_class("heading");
+
     // ── Enter selection mode ────────────────────────────────────────
     {
-        let sm = Rc::clone(selection_mode);
-        let new_btn = new_album_btn.clone();
-        let menu = menu_btn.clone();
-        let cancel = cancel_btn.clone();
+        let sm = Rc::clone(cfg.selection_mode);
+        let new_btn = cfg.new_album_btn.clone();
+        let menu = cfg.menu_btn.clone();
+        let cancel = cfg.cancel_btn.clone();
         let title = selection_title.clone();
-        let bar = action_bar.clone();
-        let gv = grid_view.clone();
-        let hdr = header.clone();
-        enter_selection.connect_activate(move |_, _| {
+        let bar = cfg.action_bar.clone();
+        let gv = cfg.grid_view.clone();
+        let hdr = cfg.header.clone();
+        cfg.enter_selection.connect_activate(move |_, _| {
             sm.set(true);
             new_btn.set_visible(false);
             menu.set_visible(false);
@@ -54,14 +58,14 @@ pub(crate) fn wire_selection_mode(
     // ── Exit selection mode ─────────────────────────────────────────
     let exit_selection = gio::SimpleAction::new("exit-selection", None);
     {
-        let sm = Rc::clone(selection_mode);
-        let new_btn = new_album_btn.clone();
-        let menu = menu_btn.clone();
-        let cancel = cancel_btn.clone();
-        let bar = action_bar.clone();
-        let gv = grid_view.clone();
-        let sel = multi_selection.clone();
-        let hdr = header.clone();
+        let sm = Rc::clone(cfg.selection_mode);
+        let new_btn = cfg.new_album_btn.clone();
+        let menu = cfg.menu_btn.clone();
+        let cancel = cfg.cancel_btn.clone();
+        let bar = cfg.action_bar.clone();
+        let gv = cfg.grid_view.clone();
+        let sel = cfg.multi_selection.clone();
+        let hdr = cfg.header.clone();
         exit_selection.connect_activate(move |_, _| {
             sm.set(false);
             new_btn.set_visible(true);
@@ -77,7 +81,7 @@ pub(crate) fn wire_selection_mode(
     // Cancel button → exit selection.
     {
         let exit = exit_selection.clone();
-        cancel_btn.connect_clicked(move |_| {
+        cfg.cancel_btn.connect_clicked(move |_| {
             exit.activate(None);
         });
     }
@@ -85,18 +89,18 @@ pub(crate) fn wire_selection_mode(
     // Update selection count label when selection changes.
     {
         let title = selection_title.clone();
-        multi_selection.connect_selection_changed(move |sel, _, _| {
-            let count = sel.selection().size() as u32;
-            title.set_text(&format!("{count} selected"));
-        });
+        cfg.multi_selection
+            .connect_selection_changed(move |sel, _, _| {
+                let count = sel.selection().size() as u32;
+                title.set_text(&format!("{count} selected"));
+            });
     }
 
     // Wire batch-delete button in the action bar.
     wire_batch_delete(
-        action_bar,
-        multi_selection,
-        store,
-        bus_sender,
+        cfg.action_bar,
+        cfg.multi_selection,
+        cfg.store,
         &exit_selection,
     );
 }
@@ -116,12 +120,11 @@ fn set_cards_selection_mode(grid_view: &gtk::GridView, mode: bool) {
 }
 
 /// Wire the "Delete Albums" action bar button to show a confirmation dialog
-/// and delete all selected albums.
+/// and delete all selected albums via `AlbumClientV2`.
 fn wire_batch_delete(
     action_bar: &gtk::ActionBar,
     multi_selection: &gtk::MultiSelection,
     store: &gio::ListStore,
-    bus_sender: &crate::event_bus::EventSender,
     exit_selection: &gio::SimpleAction,
 ) {
     let delete_btn = gtk::Button::with_label(&gettext("Delete Albums"));
@@ -133,7 +136,6 @@ fn wire_batch_delete(
 
     let sel = multi_selection.clone();
     let st = store.clone();
-    let bs = bus_sender.clone();
     let exit = exit_selection.clone();
     delete_btn.connect_clicked(move |btn| {
         let n = sel.selection().size() as u32;
@@ -149,12 +151,11 @@ fn wire_batch_delete(
                     .item(i)
                     .and_then(|o| o.downcast::<AlbumItemObject>().ok())
                 {
-                    ids.push(AlbumId::from_raw(obj.album().id.as_str().to_owned()));
+                    ids.push(AlbumId::from_raw(obj.id()));
                 }
             }
         }
 
-        let bs = bs.clone();
         let exit = exit.clone();
         let msg = if n == 1 {
             gettext("Delete 1 album?")
@@ -178,7 +179,10 @@ fn wire_batch_delete(
             if response != "delete" {
                 return;
             }
-            bs.send(crate::app_event::AppEvent::DeleteAlbumRequested { ids: ids.clone() });
+            let album_client = MomentsApplication::default()
+                .album_client_v2()
+                .expect("album client v2 available");
+            album_client.delete_album(ids.clone());
             exit.activate(None);
         });
 

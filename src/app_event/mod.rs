@@ -1,5 +1,4 @@
 use crate::library::album::AlbumId;
-use crate::library::import::ImportSummary;
 use crate::library::media::{MediaId, MediaItem};
 
 /// Application-layer event type.
@@ -23,7 +22,8 @@ pub enum AppEvent {
     ShutdownComplete,
     Error(String),
 
-    // ── Import ───────────────────────────────────────────────────────────────
+    // ── Import (legacy — used by ImmichImportJob, will be removed when
+    //    Immich import moves to sync) ─────────────────────────────────────────
     ImportProgress {
         current: usize,
         total: usize,
@@ -32,19 +32,12 @@ pub enum AppEvent {
         failed: usize,
     },
     ImportComplete {
-        summary: ImportSummary,
+        summary: crate::importer::ImportSummary,
     },
 
     // ── Thumbnails ───────────────────────────────────────────────────────────
     ThumbnailReady {
         media_id: MediaId,
-    },
-    ThumbnailDownloadProgress {
-        completed: usize,
-        total: usize,
-    },
-    ThumbnailDownloadsComplete {
-        total: usize,
     },
 
     // ── Commands (UI intent → library command handler) ────────────────────────
@@ -92,6 +85,10 @@ pub enum AppEvent {
     },
     Deleted {
         ids: Vec<MediaId>,
+    },
+    /// A local import just persisted a new asset (per-file notification).
+    AssetImported {
+        id: MediaId,
     },
     AssetSynced {
         item: MediaItem,

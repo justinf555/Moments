@@ -3,12 +3,12 @@ use std::cell::RefCell;
 use gettextrs::gettext;
 use gtk::{glib, prelude::*, subclass::prelude::*};
 
-use super::item::PersonItemObject;
+use crate::client::PersonItemObject;
 
 /// Bindings held while a cell is bound to an item.
 pub(super) struct CellBindings {
     item: glib::WeakRef<PersonItemObject>,
-    texture_handler: glib::SignalHandlerId,
+    handlers: Vec<glib::SignalHandlerId>,
 }
 
 #[allow(private_interfaces)]
@@ -84,50 +84,49 @@ impl PeopleGridCell {
     /// Bind the cell to a person item.
     pub fn bind(&self, item: &PersonItemObject) {
         let imp = self.imp();
-        let data = item.data();
 
-        let display_name = if data.name.is_empty() {
-            gettext("Unnamed")
-        } else {
-            data.name.clone()
-        };
-        imp.name_label.set_text(&display_name);
-
-        // AdwAvatar uses the text to generate consistent colour + initials.
-        imp.avatar.set_text(Some(&display_name));
+        self.update_name_display(item);
+        self.update_hidden_display(item);
 
         // Set face thumbnail as custom image if available.
         if let Some(texture) = item.texture() {
             imp.avatar.set_custom_image(Some(&texture));
         }
 
-        // Build accessible label.
-        let a11y_label = if data.is_hidden {
-            format!("{}, {}", display_name, gettext("hidden"))
-        } else {
-            display_name.to_string()
-        };
-        self.update_property(&[gtk::accessible::Property::Label(&a11y_label)]);
+        let mut handlers = Vec::new();
 
-        if data.is_hidden {
-            self.add_css_class("hidden-person");
-            imp.hidden_icon.set_visible(true);
-        } else {
-            self.remove_css_class("hidden-person");
-            imp.hidden_icon.set_visible(false);
+        // Watch for name changes.
+        {
+            let cell = self.clone();
+            let handler = item.connect_notify_local(Some("name"), move |item, _| {
+                cell.update_name_display(item);
+            });
+            handlers.push(handler);
+        }
+
+        // Watch for hidden state changes.
+        {
+            let cell = self.clone();
+            let handler = item.connect_notify_local(Some("is-hidden"), move |item, _| {
+                cell.update_hidden_display(item);
+            });
+            handlers.push(handler);
         }
 
         // Watch for async thumbnail loads.
-        let avatar = imp.avatar.clone();
-        let texture_handler = item.connect_texture_notify(move |item| {
-            if let Some(texture) = item.texture() {
-                avatar.set_custom_image(Some(&texture));
-            }
-        });
+        {
+            let avatar = imp.avatar.clone();
+            let handler = item.connect_texture_notify(move |item| {
+                if let Some(texture) = item.texture() {
+                    avatar.set_custom_image(Some(&texture));
+                }
+            });
+            handlers.push(handler);
+        }
 
         *imp.bindings.borrow_mut() = Some(CellBindings {
             item: item.downgrade(),
-            texture_handler,
+            handlers,
         });
     }
 
@@ -141,7 +140,9 @@ impl PeopleGridCell {
         let imp = self.imp();
         if let Some(b) = imp.bindings.borrow_mut().take() {
             if let Some(item) = b.item.upgrade() {
-                item.disconnect(b.texture_handler);
+                for handler in b.handlers {
+                    item.disconnect(handler);
+                }
             }
         }
         imp.avatar.set_custom_image(None::<&gtk::gdk::Paintable>);
@@ -149,6 +150,45 @@ impl PeopleGridCell {
         imp.name_label.set_text("");
         imp.hidden_icon.set_visible(false);
         self.remove_css_class("hidden-person");
+    }
+
+    fn update_name_display(&self, item: &PersonItemObject) {
+        let imp = self.imp();
+        let name = item.name();
+        let display_name = if name.is_empty() {
+            gettext("Unnamed")
+        } else {
+            name
+        };
+        imp.name_label.set_text(&display_name);
+        imp.avatar.set_text(Some(&display_name));
+    }
+
+    fn update_hidden_display(&self, item: &PersonItemObject) {
+        let imp = self.imp();
+        let is_hidden = item.is_hidden();
+
+        if is_hidden {
+            self.add_css_class("hidden-person");
+            imp.hidden_icon.set_visible(true);
+        } else {
+            self.remove_css_class("hidden-person");
+            imp.hidden_icon.set_visible(false);
+        }
+
+        // Update accessibility label.
+        let name = item.name();
+        let display_name = if name.is_empty() {
+            gettext("Unnamed")
+        } else {
+            name
+        };
+        let a11y_label = if is_hidden {
+            format!("{}, {}", display_name, gettext("hidden"))
+        } else {
+            display_name
+        };
+        self.update_property(&[gtk::accessible::Property::Label(&a11y_label)]);
     }
 }
 

@@ -70,173 +70,116 @@ Moments is a GNOME/GTK4 photo management app written in Rust, targeting GNOME Ci
 - **Tokio** (`tokio` crate) as the library executor — created in `main()`, shared across all backends via `tokio::runtime::Handle`
 - **`thiserror`** for error types
 
-### Module structure
+### Layered architecture
+
+The codebase follows a strict layered architecture:
+
+```
+GTK Widgets (ui/)
+    ↕ GObject properties, signals, ListStore models
+Client Layer (client/)
+    ↕ async calls on Tokio, results via GObject property notifications
+Library Services (library/)
+    ↕ service methods, model types
+Repository Layer (library/*/repository.rs)
+    ↕ SQL queries via sqlx
+Database (library/db/)
+```
+
+Each library feature (media, album, faces, editing, thumbnail, metadata) is split into:
+- **`model.rs`** — domain types (newtypes, enums, records)
+- **`repository.rs`** — database queries (thin sqlx wrappers)
+- **`service.rs`** — business logic composing repository calls
+
+### Top-level modules
 
 ```
 src/
-  main.rs                — Entry point: sets up gettext, loads GResources, creates MomentsApplication
-  config.rs              — Compile-time constants (VERSION, PKGDATADIR, etc.)
-  application/mod.rs     — MomentsApplication (adw::Application subclass); registers GActions
-  app_event/mod.rs       — AppEvent enum (commands, results, lifecycle events)
-  event_bus/mod.rs       — EventBus (push-based fan-out delivery via glib::idle_add_once)
-  library/
-    mod.rs               — Library supertrait (composition of feature sub-traits)
-    storage/mod.rs       — LibraryStorage async trait (open/close, set_sync_interval, set_cache_limit)
-    media/mod.rs         — MediaId, MediaItem, MediaFilter, LibraryMedia trait (incl. library_stats)
-    album/mod.rs         — AlbumId, Album, LibraryAlbums trait
-    faces/mod.rs         — PersonId, Person, LibraryFaces trait
-    editing/mod.rs       — EditState types, LibraryEditing trait (non-destructive editing)
-    edit_renderer/mod.rs — apply_edits() pure function (exposure, color, transforms)
-    import/mod.rs        — LibraryImport trait
-    thumbnail/mod.rs     — LibraryThumbnail trait, sharded path helpers
-    viewer/mod.rs        — LibraryViewer trait (original file access)
-    error/mod.rs         — LibraryError enum (thiserror-based)
-    db/
-      mod.rs             — Database struct (sqlx::SqlitePool), LibraryStats, ServerStats
-      media.rs           — LibraryMedia impl, MediaRow, filter_clause/sort_expr (read queries)
-      media_write.rs     — Insert, favourite, trash, restore, delete (write queries)
-      albums.rs          — LibraryAlbums impl
-      edits.rs           — Edit state CRUD (get/upsert/delete/mark_rendered)
-      faces.rs           — People/face CRUD (upsert, list, face_count maintenance)
-      sync.rs            — Sync upserts, checkpoints, audit methods
-      thumbnails.rs      — Thumbnail status tracking
-      stats.rs           — Aggregate library statistics query
-      upload.rs          — Upload queue CRUD
-      migrations/        — Numbered SQL migrations (001–014)
-    bundle/mod.rs        — Library bundle on disk (manifest, paths)
-    config/mod.rs        — LibraryConfig enum (Local / Immich)
-    factory/mod.rs       — LibraryFactory (creates backends by config type)
-    immich_client/mod.rs — ImmichClient (HTTP client for Immich API)
-    immich_importer/mod.rs — ImmichImportJob (upload to Immich server)
-    importer/mod.rs      — Local import job (walk_dir, collect_candidates)
-    keyring/mod.rs       — GNOME Keyring integration (session token storage)
-    commands/mod.rs      — Command handlers (trash, restore, delete, favorite, album ops)
-    sync/
-      mod.rs             — SyncHandle (public API: start, shutdown, set_interval)
-      manager.rs         — SyncManager (sync loop, entity handlers, ack flushing)
-      downloader.rs      — ThumbnailDownloader worker pool
-      types.rs           — Immich sync protocol DTOs and parse helpers
-      tests.rs           — Unit tests for sync manager and handlers
-    format/mod.rs        — Format detection (magic bytes, standard/raw/video handlers)
-    providers/
-      mod.rs             — Backend provider registry
-      local.rs           — LocalLibrary (local filesystem backend)
-      immich.rs          — ImmichLibrary (Immich server backend)
-  ui/
-    mod.rs               — UI module root
-    window/
-      mod.rs             — MomentsWindow; wires sidebar, coordinator, views
-      window.blp         — Window Blueprint template
-    sidebar/
-      mod.rs             — MomentsSidebar (AdwSidebar) with pinned albums + persistent status bar
-      route.rs           — ROUTES definitions (Photos, Favorites, Recent, People, Albums, Trash)
-    coordinator/mod.rs   — ContentCoordinator (stack-based view routing)
-    photo_grid/
-      mod.rs             — PhotoGrid + PhotoGridView (GObject + Blueprint, zoom, selection)
-      photo_grid.blp     — PhotoGrid Blueprint template
-      actions.rs         — Context menu (per-action handlers), album controls
-      action_bar.rs      — Selection mode action bar (favourite, album, trash/restore/delete)
-      model.rs           — PhotoGridModel (GObject, pagination, filtering, incremental updates)
-      factory.rs         — Cell factory (bind/unbind with texture management + decode semaphore)
-      cell.rs            — PhotoGridCell widget (placeholder → thumbnail → star + checkbox)
-      cell.blp           — Cell Blueprint template
-      item.rs            — MediaItemObject (GObject wrapper for grid items)
-      texture_cache.rs   — LRU cache for decoded RGBA thumbnail pixels
-    viewer/
-      mod.rs             — PhotoViewer (GObject + Blueprint, adw::NavigationPage subclass)
-      viewer.blp         — Viewer Blueprint template
-      loading.rs         — Full-res decode, edit session setup, metadata fetching
-      menu.rs            — Shared overflow menu builder + photo viewer menu wiring
-      info_panel/
-        mod.rs           — InfoPanel coordinator (delegates to per-section widgets)
-        info_panel.blp   — InfoPanel Blueprint template
-        date_section.rs  — Date display section (GObject + Blueprint)
-        image_section.rs — Image dimensions section (GObject + Blueprint)
-        camera_section.rs — Camera/lens EXIF section (GObject + Blueprint)
-        location_section.rs — GPS location section (GObject + Blueprint)
-        file_section.rs  — File details section (GObject + Blueprint)
-      edit_panel/
-        mod.rs           — EditPanel coordinator (session mgmt, save/revert, render)
-        edit_panel.blp   — EditPanel Blueprint template
-        transform_section.rs — TransformSection (GObject + Blueprint, 2x2 grid)
-        filter_section.rs — FilterSection (GObject + Blueprint, swatch grid + strength)
-        filter_swatch.rs — FilterSwatch (GObject + Blueprint, individual toggle)
-        adjust_section.rs — AdjustSection (GObject + Blueprint, grouped sliders)
-        filters/         — Filter trait + 11 preset files (None, B&W, Vivid, etc.)
-        transforms/      — Transform trait + 4 operation files (RotateCcw, etc.)
-        adjustments/     — Adjustment trait + 9 parameter files (Brightness, etc.)
-    video_viewer/
-      mod.rs             — VideoViewer (GObject + Blueprint, adw::NavigationPage subclass)
-      video_viewer.blp   — VideoViewer Blueprint template
-    album_grid/
-      mod.rs             — AlbumGridView (GObject + Blueprint, sort, empty state)
-      album_grid.blp     — AlbumGrid Blueprint template
-      actions.rs         — Context menu (open, rename, pin, delete) + drill-down helper
-      selection.rs       — Enter/exit selection mode, batch delete
-      card.rs            — AlbumCard widget (cover mosaic, name, count, checkbox)
-      card.blp           — AlbumCard Blueprint template
-      factory.rs         — Card factory (bind/unbind with cover thumbnail loading)
-      item.rs            — AlbumItemObject (GObject wrapper for album items)
-    people_grid/
-      mod.rs             — CollectionGridView (GObject + Blueprint, reusable grid for People)
-      people_grid.blp    — PeopleGrid Blueprint template
-      actions.rs         — Drill-down, context menu (rename, hide/unhide)
-      cell.rs            — CollectionGridCell widget (thumbnail + name + subtitle)
-      cell.blp           — Cell Blueprint template
-      factory.rs         — Cell factory with ThumbnailStyle (Circular/Square)
-      item.rs            — CollectionItemObject (GObject wrapper for collection items)
-    album_dialogs/mod.rs — Create/rename/delete album dialogs
-    album_picker_dialog/
-      mod.rs             — Album picker dialog entry point (async data fetch + present)
-      dialog.rs          — AdwDialog with search, thumbnails, create flow, empty state
-      album_row.rs       — Album row widget (thumbnail + name + count + checkmark + pill)
-      state.rs           — AlbumPickerData, AlbumEntry (data-in, events-out)
-    import_dialog/
-      mod.rs             — Import progress dialog
-      import_dialog.blp  — ImportDialog Blueprint template
-    preferences_dialog/mod.rs — Preferences (sentence case, AdwSpinRow, library stats)
-    empty_library/mod.rs — Empty library placeholder view
-    setup_window/
-      mod.rs             — Setup wizard coordinator
-      setup_window.blp   — SetupWindow Blueprint template
-      backend_picker_page.blp
-      local_setup_page.blp
-      immich_setup_page.blp
-    widgets/mod.rs       — Shared UI components (expander_row, detail_row, section_label)
-  style.css              — Custom CSS (selection highlight, circular thumbnails, hidden person styling)
+  main.rs              — Entry point: gettext, GResources, MomentsApplication
+  config.rs            — Compile-time constants (VERSION, PKGDATADIR, etc.)
+  application/         — MomentsApplication (adw::Application subclass)
+  app_event/           — AppEvent enum (commands + results)
+  event_bus/           — EventBus (push-based fan-out via glib::idle_add_once)
+  library/             — Core domain: Library struct + feature services
+  client/              — GObject bridge layer (MediaClient, AlbumClient, etc.)
+  renderer/            — RenderPipeline (decode → orient → resize → edits)
+  importer/            — Import pipeline (discovery → hash → metadata → persist)
+  sync/                — Bidirectional Immich sync engine
+  tasks/               — Background tasks (trash auto-purge)
+  ui/                  — All GTK widgets
 ```
 
-### GTK/GObject subclassing pattern
+### Library (service layer)
 
-All GObject types follow the split `imp` module pattern:
-- The inner `mod imp` struct holds state and implements GObject trait impls
-- The outer `glib::wrapper!` macro creates the public Rust type
-- UI templates are declared with `#[template(resource = "...")]` and bound in `class_init`/`instance_init`
+`Library` (`library/mod.rs`) is a **concrete struct** composing six feature services:
 
-### Two-executor model
+```rust
+pub struct Library {
+    albums: AlbumService,
+    faces: FacesService,
+    editing: EditingService,
+    media: MediaService,
+    metadata: MetadataService,
+    thumbnails: ThumbnailService,
+}
+```
 
-The app has two distinct async executors that must never be confused:
+Constructed via `Library::open(bundle, mode, db, recorder, resolver)`. Access features through service accessors: `.media()`, `.albums()`, `.faces()`, `.editing()`, `.metadata()`, `.thumbnails()`.
 
-- **GTK executor** (`glib::MainContext`) — UI thread only. Runs widget updates, signal handlers, and calls into library traits via `glib::MainContext::default().spawn_local()`.
-- **Library executor** (Tokio runtime) — all backend I/O: database queries, file ops, future Immich HTTP calls. Created in `main()` before `app.run()` and held for the process lifetime. All backends share it via `tokio::runtime::Handle` stored on `MomentsApplication`.
+Key abstractions injected at construction:
+- **`MutationRecorder`** (`library/recorder.rs`) — trait for recording state changes. `NoOpRecorder` for local backend; `QueueWriterOutbox` for Immich (writes to outbox table for push sync).
+- **`OriginalResolver`** (`library/resolver.rs`) — trait for accessing original files. `LocalResolver` for local filesystem; `CachedResolver` for Immich (downloads from server to cache).
 
-Results flow back from Tokio → GTK via `Sender<LibraryEvent>` (a `std::sync::mpsc` channel, which is `Send`). The idle loop in `application/mod.rs` translates `LibraryEvent` → `AppEvent` and sends via the event bus for fan-out delivery to all subscribers.
+### Client layer (GObject bridge)
 
-### Library abstraction layer
+`src/client/` — GObject singletons that bridge Library services to GTK widgets:
 
-`Library` (in `library/mod.rs`) is a blanket-impl composition of feature sub-traits: `LibraryStorage + LibraryImport + LibraryMedia + LibraryThumbnail + LibraryViewer + LibraryAlbums + LibraryFaces + LibraryEditing`. All backend work runs on the Tokio executor. `LibraryStorage::open()` receives a `tokio::runtime::Handle` which is stored for the backend's lifetime.
+- **`MediaClient`** — media queries, filtering, ListStore model factory
+- **`AlbumClient`** — album CRUD, album picker data
+- **`PeopleClient`** — person queries, visibility management
+- **`ImportClient`** — import pipeline orchestration, progress tracking
 
-Two backends exist:
-- **`LocalLibrary`** (`providers/local.rs`) — stores originals on disk, generates thumbnails locally
-- **`ImmichLibrary`** (`providers/immich.rs`) — syncs with an Immich server via `POST /sync/stream`, caches everything locally in the same SQLite schema. Background sync polls at a configurable interval (GSettings `sync-interval-seconds`, live-updatable) with a thumbnail download worker pool. Also syncs people and face data (`PeopleV1`, `AssetFacesV1`). See `docs/design-immich-backend.md` and `docs/design-face-integration.md` for the full design.
+Clients are GObject subclasses with property notifications. They create and manage `ListStore` models via weak refs (factory pattern). GTK widgets bind to client properties and models — they never import `Library` directly.
+
+### Renderer
+
+`src/renderer/` — stateless `RenderPipeline` with step modules:
+
+- `decode.rs` — format detection and decoding (delegates to format registry)
+- `orientation.rs` — EXIF orientation correction
+- `resize.rs` — thumbnail sizing
+- `edits.rs` — non-destructive edit application
+- `output.rs` — RGBA/WebP conversion
+- `format/` — `FormatRegistry` with handlers: `standard.rs` (JPEG/PNG/WebP), `raw.rs` (RAW via libraw), `video.rs` (video frame extraction)
+
+The pipeline builds its own `FormatRegistry` internally — format handlers are private. All consumers (thumbnail generation, viewer full-res, edit sessions) go through `RenderPipeline`.
+
+### Importer
+
+`src/importer/` — standalone import pipeline built with a builder pattern:
+
+`ImportPipelineBuilder` → `ImportPipeline::run()` with steps: discovery → filter → hash → metadata → persistence → thumbnail. Emits `ImportProgress` updates and returns `ImportSummary`. Independent of the Library trait system.
+
+### Sync engine
+
+`src/sync/` — bidirectional Immich sync:
+
+- `outbox/` — mutation recording: `MutationRecorder` trait, `QueueWriterOutbox` (writes to DB), `NoOpRecorder` (local backend)
+- `providers/immich/` — Immich-specific sync:
+  - `client.rs` — HTTP client for Immich API (`POST /sync/stream`)
+  - `pull.rs` — inbound sync (server → local)
+  - `push.rs` — outbound sync (local → server, drains outbox)
+  - `handlers/` — per-entity sync handlers (asset, album, person, face, exif)
+  - `resolver.rs` — `CachedResolver` for downloading originals
+
+The sync engine is spawned from `application/mod.rs` via `SyncHandle::start()`, not from Library.
 
 ### Database
 
-`src/library/db/mod.rs` — backend-agnostic `Database` struct wrapping an `sqlx::SqlitePool`. Used by all backends that need persistence. Migrations live at `src/library/db/migrations/` (001–014) and are embedded via `sqlx::migrate!()`. **Every schema change must be a numbered migration — no ad-hoc `CREATE TABLE IF NOT EXISTS` in code.** Query implementations are split into submodules: `db/media.rs`, `db/albums.rs`, `db/faces.rs`, `db/sync.rs`, `db/thumbnails.rs`, `db/stats.rs`, `db/upload.rs`.
+`src/library/db/mod.rs` — backend-agnostic `Database` struct wrapping `sqlx::SqlitePool`. Created with `Database::new()`, connected with `db.open(&path)`. Migrations live at `src/library/db/migrations/` and are embedded via `sqlx::migrate!()`. **Every schema change must be a numbered migration — no ad-hoc `CREATE TABLE IF NOT EXISTS` in code.**
 
 After any schema change, regenerate the offline query snapshot:
 ```bash
-# Requires DATABASE_URL pointing at a database with the current schema
 cargo sqlx database create
 cargo sqlx migrate run
 cargo sqlx prepare    # regenerates .sqlx/ — commit this directory
@@ -246,33 +189,18 @@ CI sets `SQLX_OFFLINE=true` and uses the committed `.sqlx/` snapshot.
 
 ### MediaId
 
-`src/library/media/mod.rs` — `MediaId` is the primary identity for every asset. For the local backend, it is a 64-char lowercase hex BLAKE3 hash (content-addressable). For the Immich backend, it is the server's UUID. The `MediaId` newtype treats both as opaque strings — the grid, viewer, and thumbnail pipeline don't care which format is used.
+`MediaId` is a UUID v4 stored as a 32-char lowercase hex string (no dashes). Generated via `MediaId::generate()` for local imports; loaded from DB or Immich sync via `MediaId::new()`. Content-based deduplication uses the separate `content_hash` field, not the ID.
+
+### Two-executor model
+
+- **GTK executor** (`glib::MainContext`) — UI thread only. Widget updates, signal handlers, client calls via `glib::MainContext::default().spawn_local()`.
+- **Library executor** (Tokio runtime) — all backend I/O: database, file ops, HTTP. Created in `main()`, shared via `tokio::runtime::Handle` on `MomentsApplication`.
+
+Results flow from Tokio → GTK via the event bus (`glib::idle_add_once`) or GObject property notifications on clients.
 
 ### Application singleton pattern
 
-Access shared application state (Tokio handle, settings, etc.) via `MomentsApplication::default()` with typed accessors like `tokio_handle()`. Don't walk the widget tree with `.root().application()`. This follows the standard GNOME Rust pattern (Fractal, Planify).
-
-### Sidebar
-
-The sidebar uses `AdwSidebar` with routes defined in `sidebar/route.rs`. People route is hidden for the Local backend (no face detection). Pinned albums are added dynamically as a separate `AdwSidebarSection`.
-
-The sidebar bottom bar is a persistent `AdwBottomSheet` with a `GtkStack` that switches between five states: Idle ("Synced X ago"), Sync ("Syncing..."), Thumbnails ("Thumbnails X/Y"), Upload (expandable with progress bar), and Complete ("Upload Complete"). Priority-based: upload > sync > thumbnails > idle. See `docs/design-sidebar-status-bar.md`.
-
-Import button and hamburger menu live in the **sidebar header** — content headers have view-specific controls only (zoom, selection).
-
-### Live-update pattern (watch channels)
-
-Settings that affect background tasks (sync interval, cache limit) use `tokio::sync::watch` channels for live updates from the Preferences dialog without restarting the app:
-
-1. GSettings value read on GTK thread at startup → initial `watch::channel` value
-2. Background task reads via `borrow_and_update()` each cycle (must use `_and_update` to avoid re-triggering `changed()`)
-3. Preferences dialog calls `lib.set_sync_interval()` / `lib.set_cache_limit()` which sends to the watch
-4. `tokio::select!` on sleep + `changed()` wakes the task immediately on value change
-5. `LibraryStorage` trait has default no-op methods — only Immich backend implements them
-
-### View routing and action groups
-
-All content views are GObject widget subclasses registered directly with the `ContentCoordinator` (a thin `GtkStack` wrapper). Views self-install their action groups via `widget.insert_action_group("view", ...)` — GTK's action resolution walks up the widget tree to find them. No trait abstraction needed; this follows the standard GNOME pattern (Fractal, GNOME Settings).
+Access shared state via `MomentsApplication::default()` with typed accessors: `tokio_handle()`, `library()`, `media_client()`, `album_client()`, `people_client()`, `import_client()`, `render_pipeline()`. Don't walk the widget tree with `.root().application()`.
 
 ### Event bus and command dispatch
 
@@ -280,21 +208,48 @@ All content views are GObject widget subclasses registered directly with the `Co
 
 - **`AppEvent`** (`app_event/mod.rs`) — command variants (`*Requested`) and result variants (`*Changed`, `Trashed`, etc.)
 - **`EventSender`** — `Send + Clone` wrapper around `mpsc::Sender`. Safe to call from Tokio threads.
-- **`CommandDispatcher`** (`library/commands/mod.rs`) — subscribes to the bus, routes `*Requested` events to `CommandHandler` impls on the Tokio runtime. Each handler emits result events or `AppEvent::Error` on failure.
-- **Error toasts** — a subscriber in `application/mod.rs` listens for `AppEvent::Error` and shows an `AdwToast` via `WidgetExt::activate_action("win.show-toast", ...)`. **Important:** Use `WidgetExt::activate_action` (not `ActionGroupExt::activate_action`) — `ActionGroupExt` does not resolve the `win.` prefix.
-- **Blocking errors** — library open/create failures show `AdwAlertDialog` with error details and recovery options.
+- **`CommandDispatcher`** (`library/commands/mod.rs`) — subscribes to the bus, routes `*Requested` events to `CommandHandler` impls on the Tokio runtime.
+- **Error toasts** — `AppEvent::Error` → `AdwToast` via `WidgetExt::activate_action("win.show-toast", ...)`. Use `WidgetExt` not `ActionGroupExt`.
+
+### GTK/GObject subclassing pattern
+
+All GObject types follow the split `imp` module pattern:
+- The inner `mod imp` struct holds state and implements GObject trait impls
+- The outer `glib::wrapper!` macro creates the public Rust type
+- UI templates are declared with `#[template(resource = "...")]` and bound in `class_init`/`instance_init`
+
+### Sidebar
+
+The sidebar uses `AdwSidebar` with routes defined in `sidebar/route.rs`. People route is hidden for the Local backend (no face detection). Pinned albums are added dynamically as a separate `AdwSidebarSection`.
+
+The sidebar bottom bar is a persistent `AdwBottomSheet` with a `GtkStack` that switches between five states: Idle, Sync, Thumbnails, Upload, and Complete. Priority-based: upload > sync > thumbnails > idle. See `docs/design-sidebar-status-bar.md`.
+
+Import button and hamburger menu live in the **sidebar header** — content headers have view-specific controls only (zoom, selection).
+
+### Live-update pattern (watch channels)
+
+Settings that affect background tasks (sync interval, cache limit) use `tokio::sync::watch` channels:
+
+1. GSettings value → initial `watch::channel` value
+2. Background task reads via `borrow_and_update()` each cycle
+3. Preferences dialog sends new value via setter
+4. `tokio::select!` on sleep + `changed()` wakes task immediately
+
+### View routing and action groups
+
+Content views are GObject widget subclasses registered with `ContentCoordinator` (a `GtkStack` wrapper). Views self-install action groups via `widget.insert_action_group("view", ...)` — GTK's action resolution walks the widget tree.
 
 ### Viewer headerbar and overflow menu
 
-Photo and video viewers use a clean headerbar: `[★] [ℹ] [✏] [⋮]`. The overflow menu (⋮) is a manual `gtk::Popover` with icon+label buttons (not `GMenuModel` — GTK4's `PopoverMenu` does not render icons from `GMenuModel` attributes). Items: Add to album, Share, Export original, Set as wallpaper (photo only), Show in Files, Delete (destructive, separated). Shared builder: `build_viewer_menu_popover()` and `find_menu_button()` in `viewer/menu.rs` (re-exported from `viewer/mod.rs` for `video_viewer/mod.rs`).
+Photo and video viewers: `[★] [ℹ] [✏] [⋮]`. The overflow menu uses a manual `gtk::Popover` with icon+label buttons (not `GMenuModel`). Shared builder in `viewer/menu.rs`.
 
 ### Album picker dialog
 
-`src/ui/album_picker_dialog/mod.rs` — full `adw::Dialog` replacing the old popover. Architecture: async data fetch → `AlbumPickerData` (plain structs) → dialog construction → `AppEvent` bus commands. The dialog never imports `Library`. Features: search with Pango bold highlighting, cover thumbnails (pre-decoded on Tokio), "Already added" pills, inline "New album…" creation flow, empty state.
+`src/ui/album_picker_dialog/` — `adw::Dialog` with search, cover thumbnails, "Already added" pills, inline creation. Architecture: async data fetch → `AlbumPickerData` (plain structs) → dialog → `AppEvent` bus commands. Never imports `Library`.
 
 ### Icons
 
-Use only icons confirmed to exist in the Adwaita icon theme. Common ones: `object-select-symbolic` (checkmark), `view-refresh-symbolic` (sync), `view-conceal-symbolic` (eye-slash/hidden), `folder-download-symbolic`, `go-up-symbolic`, `document-send-symbolic`. Check with `find /usr/share/icons/Adwaita -name "icon-name.svg"` before using.
+Use only icons confirmed in the Adwaita icon theme. Check with `find /usr/share/icons/Adwaita -name "icon-name.svg"` before using.
 
 ## Development Workflow
 
@@ -331,5 +286,4 @@ Design docs live in `docs/` and follow a consistent format with issue links, sta
 
 ### Blueprint templates
 
-Most widgets use Blueprint (`.blp`) declarative templates compiled to GTK XML. Existing templates: `window.blp`, `setup_window.blp` + pages, `import_dialog.blp`, `shortcuts-dialog.blp`, `viewer.blp`, `video_viewer.blp`, `edit_panel.blp`, `photo_grid.blp`, `collection_grid.blp`, `album_grid.blp`. New widgets should use Blueprint for static layout and keep dynamic construction in Rust. See `docs/design-gobject-blueprint-refactor.md` for the full pattern and lessons learned.
-
+Most widgets use Blueprint (`.blp`) declarative templates compiled to GTK XML. New widgets should use Blueprint for static layout and keep dynamic construction in Rust. See `docs/design-gobject-blueprint-refactor.md` for the full pattern and lessons learned.
