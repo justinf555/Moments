@@ -82,8 +82,7 @@ mod imp {
                     Some("state"),
                     move |client, _| {
                         if let Some(dialog) = weak.upgrade() {
-                            if client.state() == crate::client::import_client::ImportState::Complete
-                            {
+                            if client.state() == crate::client::ImportState::Complete {
                                 let summary = crate::importer::ImportSummary {
                                     imported: client.imported() as usize,
                                     skipped_duplicates: client.skipped() as usize,

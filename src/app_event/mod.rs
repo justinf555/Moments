@@ -86,10 +86,6 @@ pub enum AppEvent {
     Deleted {
         ids: Vec<MediaId>,
     },
-    /// A local import just persisted a new asset (per-file notification).
-    AssetImported {
-        id: MediaId,
-    },
     AssetSynced {
         item: MediaItem,
     },

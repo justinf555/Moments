@@ -47,7 +47,7 @@ mod imp {
         pub settings: OnceCell<gio::Settings>,
         pub tokio: OnceCell<tokio::runtime::Handle>,
         pub library: RefCell<Option<Arc<Library>>>,
-        pub import_client: RefCell<Option<crate::client::import_client::ImportClient>>,
+        pub import_client: RefCell<Option<crate::client::ImportClient>>,
         pub album_client_v2: RefCell<Option<crate::client::AlbumClientV2>>,
         pub people_client: RefCell<Option<crate::client::PeopleClientV2>>,
         pub media_client: RefCell<Option<crate::client::MediaClient>>,
@@ -198,7 +198,7 @@ impl MomentsApplication {
     ///
     /// Available from anywhere via `MomentsApplication::default().import_client()`.
     /// Returns `None` if no library is open yet.
-    pub fn import_client(&self) -> Option<crate::client::import_client::ImportClient> {
+    pub fn import_client(&self) -> Option<crate::client::ImportClient> {
         self.imp().import_client.borrow().clone()
     }
 
@@ -614,7 +614,7 @@ impl MomentsApplication {
                             *app.imp().render_pipeline.borrow_mut() =
                                 Some(Arc::clone(&render_pipeline));
 
-                            let import_client = crate::client::import_client::ImportClient::new();
+                            let import_client = crate::client::ImportClient::new();
                             import_client.configure(
                                 Arc::clone(&library),
                                 originals_dir,
@@ -622,7 +622,6 @@ impl MomentsApplication {
                                 Arc::clone(&render_pipeline),
                                 storage_mode,
                                 tokio.clone(),
-                                bus.sender(),
                             );
                             *app.imp().import_client.borrow_mut() = Some(import_client);
                         }

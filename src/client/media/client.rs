@@ -119,7 +119,7 @@ impl MediaClient {
         {
             let client_weak: glib::SendWeakRef<MediaClient> = self.downgrade().into();
             let handler = import_client.connect_notify_local(Some("state"), move |client, _| {
-                if client.state() == crate::client::import_client::ImportState::Complete {
+                if client.state() == crate::client::ImportState::Complete {
                     if let Some(media_client) = client_weak.upgrade() {
                         media_client.reload_all();
                     }
@@ -394,9 +394,6 @@ impl MediaClient {
                     self.on_deleted(id);
                 }
             }
-            AppEvent::AssetImported { id } => {
-                self.on_asset_imported(id);
-            }
             AppEvent::AssetSynced { item } => {
                 self.on_asset_synced(item);
             }
@@ -536,6 +533,8 @@ impl MediaClient {
         }
     }
 
+    // Will be revived when MediaClient v2 subscribes to MediaEvent::Added.
+    #[allow(dead_code)]
     fn on_asset_imported(&self, id: &MediaId) {
         // Collect stores for filters that should show newly imported items.
         let stores: Vec<gio::ListStore> = {
