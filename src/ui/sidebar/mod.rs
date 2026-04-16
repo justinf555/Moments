@@ -27,6 +27,8 @@ mod imp {
         pub pinned_section: OnceCell<adw::SidebarSection>,
         /// Underlying album store — must be kept alive for the filter to work.
         pub pinned_store: OnceCell<gio::ListStore>,
+        /// Filter for pinned albums — stored so it can be invalidated.
+        pub pinned_filter: OnceCell<gtk::CustomFilter>,
         /// Filtered model of pinned albums — drives the pinned sidebar section.
         pub pinned_model: OnceCell<gtk::FilterListModel>,
         pub trash_badge: OnceCell<gtk::Label>,
@@ -50,6 +52,7 @@ mod imp {
                 active_routes: RefCell::new(Vec::new()),
                 pinned_section: OnceCell::new(),
                 pinned_store: OnceCell::new(),
+                pinned_filter: OnceCell::new(),
                 pinned_model: OnceCell::new(),
                 trash_badge: OnceCell::new(),
                 trash_count: Cell::new(0),
@@ -159,18 +162,15 @@ mod imp {
             let _ = self.pinned_section.set(pinned_section.clone());
 
             // Build the filtered model — populated later in setup_pinned_albums.
-            // BoolFilter with a property expression re-evaluates automatically
-            // when the `pinned` property changes on any item.
-            let expression = gtk::PropertyExpression::new(
-                crate::client::AlbumItemObject::static_type(),
-                None::<gtk::Expression>,
-                "pinned",
-            );
-            let filter = gtk::BoolFilter::new(Some(expression));
+            let filter = gtk::CustomFilter::new(|obj| {
+                obj.downcast_ref::<crate::client::AlbumItemObject>()
+                    .is_some_and(|item| item.pinned())
+            });
             let pinned_model = gtk::FilterListModel::new(
                 None::<gio::ListModel>,
-                Some(filter),
+                Some(filter.clone()),
             );
+            let _ = self.pinned_filter.set(filter);
             let _ = self.pinned_model.set(pinned_model);
 
             // Unpin action — resolves album from pinned model index.
@@ -452,6 +452,27 @@ impl MomentsSidebar {
             return;
         };
         pinned_model.set_model(Some(&store));
+
+        // When items are added to the store, watch their `pinned` property
+        // and invalidate the filter when it changes.
+        let filter_weak = imp.pinned_filter.get().unwrap().downgrade();
+        store.connect_items_changed(move |store, pos, _removed, added| {
+            let Some(filter) = filter_weak.upgrade() else {
+                return;
+            };
+            for i in pos..pos + added {
+                if let Some(obj) = store
+                    .item(i)
+                    .and_then(|o| o.downcast::<crate::client::AlbumItemObject>().ok())
+                {
+                    let f = filter.clone();
+                    obj.connect_notify_local(Some("pinned"), move |_, _| {
+                        debug!("pinned property changed — invalidating filter");
+                        f.changed(gtk::FilterChange::Different);
+                    });
+                }
+            }
+        });
 
         // React to filter model changes — rebuild sidebar items.
         // Initial rebuild happens when list_albums completes and splices data.
