@@ -449,7 +449,12 @@ impl MomentsSidebar {
         // React to filter model changes — rebuild sidebar items.
         // Initial rebuild happens when list_albums completes and splices data.
         let weak = self.downgrade();
-        pinned_model.connect_items_changed(move |_, _, _, _| {
+        pinned_model.connect_items_changed(move |model, pos, removed, added| {
+            debug!(
+                pos, removed, added,
+                total = model.n_items(),
+                "pinned filter items_changed"
+            );
             if let Some(sidebar) = weak.upgrade() {
                 sidebar.rebuild_pinned_items();
             }
@@ -458,6 +463,7 @@ impl MomentsSidebar {
 
     /// Rebuild the pinned sidebar section from the filtered model.
     fn rebuild_pinned_items(&self) {
+        debug!("rebuild_pinned_items called");
         let imp = self.imp();
         let section = imp.pinned_section();
         let Some(pinned_model) = imp.pinned_model.get() else {
