@@ -345,6 +345,7 @@ impl AlbumClientV2 {
     pub fn list_albums(&self, model: &gio::ListStore) {
         let (library, tokio) = self.deps();
         let store = model.clone();
+        let client_weak: glib::SendWeakRef<AlbumClientV2> = self.downgrade().into();
 
         glib::MainContext::default().spawn_local(async move {
             let result =
@@ -355,12 +356,20 @@ impl AlbumClientV2 {
 
             match result {
                 Ok(albums) => {
+                    let album_ids: Vec<_> = albums.iter().map(|a| a.id.clone()).collect();
                     let objects: Vec<glib::Object> = albums
                         .into_iter()
                         .map(|a| AlbumItemObject::new(a).upcast())
                         .collect();
                     store.splice(0, store.n_items(), &objects);
                     debug!(count = store.n_items(), "albums loaded");
+
+                    // Load cover thumbnails for all albums.
+                    if let Some(client) = client_weak.upgrade() {
+                        for album_id in album_ids {
+                            client.load_cover_thumbnails(&album_id);
+                        }
+                    }
                 }
                 Err(e) => {
                     error!("failed to load albums: {e}");

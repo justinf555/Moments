@@ -446,10 +446,8 @@ impl MomentsSidebar {
         };
         pinned_model.set_model(Some(&store));
 
-        // Build initial items from any already-loaded pinned albums.
-        self.rebuild_pinned_items();
-
         // React to filter model changes — rebuild sidebar items.
+        // Initial rebuild happens when list_albums completes and splices data.
         let weak = self.downgrade();
         pinned_model.connect_items_changed(move |_, _, _, _| {
             if let Some(sidebar) = weak.upgrade() {
