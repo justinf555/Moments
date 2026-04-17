@@ -3,7 +3,6 @@ use adw::subclass::prelude::*;
 use gtk::{gdk, gio, glib};
 use tracing::debug;
 
-use crate::app_event::AppEvent;
 use crate::client::MediaItemObject;
 use crate::event_bus::EventSender;
 use crate::library::media::MediaId;
@@ -370,10 +369,9 @@ impl VideoViewer {
                 let id = obj.item().id.clone();
                 *imp.pending_fav.borrow_mut() = Some((id.clone(), was_fav));
 
-                imp.bus_sender().send(AppEvent::FavoriteRequested {
-                    ids: vec![id],
-                    state: new_fav,
-                });
+                if let Some(mc) = crate::application::MomentsApplication::default().media_client() {
+                    mc.set_favorite(vec![id], new_fav);
+                }
             });
         }
 
@@ -513,8 +511,9 @@ fn wire_overflow_menu(
                 items.get(idx).map(|obj| obj.item().id.clone())
             };
             let Some(id) = id else { return };
-            imp.bus_sender()
-                .send(AppEvent::TrashRequested { ids: vec![id] });
+            if let Some(mc) = crate::application::MomentsApplication::default().media_client() {
+                mc.trash(vec![id]);
+            }
             if let Some(nav_view) = viewer
                 .parent()
                 .and_then(|p| p.downcast::<adw::NavigationView>().ok())

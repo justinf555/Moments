@@ -1,8 +1,6 @@
 use adw::prelude::*;
 use adw::subclass::prelude::*;
 
-use crate::app_event::AppEvent;
-
 use super::PhotoViewer;
 
 /// Named references to all buttons in the viewer overflow menu.
@@ -175,8 +173,9 @@ pub(super) fn wire_overflow_menu(
                 items.get(idx).map(|obj| obj.item().id.clone())
             };
             let Some(id) = id else { return };
-            imp.bus_sender()
-                .send(AppEvent::TrashRequested { ids: vec![id] });
+            if let Some(mc) = crate::application::MomentsApplication::default().media_client() {
+                mc.trash(vec![id]);
+            }
             if let Some(nav_view) = viewer
                 .parent()
                 .and_then(|p| p.downcast::<adw::NavigationView>().ok())
