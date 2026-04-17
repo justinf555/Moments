@@ -53,10 +53,6 @@ mod imp {
         /// value captured at launch to discard stale results.
         pub load_gen: Cell<u64>,
         pub current_metadata: RefCell<Option<MediaMetadataRecord>>,
-        /// Tracks a pending optimistic favourite toggle for rollback on failure.
-        pub pending_fav: RefCell<Option<(MediaId, bool)>>,
-        /// Keeps the event bus subscription alive for this viewer's lifetime.
-        pub _subscription: RefCell<Option<crate::event_bus::Subscription>>,
     }
 
     impl VideoViewer {
@@ -85,33 +81,7 @@ mod imp {
             self.dispose_template();
         }
     }
-    impl WidgetImpl for VideoViewer {
-        fn realize(&self) {
-            self.parent_realize();
-
-            let weak = self.obj().downgrade();
-            let sub = crate::event_bus::subscribe(move |event| {
-                if let crate::app_event::AppEvent::FavoriteChanged { ids, .. } = event {
-                    let Some(viewer) = weak.upgrade() else {
-                        return;
-                    };
-                    let imp = viewer.imp();
-                    let mut pf = imp.pending_fav.borrow_mut();
-                    if let Some((ref pending_id, _)) = *pf {
-                        if ids.contains(pending_id) {
-                            *pf = None;
-                        }
-                    }
-                }
-            });
-            *self._subscription.borrow_mut() = Some(sub);
-        }
-
-        fn unrealize(&self) {
-            self._subscription.borrow_mut().take();
-            self.parent_unrealize();
-        }
-    }
+    impl WidgetImpl for VideoViewer {}
     impl NavigationPageImpl for VideoViewer {}
 }
 
@@ -361,14 +331,11 @@ impl VideoViewer {
                 let idx = imp.current_index.get();
                 let Some(obj) = items.get(idx) else { return };
 
-                let was_fav = obj.is_favorite();
-                let new_fav = !was_fav;
+                let new_fav = !obj.is_favorite();
                 crate::ui::widgets::update_star_button(btn, new_fav);
                 obj.set_is_favorite(new_fav);
 
                 let id = obj.item().id.clone();
-                *imp.pending_fav.borrow_mut() = Some((id.clone(), was_fav));
-
                 if let Some(mc) = crate::application::MomentsApplication::default().media_client() {
                     mc.set_favorite(vec![id], new_fav);
                 }

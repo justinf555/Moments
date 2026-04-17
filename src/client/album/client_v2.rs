@@ -57,6 +57,12 @@ mod imp {
                     glib::subclass::Signal::builder("album-deleted")
                         .param_types([String::static_type()])
                         .build(),
+                    // Emitted after an album's media list changes
+                    // (add_to_album or remove_from_album completed).
+                    // Parameter: album ID string.
+                    glib::subclass::Signal::builder("album-media-changed")
+                        .param_types([String::static_type()])
+                        .build(),
                 ]
             })
         }
@@ -280,6 +286,10 @@ impl AlbumClientV2 {
                     debug!(album_id = %album_id, "photos added to album");
                     if let Some(client) = client_weak.upgrade() {
                         client.update_album_in_models(&album);
+                        client.emit_by_name::<()>(
+                            "album-media-changed",
+                            &[&album_id.as_str().to_string()],
+                        );
                     }
                 }
                 Err(e) => {
@@ -315,6 +325,10 @@ impl AlbumClientV2 {
                     debug!(album_id = %album_id, "photos removed from album");
                     if let Some(client) = client_weak.upgrade() {
                         client.update_album_in_models(&album);
+                        client.emit_by_name::<()>(
+                            "album-media-changed",
+                            &[&album_id.as_str().to_string()],
+                        );
                     }
                 }
                 Err(e) => {

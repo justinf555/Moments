@@ -67,7 +67,33 @@ mod imp {
         type ParentType = glib::Object;
     }
 
-    impl ObjectImpl for MediaClient {}
+    impl ObjectImpl for MediaClient {
+        fn signals() -> &'static [glib::subclass::Signal] {
+            static SIGNALS: std::sync::OnceLock<Vec<glib::subclass::Signal>> =
+                std::sync::OnceLock::new();
+            SIGNALS.get_or_init(|| {
+                vec![
+                    // Emitted after N items are moved to trash.
+                    glib::subclass::Signal::builder("items-trashed")
+                        .param_types([u32::static_type()])
+                        .build(),
+                    // Emitted after N items are restored from trash.
+                    glib::subclass::Signal::builder("items-restored")
+                        .param_types([u32::static_type()])
+                        .build(),
+                    // Emitted after N items are permanently deleted.
+                    glib::subclass::Signal::builder("items-deleted")
+                        .param_types([u32::static_type()])
+                        .build(),
+                    // Emitted after a favourite toggle completes.
+                    // Params: (count, is_favorite).
+                    glib::subclass::Signal::builder("favorite-changed")
+                        .param_types([u32::static_type(), bool::static_type()])
+                        .build(),
+                ]
+            })
+        }
+    }
 }
 
 glib::wrapper! {
@@ -361,6 +387,7 @@ impl MediaClient {
                         for id in &ids {
                             client.on_trashed(id, true);
                         }
+                        client.emit_by_name::<()>("items-trashed", &[&(ids.len() as u32)]);
                     }
                 }
                 Err(e) => {
@@ -389,6 +416,7 @@ impl MediaClient {
                         for id in &ids {
                             client.on_trashed(id, false);
                         }
+                        client.emit_by_name::<()>("items-restored", &[&(ids.len() as u32)]);
                     }
                 }
                 Err(e) => {
@@ -417,6 +445,7 @@ impl MediaClient {
                         for id in &ids {
                             client.on_deleted(id);
                         }
+                        client.emit_by_name::<()>("items-deleted", &[&(ids.len() as u32)]);
                     }
                 }
                 Err(e) => {
@@ -445,6 +474,8 @@ impl MediaClient {
                         for id in &ids {
                             client.on_favorite_changed(id, state);
                         }
+                        client
+                            .emit_by_name::<()>("favorite-changed", &[&(ids.len() as u32), &state]);
                     }
                 }
                 Err(e) => {
@@ -483,6 +514,7 @@ impl MediaClient {
                         for id in &ids {
                             client.on_deleted(id);
                         }
+                        client.emit_by_name::<()>("items-deleted", &[&(ids.len() as u32)]);
                     }
                 }
                 Err(e) => {
@@ -521,6 +553,7 @@ impl MediaClient {
                         for id in &ids {
                             client.on_trashed(id, false);
                         }
+                        client.emit_by_name::<()>("items-restored", &[&(ids.len() as u32)]);
                     }
                 }
                 Err(e) => {
@@ -559,30 +592,16 @@ impl MediaClient {
 
     // ── Event handling (centralized) ───────────────────────────────────
 
+    /// Handle sync-originated bus events.
+    ///
+    /// Command-result events (Trashed/Restored/Deleted/FavoriteChanged) are
+    /// no longer routed through the bus — MediaClient's own command methods
+    /// update models directly and emit GObject signals. Only events that
+    /// originate outside MediaClient are handled here.
     fn handle_event(&self, event: &AppEvent) {
         match event {
             AppEvent::ThumbnailReady { media_id } => {
                 self.on_thumbnail_ready(media_id);
-            }
-            AppEvent::FavoriteChanged { ids, is_favorite } => {
-                for id in ids {
-                    self.on_favorite_changed(id, *is_favorite);
-                }
-            }
-            AppEvent::Trashed { ids } => {
-                for id in ids {
-                    self.on_trashed(id, true);
-                }
-            }
-            AppEvent::Restored { ids } => {
-                for id in ids {
-                    self.on_trashed(id, false);
-                }
-            }
-            AppEvent::Deleted { ids } => {
-                for id in ids {
-                    self.on_deleted(id);
-                }
             }
             AppEvent::AssetSynced { item } => {
                 self.on_asset_synced(item);

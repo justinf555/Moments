@@ -56,8 +56,9 @@ mod imp {
         /// GSettings instance for persisting window geometry.
         pub settings: OnceCell<gio::Settings>,
 
-        /// Event bus subscriptions kept alive for the window's lifetime.
-        pub _subscriptions: RefCell<Vec<crate::event_bus::Subscription>>,
+        /// Signal handlers on client singletons — kept alive for the
+        /// window's lifetime. (Window is a singleton, never unrealized.)
+        pub _signal_handlers: RefCell<Vec<(glib::Object, glib::SignalHandlerId)>>,
     }
 
     #[glib::object_subclass]
@@ -198,23 +199,20 @@ impl MomentsWindow {
 
         self.install_show_toast_action();
         self.install_toggle_sidebar_action();
-        self.subscribe_bus_events(bus);
+        self.connect_client_signals();
 
         debug!("switching main window to content page");
         imp.main_stack.set_visible_child_name("content");
     }
 
-    /// Subscribe to event bus events that the window handles directly.
-    fn subscribe_bus_events(&self, bus: &crate::event_bus::EventBus) {
-        use crate::app_event::AppEvent;
-        let mut subs = self.imp()._subscriptions.borrow_mut();
+    /// Connect to client singletons for events the window handles directly.
+    fn connect_client_signals(&self) {
+        let app = crate::application::MomentsApplication::default();
 
         // Navigate to Recent Imports when an import completes.
         // Deferred via idle_add_local_once because navigate() can materialise
         // a lazy view, which triggers realize → subscribe() on the new widget.
-        if let Some(import_client) =
-            crate::application::MomentsApplication::default().import_client()
-        {
+        if let Some(import_client) = app.import_client() {
             let weak = self.downgrade();
             import_client.connect_notify_local(Some("state"), move |client, _| {
                 if client.state() == crate::client::ImportState::Complete {
@@ -230,17 +228,25 @@ impl MomentsWindow {
 
         // Unregister deleted album routes from the coordinator before
         // AlbumGridView processes the event (avoids a navigation race).
-        let weak = self.downgrade();
-        subs.push(bus.subscribe(move |event| {
-            if let AppEvent::AlbumDeleted { id } = event {
-                if let Some(win) = weak.upgrade() {
-                    if let Some(coord) = win.imp().coordinator.get() {
-                        let route = format!("album:{}", id.as_str());
-                        coord.borrow_mut().unregister(&route);
+        if let Some(ac) = app.album_client_v2() {
+            let weak = self.downgrade();
+            let h = ac.connect_closure(
+                "album-deleted",
+                false,
+                glib::closure_local!(move |_: crate::client::AlbumClientV2, id: String| {
+                    if let Some(win) = weak.upgrade() {
+                        if let Some(coord) = win.imp().coordinator.get() {
+                            let route = format!("album:{}", id);
+                            coord.borrow_mut().unregister(&route);
+                        }
                     }
-                }
-            }
-        }));
+                }),
+            );
+            self.imp()
+                ._signal_handlers
+                .borrow_mut()
+                .push((ac.upcast(), h));
+        }
     }
 
     fn setup_sidebar(&self) -> MomentsSidebar {
