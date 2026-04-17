@@ -132,6 +132,16 @@ impl MediaService {
         self.repo.get(id).await
     }
 
+    /// Fetch media items for a batch of IDs in one query.
+    ///
+    /// Used by `MediaClientV2`'s event listener to reconcile tracked models
+    /// after a batched `MediaEvent::Added` or `MediaEvent::Updated` — one
+    /// DB roundtrip regardless of batch size. IDs that have been deleted
+    /// since the event fired are absent from the result.
+    pub async fn get_media_items(&self, ids: &[MediaId]) -> Result<Vec<MediaItem>, LibraryError> {
+        self.repo.get_many(ids).await
+    }
+
     pub async fn insert_media(&self, record: &MediaRecord) -> Result<(), LibraryError> {
         self.repo.insert(record).await?;
         self.emit(MediaEvent::Added(vec![record.id.clone()]));
