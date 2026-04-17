@@ -180,7 +180,7 @@ impl MediaClient {
             cursor = tracked.cursor.borrow().clone();
         }
 
-        let (library, tokio, bus) = self.deps();
+        let (library, tokio, _) = self.deps();
         let store = model.clone();
         let client_weak: glib::SendWeakRef<MediaClient> = self.downgrade().into();
 
@@ -213,12 +213,12 @@ impl MediaClient {
                 }
                 Ok(Err(e)) => {
                     error!(elapsed_ms = elapsed.as_millis(), "list_media failed: {e}");
-                    bus.send(AppEvent::Error("Could not load photos".into()));
+                    crate::client::show_toast("Could not load photos");
                     client.with_tracked_model(&store, |t| t.loading.set(false));
                 }
                 Err(e) => {
                     error!(elapsed_ms = elapsed.as_millis(), "tokio join failed: {e}");
-                    bus.send(AppEvent::Error("Could not load photos".into()));
+                    crate::client::show_toast("Could not load photos");
                     client.with_tracked_model(&store, |t| t.loading.set(false));
                 }
             }

@@ -3,10 +3,8 @@ use adw::subclass::prelude::*;
 use gtk::{gdk, glib};
 use tracing::{debug, error};
 
-use crate::app_event::AppEvent;
 use crate::renderer::output;
 use crate::renderer::pipeline::{RenderOptions, RenderSize};
-use crate::UserFacingError;
 
 use super::PhotoViewer;
 
@@ -14,7 +12,6 @@ impl PhotoViewer {
     /// Asynchronously load the original file at full resolution.
     pub(super) fn start_full_res_load(&self, gen: u64, id: crate::library::media::MediaId) {
         let imp = self.imp();
-        let bus_sender = imp.bus_sender().clone();
         let tokio = crate::application::MomentsApplication::default().tokio_handle();
 
         imp.spinner.set_spinning(true);
@@ -42,7 +39,7 @@ impl PhotoViewer {
                     imp.spinner.set_spinning(false);
                     imp.spinner.set_visible(false);
                 }
-                bus_sender.send(AppEvent::Error("Could not find original photo".into()));
+                crate::client::show_toast("Could not find original photo");
                 return;
             };
 
@@ -67,7 +64,6 @@ impl PhotoViewer {
             }
 
             let weak2 = viewer.downgrade();
-            let bus = imp.bus_sender().clone();
             drop(viewer);
             glib::MainContext::default().spawn_local(async move {
                 #[allow(clippy::type_complexity)]
@@ -119,7 +115,7 @@ impl PhotoViewer {
                     }
                     Some(Err(e)) => {
                         debug!("full-res decode failed: {e}");
-                        bus.send(AppEvent::Error(e.to_user_facing()));
+                        crate::client::show_error_toast(&e);
                     }
                     None => {
                         debug!("full-res decode failed (task cancelled)");

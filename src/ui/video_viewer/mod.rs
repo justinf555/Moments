@@ -212,7 +212,6 @@ impl VideoViewer {
 
     fn load_video(&self, gen: u64, id: MediaId) {
         let imp = self.imp();
-        let bus_sender = imp.bus_sender().clone();
 
         debug!(%id, "load_video: resolving path");
 
@@ -233,7 +232,7 @@ impl VideoViewer {
                     imp.spinner.set_visible(false);
                 }
                 tracing::warn!("load_video: could not resolve original path");
-                bus_sender.send(AppEvent::Error("Could not find original video".into()));
+                crate::client::show_toast("Could not find original video");
                 return;
             };
 
