@@ -247,7 +247,6 @@ impl EditPanel {
             // Don't persist identity state — delete instead if it exists.
             if session.state.is_identity() {
                 let id_log = id.clone();
-                let tx = imp.bus_sender().clone();
                 let mc = crate::application::MomentsApplication::default()
                     .media_client()
                     .expect("media client available");
@@ -255,9 +254,7 @@ impl EditPanel {
                     Ok(()) => debug!(media_id = %id_log, reason, "delete identity edit state"),
                     Err(e) => {
                         error!("delete edit state failed: {e}");
-                        tx.send(crate::app_event::AppEvent::Error(
-                            "Could not revert edits".into(),
-                        ));
+                        crate::client::show_toast("Could not revert edits");
                     }
                 });
                 return;
@@ -273,7 +270,6 @@ impl EditPanel {
 
         imp.save_in_flight.set(true);
         let id_log = id.clone();
-        let tx = imp.bus_sender().clone();
         let mc = crate::application::MomentsApplication::default()
             .media_client()
             .expect("media client available");
@@ -290,9 +286,7 @@ impl EditPanel {
                 }
                 Err(e) => {
                     error!("save edit state failed: {e}");
-                    tx.send(crate::app_event::AppEvent::Error(
-                        "Could not save edits".into(),
-                    ));
+                    crate::client::show_toast("Could not save edits");
                 }
             }
         });
@@ -427,7 +421,6 @@ impl EditPanel {
             let id = imp.media_id.borrow().clone();
             if let Some(id) = id {
                 let id_log = id.clone();
-                let tx = imp.bus_sender().clone();
                 let mc = crate::application::MomentsApplication::default()
                     .media_client()
                     .expect("media client available");
@@ -435,9 +428,7 @@ impl EditPanel {
                     Ok(()) => debug!(media_id = %id_log, "revert edits"),
                     Err(e) => {
                         error!("revert edits failed: {e}");
-                        tx.send(crate::app_event::AppEvent::Error(
-                            "Could not revert edits".into(),
-                        ));
+                        crate::client::show_toast("Could not revert edits");
                     }
                 });
             }
