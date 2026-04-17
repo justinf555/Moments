@@ -158,6 +158,11 @@ impl PeopleClientV2 {
                         }
                     });
                 }
+                FacesEvent::PersonMediaChanged(_) => {
+                    // Handled by MediaClientV2 (future PR) for person-
+                    // filtered media grids. PeopleClientV2 doesn't track
+                    // per-person media membership itself.
+                }
             }
         }
         debug!("faces event listener shutting down");

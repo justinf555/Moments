@@ -665,7 +665,7 @@ impl MomentsApplication {
                         // Create the album client (GObject singleton).
                         // Subscribe to AlbumEvent for reactive model updates.
                         {
-                            let albums_rx = library.albums().subscribe().await;
+                            let albums_rx = library.albums().subscribe();
                             let album_client_v2 = crate::client::AlbumClientV2::new();
                             album_client_v2.configure(
                                 Arc::clone(&library),
@@ -678,7 +678,7 @@ impl MomentsApplication {
                         // Create the people client (GObject singleton).
                         // Subscribe to FacesEvent for reactive model updates.
                         {
-                            let faces_rx = library.faces().subscribe().await;
+                            let faces_rx = library.faces().subscribe();
                             let people_client = crate::client::PeopleClientV2::new();
                             people_client.configure(Arc::clone(&library), tokio.clone(), faces_rx);
                             *app.imp().people_client.borrow_mut() = Some(people_client);

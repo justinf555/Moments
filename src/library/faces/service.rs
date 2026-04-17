@@ -6,6 +6,7 @@ use tracing::warn;
 use super::event::FacesEvent;
 use super::model::{Person, PersonId};
 use super::repository::FacesRepository;
+use crate::event_emitter::EventEmitter;
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
 use crate::library::media::MediaId;
@@ -14,16 +15,17 @@ use crate::library::recorder::MutationRecorder;
 
 /// Face/people management service.
 ///
-/// Holds an `mpsc::Sender<FacesEvent>` to notify the client layer of
-/// state changes. Call `subscribe()` once to obtain the receiver.
+/// Holds an [`EventEmitter<FacesEvent>`] to notify clients of state changes.
+/// Each call to [`subscribe`] returns a fresh receiver; every emitted event
+/// is delivered to every live subscriber.
+///
+/// [`subscribe`]: FacesService::subscribe
 #[derive(Clone)]
 pub struct FacesService {
     repo: FacesRepository,
     thumbnails_dir: Option<std::path::PathBuf>,
     recorder: Arc<dyn MutationRecorder>,
-    events_tx: mpsc::UnboundedSender<FacesEvent>,
-    /// Held so `subscribe()` can hand it out exactly once.
-    events_rx: Arc<tokio::sync::Mutex<Option<mpsc::UnboundedReceiver<FacesEvent>>>>,
+    events: EventEmitter<FacesEvent>,
 }
 
 impl FacesService {
@@ -36,29 +38,23 @@ impl FacesService {
         thumbnails_dir: Option<std::path::PathBuf>,
         recorder: Arc<dyn MutationRecorder>,
     ) -> Self {
-        let (tx, rx) = mpsc::unbounded_channel();
         Self {
             repo: FacesRepository::new(db),
             thumbnails_dir,
             recorder,
-            events_tx: tx,
-            events_rx: Arc::new(tokio::sync::Mutex::new(Some(rx))),
+            events: EventEmitter::new(),
         }
     }
 
-    /// Take the event receiver. Can only be called once — panics on
-    /// subsequent calls.
-    pub async fn subscribe(&self) -> mpsc::UnboundedReceiver<FacesEvent> {
-        self.events_rx
-            .lock()
-            .await
-            .take()
-            .expect("FacesService::subscribe() called more than once")
+    /// Register a new subscriber. Every emitted event is delivered to every
+    /// live subscriber.
+    pub fn subscribe(&self) -> mpsc::UnboundedReceiver<FacesEvent> {
+        self.events.subscribe()
     }
 
-    /// Send an event, ignoring errors (no subscriber yet, or dropped).
+    /// Broadcast an event to every live subscriber.
     fn emit(&self, event: FacesEvent) {
-        let _ = self.events_tx.send(event);
+        self.events.emit(event);
     }
 
     // ── Sync upserts (pull from server, no outbox recording) ───────
@@ -100,11 +96,27 @@ impl FacesService {
     }
 
     /// Insert or replace an asset face from the sync stream.
+    ///
+    /// Emits `PersonMediaChanged` for every person whose membership set
+    /// changed. For a reassignment from A to B, two events fire — one for
+    /// A (a media was removed) and one for B (a media was added). If the
+    /// person_id is unchanged, no events fire.
     pub(crate) async fn upsert_asset_face(
         &self,
         face: &super::repository::AssetFaceRow,
     ) -> Result<(), LibraryError> {
-        self.repo.upsert_asset_face(face).await
+        let prev_person_id = self.repo.get_asset_face_person_id(&face.id).await?;
+        self.repo.upsert_asset_face(face).await?;
+        let new_person_id = face.person_id.clone();
+        if prev_person_id != new_person_id {
+            if let Some(p) = prev_person_id {
+                self.emit(FacesEvent::PersonMediaChanged(PersonId::from_raw(p)));
+            }
+            if let Some(p) = new_person_id {
+                self.emit(FacesEvent::PersonMediaChanged(PersonId::from_raw(p)));
+            }
+        }
+        Ok(())
     }
 
     /// Delete a person by ID (sync stream delete).
@@ -117,8 +129,14 @@ impl FacesService {
     }
 
     /// Delete an asset face by ID (sync stream delete).
+    ///
+    /// Emits `PersonMediaChanged` for the deleted face's person, if any.
     pub async fn delete_asset_face(&self, id: &str) -> Result<(), LibraryError> {
-        self.repo.delete_asset_face(id).await
+        let deleted_person_id = self.repo.delete_asset_face(id).await?;
+        if let Some(p) = deleted_person_id {
+            self.emit(FacesEvent::PersonMediaChanged(PersonId::from_raw(p)));
+        }
+        Ok(())
     }
 
     /// Update the denormalized face count for a person.
