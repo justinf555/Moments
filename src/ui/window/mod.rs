@@ -152,9 +152,8 @@ impl MomentsWindow {
 
     /// Wire the full shell: sidebar, coordinator, views.
     ///
-    /// All models subscribe to the [`EventBus`] for event delivery.
-    /// The caller does not need to forward events — components are
-    /// self-contained.
+    /// Components react to mutations via GObject signals on the client
+    /// singletons (`MediaClient`, `AlbumClientV2`), not via the event bus.
     pub fn setup(&self, settings: gio::Settings, bus: &crate::event_bus::EventBus) {
         let imp = self.imp();
         let bus_sender = bus.sender();

@@ -39,8 +39,10 @@ mod imp {
         pub trash_badge: OnceCell<gtk::Label>,
         pub trash_count: Cell<u32>,
 
-        /// Signal handler IDs on MediaClient — disconnected on unrealize.
-        pub _signal_handlers: RefCell<Vec<glib::SignalHandlerId>>,
+        /// Signal handlers — disconnected on unrealize.
+        /// Stores (client_object, handler_id) pairs so disconnect works
+        /// even if the client singleton is unreachable at shutdown.
+        pub _signal_handlers: RefCell<Vec<(glib::Object, glib::SignalHandlerId)>>,
     }
 
     #[glib::object_subclass]
@@ -195,6 +197,7 @@ mod imp {
             let Some(mc) = crate::application::MomentsApplication::default().media_client() else {
                 return;
             };
+            let mc_obj: glib::Object = mc.clone().upcast();
 
             let weak1 = self.obj().downgrade();
             let h1 = mc.connect_closure(
@@ -229,14 +232,13 @@ mod imp {
                 }),
             );
 
-            *self._signal_handlers.borrow_mut() = vec![h1, h2, h3];
+            *self._signal_handlers.borrow_mut() =
+                vec![(mc_obj.clone(), h1), (mc_obj.clone(), h2), (mc_obj, h3)];
         }
 
         fn unrealize(&self) {
-            if let Some(mc) = crate::application::MomentsApplication::default().media_client() {
-                for h in self._signal_handlers.borrow_mut().drain(..) {
-                    mc.disconnect(h);
-                }
+            for (obj, h) in self._signal_handlers.borrow_mut().drain(..) {
+                obj.disconnect(h);
             }
             self.parent_unrealize();
         }

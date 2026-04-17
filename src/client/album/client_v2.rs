@@ -219,10 +219,6 @@ impl AlbumClientV2 {
                         // Always emit — if create was invoked from "Create &
                         // add", media was added too; subscribers like the
                         // photo grid rely on this to exit selection mode.
-                        tracing::debug!(
-                            album_id = %album_id,
-                            "emitting album-media-changed (create_album)"
-                        );
                         client.emit_by_name::<()>(
                             "album-media-changed",
                             &[&album_id.as_str().to_string()],
@@ -297,7 +293,6 @@ impl AlbumClientV2 {
                     debug!(album_id = %album_id, "photos added to album");
                     if let Some(client) = client_weak.upgrade() {
                         client.update_album_in_models(&album);
-                        tracing::debug!(album_id = %album_id, "emitting album-media-changed");
                         client.emit_by_name::<()>(
                             "album-media-changed",
                             &[&album_id.as_str().to_string()],
@@ -337,7 +332,6 @@ impl AlbumClientV2 {
                     debug!(album_id = %album_id, "photos removed from album");
                     if let Some(client) = client_weak.upgrade() {
                         client.update_album_in_models(&album);
-                        tracing::debug!(album_id = %album_id, "emitting album-media-changed");
                         client.emit_by_name::<()>(
                             "album-media-changed",
                             &[&album_id.as_str().to_string()],
@@ -790,6 +784,21 @@ mod tests {
         // Should not panic on the dead ref.
         client.insert_into_models(test_album("a1", "Alpha"));
         assert_eq!(_live.n_items(), 1);
+    }
+
+    #[test]
+    fn insert_into_models_is_idempotent() {
+        let client = AlbumClientV2::new();
+        let store = client.create_model();
+
+        client.insert_into_models(test_album("a1", "Alpha"));
+        client.insert_into_models(test_album("a1", "Alpha"));
+
+        assert_eq!(
+            store.n_items(),
+            1,
+            "second insert of same ID should be a no-op"
+        );
     }
 
     // ── update_in_models ──────────────────────────────────────────────
