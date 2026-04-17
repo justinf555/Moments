@@ -181,6 +181,11 @@ impl AlbumClientV2 {
                         }
                     });
                 }
+                AlbumEvent::AlbumMediaChanged(_) => {
+                    // Handled by MediaClientV2 (future PR); AlbumClientV2's
+                    // own command methods already emit the
+                    // `album-media-changed` GObject signal for widgets.
+                }
             }
         }
         debug!("album event listener shutting down");

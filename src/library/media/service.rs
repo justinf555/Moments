@@ -1,10 +1,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use tokio::sync::mpsc;
 use tracing::warn;
 
+use super::event::MediaEvent;
 use super::model::{MediaCursor, MediaFilter, MediaId, MediaItem, MediaRecord};
 use super::repository::MediaRepository;
+use crate::event_emitter::EventEmitter;
 use crate::library::config::LocalStorageMode;
 use crate::library::db::{Database, LibraryStats};
 use crate::library::error::LibraryError;
@@ -16,6 +19,12 @@ use crate::library::resolver::OriginalResolver;
 ///
 /// Owns all media-table operations and the filesystem knowledge needed
 /// to resolve original-file paths and clean up files on deletion.
+///
+/// Holds an [`EventEmitter<MediaEvent>`] to notify clients of state
+/// changes. Each call to [`subscribe`] returns a fresh receiver; every
+/// emitted event is delivered to every live subscriber.
+///
+/// [`subscribe`]: MediaService::subscribe
 #[derive(Clone)]
 pub struct MediaService {
     repo: MediaRepository,
@@ -23,6 +32,7 @@ pub struct MediaService {
     mode: LocalStorageMode,
     recorder: Arc<dyn MutationRecorder>,
     resolver: Arc<dyn OriginalResolver>,
+    events: EventEmitter<MediaEvent>,
 }
 
 impl MediaService {
@@ -39,7 +49,19 @@ impl MediaService {
             mode,
             recorder,
             resolver,
+            events: EventEmitter::new(),
         }
+    }
+
+    /// Register a new subscriber. Every emitted event is delivered to every
+    /// live subscriber.
+    pub fn subscribe(&self) -> mpsc::UnboundedReceiver<MediaEvent> {
+        self.events.subscribe()
+    }
+
+    /// Broadcast an event to every live subscriber.
+    fn emit(&self, event: MediaEvent) {
+        self.events.emit(event);
     }
 
     // ── Path resolution ─────────────────────────────────────────────
@@ -80,8 +102,19 @@ impl MediaService {
     // ── Sync upsert (pull from server, no outbox recording) ────────
 
     /// Insert or replace a media record from the sync stream.
+    ///
+    /// Pre-queries existence so the emitted event distinguishes a new row
+    /// (`Added`) from a refreshed row (`Updated`).
     pub async fn upsert_media(&self, record: &MediaRecord) -> Result<(), LibraryError> {
-        self.repo.upsert(record).await
+        let existed = self.repo.exists(&record.id).await?;
+        self.repo.upsert(record).await?;
+        let ids = vec![record.id.clone()];
+        if existed {
+            self.emit(MediaEvent::Updated(ids));
+        } else {
+            self.emit(MediaEvent::Added(ids));
+        }
+        Ok(())
     }
 
     // ── Delegating methods ──────────────────────────────────────────
@@ -101,6 +134,7 @@ impl MediaService {
 
     pub async fn insert_media(&self, record: &MediaRecord) -> Result<(), LibraryError> {
         self.repo.insert(record).await?;
+        self.emit(MediaEvent::Added(vec![record.id.clone()]));
         let file_path = match self.mode {
             LocalStorageMode::Managed => self.originals_dir.join(&record.relative_path),
             LocalStorageMode::Referenced => PathBuf::from(&record.relative_path),
@@ -129,6 +163,7 @@ impl MediaService {
 
     pub async fn set_favorite(&self, ids: &[MediaId], favorite: bool) -> Result<(), LibraryError> {
         self.repo.set_favorite(ids, favorite).await?;
+        self.emit(MediaEvent::Updated(ids.to_vec()));
         if let Err(e) = self
             .recorder
             .record(&Mutation::AssetFavorited {
@@ -144,6 +179,7 @@ impl MediaService {
 
     pub async fn trash(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
         self.repo.trash(ids).await?;
+        self.emit(MediaEvent::Updated(ids.to_vec()));
         if let Err(e) = self
             .recorder
             .record(&Mutation::AssetTrashed { ids: ids.to_vec() })
@@ -156,6 +192,7 @@ impl MediaService {
 
     pub async fn restore(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
         self.repo.restore(ids).await?;
+        self.emit(MediaEvent::Updated(ids.to_vec()));
         if let Err(e) = self
             .recorder
             .record(&Mutation::AssetRestored { ids: ids.to_vec() })
@@ -170,6 +207,7 @@ impl MediaService {
         // Capture external_ids before the DB delete removes the rows.
         let ext_map = self.repo.external_ids(ids).await.unwrap_or_default();
         self.repo.delete_permanently(ids).await?;
+        self.emit(MediaEvent::Removed(ids.to_vec()));
         let items: Vec<(MediaId, Option<String>)> = ids
             .iter()
             .map(|id| {
@@ -192,7 +230,9 @@ impl MediaService {
 
     /// Permanently delete without outbox recording (used by pull sync).
     pub async fn delete_permanently_no_record(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
-        self.repo.delete_permanently(ids).await
+        self.repo.delete_permanently(ids).await?;
+        self.emit(MediaEvent::Removed(ids.to_vec()));
+        Ok(())
     }
 
     pub async fn expired_trash(&self, max_age_secs: i64) -> Result<Vec<MediaId>, LibraryError> {

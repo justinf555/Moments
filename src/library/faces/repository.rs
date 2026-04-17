@@ -211,14 +211,35 @@ impl FacesRepository {
         Ok(())
     }
 
-    /// Delete an asset face by ID.
-    pub async fn delete_asset_face(&self, id: &str) -> Result<(), LibraryError> {
-        sqlx::query("DELETE FROM asset_faces WHERE id = ?")
-            .bind(id)
-            .execute(self.db.pool())
-            .await
-            .map_err(LibraryError::Db)?;
-        Ok(())
+    /// Look up the `person_id` currently assigned to an asset face.
+    ///
+    /// Returns `None` if the face row does not exist, or if the row exists
+    /// with a null `person_id`. Callers that need to distinguish those two
+    /// cases must query separately.
+    pub async fn get_asset_face_person_id(&self, id: &str) -> Result<Option<String>, LibraryError> {
+        let row: Option<(Option<String>,)> =
+            sqlx::query_as("SELECT person_id FROM asset_faces WHERE id = ?")
+                .bind(id)
+                .fetch_optional(self.db.pool())
+                .await
+                .map_err(LibraryError::Db)?;
+        Ok(row.and_then(|(p,)| p))
+    }
+
+    /// Delete an asset face by ID, returning the `person_id` of the deleted
+    /// row if any. Returns `None` if no row matched, or if the row existed
+    /// with a null `person_id`.
+    ///
+    /// The returned value lets `FacesService` emit `PersonMediaChanged`
+    /// without a second query.
+    pub async fn delete_asset_face(&self, id: &str) -> Result<Option<String>, LibraryError> {
+        let row: Option<(Option<String>,)> =
+            sqlx::query_as("DELETE FROM asset_faces WHERE id = ? RETURNING person_id")
+                .bind(id)
+                .fetch_optional(self.db.pool())
+                .await
+                .map_err(LibraryError::Db)?;
+        Ok(row.and_then(|(p,)| p))
     }
 
     /// Recount faces for a person and update the denormalised face_count.
@@ -461,7 +482,8 @@ mod tests {
         let media = repo.list_media_for_person("p1").await.unwrap();
         assert_eq!(media, vec!["m1"]);
 
-        repo.delete_asset_face("f1").await.unwrap();
+        let deleted_person = repo.delete_asset_face("f1").await.unwrap();
+        assert_eq!(deleted_person, Some("p1".to_string()));
         repo.update_face_count("p1").await.unwrap();
 
         let media = repo.list_media_for_person("p1").await.unwrap();

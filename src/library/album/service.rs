@@ -7,6 +7,7 @@ use tracing::warn;
 use super::event::AlbumEvent;
 use super::model::{Album, AlbumId};
 use super::repository::AlbumRepository;
+use crate::event_emitter::EventEmitter;
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
 use crate::library::media::{MediaCursor, MediaId, MediaItem};
@@ -15,41 +16,36 @@ use crate::library::recorder::MutationRecorder;
 
 /// Album management service.
 ///
-/// Holds an `mpsc::Sender<AlbumEvent>` to notify the client layer of
-/// state changes. Call `subscribe()` once to obtain the receiver.
+/// Holds an [`EventEmitter<AlbumEvent>`] to notify clients of state changes.
+/// Each call to [`subscribe`] returns a fresh receiver; every emitted event
+/// is delivered to every live subscriber.
+///
+/// [`subscribe`]: AlbumService::subscribe
 #[derive(Clone)]
 pub struct AlbumService {
     repo: AlbumRepository,
     recorder: Arc<dyn MutationRecorder>,
-    events_tx: mpsc::UnboundedSender<AlbumEvent>,
-    /// Held so `subscribe()` can hand it out exactly once.
-    events_rx: Arc<tokio::sync::Mutex<Option<mpsc::UnboundedReceiver<AlbumEvent>>>>,
+    events: EventEmitter<AlbumEvent>,
 }
 
 impl AlbumService {
     pub fn new(db: Database, recorder: Arc<dyn MutationRecorder>) -> Self {
-        let (tx, rx) = mpsc::unbounded_channel();
         Self {
             repo: AlbumRepository::new(db),
             recorder,
-            events_tx: tx,
-            events_rx: Arc::new(tokio::sync::Mutex::new(Some(rx))),
+            events: EventEmitter::new(),
         }
     }
 
-    /// Take the event receiver. Can only be called once — panics on
-    /// subsequent calls.
-    pub async fn subscribe(&self) -> mpsc::UnboundedReceiver<AlbumEvent> {
-        self.events_rx
-            .lock()
-            .await
-            .take()
-            .expect("AlbumService::subscribe() called more than once")
+    /// Register a new subscriber. Every emitted event is delivered to every
+    /// live subscriber.
+    pub fn subscribe(&self) -> mpsc::UnboundedReceiver<AlbumEvent> {
+        self.events.subscribe()
     }
 
-    /// Send an event, ignoring errors (no subscriber yet, or dropped).
+    /// Broadcast an event to every live subscriber.
     fn emit(&self, event: AlbumEvent) {
-        let _ = self.events_tx.send(event);
+        self.events.emit(event);
     }
 
     // ── Sync upsert (pull from server, no outbox recording) ────────
@@ -143,7 +139,11 @@ impl AlbumService {
         media_ids: &[MediaId],
     ) -> Result<(), LibraryError> {
         self.repo.add_media(album_id, media_ids).await?;
+        // Emit both for now: AlbumUpdated preserves the existing
+        // AlbumClientV2 refresh path; AlbumMediaChanged is the targeted
+        // signal for album-filtered media grids (consumed in a later PR).
         self.emit(AlbumEvent::AlbumUpdated(album_id.clone()));
+        self.emit(AlbumEvent::AlbumMediaChanged(album_id.clone()));
         if let Err(e) = self
             .recorder
             .record(&Mutation::AlbumMediaAdded {
@@ -164,6 +164,7 @@ impl AlbumService {
     ) -> Result<(), LibraryError> {
         self.repo.remove_media(album_id, media_ids).await?;
         self.emit(AlbumEvent::AlbumUpdated(album_id.clone()));
+        self.emit(AlbumEvent::AlbumMediaChanged(album_id.clone()));
         if let Err(e) = self
             .recorder
             .record(&Mutation::AlbumMediaRemoved {

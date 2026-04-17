@@ -82,11 +82,15 @@ impl Database {
             .await
     }
 
-    /// Forwarding shim — delegates to `FacesRepository`.
+    /// Forwarding shim — delegates to `FacesRepository`. The deleted
+    /// `person_id` is dropped; callers that need it should use
+    /// `FacesService::delete_asset_face` (which emits `PersonMediaChanged`)
+    /// or the repository directly.
     pub async fn delete_asset_face(&self, id: &str) -> Result<(), LibraryError> {
         FacesRepository::new(self.clone())
             .delete_asset_face(id)
             .await
+            .map(|_| ())
     }
 
     /// Forwarding shim — delegates to `FacesRepository`.

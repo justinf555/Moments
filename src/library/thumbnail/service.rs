@@ -1,7 +1,11 @@
 use std::path::PathBuf;
 
+use tokio::sync::mpsc;
+
+use super::event::ThumbnailEvent;
 use super::model::ThumbnailStatus;
 use super::repository::ThumbnailRepository;
+use crate::event_emitter::EventEmitter;
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
 use crate::library::media::MediaId;
@@ -46,10 +50,18 @@ pub fn sharded_original_relative(id: &MediaId) -> String {
 }
 
 /// Thumbnail path resolution and persistence service.
+///
+/// Holds an [`EventEmitter<ThumbnailEvent>`] to notify clients when a
+/// thumbnail becomes ready on disk. Each call to [`subscribe`] returns a
+/// fresh receiver; every emitted event is delivered to every live
+/// subscriber.
+///
+/// [`subscribe`]: ThumbnailService::subscribe
 #[derive(Clone)]
 pub struct ThumbnailService {
     repo: ThumbnailRepository,
     thumbnails_dir: PathBuf,
+    events: EventEmitter<ThumbnailEvent>,
 }
 
 impl ThumbnailService {
@@ -57,7 +69,19 @@ impl ThumbnailService {
         Self {
             repo: ThumbnailRepository::new(db),
             thumbnails_dir,
+            events: EventEmitter::new(),
         }
+    }
+
+    /// Register a new subscriber. Every emitted event is delivered to every
+    /// live subscriber.
+    pub fn subscribe(&self) -> mpsc::UnboundedReceiver<ThumbnailEvent> {
+        self.events.subscribe()
+    }
+
+    /// Broadcast an event to every live subscriber.
+    fn emit(&self, event: ThumbnailEvent) {
+        self.events.emit(event);
     }
 
     pub fn thumbnail_path(&self, id: &MediaId) -> PathBuf {
@@ -74,7 +98,9 @@ impl ThumbnailService {
         file_path: &str,
         generated_at: i64,
     ) -> Result<(), LibraryError> {
-        self.repo.set_ready(id, file_path, generated_at).await
+        self.repo.set_ready(id, file_path, generated_at).await?;
+        self.emit(ThumbnailEvent::Ready(id.clone()));
+        Ok(())
     }
 
     pub async fn set_thumbnail_failed(&self, id: &MediaId) -> Result<(), LibraryError> {
