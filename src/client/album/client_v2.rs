@@ -214,8 +214,15 @@ impl AlbumClientV2 {
                     debug!(album_id = %album.id, name = %album.name, "album created");
                     if let Some(client) = client_weak.upgrade() {
                         let album_id = album.id.clone();
+                        let had_media = album.media_count > 0;
                         client.insert_into_models(album);
                         client.load_cover_thumbnails(&album_id);
+                        if had_media {
+                            client.emit_by_name::<()>(
+                                "album-media-changed",
+                                &[&album_id.as_str().to_string()],
+                            );
+                        }
                     }
                 }
                 Err(e) => {
@@ -286,6 +293,7 @@ impl AlbumClientV2 {
                     debug!(album_id = %album_id, "photos added to album");
                     if let Some(client) = client_weak.upgrade() {
                         client.update_album_in_models(&album);
+                        tracing::debug!(album_id = %album_id, "emitting album-media-changed");
                         client.emit_by_name::<()>(
                             "album-media-changed",
                             &[&album_id.as_str().to_string()],
@@ -325,6 +333,7 @@ impl AlbumClientV2 {
                     debug!(album_id = %album_id, "photos removed from album");
                     if let Some(client) = client_weak.upgrade() {
                         client.update_album_in_models(&album);
+                        tracing::debug!(album_id = %album_id, "emitting album-media-changed");
                         client.emit_by_name::<()>(
                             "album-media-changed",
                             &[&album_id.as_str().to_string()],

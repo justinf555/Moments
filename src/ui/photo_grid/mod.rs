@@ -467,12 +467,17 @@ mod view_imp {
                 }
 
                 if let Some(ac) = app.album_client_v2() {
+                    tracing::debug!("photo_grid: subscribing to album-media-changed");
                     let ac_obj: glib::Object = ac.clone().upcast();
                     let exit = exit.clone();
                     let h = ac.connect_closure(
                         "album-media-changed",
                         false,
-                        glib::closure_local!(move |_: crate::client::AlbumClientV2, _: String| {
+                        glib::closure_local!(move |_: crate::client::AlbumClientV2, id: String| {
+                            tracing::debug!(
+                                %id,
+                                "photo_grid: album-media-changed received, exiting selection"
+                            );
                             exit.activate(None);
                         }),
                     );
