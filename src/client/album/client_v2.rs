@@ -214,15 +214,19 @@ impl AlbumClientV2 {
                     debug!(album_id = %album.id, name = %album.name, "album created");
                     if let Some(client) = client_weak.upgrade() {
                         let album_id = album.id.clone();
-                        let had_media = album.media_count > 0;
                         client.insert_into_models(album);
                         client.load_cover_thumbnails(&album_id);
-                        if had_media {
-                            client.emit_by_name::<()>(
-                                "album-media-changed",
-                                &[&album_id.as_str().to_string()],
-                            );
-                        }
+                        // Always emit — if create was invoked from "Create &
+                        // add", media was added too; subscribers like the
+                        // photo grid rely on this to exit selection mode.
+                        tracing::debug!(
+                            album_id = %album_id,
+                            "emitting album-media-changed (create_album)"
+                        );
+                        client.emit_by_name::<()>(
+                            "album-media-changed",
+                            &[&album_id.as_str().to_string()],
+                        );
                     }
                 }
                 Err(e) => {
