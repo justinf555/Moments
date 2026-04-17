@@ -4,15 +4,9 @@
 //! - **Standard** (Photos, Favourites, Recent, People): Favourite, Add to album, Delete
 //! - **Trash**: Restore, Delete permanently
 //! - **Album**: Favourite, Remove from album, Delete
-//!
-//! Button handlers emit command events via the [`EventBus`] — they resolve
-//! UI state (selection → IDs) and nothing else. The library's command
-//! handler handles execution and emits result events.
 
 use adw::prelude::*;
 
-use crate::app_event::AppEvent;
-use crate::event_bus::EventSender;
 use crate::library::album::AlbumId;
 use crate::library::media::MediaFilter;
 
@@ -33,28 +27,24 @@ pub struct ActionBarButtons {
 /// Build action bar buttons appropriate for the given filter.
 ///
 /// Returns wired buttons ready to be placed in a `gtk::ActionBar`.
-pub fn build_for_filter(
-    filter: &MediaFilter,
-    selection: &gtk::MultiSelection,
-    bus: &EventSender,
-) -> ActionBarButtons {
+pub fn build_for_filter(filter: &MediaFilter, selection: &gtk::MultiSelection) -> ActionBarButtons {
     match filter {
-        MediaFilter::Trashed => build_trash_bar(selection, bus),
-        MediaFilter::Album { album_id } => build_album_bar(selection, bus, album_id),
-        _ => build_standard_bar(selection, bus),
+        MediaFilter::Trashed => build_trash_bar(selection),
+        MediaFilter::Album { album_id } => build_album_bar(selection, album_id),
+        _ => build_standard_bar(selection),
     }
 }
 
 // ── Standard: Favourite, Add to album, Delete ────────────────────────────────
 
-fn build_standard_bar(selection: &gtk::MultiSelection, bus: &EventSender) -> ActionBarButtons {
+fn build_standard_bar(selection: &gtk::MultiSelection) -> ActionBarButtons {
     let fav_btn = make_button("starred-symbolic", "Favourite");
     fav_btn.set_width_request(150);
     let album_btn = make_button("folder-new-symbolic", "Add to album");
     let trash_btn = make_button("user-trash-symbolic", "Delete");
 
-    wire_favourite(&fav_btn, selection, bus);
-    wire_trash(&trash_btn, selection, bus);
+    wire_favourite(&fav_btn, selection);
+    wire_trash(&trash_btn, selection);
 
     let container = bar_container();
     container.append(&fav_btn);
@@ -70,12 +60,12 @@ fn build_standard_bar(selection: &gtk::MultiSelection, bus: &EventSender) -> Act
 
 // ── Trash: Restore, Delete permanently ───────────────────────────────────────
 
-fn build_trash_bar(selection: &gtk::MultiSelection, bus: &EventSender) -> ActionBarButtons {
+fn build_trash_bar(selection: &gtk::MultiSelection) -> ActionBarButtons {
     let restore_btn = make_button("edit-undo-symbolic", "Restore");
     let delete_btn = make_button("edit-delete-symbolic", "Delete permanently");
 
-    wire_restore(&restore_btn, selection, bus);
-    wire_delete_permanently(&delete_btn, selection, bus);
+    wire_restore(&restore_btn, selection);
+    wire_delete_permanently(&delete_btn, selection);
 
     let container = bar_container();
     container.append(&restore_btn);
@@ -90,19 +80,15 @@ fn build_trash_bar(selection: &gtk::MultiSelection, bus: &EventSender) -> Action
 
 // ── Album: Favourite, Remove from album, Delete ──────────────────────────────
 
-fn build_album_bar(
-    selection: &gtk::MultiSelection,
-    bus: &EventSender,
-    album_id: &AlbumId,
-) -> ActionBarButtons {
+fn build_album_bar(selection: &gtk::MultiSelection, album_id: &AlbumId) -> ActionBarButtons {
     let fav_btn = make_button("starred-symbolic", "Favourite");
     fav_btn.set_width_request(150);
     let remove_btn = make_button("list-remove-symbolic", "Remove from album");
     let trash_btn = make_button("user-trash-symbolic", "Delete");
 
-    wire_favourite(&fav_btn, selection, bus);
-    wire_remove_from_album(&remove_btn, selection, bus, album_id);
-    wire_trash(&trash_btn, selection, bus);
+    wire_favourite(&fav_btn, selection);
+    wire_remove_from_album(&remove_btn, selection, album_id);
+    wire_trash(&trash_btn, selection);
 
     let container = bar_container();
     container.append(&fav_btn);
@@ -142,9 +128,8 @@ fn bar_container() -> gtk::Box {
 
 // ── Wiring ───────────────────────────────────────────────────────────────────
 
-fn wire_favourite(btn: &gtk::Button, selection: &gtk::MultiSelection, bus: &EventSender) {
+fn wire_favourite(btn: &gtk::Button, selection: &gtk::MultiSelection) {
     let sel = selection.clone();
-    let tx = bus.clone();
     let btn_ref = btn.clone();
     btn.connect_clicked(move |_| {
         let ids = super::collect_selected_ids(&sel);
@@ -159,39 +144,41 @@ fn wire_favourite(btn: &gtk::Button, selection: &gtk::MultiSelection, bus: &Even
             .unwrap_or(false);
         let new_state = !first_fav;
 
-        tx.send(AppEvent::FavoriteRequested {
-            ids,
-            state: new_state,
-        });
+        if let Some(mc) = crate::application::MomentsApplication::default().media_client() {
+            mc.set_favorite(ids, new_state);
+        }
         actions::update_fav_button(&btn_ref, new_state);
     });
 }
 
-fn wire_trash(btn: &gtk::Button, selection: &gtk::MultiSelection, bus: &EventSender) {
+fn wire_trash(btn: &gtk::Button, selection: &gtk::MultiSelection) {
     let sel = selection.clone();
-    let tx = bus.clone();
     btn.connect_clicked(move |_| {
         let ids = super::collect_selected_ids(&sel);
-        if !ids.is_empty() {
-            tx.send(AppEvent::TrashRequested { ids });
+        if ids.is_empty() {
+            return;
+        }
+        if let Some(mc) = crate::application::MomentsApplication::default().media_client() {
+            mc.trash(ids);
         }
     });
 }
 
-fn wire_restore(btn: &gtk::Button, selection: &gtk::MultiSelection, bus: &EventSender) {
+fn wire_restore(btn: &gtk::Button, selection: &gtk::MultiSelection) {
     let sel = selection.clone();
-    let tx = bus.clone();
     btn.connect_clicked(move |_| {
         let ids = super::collect_selected_ids(&sel);
-        if !ids.is_empty() {
-            tx.send(AppEvent::RestoreRequested { ids });
+        if ids.is_empty() {
+            return;
+        }
+        if let Some(mc) = crate::application::MomentsApplication::default().media_client() {
+            mc.restore(ids);
         }
     });
 }
 
-fn wire_delete_permanently(btn: &gtk::Button, selection: &gtk::MultiSelection, bus: &EventSender) {
+fn wire_delete_permanently(btn: &gtk::Button, selection: &gtk::MultiSelection) {
     let sel = selection.clone();
-    let tx = bus.clone();
     btn.connect_clicked(move |btn| {
         let ids = super::collect_selected_ids(&sel);
         if ids.is_empty() {
@@ -214,36 +201,33 @@ fn wire_delete_permanently(btn: &gtk::Button, selection: &gtk::MultiSelection, b
         dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
         dialog.set_default_response(Some("cancel"));
 
-        let tx = tx.clone();
         let window = btn.root().and_downcast::<gtk::Window>();
         dialog.choose(
             window.as_ref(),
             gtk::gio::Cancellable::NONE,
             move |response| {
                 if response == "delete" {
-                    tx.send(AppEvent::DeleteRequested { ids });
+                    if let Some(mc) =
+                        crate::application::MomentsApplication::default().media_client()
+                    {
+                        mc.delete(ids);
+                    }
                 }
             },
         );
     });
 }
 
-fn wire_remove_from_album(
-    btn: &gtk::Button,
-    selection: &gtk::MultiSelection,
-    bus: &EventSender,
-    album_id: &AlbumId,
-) {
+fn wire_remove_from_album(btn: &gtk::Button, selection: &gtk::MultiSelection, album_id: &AlbumId) {
     let sel = selection.clone();
-    let tx = bus.clone();
     let aid = album_id.clone();
     btn.connect_clicked(move |_| {
         let ids = super::collect_selected_ids(&sel);
-        if !ids.is_empty() {
-            tx.send(AppEvent::RemoveFromAlbumRequested {
-                album_id: aid.clone(),
-                ids,
-            });
+        if ids.is_empty() {
+            return;
+        }
+        if let Some(ac) = crate::application::MomentsApplication::default().album_client_v2() {
+            ac.remove_from_album(aid.clone(), ids);
         }
     });
 }

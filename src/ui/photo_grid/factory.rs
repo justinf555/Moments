@@ -7,9 +7,7 @@ use gtk::{gio, glib, prelude::*, subclass::prelude::*};
 use tokio::sync::Semaphore;
 use tracing::debug;
 
-use crate::app_event::AppEvent;
 use crate::client::{MediaClient, MediaItemObject};
-use crate::event_bus::EventSender;
 use crate::library::media::{MediaFilter, MediaItem};
 
 use super::cell::PhotoGridCell;
@@ -29,7 +27,6 @@ fn max_decode_workers() -> usize {
 pub fn build_factory(
     cell_size: i32,
     media_client: MediaClient,
-    bus_sender: EventSender,
     filter: MediaFilter,
     cache: Rc<TextureCache>,
     selection_mode: Rc<Cell<bool>>,
@@ -52,8 +49,6 @@ pub fn build_factory(
         media_client,
         #[strong]
         tokio,
-        #[strong]
-        bus_sender,
         #[strong]
         cache,
         #[strong]
@@ -169,10 +164,10 @@ pub fn build_factory(
             } else {
                 cell.imp().days_label.set_visible(false);
 
-                // Wire star button click → optimistic toggle + bus command.
+                // Wire star button click → optimistic toggle + MediaClient command.
                 let star_btn = cell.imp().star_btn.clone();
                 let item_weak = item.downgrade();
-                let tx = bus_sender.clone();
+                let mc = media_client.clone();
                 let handler_id = star_btn.connect_clicked(move |_| {
                     let Some(item) = item_weak.upgrade() else {
                         return;
@@ -180,10 +175,7 @@ pub fn build_factory(
                     let new_fav = !item.is_favorite();
                     item.set_is_favorite(new_fav);
                     let id = item.item().id.clone();
-                    tx.send(AppEvent::FavoriteRequested {
-                        ids: vec![id],
-                        state: new_fav,
-                    });
+                    mc.set_favorite(vec![id], new_fav);
                 });
 
                 cell.imp()

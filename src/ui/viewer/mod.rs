@@ -2,7 +2,6 @@ use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gdk, glib};
 
-use crate::app_event::AppEvent;
 use crate::client::MediaItemObject;
 use crate::event_bus::EventSender;
 use crate::library::media::MediaId;
@@ -363,10 +362,9 @@ impl PhotoViewer {
                 let id = obj.item().id.clone();
                 *imp.pending_fav.borrow_mut() = Some((id.clone(), was_fav));
 
-                imp.bus_sender().send(AppEvent::FavoriteRequested {
-                    ids: vec![id],
-                    state: new_fav,
-                });
+                if let Some(mc) = crate::application::MomentsApplication::default().media_client() {
+                    mc.set_favorite(vec![id], new_fav);
+                }
             });
         }
 

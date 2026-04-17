@@ -4,21 +4,17 @@ use adw::prelude::*;
 use gtk::glib;
 use tracing::debug;
 
-use crate::app_event::AppEvent;
-use crate::event_bus::EventSender;
 use crate::library::media::MediaFilter;
 
 use crate::client::MediaItemObject;
 
 /// Context passed to wiring functions.
 ///
-/// Carries the bus sender for commands and view references for
-/// context menus and action bar actions.
+/// Carries view references for context menus and action bar actions.
 pub(super) struct ActionContext {
     pub selection: gtk::MultiSelection,
     pub filter: MediaFilter,
     pub grid_view: gtk::GridView,
-    pub bus_sender: EventSender,
 }
 
 /// Wire the "Add to Album" button to open the album picker dialog.
@@ -37,7 +33,7 @@ pub(super) fn wire_album_controls(ctx: &ActionContext, album_btn: &gtk::Button) 
 
 /// Wire the right-click context menu on grid cells.
 ///
-/// All actions emit command events via the bus — no direct library calls.
+/// Actions invoke `MediaClient` / `AlbumClientV2` methods directly.
 pub(super) fn wire_context_menu(ctx: &ActionContext) {
     let gesture = gtk::GestureClick::new();
     gesture.set_button(3);
@@ -45,7 +41,6 @@ pub(super) fn wire_context_menu(ctx: &ActionContext) {
     let grid_view = ctx.grid_view.clone();
     let selection = ctx.selection.clone();
     let filter = ctx.filter.clone();
-    let bus_tx = ctx.bus_sender.clone();
 
     gesture.connect_pressed(move |gesture, _, x, y| {
         let Some(pos) = find_clicked_position(&grid_view, &selection, x, y) else {
@@ -81,9 +76,9 @@ pub(super) fn wire_context_menu(ctx: &ActionContext) {
         let pop_ref: glib::WeakRef<gtk::Popover> = popover.downgrade();
 
         if is_trash {
-            build_trash_menu(&vbox, &pop_ref, &selection, &bus_tx);
+            build_trash_menu(&vbox, &pop_ref, &selection);
         } else {
-            build_standard_menu(&vbox, &pop_ref, &selection, &bus_tx, &filter, is_favorite);
+            build_standard_menu(&vbox, &pop_ref, &selection, &filter, is_favorite);
         }
 
         popover.set_child(Some(&vbox));
@@ -142,7 +137,6 @@ fn build_trash_menu(
     vbox: &gtk::Box,
     pop_ref: &glib::WeakRef<gtk::Popover>,
     selection: &gtk::MultiSelection,
-    bus_tx: &EventSender,
 ) {
     let restore_btn = gtk::Button::with_label("Restore");
     restore_btn.add_css_class("flat");
@@ -153,8 +147,8 @@ fn build_trash_menu(
     delete_btn.add_css_class("error");
     vbox.append(&delete_btn);
 
-    wire_restore_button(&restore_btn, pop_ref, selection, bus_tx);
-    wire_permanent_delete_button(&delete_btn, pop_ref, selection, bus_tx);
+    wire_restore_button(&restore_btn, pop_ref, selection);
+    wire_permanent_delete_button(&delete_btn, pop_ref, selection);
 }
 
 /// Build the standard/album context menu: Favourite, Move to Trash,
@@ -163,7 +157,6 @@ fn build_standard_menu(
     vbox: &gtk::Box,
     pop_ref: &glib::WeakRef<gtk::Popover>,
     selection: &gtk::MultiSelection,
-    bus_tx: &EventSender,
     filter: &MediaFilter,
     is_favorite: bool,
 ) {
@@ -188,24 +181,23 @@ fn build_standard_menu(
 
         let pw = pop_ref.clone();
         let sel = selection.clone();
-        let tx = bus_tx.clone();
         let aid = album_id.clone();
         remove_btn.connect_clicked(move |_| {
             if let Some(p) = pw.upgrade() {
                 p.popdown();
             }
             let ids = super::collect_selected_ids(&sel);
-            if !ids.is_empty() {
-                tx.send(AppEvent::RemoveFromAlbumRequested {
-                    album_id: aid.clone(),
-                    ids,
-                });
+            if ids.is_empty() {
+                return;
+            }
+            if let Some(ac) = crate::application::MomentsApplication::default().album_client_v2() {
+                ac.remove_from_album(aid.clone(), ids);
             }
         });
     }
 
-    wire_favourite_button(&fav_btn, pop_ref, selection, bus_tx, !is_favorite);
-    wire_trash_button(&trash_btn, pop_ref, selection, bus_tx);
+    wire_favourite_button(&fav_btn, pop_ref, selection, !is_favorite);
+    wire_trash_button(&trash_btn, pop_ref, selection);
 }
 
 /// Wire the Restore button to send a restore command.
@@ -213,18 +205,19 @@ fn wire_restore_button(
     btn: &gtk::Button,
     pop_ref: &glib::WeakRef<gtk::Popover>,
     selection: &gtk::MultiSelection,
-    bus_tx: &EventSender,
 ) {
     let pw = pop_ref.clone();
     let sel = selection.clone();
-    let tx = bus_tx.clone();
     btn.connect_clicked(move |_| {
         if let Some(p) = pw.upgrade() {
             p.popdown();
         }
         let ids = super::collect_selected_ids(&sel);
-        if !ids.is_empty() {
-            tx.send(AppEvent::RestoreRequested { ids });
+        if ids.is_empty() {
+            return;
+        }
+        if let Some(mc) = crate::application::MomentsApplication::default().media_client() {
+            mc.restore(ids);
         }
     });
 }
@@ -234,11 +227,9 @@ fn wire_permanent_delete_button(
     btn: &gtk::Button,
     pop_ref: &glib::WeakRef<gtk::Popover>,
     selection: &gtk::MultiSelection,
-    bus_tx: &EventSender,
 ) {
     let pw = pop_ref.clone();
     let sel = selection.clone();
-    let tx = bus_tx.clone();
     btn.connect_clicked(move |btn| {
         if let Some(p) = pw.upgrade() {
             p.popdown();
@@ -264,14 +255,17 @@ fn wire_permanent_delete_button(
         dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
         dialog.set_default_response(Some("cancel"));
 
-        let tx = tx.clone();
         let window = btn.root().and_downcast::<gtk::Window>();
         dialog.choose(
             window.as_ref(),
             gtk::gio::Cancellable::NONE,
             move |response| {
                 if response == "delete" {
-                    tx.send(AppEvent::DeleteRequested { ids });
+                    if let Some(mc) =
+                        crate::application::MomentsApplication::default().media_client()
+                    {
+                        mc.delete(ids);
+                    }
                 }
             },
         );
@@ -283,22 +277,20 @@ fn wire_favourite_button(
     btn: &gtk::Button,
     pop_ref: &glib::WeakRef<gtk::Popover>,
     selection: &gtk::MultiSelection,
-    bus_tx: &EventSender,
     new_fav: bool,
 ) {
     let pw = pop_ref.clone();
     let sel = selection.clone();
-    let tx = bus_tx.clone();
     btn.connect_clicked(move |_| {
         if let Some(p) = pw.upgrade() {
             p.popdown();
         }
         let ids = super::collect_selected_ids(&sel);
-        if !ids.is_empty() {
-            tx.send(AppEvent::FavoriteRequested {
-                ids,
-                state: new_fav,
-            });
+        if ids.is_empty() {
+            return;
+        }
+        if let Some(mc) = crate::application::MomentsApplication::default().media_client() {
+            mc.set_favorite(ids, new_fav);
         }
     });
 }
@@ -308,18 +300,19 @@ fn wire_trash_button(
     btn: &gtk::Button,
     pop_ref: &glib::WeakRef<gtk::Popover>,
     selection: &gtk::MultiSelection,
-    bus_tx: &EventSender,
 ) {
     let pw = pop_ref.clone();
     let sel = selection.clone();
-    let tx = bus_tx.clone();
     btn.connect_clicked(move |_| {
         if let Some(p) = pw.upgrade() {
             p.popdown();
         }
         let ids = super::collect_selected_ids(&sel);
-        if !ids.is_empty() {
-            tx.send(AppEvent::TrashRequested { ids });
+        if ids.is_empty() {
+            return;
+        }
+        if let Some(mc) = crate::application::MomentsApplication::default().media_client() {
+            mc.trash(ids);
         }
     });
 }

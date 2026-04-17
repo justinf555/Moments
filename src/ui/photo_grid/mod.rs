@@ -7,7 +7,6 @@ use gettextrs::gettext;
 use gtk::{gio, glib};
 use tracing::instrument;
 
-use crate::app_event::AppEvent;
 use crate::client::MediaItemObject;
 use crate::library::media::{MediaFilter, MediaType};
 use crate::ui::video_viewer::VideoViewer;
@@ -209,7 +208,6 @@ impl PhotoGrid {
         let imp = self.imp();
         let grid_view = imp.grid_view();
         let media_client = imp.media_client().clone();
-        let bus_sender = imp.bus_sender().clone();
         let filter = imp.filter.borrow().clone();
         let cache = imp.texture_cache().clone();
         let sm = Rc::clone(&imp.selection_mode);
@@ -218,7 +216,6 @@ impl PhotoGrid {
         grid_view.set_factory(Some(&factory::build_factory(
             self.current_cell_size(),
             media_client,
-            bus_sender,
             filter,
             cache,
             sm,
@@ -257,7 +254,6 @@ impl PhotoGrid {
         grid_view.set_factory(Some(&factory::build_factory(
             self.current_cell_size(),
             media_client.clone(),
-            bus_sender,
             filter.clone(),
             cache,
             sm,
@@ -736,7 +732,6 @@ impl PhotoGridView {
             selection: selection.clone(),
             filter: filter.clone(),
             grid_view,
-            bus_sender: bus_sender.clone(),
         };
 
         actions::wire_context_menu(&ctx);
@@ -747,7 +742,7 @@ impl PhotoGridView {
             bar_box.remove(&child);
         }
 
-        let bar_buttons = action_bar::build_for_filter(&filter, &ctx.selection, &bus_sender);
+        let bar_buttons = action_bar::build_for_filter(&filter, &ctx.selection);
         bar_box.append(&bar_buttons.container);
         *imp.fav_btn.borrow_mut() = bar_buttons.fav_btn;
 
@@ -774,55 +769,54 @@ impl PhotoGridView {
                 store.connect_items_changed(move |_, _, _, _| update());
             }
 
-            {
-                let bs = bus_sender.clone();
-                imp.restore_all_btn.connect_clicked(move |b| {
-                    let bs = bs.clone();
-                    let win = b.root().and_then(|r| r.downcast::<gtk::Window>().ok());
-                    let dialog = adw::AlertDialog::new(
-                        Some(&gettext("Restore all photos?")),
-                        Some(&gettext(
-                            "All trashed photos will be moved back to the library.",
-                        )),
-                    );
-                    dialog.add_response("cancel", &gettext("Cancel"));
-                    dialog.add_response("restore", &gettext("Restore All"));
-                    dialog.set_default_response(Some("cancel"));
-                    dialog.set_close_response("cancel");
-                    dialog.connect_response(None, move |_, response| {
-                        if response == "restore" {
-                            bs.send(AppEvent::RestoreAllTrashRequested);
+            imp.restore_all_btn.connect_clicked(move |b| {
+                let win = b.root().and_then(|r| r.downcast::<gtk::Window>().ok());
+                let dialog = adw::AlertDialog::new(
+                    Some(&gettext("Restore all photos?")),
+                    Some(&gettext(
+                        "All trashed photos will be moved back to the library.",
+                    )),
+                );
+                dialog.add_response("cancel", &gettext("Cancel"));
+                dialog.add_response("restore", &gettext("Restore All"));
+                dialog.set_default_response(Some("cancel"));
+                dialog.set_close_response("cancel");
+                dialog.connect_response(None, move |_, response| {
+                    if response == "restore" {
+                        if let Some(mc) =
+                            crate::application::MomentsApplication::default().media_client()
+                        {
+                            mc.restore_all_trash();
                         }
-                    });
-                    dialog.present(win.as_ref());
+                    }
                 });
-            }
+                dialog.present(win.as_ref());
+            });
 
-            {
-                let bs = bus_sender.clone();
-                imp.empty_trash_btn.connect_clicked(move |b| {
-                    let bs = bs.clone();
-                    let win = b.root().and_then(|r| r.downcast::<gtk::Window>().ok());
-                    let dialog = adw::AlertDialog::new(
-                        Some(&gettext("Empty Trash?")),
-                        Some(&gettext("All trashed photos will be permanently deleted. This cannot be undone.")),
-                    );
-                    dialog.add_response("cancel", &gettext("Cancel"));
-                    dialog.add_response("delete", &gettext("Empty Trash"));
-                    dialog.set_response_appearance(
-                        "delete",
-                        adw::ResponseAppearance::Destructive,
-                    );
-                    dialog.set_default_response(Some("cancel"));
-                    dialog.set_close_response("cancel");
-                    dialog.connect_response(None, move |_, response| {
-                        if response == "delete" {
-                            bs.send(AppEvent::EmptyTrashRequested);
+            imp.empty_trash_btn.connect_clicked(move |b| {
+                let win = b.root().and_then(|r| r.downcast::<gtk::Window>().ok());
+                let dialog = adw::AlertDialog::new(
+                    Some(&gettext("Empty Trash?")),
+                    Some(&gettext(
+                        "All trashed photos will be permanently deleted. This cannot be undone.",
+                    )),
+                );
+                dialog.add_response("cancel", &gettext("Cancel"));
+                dialog.add_response("delete", &gettext("Empty Trash"));
+                dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+                dialog.set_default_response(Some("cancel"));
+                dialog.set_close_response("cancel");
+                dialog.connect_response(None, move |_, response| {
+                    if response == "delete" {
+                        if let Some(mc) =
+                            crate::application::MomentsApplication::default().media_client()
+                        {
+                            mc.empty_trash();
                         }
-                    });
-                    dialog.present(win.as_ref());
+                    }
                 });
-            }
+                dialog.present(win.as_ref());
+            });
         }
 
         // ── Selection changed → update count, auto-exit ─────────────────
