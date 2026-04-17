@@ -614,9 +614,17 @@ impl AlbumClientV2 {
 
     /// Insert a new album into all tracked models.
     fn insert_into_models(&self, album: Album) {
+        let id_str = album.id.as_str().to_owned();
         let models = self.imp().models.borrow();
         for weak in models.iter() {
             if let Some(store) = weak.upgrade() {
+                // Idempotent: skip if an item with this ID is already in the
+                // store. Both the command path and the AlbumEvent listener
+                // insert on album creation; without this guard they race to
+                // produce duplicate rows.
+                if find_by_id(&store, &id_str).is_some() {
+                    continue;
+                }
                 store.append(&AlbumItemObject::new(album.clone()));
             }
         }
