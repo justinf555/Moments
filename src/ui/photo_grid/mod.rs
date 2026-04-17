@@ -361,8 +361,9 @@ mod view_imp {
         pub selection_title: OnceCell<gtk::Label>,
         pub bar_box: OnceCell<gtk::Box>,
         pub fav_btn: RefCell<Option<gtk::Button>>,
-        /// Keeps the event bus subscription alive for this view's lifetime.
-        pub _subscription: RefCell<Option<crate::event_bus::Subscription>>,
+        /// Signal handler IDs — disconnected on unrealize.
+        /// Stores (client_object, handler_id) pairs for later disconnect.
+        pub _signal_handlers: RefCell<Vec<(glib::Object, glib::SignalHandlerId)>>,
     }
 
     impl PhotoGridView {
@@ -434,25 +435,58 @@ mod view_imp {
                 mc.populate(store);
             }
 
-            // Subscribe for exit-selection on result events.
+            // Exit selection mode on any relevant mutation.
             if let Some(exit) = self.exit_selection.get() {
-                let exit = exit.clone();
-                let sub = crate::event_bus::subscribe(move |event| match event {
-                    crate::app_event::AppEvent::Trashed { .. }
-                    | crate::app_event::AppEvent::Deleted { .. }
-                    | crate::app_event::AppEvent::Restored { .. }
-                    | crate::app_event::AppEvent::AlbumMediaChanged { .. }
-                    | crate::app_event::AppEvent::FavoriteChanged { .. } => {
-                        exit.activate(None);
+                let app = crate::application::MomentsApplication::default();
+                let mut handlers: Vec<(glib::Object, glib::SignalHandlerId)> = Vec::new();
+
+                if let Some(mc) = app.media_client() {
+                    let mc_obj: glib::Object = mc.clone().upcast();
+                    for sig in ["items-trashed", "items-restored", "items-deleted"] {
+                        let exit = exit.clone();
+                        let h = mc.connect_closure(
+                            sig,
+                            false,
+                            glib::closure_local!(move |_: crate::client::MediaClient, _: u32| {
+                                exit.activate(None);
+                            }),
+                        );
+                        handlers.push((mc_obj.clone(), h));
                     }
-                    _ => {}
-                });
-                *self._subscription.borrow_mut() = Some(sub);
+                    let exit = exit.clone();
+                    let h = mc.connect_closure(
+                        "favorite-changed",
+                        false,
+                        glib::closure_local!(
+                            move |_: crate::client::MediaClient, _: u32, _: bool| {
+                                exit.activate(None);
+                            }
+                        ),
+                    );
+                    handlers.push((mc_obj, h));
+                }
+
+                if let Some(ac) = app.album_client_v2() {
+                    let ac_obj: glib::Object = ac.clone().upcast();
+                    let exit = exit.clone();
+                    let h = ac.connect_closure(
+                        "album-media-changed",
+                        false,
+                        glib::closure_local!(move |_: crate::client::AlbumClientV2, _: String| {
+                            exit.activate(None);
+                        }),
+                    );
+                    handlers.push((ac_obj, h));
+                }
+
+                *self._signal_handlers.borrow_mut() = handlers;
             }
         }
 
         fn unrealize(&self) {
-            self._subscription.borrow_mut().take();
+            for (obj, h) in self._signal_handlers.borrow_mut().drain(..) {
+                obj.disconnect(h);
+            }
             self.parent_unrealize();
         }
     }

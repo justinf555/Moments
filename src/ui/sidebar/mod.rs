@@ -39,8 +39,10 @@ mod imp {
         pub trash_badge: OnceCell<gtk::Label>,
         pub trash_count: Cell<u32>,
 
-        /// Keeps the event bus subscription alive for this sidebar's lifetime.
-        pub _subscription: RefCell<Option<crate::event_bus::Subscription>>,
+        /// Signal handlers — disconnected on unrealize.
+        /// Stores (client_object, handler_id) pairs so disconnect works
+        /// even if the client singleton is unreachable at shutdown.
+        pub _signal_handlers: RefCell<Vec<(glib::Object, glib::SignalHandlerId)>>,
     }
 
     #[glib::object_subclass]
@@ -192,29 +194,52 @@ mod imp {
         fn realize(&self) {
             self.parent_realize();
 
-            let weak = self.obj().downgrade();
-            let sub = crate::event_bus::subscribe(move |event| {
-                let Some(sidebar) = weak.upgrade() else {
-                    return;
-                };
-                match event {
-                    crate::app_event::AppEvent::Trashed { ids } => {
-                        sidebar.adjust_trash_count(ids.len() as i32);
+            let Some(mc) = crate::application::MomentsApplication::default().media_client() else {
+                return;
+            };
+            let mc_obj: glib::Object = mc.clone().upcast();
+
+            let weak1 = self.obj().downgrade();
+            let h1 = mc.connect_closure(
+                "items-trashed",
+                false,
+                glib::closure_local!(move |_: crate::client::MediaClient, count: u32| {
+                    if let Some(sidebar) = weak1.upgrade() {
+                        sidebar.adjust_trash_count(count as i32);
                     }
-                    crate::app_event::AppEvent::Restored { ids } => {
-                        sidebar.adjust_trash_count(-(ids.len() as i32));
+                }),
+            );
+
+            let weak2 = self.obj().downgrade();
+            let h2 = mc.connect_closure(
+                "items-restored",
+                false,
+                glib::closure_local!(move |_: crate::client::MediaClient, count: u32| {
+                    if let Some(sidebar) = weak2.upgrade() {
+                        sidebar.adjust_trash_count(-(count as i32));
                     }
-                    crate::app_event::AppEvent::Deleted { ids } => {
-                        sidebar.adjust_trash_count(-(ids.len() as i32));
+                }),
+            );
+
+            let weak3 = self.obj().downgrade();
+            let h3 = mc.connect_closure(
+                "items-deleted",
+                false,
+                glib::closure_local!(move |_: crate::client::MediaClient, count: u32| {
+                    if let Some(sidebar) = weak3.upgrade() {
+                        sidebar.adjust_trash_count(-(count as i32));
                     }
-                    _ => {}
-                }
-            });
-            *self._subscription.borrow_mut() = Some(sub);
+                }),
+            );
+
+            *self._signal_handlers.borrow_mut() =
+                vec![(mc_obj.clone(), h1), (mc_obj.clone(), h2), (mc_obj, h3)];
         }
 
         fn unrealize(&self) {
-            self._subscription.borrow_mut().take();
+            for (obj, h) in self._signal_handlers.borrow_mut().drain(..) {
+                obj.disconnect(h);
+            }
             self.parent_unrealize();
         }
     }
