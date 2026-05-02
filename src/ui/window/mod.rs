@@ -267,7 +267,7 @@ impl MomentsWindow {
         {
             let sb = sidebar.clone();
             let media_client = crate::application::MomentsApplication::default()
-                .media_client()
+                .media_client_v2()
                 .expect("media client available");
             media_client.library_stats(move |result| {
                 if let Ok(stats) = result {
@@ -291,7 +291,7 @@ impl MomentsWindow {
         use crate::library::media::MediaFilter;
 
         let media_client = crate::application::MomentsApplication::default()
-            .media_client()
+            .media_client_v2()
             .expect("media client available");
 
         let content_stack = gtk::Stack::new();
@@ -333,7 +333,7 @@ impl MomentsWindow {
             let bs = bus_sender.clone();
             coordinator.register_lazy("favorites", move || {
                 let mc = crate::application::MomentsApplication::default()
-                    .media_client()
+                    .media_client_v2()
                     .expect("media client available");
                 let store = mc.create_model(MediaFilter::Favorites);
                 let view = PhotoGridView::new();
@@ -352,7 +352,7 @@ impl MomentsWindow {
                 let since = chrono::Utc::now().timestamp() - days * 86400;
                 let filter = MediaFilter::RecentImports { since };
                 let mc = crate::application::MomentsApplication::default()
-                    .media_client()
+                    .media_client_v2()
                     .expect("media client available");
                 let store = mc.create_model(filter.clone());
                 let view = PhotoGridView::new();
@@ -368,7 +368,7 @@ impl MomentsWindow {
             let bs = bus_sender.clone();
             coordinator.register_lazy("trash", move || {
                 let mc = crate::application::MomentsApplication::default()
-                    .media_client()
+                    .media_client_v2()
                     .expect("media client available");
                 let store = mc.create_model(MediaFilter::Trashed);
                 let view = PhotoGridView::new();
@@ -448,7 +448,7 @@ impl MomentsWindow {
                     let album_id = AlbumId::from_raw(album_id_str.to_owned());
                     let filter = MediaFilter::Album { album_id };
                     let mc = crate::application::MomentsApplication::default()
-                        .media_client()
+                        .media_client_v2()
                         .expect("media client available");
                     let store = mc.create_model(filter.clone());
                     let view = PhotoGridView::new();

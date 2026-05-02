@@ -173,7 +173,7 @@ pub(super) fn wire_overflow_menu(
                 items.get(idx).map(|obj| obj.item().id.clone())
             };
             let Some(id) = id else { return };
-            if let Some(mc) = crate::application::MomentsApplication::default().media_client() {
+            if let Some(mc) = crate::application::MomentsApplication::default().media_client_v2() {
                 mc.trash(vec![id]);
             }
             if let Some(nav_view) = viewer

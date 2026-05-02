@@ -194,7 +194,8 @@ mod imp {
         fn realize(&self) {
             self.parent_realize();
 
-            let Some(mc) = crate::application::MomentsApplication::default().media_client() else {
+            let Some(mc) = crate::application::MomentsApplication::default().media_client_v2()
+            else {
                 return;
             };
             let mc_obj: glib::Object = mc.clone().upcast();
@@ -203,7 +204,7 @@ mod imp {
             let h1 = mc.connect_closure(
                 "items-trashed",
                 false,
-                glib::closure_local!(move |_: crate::client::MediaClient, count: u32| {
+                glib::closure_local!(move |_: crate::client::MediaClientV2, count: u32| {
                     if let Some(sidebar) = weak1.upgrade() {
                         sidebar.adjust_trash_count(count as i32);
                     }
@@ -214,7 +215,7 @@ mod imp {
             let h2 = mc.connect_closure(
                 "items-restored",
                 false,
-                glib::closure_local!(move |_: crate::client::MediaClient, count: u32| {
+                glib::closure_local!(move |_: crate::client::MediaClientV2, count: u32| {
                     if let Some(sidebar) = weak2.upgrade() {
                         sidebar.adjust_trash_count(-(count as i32));
                     }
@@ -225,7 +226,7 @@ mod imp {
             let h3 = mc.connect_closure(
                 "items-deleted",
                 false,
-                glib::closure_local!(move |_: crate::client::MediaClient, count: u32| {
+                glib::closure_local!(move |_: crate::client::MediaClientV2, count: u32| {
                     if let Some(sidebar) = weak3.upgrade() {
                         sidebar.adjust_trash_count(-(count as i32));
                     }

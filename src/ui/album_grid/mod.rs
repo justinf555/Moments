@@ -288,27 +288,37 @@ impl AlbumGridView {
         settings: &gio::Settings,
         texture_cache: &Rc<TextureCache>,
         bus_sender: &crate::event_bus::EventSender,
-        store: &gio::ListStore,
+        _store: &gio::ListStore,
     ) {
         let s = settings.clone();
         let tc = Rc::clone(texture_cache);
         let bs = bus_sender.clone();
-        let st = store.clone();
         let nav = self.imp().nav_view.clone();
 
-        self.imp().grid_view.connect_activate(move |_, position| {
-            let Some(obj) = st.item(position) else { return };
-            let Some(item) = obj.downcast_ref::<AlbumItemObject>() else {
-                return;
-            };
-            let album_id_str = item.id();
-            let album_name = item.name();
-            let album_id = AlbumId::from_raw(album_id_str.clone());
+        // Resolve the activated item via the grid's bound model so that
+        // sorted/filtered positions map back to the right AlbumItemObject.
+        // Looking up by position in the raw store would return the wrong
+        // album whenever sort order differs from insertion order.
+        self.imp()
+            .grid_view
+            .connect_activate(move |grid_view, position| {
+                let Some(model) = grid_view.model() else {
+                    return;
+                };
+                let Some(obj) = model.item(position) else {
+                    return;
+                };
+                let Some(item) = obj.downcast_ref::<AlbumItemObject>() else {
+                    return;
+                };
+                let album_id_str = item.id();
+                let album_name = item.name();
+                let album_id = AlbumId::from_raw(album_id_str.clone());
 
-            debug!(album_id = %album_id_str, name = %album_name, "album activated");
+                debug!(album_id = %album_id_str, name = %album_name, "album activated");
 
-            actions::open_album_drilldown(&s, &tc, &bs, &nav, album_id, &album_name);
-        });
+                actions::open_album_drilldown(&s, &tc, &bs, &nav, album_id, &album_name);
+            });
     }
 }
 

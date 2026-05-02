@@ -42,7 +42,7 @@ pub(super) fn wire_activation(
             person_id: person_id.clone(),
         };
         let mc = crate::application::MomentsApplication::default()
-            .media_client()
+            .media_client_v2()
             .expect("media client available");
         let store = mc.create_model(filter.clone());
         let view = PhotoGridView::new();
