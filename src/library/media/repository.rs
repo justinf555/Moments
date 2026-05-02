@@ -96,6 +96,33 @@ impl MediaRepository {
         Ok(row.map(MediaRow::into_item))
     }
 
+    /// Fetch media items for a batch of IDs in one query.
+    ///
+    /// IDs that don't match any row are silently absent from the result;
+    /// callers compare the returned vec length with the request length to
+    /// detect missing rows.
+    pub async fn get_many(&self, ids: &[MediaId]) -> Result<Vec<MediaItem>, LibraryError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = id_placeholders(ids.len());
+        let sql = format!(
+            "SELECT id, taken_at, imported_at, original_filename,
+                    width, height, orientation, media_type, is_favorite,
+                    is_trashed, trashed_at, duration_ms
+             FROM media WHERE id IN ({placeholders})"
+        );
+        let mut query = sqlx::query_as::<_, MediaRow>(&sql);
+        for id in ids {
+            query = query.bind(id.as_str());
+        }
+        let rows: Vec<MediaRow> = query
+            .fetch_all(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
+        Ok(rows.into_iter().map(MediaRow::into_item).collect())
+    }
+
     /// Return the `original_filename` column for `id`, or `None` if no row exists.
     pub async fn original_filename(&self, id: &MediaId) -> Result<Option<String>, LibraryError> {
         let row: Option<String> =

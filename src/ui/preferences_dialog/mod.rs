@@ -219,7 +219,7 @@ fn build_storage_group(
 }
 
 fn spawn_library_stats(rows: LibraryStatsRows) {
-    let Some(media_client) = crate::application::MomentsApplication::default().media_client()
+    let Some(media_client) = crate::application::MomentsApplication::default().media_client_v2()
     else {
         return;
     };
@@ -367,7 +367,7 @@ fn build_server_stats_group() -> (adw::PreferencesGroup, ServerStatsRows) {
 }
 
 fn spawn_server_stats(rows: ServerStatsRows) {
-    let Some(media_client) = crate::application::MomentsApplication::default().media_client()
+    let Some(media_client) = crate::application::MomentsApplication::default().media_client_v2()
     else {
         return;
     };

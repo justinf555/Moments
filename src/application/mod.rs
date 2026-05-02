@@ -51,6 +51,7 @@ mod imp {
         pub album_client_v2: RefCell<Option<crate::client::AlbumClientV2>>,
         pub people_client: RefCell<Option<crate::client::PeopleClientV2>>,
         pub media_client: RefCell<Option<crate::client::MediaClient>>,
+        pub media_client_v2: RefCell<Option<crate::client::MediaClientV2>>,
         pub sync_client: RefCell<Option<crate::client::SyncClient>>,
         pub render_pipeline: RefCell<Option<Arc<crate::renderer::pipeline::RenderPipeline>>>,
         pub is_immich: Cell<bool>,
@@ -137,6 +138,7 @@ mod imp {
             self.album_client_v2.borrow_mut().take();
             self.people_client.borrow_mut().take();
             self.media_client.borrow_mut().take();
+            self.media_client_v2.borrow_mut().take();
             self.sync_handle.borrow_mut().take();
             self.library.borrow_mut().take();
 
@@ -259,6 +261,15 @@ impl MomentsApplication {
     /// Returns `None` if no library is open yet.
     pub fn media_client(&self) -> Option<crate::client::MediaClient> {
         self.imp().media_client.borrow().clone()
+    }
+
+    /// Access the media client v2 singleton.
+    ///
+    /// Stands alongside [`Self::media_client`] during the MediaClientV2
+    /// uplift (#587). Read-path call sites migrate to v2 incrementally;
+    /// v1 retains command methods until EventBus is removed.
+    pub fn media_client_v2(&self) -> Option<crate::client::MediaClientV2> {
+        self.imp().media_client_v2.borrow().clone()
     }
 
     /// Access the sync client singleton (Immich only).
@@ -693,6 +704,15 @@ impl MomentsApplication {
                                 bus.sender(),
                             );
                             *app.imp().media_client.borrow_mut() = Some(media_client);
+                        }
+
+                        // Create MediaClientV2 alongside v1 (#587). Subscribes
+                        // to MediaEvent via the service's fan-out channel.
+                        // Read-path call sites migrate to v2 in later phases.
+                        {
+                            let media_client_v2 = crate::client::MediaClientV2::new();
+                            media_client_v2.configure(Arc::clone(&library), tokio.clone());
+                            *app.imp().media_client_v2.borrow_mut() = Some(media_client_v2);
                         }
 
                         // Wire the shell: builds sidebar, registers views,

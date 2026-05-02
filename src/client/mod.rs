@@ -6,7 +6,7 @@ pub mod sync;
 
 pub use album::{AlbumClientV2, AlbumItemObject};
 pub use import::{ImportClient, ImportState};
-pub use media::{MediaClient, MediaItemObject};
+pub use media::{MediaClient, MediaClientV2, MediaItemObject};
 pub use people::{PeopleClientV2, PersonItemObject};
 pub use sync::{SyncClient, SyncState};
 
