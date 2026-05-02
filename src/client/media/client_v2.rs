@@ -138,7 +138,10 @@ impl MediaClientV2 {
     /// the tracking entry is cleaned up on the next `find_tracked` scan.
     pub fn create_model(&self, filter: MediaFilter) -> gio::ListStore {
         let store = gio::ListStore::new::<MediaItemObject>();
-        self.imp().models.borrow_mut().push(TrackedMediaModel {
+        let mut models = self.imp().models.borrow_mut();
+        // Reclaim slots whose ListStore has been dropped by its widget.
+        models.retain(|t| t.store.upgrade().is_some());
+        models.push(TrackedMediaModel {
             store: store.downgrade(),
             filter,
             cursor: RefCell::new(None),
@@ -549,14 +552,19 @@ impl MediaClientV2 {
     }
 
     fn on_thumbnail_ready(&self, id: &MediaId) {
-        // Find the MediaItemObject across tracked models' id_indices.
-        let obj = {
+        // Collect every tracked MediaItemObject for this id — the same media
+        // can appear in multiple open models (e.g. All grid + album detail),
+        // and each holds an independent MediaItemObject that needs the texture.
+        let objs: Vec<MediaItemObject> = {
             let models = self.imp().models.borrow();
             models
                 .iter()
-                .find_map(|t| t.id_index.borrow().get(id).and_then(|w| w.upgrade()))
+                .filter_map(|t| t.id_index.borrow().get(id).and_then(|w| w.upgrade()))
+                .collect()
         };
-        let Some(obj) = obj else { return };
+        if objs.is_empty() {
+            return;
+        }
 
         let (library, tokio) = self.deps();
         let path = library.thumbnails().thumbnail_path(id);
@@ -564,8 +572,10 @@ impl MediaClientV2 {
 
         glib::MainContext::default().spawn_local(async move {
             if let Some(texture) = load_texture(tokio, path).await {
-                debug!(id = %id_for_log, "thumbnail ready: texture set");
-                obj.set_texture(Some(texture));
+                debug!(id = %id_for_log, models = objs.len(), "thumbnail ready: texture set");
+                for obj in &objs {
+                    obj.set_texture(Some(texture.clone()));
+                }
             }
         });
     }
@@ -732,6 +742,10 @@ fn remove_item_from_tracked(tracked: &TrackedMediaModel, store: &gio::ListStore,
 /// thread. Returns `None` on any error (file not found, decode failure,
 /// spawn error) — the caller skips the update and keeps the existing
 /// texture.
+///
+/// Bypasses `crate::client::spawn_on` because that helper requires the
+/// inner future return `Result<T, LibraryError>`; thumbnail loads are
+/// best-effort and surface failure as `None`, not `LibraryError`.
 async fn load_texture(handle: tokio::runtime::Handle, path: PathBuf) -> Option<gdk::Texture> {
     let result = handle
         .spawn(async move {
