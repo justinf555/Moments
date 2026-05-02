@@ -144,7 +144,7 @@ fn wire_favourite(btn: &gtk::Button, selection: &gtk::MultiSelection) {
             .unwrap_or(false);
         let new_state = !first_fav;
 
-        if let Some(mc) = crate::application::MomentsApplication::default().media_client() {
+        if let Some(mc) = crate::application::MomentsApplication::default().media_client_v2() {
             mc.set_favorite(ids, new_state);
         }
         actions::update_fav_button(&btn_ref, new_state);
@@ -158,7 +158,7 @@ fn wire_trash(btn: &gtk::Button, selection: &gtk::MultiSelection) {
         if ids.is_empty() {
             return;
         }
-        if let Some(mc) = crate::application::MomentsApplication::default().media_client() {
+        if let Some(mc) = crate::application::MomentsApplication::default().media_client_v2() {
             mc.trash(ids);
         }
     });
@@ -171,7 +171,7 @@ fn wire_restore(btn: &gtk::Button, selection: &gtk::MultiSelection) {
         if ids.is_empty() {
             return;
         }
-        if let Some(mc) = crate::application::MomentsApplication::default().media_client() {
+        if let Some(mc) = crate::application::MomentsApplication::default().media_client_v2() {
             mc.restore(ids);
         }
     });
@@ -208,7 +208,7 @@ fn wire_delete_permanently(btn: &gtk::Button, selection: &gtk::MultiSelection) {
             move |response| {
                 if response == "delete" {
                     if let Some(mc) =
-                        crate::application::MomentsApplication::default().media_client()
+                        crate::application::MomentsApplication::default().media_client_v2()
                     {
                         mc.delete(ids);
                     }

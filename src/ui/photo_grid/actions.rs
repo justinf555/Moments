@@ -216,7 +216,7 @@ fn wire_restore_button(
         if ids.is_empty() {
             return;
         }
-        if let Some(mc) = crate::application::MomentsApplication::default().media_client() {
+        if let Some(mc) = crate::application::MomentsApplication::default().media_client_v2() {
             mc.restore(ids);
         }
     });
@@ -262,7 +262,7 @@ fn wire_permanent_delete_button(
             move |response| {
                 if response == "delete" {
                     if let Some(mc) =
-                        crate::application::MomentsApplication::default().media_client()
+                        crate::application::MomentsApplication::default().media_client_v2()
                     {
                         mc.delete(ids);
                     }
@@ -289,7 +289,7 @@ fn wire_favourite_button(
         if ids.is_empty() {
             return;
         }
-        if let Some(mc) = crate::application::MomentsApplication::default().media_client() {
+        if let Some(mc) = crate::application::MomentsApplication::default().media_client_v2() {
             mc.set_favorite(ids, new_fav);
         }
     });
@@ -311,7 +311,7 @@ fn wire_trash_button(
         if ids.is_empty() {
             return;
         }
-        if let Some(mc) = crate::application::MomentsApplication::default().media_client() {
+        if let Some(mc) = crate::application::MomentsApplication::default().media_client_v2() {
             mc.trash(ids);
         }
     });

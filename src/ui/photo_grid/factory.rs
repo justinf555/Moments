@@ -7,7 +7,7 @@ use gtk::{gio, glib, prelude::*, subclass::prelude::*};
 use tokio::sync::Semaphore;
 use tracing::debug;
 
-use crate::client::{MediaClient, MediaItemObject};
+use crate::client::{MediaClientV2, MediaItemObject};
 use crate::library::media::{MediaFilter, MediaItem};
 
 use super::cell::PhotoGridCell;
@@ -26,7 +26,7 @@ fn max_decode_workers() -> usize {
 #[allow(clippy::too_many_arguments)]
 pub fn build_factory(
     cell_size: i32,
-    media_client: MediaClient,
+    media_client: MediaClientV2,
     filter: MediaFilter,
     cache: Rc<TextureCache>,
     selection_mode: Rc<Cell<bool>>,

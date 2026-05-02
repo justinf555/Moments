@@ -37,7 +37,7 @@ mod photo_grid_imp {
         pub selection: RefCell<Option<gtk::MultiSelection>>,
         pub store: RefCell<Option<gio::ListStore>>,
         pub zoom_level: Cell<usize>,
-        pub media_client: OnceCell<crate::client::MediaClient>,
+        pub media_client: OnceCell<crate::client::MediaClientV2>,
         pub bus_sender: OnceCell<crate::event_bus::EventSender>,
         pub filter: RefCell<crate::library::media::MediaFilter>,
         pub texture_cache: OnceCell<Rc<super::texture_cache::TextureCache>>,
@@ -94,7 +94,7 @@ mod photo_grid_imp {
                 .get()
                 .expect("content_stack not initialized")
         }
-        pub fn media_client(&self) -> &crate::client::MediaClient {
+        pub fn media_client(&self) -> &crate::client::MediaClientV2 {
             self.media_client
                 .get()
                 .expect("media_client not initialized")
@@ -230,7 +230,7 @@ impl PhotoGrid {
     pub fn set_store(
         &self,
         store: gio::ListStore,
-        media_client: crate::client::MediaClient,
+        media_client: crate::client::MediaClientV2,
         bus_sender: crate::event_bus::EventSender,
         filter: crate::library::media::MediaFilter,
         cache: Rc<texture_cache::TextureCache>,
@@ -440,14 +440,14 @@ mod view_imp {
                 let app = crate::application::MomentsApplication::default();
                 let mut handlers: Vec<(glib::Object, glib::SignalHandlerId)> = Vec::new();
 
-                if let Some(mc) = app.media_client() {
+                if let Some(mc) = app.media_client_v2() {
                     let mc_obj: glib::Object = mc.clone().upcast();
                     for sig in ["items-trashed", "items-restored", "items-deleted"] {
                         let exit = exit.clone();
                         let h = mc.connect_closure(
                             sig,
                             false,
-                            glib::closure_local!(move |_: crate::client::MediaClient, _: u32| {
+                            glib::closure_local!(move |_: crate::client::MediaClientV2, _: u32| {
                                 exit.activate(None);
                             }),
                         );
@@ -458,7 +458,7 @@ mod view_imp {
                         "favorite-changed",
                         false,
                         glib::closure_local!(
-                            move |_: crate::client::MediaClient, _: u32, _: bool| {
+                            move |_: crate::client::MediaClientV2, _: u32, _: bool| {
                                 exit.activate(None);
                             }
                         ),
@@ -710,7 +710,7 @@ impl PhotoGridView {
     pub fn set_store(&self, store: gio::ListStore, filter: MediaFilter) {
         let imp = self.imp();
         let media_client = crate::application::MomentsApplication::default()
-            .media_client()
+            .media_client_v2()
             .expect("media client available");
         let bus_sender = imp.bus_sender().clone();
         let texture_cache = Rc::clone(imp.texture_cache());
@@ -818,7 +818,7 @@ impl PhotoGridView {
                 dialog.connect_response(None, move |_, response| {
                     if response == "restore" {
                         if let Some(mc) =
-                            crate::application::MomentsApplication::default().media_client()
+                            crate::application::MomentsApplication::default().media_client_v2()
                         {
                             mc.restore_all_trash();
                         }
@@ -843,7 +843,7 @@ impl PhotoGridView {
                 dialog.connect_response(None, move |_, response| {
                     if response == "delete" {
                         if let Some(mc) =
-                            crate::application::MomentsApplication::default().media_client()
+                            crate::application::MomentsApplication::default().media_client_v2()
                         {
                             mc.empty_trash();
                         }

@@ -726,16 +726,6 @@ impl MomentsApplication {
                             .clone();
                         window.setup(settings, &bus);
 
-                        // Subscribe for command events — routes *Requested
-                        // events to library calls on the Tokio runtime.
-                        let Some(lib) = app.imp().library.borrow().as_ref().map(Arc::clone) else {
-                            tracing::error!("library not initialised when subscribing commands");
-                            return;
-                        };
-                        let cmd_sub =
-                            crate::library::commands::subscribe_commands(lib, tokio.clone(), &bus);
-                        app.imp().subscriptions.borrow_mut().push(cmd_sub);
-
                         // Subscribe for error toasts — centralised error
                         // handling for all command failures.
                         {
