@@ -248,7 +248,7 @@ impl EditPanel {
             if session.state.is_identity() {
                 let id_log = id.clone();
                 let mc = crate::application::MomentsApplication::default()
-                    .media_client()
+                    .media_client_v2()
                     .expect("media client available");
                 mc.revert_edits(&id, move |result| match result {
                     Ok(()) => debug!(media_id = %id_log, reason, "delete identity edit state"),
@@ -271,7 +271,7 @@ impl EditPanel {
         imp.save_in_flight.set(true);
         let id_log = id.clone();
         let mc = crate::application::MomentsApplication::default()
-            .media_client()
+            .media_client_v2()
             .expect("media client available");
 
         let weak = self.downgrade();
@@ -422,7 +422,7 @@ impl EditPanel {
             if let Some(id) = id {
                 let id_log = id.clone();
                 let mc = crate::application::MomentsApplication::default()
-                    .media_client()
+                    .media_client_v2()
                     .expect("media client available");
                 mc.revert_edits(&id, move |result| match result {
                     Ok(()) => debug!(media_id = %id_log, "revert edits"),

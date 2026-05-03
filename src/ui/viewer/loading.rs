@@ -18,7 +18,7 @@ impl PhotoViewer {
         imp.spinner.set_visible(true);
 
         let media_client = crate::application::MomentsApplication::default()
-            .media_client()
+            .media_client_v2()
             .expect("media client available");
 
         let pipeline = match crate::application::MomentsApplication::default().render_pipeline() {
@@ -139,7 +139,7 @@ impl PhotoViewer {
         let tokio = crate::application::MomentsApplication::default().tokio_handle();
 
         let media_client = crate::application::MomentsApplication::default()
-            .media_client()
+            .media_client_v2()
             .expect("media client available");
 
         let pipeline = match crate::application::MomentsApplication::default().render_pipeline() {
@@ -248,7 +248,7 @@ impl PhotoViewer {
 
     pub(super) fn load_metadata_async(&self, gen: u64, id: crate::library::media::MediaId) {
         let media_client = crate::application::MomentsApplication::default()
-            .media_client()
+            .media_client_v2()
             .expect("media client available");
 
         let weak = self.downgrade();
