@@ -12,7 +12,6 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 use tracing::{error, info};
 
-use crate::event_bus::EventSender;
 use crate::library::db::Database;
 use crate::library::Library;
 
@@ -43,7 +42,6 @@ impl SyncHandle {
         client: providers::immich::client::ImmichClient,
         library: Arc<Library>,
         db: Database,
-        events: EventSender,
         sync_events: mpsc::UnboundedSender<event::SyncEvent>,
         thumbnails_dir: PathBuf,
         initial_interval_secs: u64,
@@ -59,7 +57,6 @@ impl SyncHandle {
             client: client.clone(),
             library: Arc::clone(&library),
             db: db.clone(),
-            events: events.clone(),
             sync_events: sync_events.clone(),
             shutdown_rx: shutdown_rx.clone(),
             thumbnails_dir,

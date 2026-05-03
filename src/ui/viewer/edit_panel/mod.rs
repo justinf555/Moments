@@ -62,7 +62,6 @@ mod imp {
 
         // Service dependencies (set once in setup)
         pub picture: OnceCell<gtk::Picture>,
-        pub bus_sender: OnceCell<crate::event_bus::EventSender>,
 
         // Shared session — same Rc passed to all sections
         pub session: OnceCell<Rc<RefCell<Option<EditSession>>>>,
@@ -76,9 +75,6 @@ mod imp {
     impl EditPanel {
         pub fn picture(&self) -> &gtk::Picture {
             self.picture.get().expect("picture not initialized")
-        }
-        pub fn bus_sender(&self) -> &crate::event_bus::EventSender {
-            self.bus_sender.get().expect("bus_sender not initialized")
         }
         pub fn session_rc(&self) -> &Rc<RefCell<Option<EditSession>>> {
             self.session.get().expect("session not initialized")
@@ -131,10 +127,9 @@ impl EditPanel {
     }
 
     /// Inject service dependencies and wire signal handlers.
-    pub fn setup(&self, picture: gtk::Picture, bus_sender: crate::event_bus::EventSender) {
+    pub fn setup(&self, picture: gtk::Picture) {
         let imp = self.imp();
         assert!(imp.picture.set(picture).is_ok(), "setup called twice");
-        assert!(imp.bus_sender.set(bus_sender).is_ok(), "setup called twice");
 
         // Create the shared session.
         let session: Rc<RefCell<Option<EditSession>>> = Rc::new(RefCell::new(None));
@@ -246,15 +241,28 @@ impl EditPanel {
 
             // Don't persist identity state — delete instead if it exists.
             if session.state.is_identity() {
+                if imp.save_in_flight.get() {
+                    debug!(media_id = %id, reason, "revert skipped — write already in-flight");
+                    return;
+                }
+                imp.save_in_flight.set(true);
                 let id_log = id.clone();
                 let mc = crate::application::MomentsApplication::default()
                     .media_client_v2()
                     .expect("media client available");
-                mc.revert_edits(&id, move |result| match result {
-                    Ok(()) => debug!(media_id = %id_log, reason, "delete identity edit state"),
-                    Err(e) => {
-                        error!("delete edit state failed: {e}");
-                        crate::client::show_toast("Could not revert edits");
+                let weak = self.downgrade();
+                mc.revert_edits(&id, move |result| {
+                    if let Some(panel) = weak.upgrade() {
+                        panel.imp().save_in_flight.set(false);
+                    }
+                    match result {
+                        Ok(()) => {
+                            debug!(media_id = %id_log, reason, "delete identity edit state")
+                        }
+                        Err(e) => {
+                            error!("delete edit state failed: {e}");
+                            crate::client::show_toast("Could not revert edits");
+                        }
                     }
                 });
                 return;

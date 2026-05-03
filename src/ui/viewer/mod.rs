@@ -3,7 +3,6 @@ use adw::subclass::prelude::*;
 use gtk::{gdk, glib};
 
 use crate::client::MediaItemObject;
-use crate::event_bus::EventSender;
 use crate::library::media::MediaId;
 use crate::library::metadata::MediaMetadataRecord;
 
@@ -22,7 +21,7 @@ pub use menu::{build_viewer_menu_popover, ViewerMenuButtons};
 
 mod imp {
     use super::*;
-    use std::cell::{Cell, OnceCell, RefCell};
+    use std::cell::{Cell, RefCell};
 
     use gtk::CompositeTemplate;
 
@@ -53,9 +52,6 @@ mod imp {
         #[template_child]
         pub menu_btn: TemplateChild<gtk::MenuButton>,
 
-        // Service dependencies (set once in setup)
-        pub bus_sender: OnceCell<EventSender>,
-
         // Owned sub-panels (set in setup, not GObject yet)
         pub info_panel: RefCell<Option<InfoPanel>>,
         pub edit_panel: RefCell<Option<EditPanel>>,
@@ -72,12 +68,6 @@ mod imp {
         pub pending_load: RefCell<Option<MediaId>>,
         /// Cached metadata for the currently displayed item.
         pub current_metadata: RefCell<Option<MediaMetadataRecord>>,
-    }
-
-    impl PhotoViewer {
-        pub fn bus_sender(&self) -> &EventSender {
-            self.bus_sender.get().expect("bus_sender not initialized")
-        }
     }
 
     #[glib::object_subclass]
@@ -121,19 +111,14 @@ impl PhotoViewer {
         glib::Object::new()
     }
 
-    /// Inject service dependencies, build sub-panels, and wire signal handlers.
-    pub fn setup(&self, bus_sender: EventSender) {
+    /// Build sub-panels and wire signal handlers.
+    pub fn setup(&self) {
         let imp = self.imp();
-
-        assert!(
-            imp.bus_sender.set(bus_sender.clone()).is_ok(),
-            "setup called twice"
-        );
 
         // Build sub-panels and add to sidebar stack.
         let info_panel = InfoPanel::new();
         let edit_panel = EditPanel::new();
-        edit_panel.setup(imp.picture.clone(), bus_sender);
+        edit_panel.setup(imp.picture.clone());
         imp.sidebar_stack.add_named(&info_panel, Some("info"));
         imp.sidebar_stack.add_named(&edit_panel, Some("edit"));
         *imp.info_panel.borrow_mut() = Some(info_panel);

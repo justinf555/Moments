@@ -788,7 +788,9 @@ impl MediaClientV2 {
         // Single source of truth for `items-deleted` — fires for user
         // deletes, `empty_trash`, AND the background purge task. Listeners
         // (e.g. the sidebar trash badge) react to all deletion paths.
-        self.emit_by_name::<()>("items-deleted", &[&(ids.len() as u32)]);
+        if !ids.is_empty() {
+            self.emit_by_name::<()>("items-deleted", &[&(ids.len() as u32)]);
+        }
     }
 
     fn on_thumbnail_ready(&self, id: &MediaId) {

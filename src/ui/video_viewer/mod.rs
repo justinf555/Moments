@@ -4,7 +4,6 @@ use gtk::{gdk, gio, glib};
 use tracing::debug;
 
 use crate::client::MediaItemObject;
-use crate::event_bus::EventSender;
 use crate::library::media::MediaId;
 use crate::library::metadata::MediaMetadataRecord;
 use crate::ui::viewer::info_panel::InfoPanel;
@@ -13,7 +12,7 @@ use crate::ui::viewer::info_panel::InfoPanel;
 
 mod imp {
     use super::*;
-    use std::cell::{Cell, OnceCell, RefCell};
+    use std::cell::{Cell, RefCell};
 
     use gtk::CompositeTemplate;
 
@@ -40,9 +39,6 @@ mod imp {
         #[template_child]
         pub menu_btn: TemplateChild<gtk::MenuButton>,
 
-        // Service dependencies (set once in setup)
-        pub bus_sender: OnceCell<EventSender>,
-
         // Owned sub-panel (set in setup, not GObject yet)
         pub info_panel: RefCell<Option<InfoPanel>>,
 
@@ -53,12 +49,6 @@ mod imp {
         /// value captured at launch to discard stale results.
         pub load_gen: Cell<u64>,
         pub current_metadata: RefCell<Option<MediaMetadataRecord>>,
-    }
-
-    impl VideoViewer {
-        pub fn bus_sender(&self) -> &EventSender {
-            self.bus_sender.get().expect("bus_sender not initialized")
-        }
     }
 
     #[glib::object_subclass]
@@ -102,11 +92,9 @@ impl VideoViewer {
         glib::Object::new()
     }
 
-    /// Inject service dependencies, build info panel, and wire signal handlers.
-    pub fn setup(&self, bus_sender: EventSender) {
+    /// Build info panel and wire signal handlers.
+    pub fn setup(&self) {
         let imp = self.imp();
-
-        assert!(imp.bus_sender.set(bus_sender).is_ok(), "setup called twice");
 
         // Build info panel and set as sidebar.
         let info_panel = InfoPanel::new();

@@ -95,12 +95,7 @@ impl PeopleGridView {
     }
 
     /// Set up the People collection grid view.
-    pub fn setup_people(
-        &self,
-        settings: gio::Settings,
-        texture_cache: Rc<TextureCache>,
-        bus_sender: crate::event_bus::EventSender,
-    ) {
+    pub fn setup_people(&self, settings: gio::Settings, texture_cache: Rc<TextureCache>) {
         let imp = self.imp();
 
         let people_client = crate::application::MomentsApplication::default()
@@ -177,7 +172,6 @@ impl PeopleGridView {
             &imp.nav_view,
             &settings,
             &texture_cache,
-            &bus_sender,
         );
         actions::wire_context_menu(&imp.grid_view, &filter_model, &people_client);
 

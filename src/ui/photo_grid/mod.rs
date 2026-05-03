@@ -38,7 +38,6 @@ mod photo_grid_imp {
         pub store: RefCell<Option<gio::ListStore>>,
         pub zoom_level: Cell<usize>,
         pub media_client: OnceCell<crate::client::MediaClientV2>,
-        pub bus_sender: OnceCell<crate::event_bus::EventSender>,
         pub filter: RefCell<crate::library::media::MediaFilter>,
         pub texture_cache: OnceCell<Rc<super::texture_cache::TextureCache>>,
         /// Shared selection mode flag for the factory.
@@ -58,7 +57,6 @@ mod photo_grid_imp {
                 store: RefCell::default(),
                 zoom_level: Cell::new(DEFAULT_ZOOM_INDEX),
                 media_client: OnceCell::default(),
-                bus_sender: OnceCell::default(),
                 filter: RefCell::new(crate::library::media::MediaFilter::All),
                 texture_cache: OnceCell::default(),
                 selection_mode: Rc::new(Cell::new(false)),
@@ -98,9 +96,6 @@ mod photo_grid_imp {
             self.media_client
                 .get()
                 .expect("media_client not initialized")
-        }
-        pub fn bus_sender(&self) -> &crate::event_bus::EventSender {
-            self.bus_sender.get().expect("bus_sender not initialized")
         }
         pub fn texture_cache(&self) -> &Rc<super::texture_cache::TextureCache> {
             self.texture_cache
@@ -231,14 +226,12 @@ impl PhotoGrid {
         &self,
         store: gio::ListStore,
         media_client: crate::client::MediaClientV2,
-        bus_sender: crate::event_bus::EventSender,
         filter: crate::library::media::MediaFilter,
         cache: Rc<texture_cache::TextureCache>,
         on_activate: impl Fn(Vec<MediaItemObject>, usize) + 'static,
     ) {
         let imp = self.imp();
         let _ = imp.media_client.set(media_client.clone());
-        let _ = imp.bus_sender.set(bus_sender.clone());
         let _ = imp.texture_cache.set(Rc::clone(&cache));
         *imp.filter.borrow_mut() = filter.clone();
 
@@ -348,7 +341,6 @@ mod view_imp {
         pub empty_trash_btn: TemplateChild<gtk::Button>,
 
         // Service dependencies
-        pub bus_sender: OnceCell<crate::event_bus::EventSender>,
         pub texture_cache: OnceCell<Rc<texture_cache::TextureCache>>,
 
         // Viewers (reused across activations)
@@ -367,9 +359,6 @@ mod view_imp {
     }
 
     impl PhotoGridView {
-        pub fn bus_sender(&self) -> &crate::event_bus::EventSender {
-            self.bus_sender.get().expect("bus_sender not initialized")
-        }
         pub fn texture_cache(&self) -> &Rc<texture_cache::TextureCache> {
             self.texture_cache
                 .get()
@@ -427,7 +416,7 @@ mod view_imp {
         fn realize(&self) {
             self.parent_realize();
 
-            // Trigger initial page load via MediaClient.
+            // Trigger initial page load via MediaClientV2.
             if let (Some(store), Some(mc)) = (
                 self.photo_grid.imp().store.borrow().as_ref(),
                 self.photo_grid.imp().media_client.get(),
@@ -509,17 +498,8 @@ impl PhotoGridView {
         glib::Object::new()
     }
 
-    pub fn setup(
-        &self,
-        settings: gio::Settings,
-        texture_cache: Rc<texture_cache::TextureCache>,
-        bus_sender: crate::event_bus::EventSender,
-    ) {
+    pub fn setup(&self, settings: gio::Settings, texture_cache: Rc<texture_cache::TextureCache>) {
         let imp = self.imp();
-        assert!(
-            imp.bus_sender.set(bus_sender.clone()).is_ok(),
-            "setup called twice"
-        );
         assert!(
             imp.texture_cache.set(Rc::clone(&texture_cache)).is_ok(),
             "setup called twice"
@@ -527,9 +507,9 @@ impl PhotoGridView {
 
         // Viewers.
         let photo_viewer = PhotoViewer::new();
-        photo_viewer.setup(bus_sender.clone());
+        photo_viewer.setup();
         let video_viewer = VideoViewer::new();
-        video_viewer.setup(bus_sender.clone());
+        video_viewer.setup();
         assert!(imp.photo_viewer.set(photo_viewer).is_ok());
         assert!(imp.video_viewer.set(video_viewer).is_ok());
 
@@ -712,13 +692,11 @@ impl PhotoGridView {
         let media_client = crate::application::MomentsApplication::default()
             .media_client_v2()
             .expect("media client available");
-        let bus_sender = imp.bus_sender().clone();
         let texture_cache = Rc::clone(imp.texture_cache());
 
         imp.photo_grid.set_store(
             store.clone(),
             media_client,
-            bus_sender.clone(),
             filter.clone(),
             Rc::clone(&texture_cache),
             {

@@ -33,7 +33,7 @@ pub(super) fn wire_album_controls(ctx: &ActionContext, album_btn: &gtk::Button) 
 
 /// Wire the right-click context menu on grid cells.
 ///
-/// Actions invoke `MediaClient` / `AlbumClientV2` methods directly.
+/// Actions invoke `MediaClientV2` / `AlbumClientV2` methods directly.
 pub(super) fn wire_context_menu(ctx: &ActionContext) {
     let gesture = gtk::GestureClick::new();
     gesture.set_button(3);

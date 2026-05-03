@@ -11,7 +11,6 @@ use futures_util::TryStreamExt;
 use tokio::io::AsyncBufReadExt;
 use tracing::{debug, error, info, instrument, warn};
 
-use crate::event_bus::EventSender;
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
 use crate::library::media::MediaId;
@@ -55,7 +54,6 @@ pub(crate) struct PullManager {
     pub library: Arc<Library>,
     /// Database handle for sync infrastructure (checkpoints, audit).
     pub db: Database,
-    pub events: EventSender,
     /// Channel for UI state updates (sync progress, errors).
     pub sync_events: tokio::sync::mpsc::UnboundedSender<SyncEvent>,
     pub shutdown_rx: tokio::sync::watch::Receiver<bool>,
@@ -178,7 +176,6 @@ impl PullManager {
             client: self.client.clone(),
             library: Arc::clone(&self.library),
             db: self.db.clone(),
-            events: self.events.clone(),
             thumbnails_dir: self.thumbnails_dir.clone(),
         };
 

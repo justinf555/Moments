@@ -30,9 +30,7 @@ use gettextrs::gettext;
 use gtk::{gio, glib};
 use tracing::{debug, error, info, instrument, warn};
 
-use crate::app_event::AppEvent;
 use crate::config::{APP_ID, PROFILE, VERSION};
-use crate::event_bus::EventBus;
 use crate::library::bundle::Bundle;
 use crate::library::config::LibraryConfig;
 use crate::library::Library;
@@ -50,17 +48,11 @@ mod imp {
         pub import_client: RefCell<Option<crate::client::ImportClient>>,
         pub album_client_v2: RefCell<Option<crate::client::AlbumClientV2>>,
         pub people_client: RefCell<Option<crate::client::PeopleClientV2>>,
-        pub media_client: RefCell<Option<crate::client::MediaClient>>,
         pub media_client_v2: RefCell<Option<crate::client::MediaClientV2>>,
         pub sync_client: RefCell<Option<crate::client::SyncClient>>,
         pub render_pipeline: RefCell<Option<Arc<crate::renderer::pipeline::RenderPipeline>>>,
         pub is_immich: Cell<bool>,
         pub immich_server_url: RefCell<Option<String>>,
-        /// Centralised event bus for fan-out event delivery.
-        /// Created when the library is loaded.
-        pub event_bus: RefCell<Option<EventBus>>,
-        /// App-lifetime event bus subscriptions (error toasts, etc.).
-        pub subscriptions: RefCell<Vec<crate::event_bus::Subscription>>,
         /// Background task handle for periodic trash purge.
         pub purge_handle: RefCell<Option<tokio::task::JoinHandle<()>>>,
         /// Sync engine handle (Immich only).
@@ -132,12 +124,10 @@ mod imp {
                 handle.shutdown();
             }
 
-            self.event_bus.borrow_mut().take();
             self.sync_client.borrow_mut().take();
             self.import_client.borrow_mut().take();
             self.album_client_v2.borrow_mut().take();
             self.people_client.borrow_mut().take();
-            self.media_client.borrow_mut().take();
             self.media_client_v2.borrow_mut().take();
             self.sync_handle.borrow_mut().take();
             self.library.borrow_mut().take();
@@ -257,17 +247,8 @@ impl MomentsApplication {
 
     /// Access the media client singleton.
     ///
-    /// Available from anywhere via `MomentsApplication::default().media_client()`.
+    /// Available from anywhere via `MomentsApplication::default().media_client_v2()`.
     /// Returns `None` if no library is open yet.
-    pub fn media_client(&self) -> Option<crate::client::MediaClient> {
-        self.imp().media_client.borrow().clone()
-    }
-
-    /// Access the media client v2 singleton.
-    ///
-    /// Stands alongside [`Self::media_client`] during the MediaClientV2
-    /// uplift (#587). Read-path call sites migrate to v2 incrementally;
-    /// v1 retains command methods until EventBus is removed.
     pub fn media_client_v2(&self) -> Option<crate::client::MediaClientV2> {
         self.imp().media_client_v2.borrow().clone()
     }
@@ -604,8 +585,6 @@ impl MomentsApplication {
             async move {
                 let tokio = app.imp().tokio.get().expect("tokio handle set").clone();
 
-                let bus = EventBus::new();
-
                 let import_mode = storage_mode.clone();
                 let db = crate::library::db::Database::new();
 
@@ -695,20 +674,9 @@ impl MomentsApplication {
                             *app.imp().people_client.borrow_mut() = Some(people_client);
                         }
 
-                        // Create the media client (GObject singleton).
-                        {
-                            let media_client = crate::client::MediaClient::new();
-                            media_client.configure(
-                                Arc::clone(&library),
-                                tokio.clone(),
-                                bus.sender(),
-                            );
-                            *app.imp().media_client.borrow_mut() = Some(media_client);
-                        }
-
-                        // Create MediaClientV2 alongside v1 (#587). Subscribes
-                        // to MediaEvent via the service's fan-out channel.
-                        // Read-path call sites migrate to v2 in later phases.
+                        // Create the MediaClient (GObject singleton).
+                        // Subscribes to MediaEvent via the service's fan-out
+                        // channel for reactive model updates.
                         {
                             let media_client_v2 = crate::client::MediaClientV2::new();
                             media_client_v2.configure(Arc::clone(&library), tokio.clone());
@@ -716,34 +684,16 @@ impl MomentsApplication {
                         }
 
                         // Wire the shell: builds sidebar, registers views,
-                        // and switches to the content page. All components
-                        // subscribe to the bus for event delivery.
+                        // and switches to the content page. Components react
+                        // to mutations via per-service event channels and
+                        // GObject signals on the client singletons.
                         let settings = app
                             .imp()
                             .settings
                             .get()
                             .expect("settings initialised")
                             .clone();
-                        window.setup(settings, &bus);
-
-                        // Subscribe for error toasts — centralised error
-                        // handling for all command failures.
-                        {
-                            let win_weak = window.downgrade();
-                            let sub = bus.subscribe(move |event| {
-                                if let AppEvent::Error(msg) = event {
-                                    if let Some(win) = win_weak.upgrade() {
-                                        gtk::prelude::WidgetExt::activate_action(
-                                            &win,
-                                            "win.show-toast",
-                                            Some(&msg.to_variant()),
-                                        )
-                                        .ok();
-                                    }
-                                }
-                            });
-                            app.imp().subscriptions.borrow_mut().push(sub);
-                        }
+                        window.setup(settings);
 
                         // Start periodic trash purge task.
                         {
@@ -758,7 +708,6 @@ impl MomentsApplication {
                                 .uint("trash-retention-days");
                             let handle = crate::tasks::purge_trash::start(
                                 lib,
-                                bus.sender(),
                                 retention_days,
                                 tokio.clone(),
                             );
@@ -785,7 +734,6 @@ impl MomentsApplication {
                                 client,
                                 lib,
                                 db_for_sync,
-                                bus.sender(),
                                 sync_events_tx,
                                 sync_thumbnails_dir,
                                 sync_interval,
@@ -797,9 +745,6 @@ impl MomentsApplication {
                             sync_client.configure(sync_events_rx, tokio.clone());
                             app.set_sync_client(sync_client);
                         }
-
-                        // Store bus for shutdown cleanup.
-                        *app.imp().event_bus.borrow_mut() = Some(bus);
                     }
                     Err(e) => {
                         error!("failed to open library: {e}");

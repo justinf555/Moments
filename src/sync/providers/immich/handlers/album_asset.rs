@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 
-use crate::app_event::AppEvent;
 use crate::library::album::AlbumId;
 use crate::library::error::LibraryError;
 
@@ -28,9 +27,9 @@ impl SyncEntityHandler for AlbumAssetHandler {
         ctx.db
             .upsert_album_media(&assoc.album_id, &assoc.asset_id, now)
             .await?;
-        ctx.events.send(AppEvent::AlbumMediaChanged {
-            album_id: AlbumId::from_raw(assoc.album_id),
-        });
+        ctx.library
+            .albums()
+            .emit_album_media_changed(&AlbumId::from_raw(assoc.album_id));
 
         Ok(HandlerResult {
             entity_id: id,
@@ -61,9 +60,9 @@ impl SyncEntityHandler for AlbumAssetDeleteHandler {
         ctx.db
             .delete_album_media_entry(&assoc.album_id, &assoc.asset_id)
             .await?;
-        ctx.events.send(AppEvent::AlbumMediaChanged {
-            album_id: AlbumId::from_raw(assoc.album_id),
-        });
+        ctx.library
+            .albums()
+            .emit_album_media_changed(&AlbumId::from_raw(assoc.album_id));
 
         Ok(HandlerResult {
             entity_id: id,

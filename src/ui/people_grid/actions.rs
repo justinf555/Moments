@@ -18,12 +18,10 @@ pub(super) fn wire_activation(
     nav_view: &adw::NavigationView,
     settings: &gio::Settings,
     texture_cache: &Rc<TextureCache>,
-    bus_sender: &crate::event_bus::EventSender,
 ) {
     let nav = nav_view.clone();
     let s = settings.clone();
     let tc = Rc::clone(texture_cache);
-    let bs = bus_sender.clone();
     let fm = filter_model.clone();
 
     grid_view.connect_activate(move |_, position| {
@@ -46,7 +44,7 @@ pub(super) fn wire_activation(
             .expect("media client available");
         let store = mc.create_model(filter.clone());
         let view = PhotoGridView::new();
-        view.setup(s.clone(), Rc::clone(&tc), bs.clone());
+        view.setup(s.clone(), Rc::clone(&tc));
         view.set_store(store, filter);
 
         let display_name = if name.is_empty() {

@@ -12,7 +12,6 @@ use crate::ui::photo_grid::PhotoGridView;
 pub(crate) fn open_album_drilldown(
     settings: &gtk::gio::Settings,
     texture_cache: &Rc<TextureCache>,
-    bus_sender: &crate::event_bus::EventSender,
     nav_view: &adw::NavigationView,
     album_id: AlbumId,
     album_name: &str,
@@ -23,11 +22,7 @@ pub(crate) fn open_album_drilldown(
         .expect("media client available");
     let store = media_client.create_model(filter.clone());
     let view = PhotoGridView::new();
-    view.setup(
-        settings.clone(),
-        Rc::clone(texture_cache),
-        bus_sender.clone(),
-    );
+    view.setup(settings.clone(), Rc::clone(texture_cache));
     view.set_store(store, filter);
 
     let page = adw::NavigationPage::builder()

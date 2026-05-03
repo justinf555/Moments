@@ -1,6 +1,5 @@
 pub mod album;
 pub mod bundle;
-pub mod commands;
 pub mod config;
 pub mod db;
 pub mod editing;
@@ -34,7 +33,7 @@ use thumbnail::ThumbnailService;
 /// Constructed via [`Library::open`] with a validated [`Bundle`] and
 /// [`LocalStorageMode`]. All operations are accessed via service accessors
 /// (`media()`, `albums()`, `faces()`, etc.) or through the client layer
-/// (`MediaClient`, `AlbumClientV2`, `PeopleClientV2`).
+/// (`MediaClientV2`, `AlbumClientV2`, `PeopleClientV2`).
 pub struct Library {
     albums: AlbumService,
     faces: FacesService,
