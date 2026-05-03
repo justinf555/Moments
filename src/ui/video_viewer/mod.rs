@@ -189,7 +189,7 @@ impl VideoViewer {
         imp.spinner.set_visible(true);
 
         let mc = crate::application::MomentsApplication::default()
-            .media_client()
+            .media_client_v2()
             .expect("media client available");
 
         let weak = self.downgrade();
@@ -226,7 +226,7 @@ impl VideoViewer {
 
     fn load_metadata_async(&self, gen: u64, id: MediaId) {
         let mc = crate::application::MomentsApplication::default()
-            .media_client()
+            .media_client_v2()
             .expect("media client available");
 
         let weak = self.downgrade();

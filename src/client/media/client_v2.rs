@@ -9,7 +9,7 @@ use gtk::glib;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use tokio::sync::mpsc;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use super::model::MediaItemObject;
 use crate::library::album::{AlbumEvent, AlbumId};
@@ -322,6 +322,40 @@ impl MediaClientV2 {
         });
     }
 
+    /// Persist the non-destructive edit state for a media item.
+    pub fn save_edit_state(
+        &self,
+        id: &MediaId,
+        state: &EditState,
+        cb: impl FnOnce(Result<(), LibraryError>) + 'static,
+    ) {
+        let (library, tokio) = self.deps();
+        let id = id.clone();
+        let state = state.clone();
+
+        glib::MainContext::default().spawn_local(async move {
+            let result = crate::client::spawn_on(&tokio, async move {
+                library.editing().save_edit_state(&id, &state).await
+            })
+            .await;
+            cb(result);
+        });
+    }
+
+    /// Revert edits for a media item (delete edit state from DB).
+    pub fn revert_edits(&self, id: &MediaId, cb: impl FnOnce(Result<(), LibraryError>) + 'static) {
+        let (library, tokio) = self.deps();
+        let id = id.clone();
+
+        glib::MainContext::default().spawn_local(async move {
+            let result = crate::client::spawn_on(&tokio, async move {
+                library.editing().revert_edits(&id).await
+            })
+            .await;
+            cb(result);
+        });
+    }
+
     /// Fetch library statistics (total count, totals by type, etc.).
     pub fn library_stats(&self, cb: impl FnOnce(Result<LibraryStats, LibraryError>) + 'static) {
         let (library, tokio) = self.deps();
@@ -355,18 +389,17 @@ impl MediaClientV2 {
     pub fn trash(&self, ids: Vec<MediaId>) {
         let (library, tokio) = self.deps();
         let client_weak: glib::SendWeakRef<MediaClientV2> = self.downgrade().into();
+        let count = ids.len() as u32;
 
         glib::MainContext::default().spawn_local(async move {
-            let ids_for_call = ids.clone();
-            let result = crate::client::spawn_on(&tokio, async move {
-                library.media().trash(&ids_for_call).await
-            })
-            .await;
+            let result =
+                crate::client::spawn_on(&tokio, async move { library.media().trash(&ids).await })
+                    .await;
 
             match result {
                 Ok(()) => {
                     if let Some(client) = client_weak.upgrade() {
-                        client.emit_by_name::<()>("items-trashed", &[&(ids.len() as u32)]);
+                        client.emit_by_name::<()>("items-trashed", &[&count]);
                     }
                 }
                 Err(e) => {
@@ -381,18 +414,17 @@ impl MediaClientV2 {
     pub fn restore(&self, ids: Vec<MediaId>) {
         let (library, tokio) = self.deps();
         let client_weak: glib::SendWeakRef<MediaClientV2> = self.downgrade().into();
+        let count = ids.len() as u32;
 
         glib::MainContext::default().spawn_local(async move {
-            let ids_for_call = ids.clone();
-            let result = crate::client::spawn_on(&tokio, async move {
-                library.media().restore(&ids_for_call).await
-            })
-            .await;
+            let result =
+                crate::client::spawn_on(&tokio, async move { library.media().restore(&ids).await })
+                    .await;
 
             match result {
                 Ok(()) => {
                     if let Some(client) = client_weak.upgrade() {
-                        client.emit_by_name::<()>("items-restored", &[&(ids.len() as u32)]);
+                        client.emit_by_name::<()>("items-restored", &[&count]);
                     }
                 }
                 Err(e) => {
@@ -404,27 +436,24 @@ impl MediaClientV2 {
     }
 
     /// Permanently delete items.
+    ///
+    /// `items-deleted` is emitted from `on_media_removed` (the
+    /// `MediaEvent::Removed` listener), not directly from this method, so
+    /// the signal also fires for the background purge task.
     pub fn delete(&self, ids: Vec<MediaId>) {
         let (library, tokio) = self.deps();
-        let client_weak: glib::SendWeakRef<MediaClientV2> = self.downgrade().into();
 
         glib::MainContext::default().spawn_local(async move {
-            let ids_for_call = ids.clone();
-            let result = crate::client::spawn_on(&tokio, async move {
-                library.delete_permanently(&ids_for_call).await
-            })
-            .await;
+            let result =
+                crate::client::spawn_on(
+                    &tokio,
+                    async move { library.delete_permanently(&ids).await },
+                )
+                .await;
 
-            match result {
-                Ok(()) => {
-                    if let Some(client) = client_weak.upgrade() {
-                        client.emit_by_name::<()>("items-deleted", &[&(ids.len() as u32)]);
-                    }
-                }
-                Err(e) => {
-                    error!("delete permanently failed: {e}");
-                    crate::client::show_error_toast(&e);
-                }
+            if let Err(e) = result {
+                error!("delete permanently failed: {e}");
+                crate::client::show_error_toast(&e);
             }
         });
     }
@@ -433,19 +462,18 @@ impl MediaClientV2 {
     pub fn set_favorite(&self, ids: Vec<MediaId>, state: bool) {
         let (library, tokio) = self.deps();
         let client_weak: glib::SendWeakRef<MediaClientV2> = self.downgrade().into();
+        let count = ids.len() as u32;
 
         glib::MainContext::default().spawn_local(async move {
-            let ids_for_call = ids.clone();
             let result = crate::client::spawn_on(&tokio, async move {
-                library.media().set_favorite(&ids_for_call, state).await
+                library.media().set_favorite(&ids, state).await
             })
             .await;
 
             match result {
                 Ok(()) => {
                     if let Some(client) = client_weak.upgrade() {
-                        client
-                            .emit_by_name::<()>("favorite-changed", &[&(ids.len() as u32), &state]);
+                        client.emit_by_name::<()>("favorite-changed", &[&count, &state]);
                     }
                 }
                 Err(e) => {
@@ -457,9 +485,11 @@ impl MediaClientV2 {
     }
 
     /// Permanently delete every trashed item.
+    ///
+    /// `items-deleted` is emitted from `on_media_removed`, not from this
+    /// method.
     pub fn empty_trash(&self) {
         let (library, tokio) = self.deps();
-        let client_weak: glib::SendWeakRef<MediaClientV2> = self.downgrade().into();
 
         glib::MainContext::default().spawn_local(async move {
             let result = crate::client::spawn_on(&tokio, async move {
@@ -469,21 +499,17 @@ impl MediaClientV2 {
                     .await?;
                 let ids: Vec<_> = items.into_iter().map(|i| i.id).collect();
                 if ids.is_empty() {
-                    return Ok(Vec::new());
+                    return Ok(0);
                 }
+                let count = ids.len();
                 library.delete_permanently(&ids).await?;
-                Ok(ids)
+                Ok(count)
             })
             .await;
 
             match result {
-                Ok(ids) if ids.is_empty() => {}
-                Ok(ids) => {
-                    tracing::info!(count = ids.len(), "trash emptied");
-                    if let Some(client) = client_weak.upgrade() {
-                        client.emit_by_name::<()>("items-deleted", &[&(ids.len() as u32)]);
-                    }
-                }
+                Ok(0) => {}
+                Ok(count) => info!(count, "trash emptied"),
                 Err(e) => {
                     error!("empty trash failed: {e}");
                     crate::client::show_error_toast(&e);
@@ -515,7 +541,7 @@ impl MediaClientV2 {
             match result {
                 Ok(ids) if ids.is_empty() => {}
                 Ok(ids) => {
-                    tracing::info!(count = ids.len(), "all trash restored");
+                    info!(count = ids.len(), "all trash restored");
                     if let Some(client) = client_weak.upgrade() {
                         client.emit_by_name::<()>("items-restored", &[&(ids.len() as u32)]);
                     }
@@ -759,6 +785,10 @@ impl MediaClientV2 {
                 self.remove_item(&store, id);
             }
         }
+        // Single source of truth for `items-deleted` — fires for user
+        // deletes, `empty_trash`, AND the background purge task. Listeners
+        // (e.g. the sidebar trash badge) react to all deletion paths.
+        self.emit_by_name::<()>("items-deleted", &[&(ids.len() as u32)]);
     }
 
     fn on_thumbnail_ready(&self, id: &MediaId) {

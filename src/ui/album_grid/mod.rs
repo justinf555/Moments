@@ -162,7 +162,7 @@ impl AlbumGridView {
         );
         self.wire_empty_toggle(&store);
         self.wire_create_buttons(&album_client);
-        self.wire_activation(&settings, &texture_cache, &bus_sender, &store);
+        self.wire_activation(&settings, &texture_cache, &bus_sender);
 
         imp.toolbar_view
             .insert_action_group("album", Some(&action_group));
@@ -288,7 +288,6 @@ impl AlbumGridView {
         settings: &gio::Settings,
         texture_cache: &Rc<TextureCache>,
         bus_sender: &crate::event_bus::EventSender,
-        _store: &gio::ListStore,
     ) {
         let s = settings.clone();
         let tc = Rc::clone(texture_cache);
