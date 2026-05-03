@@ -304,9 +304,16 @@ impl ImmichClient {
     }
 
     /// Upload an asset via multipart form-data.
+    ///
+    /// `filename` must be the original user-facing filename (e.g.
+    /// `IMG_1234.jpg`). It is sent in the multipart `Content-Disposition`
+    /// header so Immich can infer the asset's media type from the
+    /// extension. The on-disk path may be extensionless (UUID-sharded
+    /// originals layout) so we cannot derive it from `file_path`.
     pub(crate) async fn upload_asset(
         &self,
         file_path: &std::path::Path,
+        filename: &str,
         device_asset_id: &str,
         file_created_at: &str,
         file_modified_at: &str,
@@ -314,16 +321,10 @@ impl ImmichClient {
     ) -> Result<UploadResponse, LibraryError> {
         let url = self.url("/assets");
 
-        let file_name = file_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("upload")
-            .to_owned();
-
         let file_bytes = tokio::fs::read(file_path).await.map_err(LibraryError::Io)?;
 
         let file_part = reqwest::multipart::Part::bytes(file_bytes)
-            .file_name(file_name)
+            .file_name(filename.to_owned())
             .mime_str("application/octet-stream")
             .map_err(|e| LibraryError::Immich(format!("invalid mime type: {e}")))?;
 

@@ -309,10 +309,17 @@ impl PushManager {
             )));
         }
 
+        // Originals are stored at extensionless UUID-sharded paths, so
+        // `path.file_name()` yields a bare UUID with no clue to the
+        // file type. Immich infers media type from the multipart
+        // filename's extension, so we must send the user-facing
+        // `original_filename` (e.g. `IMG_1234.jpg`) instead.
+        let filename = self.lookup_original_filename(&entry.entity_id).await?;
+
         let now = chrono::Utc::now().to_rfc3339();
         let resp = self
             .client
-            .upload_asset(path, &entry.entity_id, &now, &now, None)
+            .upload_asset(path, &filename, &entry.entity_id, &now, &now, None)
             .await?;
 
         // Store the server-assigned ID as external_id.
@@ -392,7 +399,29 @@ impl PushManager {
         Ok(())
     }
 
-    // ── External ID lookups ─────────────────────────────────────────
+    // ── Media row lookups ───────────────────────────────────────────
+
+    /// Fetch the user-facing original filename for an asset.
+    ///
+    /// Required for upload — Immich keys media-type detection off the
+    /// multipart filename's extension, and the extensionless UUID-sharded
+    /// path on disk doesn't carry one.
+    async fn lookup_original_filename(&self, local_id: &str) -> Result<String, LibraryError> {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT original_filename FROM media WHERE id = ?")
+                .bind(local_id)
+                .fetch_optional(self.db.pool())
+                .await
+                .map_err(LibraryError::Db)?;
+
+        match row {
+            Some((name,)) if !name.is_empty() => Ok(name),
+            Some(_) => Err(LibraryError::Immich(format!(
+                "media has empty original_filename: {local_id}"
+            ))),
+            None => Err(LibraryError::Immich(format!("media not found: {local_id}"))),
+        }
+    }
 
     async fn lookup_media_external_id(&self, local_id: &str) -> Result<String, LibraryError> {
         let row: Option<(String,)> =
@@ -747,6 +776,46 @@ mod tests {
         let result = push.lookup_media_external_id("nonexistent").await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("media not found"));
+    }
+
+    #[tokio::test]
+    async fn lookup_original_filename_returns_stored_name() {
+        let (_dir, db) = setup_push_db().await;
+
+        let mut record = test_record(MediaId::new("local-1".to_string()));
+        record.original_filename = "IMG_1234.jpg".to_string();
+        db.upsert_media(&record).await.unwrap();
+
+        let push = make_push_manager(db).await;
+        let name = push.lookup_original_filename("local-1").await.unwrap();
+        assert_eq!(name, "IMG_1234.jpg");
+    }
+
+    #[tokio::test]
+    async fn lookup_original_filename_missing_returns_error() {
+        let (_dir, db) = setup_push_db().await;
+        let push = make_push_manager(db).await;
+
+        let result = push.lookup_original_filename("nope").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("media not found"));
+    }
+
+    #[tokio::test]
+    async fn lookup_original_filename_empty_returns_error() {
+        let (_dir, db) = setup_push_db().await;
+
+        let mut record = test_record(MediaId::new("local-empty".to_string()));
+        record.original_filename = String::new();
+        db.upsert_media(&record).await.unwrap();
+
+        let push = make_push_manager(db).await;
+        let result = push.lookup_original_filename("local-empty").await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("empty original_filename"));
     }
 
     #[tokio::test]
