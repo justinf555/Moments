@@ -1,0 +1,68 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "run-dev",
+      "type": "shell",
+      "command": "make run-dev",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": ["$rustc"],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "run",
+      "type": "shell",
+      "command": "make run",
+      "group": "build",
+      "problemMatcher": ["$rustc"],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "check",
+      "type": "shell",
+      "command": "make check",
+      "group": "build",
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "lint",
+      "type": "shell",
+      "command": "make lint",
+      "group": "test",
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "test",
+      "type": "shell",
+      "command": "make test",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "test-integration",
+      "type": "shell",
+      "command": "make test-integration",
+      "group": "test",
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "ci-all",
+      "type": "shell",
+      "command": "make ci-all",
+      "group": "test",
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "fmt",
+      "type": "shell",
+      "command": "make fmt",
+      "problemMatcher": []
+    },
+    {
+      "label": "clean",
+      "type": "shell",
+      "command": "make clean",
+      "problemMatcher": []
+    }
+  ]
+}
