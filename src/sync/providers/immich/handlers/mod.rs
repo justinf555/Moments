@@ -17,7 +17,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::event_bus::EventSender;
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
 use crate::library::Library;
@@ -66,7 +65,6 @@ pub struct SyncContext {
     pub client: ImmichClient,
     pub library: Arc<Library>,
     pub db: Database,
-    pub events: EventSender,
     pub thumbnails_dir: PathBuf,
 }
 

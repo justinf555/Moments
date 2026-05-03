@@ -1,9 +1,8 @@
 use async_trait::async_trait;
 use tracing::{debug, instrument};
 
-use crate::app_event::AppEvent;
 use crate::library::error::LibraryError;
-use crate::library::media::{MediaId, MediaItem, MediaRecord, MediaType};
+use crate::library::media::{MediaId, MediaRecord, MediaType};
 use crate::library::thumbnail::{sharded_original_relative, sharded_thumbnail_path};
 
 use super::{CounterKind, HandlerResult, SyncContext, SyncEntityHandler};
@@ -74,30 +73,8 @@ async fn handle_asset(asset: SyncAssetV1, ctx: &SyncContext) -> Result<(), Libra
     let media_id = record.id.clone();
     ctx.library.media().upsert_media(&record).await?;
 
-    let item = MediaItem {
-        id: media_id.clone(),
-        taken_at,
-        imported_at,
-        original_filename: record.original_filename.clone(),
-        width: record.width,
-        height: record.height,
-        orientation: record.orientation,
-        media_type,
-        is_favorite: record.is_favorite,
-        is_trashed: record.is_trashed,
-        trashed_at: record.trashed_at,
-        duration_ms: record.duration_ms,
-    };
-    ctx.events.send(AppEvent::AssetSynced { item });
-
-    if let Err(e) = download_thumbnail(
-        &ctx.client,
-        &ctx.library,
-        &ctx.events,
-        &ctx.thumbnails_dir,
-        &media_id,
-    )
-    .await
+    if let Err(e) =
+        download_thumbnail(&ctx.client, &ctx.library, &ctx.thumbnails_dir, &media_id).await
     {
         debug!(id = %media_id, "thumbnail download failed: {e}");
     }
@@ -125,7 +102,6 @@ impl SyncEntityHandler for AssetDeleteHandler {
         ctx.library
             .delete_permanently_from_sync(std::slice::from_ref(&media_id))
             .await?;
-        ctx.events.send(AppEvent::AssetDeletedRemote { media_id });
         Ok(HandlerResult {
             entity_id: id,
             audit_action: "delete",
@@ -135,11 +111,14 @@ impl SyncEntityHandler for AssetDeleteHandler {
 }
 
 /// Download a single thumbnail from Immich and write it to the local cache.
-#[instrument(skip(client, library, events, thumbnails_dir))]
+///
+/// `set_thumbnail_ready` on the thumbnail service emits
+/// `ThumbnailEvent::Ready`, so subscribers (e.g. `MediaClientV2`) get
+/// notified through the per-service channel — no bus emission needed.
+#[instrument(skip(client, library, thumbnails_dir))]
 async fn download_thumbnail(
     client: &super::super::client::ImmichClient,
     library: &crate::library::Library,
-    events: &crate::event_bus::EventSender,
     thumbnails_dir: &std::path::Path,
     media_id: &MediaId,
 ) -> Result<(), LibraryError> {
@@ -152,9 +131,6 @@ async fn download_thumbnail(
             .thumbnails()
             .set_thumbnail_ready(media_id, &path.to_string_lossy(), now)
             .await?;
-        events.send(AppEvent::ThumbnailReady {
-            media_id: media_id.clone(),
-        });
         return Ok(());
     }
 
@@ -175,9 +151,6 @@ async fn download_thumbnail(
         .thumbnails()
         .set_thumbnail_ready(media_id, &path.to_string_lossy(), now)
         .await?;
-    events.send(AppEvent::ThumbnailReady {
-        media_id: media_id.clone(),
-    });
 
     Ok(())
 }

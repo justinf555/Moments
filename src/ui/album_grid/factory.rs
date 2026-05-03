@@ -22,7 +22,6 @@ pub fn build_factory(
     enter_selection: gio::SimpleAction,
     settings: gio::Settings,
     texture_cache: Rc<TextureCache>,
-    bus_sender: crate::event_bus::EventSender,
     nav_view: adw::NavigationView,
 ) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
@@ -87,14 +86,7 @@ pub fn build_factory(
         }
 
         // Set up per-item context menu on the ContextMenuBin.
-        setup_context_menu(
-            &bin,
-            &item,
-            &settings,
-            &texture_cache,
-            &bus_sender,
-            &nav_view,
-        );
+        setup_context_menu(&bin, &item, &settings, &texture_cache, &nav_view);
     });
 
     factory.connect_unbind(|_, obj| {
@@ -129,7 +121,6 @@ fn setup_context_menu(
     item: &AlbumItemObject,
     settings: &gio::Settings,
     texture_cache: &Rc<TextureCache>,
-    bus_sender: &crate::event_bus::EventSender,
     nav_view: &adw::NavigationView,
 ) {
     let album_id_str = item.id();
@@ -147,7 +138,6 @@ fn setup_context_menu(
     {
         let s = settings.clone();
         let tc = Rc::clone(texture_cache);
-        let bs = bus_sender.clone();
         let nav = nav_view.clone();
         let aid = album_id_str.clone();
         let aname = album_name.clone();
@@ -155,7 +145,6 @@ fn setup_context_menu(
             super::actions::open_album_drilldown(
                 &s,
                 &tc,
-                &bs,
                 &nav,
                 AlbumId::from_raw(aid.clone()),
                 &aname,

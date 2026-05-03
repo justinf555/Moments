@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use tracing::instrument;
 
-use crate::app_event::AppEvent;
 use crate::library::album::AlbumId;
 use crate::library::error::LibraryError;
 
@@ -40,11 +39,6 @@ impl SyncEntityHandler for AlbumHandler {
             )
             .await?;
 
-        ctx.events.send(AppEvent::AlbumCreated {
-            id: AlbumId::from_raw(album.id),
-            name: album.name,
-        });
-
         Ok(HandlerResult {
             entity_id: id,
             audit_action: "upsert",
@@ -71,7 +65,6 @@ impl SyncEntityHandler for AlbumDeleteHandler {
         let id_str = delete.album_id.clone();
         let id = AlbumId::from_raw(id_str.clone());
         ctx.library.albums().delete_album(&id).await?;
-        ctx.events.send(AppEvent::AlbumDeleted { id });
         Ok(HandlerResult {
             entity_id: id_str,
             audit_action: "delete",

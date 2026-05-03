@@ -48,6 +48,14 @@ impl AlbumService {
         self.events.emit(event);
     }
 
+    /// Emit `AlbumMediaChanged` for sync handlers that mutate the
+    /// `album_media` table directly via the database (bypassing the
+    /// service-level `add_to_album` / `remove_from_album` paths to avoid
+    /// recording outbox mutations on pull).
+    pub fn emit_album_media_changed(&self, album_id: &AlbumId) {
+        self.emit(AlbumEvent::AlbumMediaChanged(album_id.clone()));
+    }
+
     // ── Sync upsert (pull from server, no outbox recording) ────────
 
     /// Insert or replace an album from the sync stream.

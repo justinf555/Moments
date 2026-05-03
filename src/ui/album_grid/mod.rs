@@ -120,12 +120,7 @@ impl AlbumGridView {
         glib::Object::new()
     }
 
-    pub fn setup(
-        &self,
-        settings: gio::Settings,
-        texture_cache: Rc<TextureCache>,
-        bus_sender: crate::event_bus::EventSender,
-    ) {
+    pub fn setup(&self, settings: gio::Settings, texture_cache: Rc<TextureCache>) {
         let imp = self.imp();
 
         let album_client = crate::application::MomentsApplication::default()
@@ -151,7 +146,6 @@ impl AlbumGridView {
             &enter_selection,
             &settings,
             &texture_cache,
-            &bus_sender,
         );
         self.wire_selection(
             &enter_selection,
@@ -162,7 +156,7 @@ impl AlbumGridView {
         );
         self.wire_empty_toggle(&store);
         self.wire_create_buttons(&album_client);
-        self.wire_activation(&settings, &texture_cache, &bus_sender);
+        self.wire_activation(&settings, &texture_cache);
 
         imp.toolbar_view
             .insert_action_group("album", Some(&action_group));
@@ -219,7 +213,6 @@ impl AlbumGridView {
         enter_selection: &gio::SimpleAction,
         settings: &gio::Settings,
         texture_cache: &Rc<TextureCache>,
-        bus_sender: &crate::event_bus::EventSender,
     ) {
         let imp = self.imp();
         imp.grid_view.set_model(Some(multi_selection));
@@ -229,7 +222,6 @@ impl AlbumGridView {
             enter_selection.clone(),
             settings.clone(),
             Rc::clone(texture_cache),
-            bus_sender.clone(),
             imp.nav_view.clone(),
         )));
     }
@@ -283,15 +275,9 @@ impl AlbumGridView {
             .connect_clicked(move |btn| connect_create(btn));
     }
 
-    fn wire_activation(
-        &self,
-        settings: &gio::Settings,
-        texture_cache: &Rc<TextureCache>,
-        bus_sender: &crate::event_bus::EventSender,
-    ) {
+    fn wire_activation(&self, settings: &gio::Settings, texture_cache: &Rc<TextureCache>) {
         let s = settings.clone();
         let tc = Rc::clone(texture_cache);
-        let bs = bus_sender.clone();
         let nav = self.imp().nav_view.clone();
 
         // Resolve the activated item via the grid's bound model so that
@@ -316,7 +302,7 @@ impl AlbumGridView {
 
                 debug!(album_id = %album_id_str, name = %album_name, "album activated");
 
-                actions::open_album_drilldown(&s, &tc, &bs, &nav, album_id, &album_name);
+                actions::open_album_drilldown(&s, &tc, &nav, album_id, &album_name);
             });
     }
 }

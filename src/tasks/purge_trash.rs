@@ -1,7 +1,9 @@
 //! Periodic auto-purge of expired trash items.
 //!
-//! Runs on the Tokio runtime: queries for items past the retention period,
-//! permanently deletes them, and emits `Deleted` so clients update the UI.
+//! Runs on the Tokio runtime: queries for items past the retention period
+//! and permanently deletes them. Subscribers (e.g. `MediaClientV2`) are
+//! notified through the per-service `MediaEvent::Removed` channel emitted
+//! by `delete_permanently` — no separate notification path needed.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,8 +11,6 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument};
 
-use crate::app_event::AppEvent;
-use crate::event_bus::EventSender;
 use crate::library::Library;
 
 /// How often to check for expired trash items.
@@ -23,7 +23,6 @@ const CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60); // 1 hour
 /// is read from GSettings on the GTK thread before calling this function.
 pub fn start(
     library: Arc<Library>,
-    bus: EventSender,
     retention_days: u32,
     tokio: tokio::runtime::Handle,
 ) -> JoinHandle<()> {
@@ -31,20 +30,15 @@ pub fn start(
 
     tokio.spawn(async move {
         loop {
-            purge_expired(&library, &bus, max_age_secs, retention_days).await;
+            purge_expired(&library, max_age_secs, retention_days).await;
             tokio::time::sleep(CHECK_INTERVAL).await;
         }
     })
 }
 
 /// Find and permanently delete all items past the retention period.
-#[instrument(skip(library, bus))]
-async fn purge_expired(
-    library: &Library,
-    bus: &EventSender,
-    max_age_secs: i64,
-    retention_days: u32,
-) {
+#[instrument(skip(library))]
+async fn purge_expired(library: &Library, max_age_secs: i64, retention_days: u32) {
     let expired = match library.media().expired_trash(max_age_secs).await {
         Ok(ids) => ids,
         Err(e) => {
@@ -65,10 +59,7 @@ async fn purge_expired(
 
     if let Err(e) = library.delete_permanently(&expired).await {
         error!("failed to purge expired trash: {e}");
-        return;
     }
-
-    bus.send(AppEvent::Deleted { ids: expired });
 }
 
 #[cfg(test)]

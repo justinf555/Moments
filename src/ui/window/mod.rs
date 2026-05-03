@@ -154,23 +154,17 @@ impl MomentsWindow {
     ///
     /// Components react to mutations via GObject signals on the client
     /// singletons (`MediaClient`, `AlbumClientV2`), not via the event bus.
-    pub fn setup(&self, settings: gio::Settings, bus: &crate::event_bus::EventBus) {
+    pub fn setup(&self, settings: gio::Settings) {
         let imp = self.imp();
-        let bus_sender = bus.sender();
 
         let sidebar = self.setup_sidebar();
 
         let texture_cache = Rc::new(TextureCache::new());
 
         let (content_stack, coordinator, photos_model) =
-            self.build_coordinator(&settings, &texture_cache, &bus_sender);
+            self.build_coordinator(&settings, &texture_cache);
 
-        self.register_lazy_views(
-            &mut coordinator.borrow_mut(),
-            &settings,
-            &texture_cache,
-            &bus_sender,
-        );
+        self.register_lazy_views(&mut coordinator.borrow_mut(), &settings, &texture_cache);
 
         let content_nav_page = adw::NavigationPage::builder()
             .title("Photos")
@@ -186,7 +180,7 @@ impl MomentsWindow {
             .set(Rc::clone(&coordinator))
             .expect("coordinator set once in setup()");
 
-        self.connect_sidebar_navigation(&sidebar, &settings, &texture_cache, &bus_sender);
+        self.connect_sidebar_navigation(&sidebar, &settings, &texture_cache);
 
         sidebar.select_first();
 
@@ -286,7 +280,6 @@ impl MomentsWindow {
         &self,
         settings: &gio::Settings,
         texture_cache: &Rc<TextureCache>,
-        bus_sender: &crate::event_bus::EventSender,
     ) -> (gtk::Stack, Rc<RefCell<ContentCoordinator>>, gio::ListStore) {
         use crate::library::media::MediaFilter;
 
@@ -303,11 +296,7 @@ impl MomentsWindow {
 
         let photos_store = media_client.create_model(MediaFilter::All);
         let photos_view = PhotoGridView::new();
-        photos_view.setup(
-            settings.clone(),
-            Rc::clone(texture_cache),
-            bus_sender.clone(),
-        );
+        photos_view.setup(settings.clone(), Rc::clone(texture_cache));
         photos_view.set_store(photos_store.clone(), MediaFilter::All);
         coordinator.register("photos", &photos_view);
 
@@ -323,21 +312,19 @@ impl MomentsWindow {
         coordinator: &mut ContentCoordinator,
         settings: &gio::Settings,
         texture_cache: &Rc<TextureCache>,
-        bus_sender: &crate::event_bus::EventSender,
     ) {
         use crate::library::media::MediaFilter;
 
         {
             let s = settings.clone();
             let tc = Rc::clone(texture_cache);
-            let bs = bus_sender.clone();
             coordinator.register_lazy("favorites", move || {
                 let mc = crate::application::MomentsApplication::default()
                     .media_client_v2()
                     .expect("media client available");
                 let store = mc.create_model(MediaFilter::Favorites);
                 let view = PhotoGridView::new();
-                view.setup(s, tc, bs);
+                view.setup(s, tc);
                 view.set_store(store, MediaFilter::Favorites);
                 view.upcast()
             });
@@ -346,7 +333,6 @@ impl MomentsWindow {
         {
             let s = settings.clone();
             let tc = Rc::clone(texture_cache);
-            let bs = bus_sender.clone();
             coordinator.register_lazy("recent", move || {
                 let days = s.uint("recent-imports-days") as i64;
                 let since = chrono::Utc::now().timestamp() - days * 86400;
@@ -356,7 +342,7 @@ impl MomentsWindow {
                     .expect("media client available");
                 let store = mc.create_model(filter.clone());
                 let view = PhotoGridView::new();
-                view.setup(s, tc, bs);
+                view.setup(s, tc);
                 view.set_store(store, filter);
                 view.upcast()
             });
@@ -365,14 +351,13 @@ impl MomentsWindow {
         {
             let s = settings.clone();
             let tc = Rc::clone(texture_cache);
-            let bs = bus_sender.clone();
             coordinator.register_lazy("trash", move || {
                 let mc = crate::application::MomentsApplication::default()
                     .media_client_v2()
                     .expect("media client available");
                 let store = mc.create_model(MediaFilter::Trashed);
                 let view = PhotoGridView::new();
-                view.setup(s, tc, bs);
+                view.setup(s, tc);
                 view.set_store(store, MediaFilter::Trashed);
                 view.upcast()
             });
@@ -381,10 +366,9 @@ impl MomentsWindow {
         {
             let s = settings.clone();
             let tc = Rc::clone(texture_cache);
-            let bs = bus_sender.clone();
             coordinator.register_lazy("people", move || {
                 let view = PeopleGridView::new();
-                view.setup_people(s, tc, bs);
+                view.setup_people(s, tc);
                 view.upcast()
             });
         }
@@ -392,10 +376,9 @@ impl MomentsWindow {
         {
             let s = settings.clone();
             let tc = Rc::clone(texture_cache);
-            let bs = bus_sender.clone();
             coordinator.register_lazy("albums", move || {
                 let view = super::album_grid::AlbumGridView::new();
-                view.setup(s, tc, bs);
+                view.setup(s, tc);
                 view.upcast()
             });
         }
@@ -426,12 +409,10 @@ impl MomentsWindow {
         sidebar: &MomentsSidebar,
         settings: &gio::Settings,
         texture_cache: &Rc<TextureCache>,
-        bus_sender: &crate::event_bus::EventSender,
     ) {
         let obj_weak = self.downgrade();
         let s = settings.clone();
         let tc = Rc::clone(texture_cache);
-        let bs = bus_sender.clone();
         sidebar.connect_route_selected(move |id| {
             let Some(win) = obj_weak.upgrade() else {
                 return;
@@ -452,7 +433,7 @@ impl MomentsWindow {
                         .expect("media client available");
                     let store = mc.create_model(filter.clone());
                     let view = PhotoGridView::new();
-                    view.setup(s.clone(), Rc::clone(&tc), bs.clone());
+                    view.setup(s.clone(), Rc::clone(&tc));
                     view.set_store(store, filter);
                     coord.register(id, &view);
                 }
