@@ -1,5 +1,5 @@
 use adw::prelude::*;
-use gtk::gio;
+use gtk::{gio, glib};
 use tracing::debug;
 
 /// Build and present the Preferences dialog.
@@ -24,9 +24,11 @@ pub fn show_preferences(
     spawn_library_stats(stats_rows);
 
     if is_immich {
-        let (immich_page, server_rows) = build_immich_page(settings, &immich_server_url);
+        let (immich_page, server_rows, outbox_rows) =
+            build_immich_page(settings, &immich_server_url);
         dialog.add(&immich_page);
         spawn_server_stats(server_rows);
+        spawn_outbox_status(outbox_rows);
     }
 
     dialog.present(Some(window));
@@ -276,7 +278,7 @@ struct ServerStatsRows {
 fn build_immich_page(
     settings: &gio::Settings,
     immich_server_url: &Option<String>,
-) -> (adw::PreferencesPage, ServerStatsRows) {
+) -> (adw::PreferencesPage, ServerStatsRows, OutboxRows) {
     let page = adw::PreferencesPage::new();
     page.set_title("Immich");
     page.set_icon_name(Some("network-server-symbolic"));
@@ -287,7 +289,10 @@ fn build_immich_page(
     let (server_group, server_rows) = build_server_stats_group();
     page.add(&server_group);
 
-    (page, server_rows)
+    let (outbox_group, outbox_rows) = build_outbox_group();
+    page.add(&outbox_group);
+
+    (page, server_rows, outbox_rows)
 }
 
 fn build_connection_group(immich_server_url: &Option<String>) -> adw::PreferencesGroup {
@@ -394,6 +399,177 @@ fn spawn_server_stats(rows: ServerStatsRows) {
             }
         }
     });
+}
+
+struct OutboxRows {
+    pending: adw::ActionRow,
+    failed: adw::ActionRow,
+    dead_letter: adw::ActionRow,
+    retry_button: gtk::Button,
+    clear_button: gtk::Button,
+}
+
+fn build_outbox_group() -> (adw::PreferencesGroup, OutboxRows) {
+    let group = adw::PreferencesGroup::builder()
+        .title("Outbox")
+        .description("Local changes queued for upload to the server")
+        .build();
+
+    let pending = adw::ActionRow::builder()
+        .title("Pending")
+        .subtitle("Loading...")
+        .build();
+    group.add(&pending);
+
+    let failed = adw::ActionRow::builder()
+        .title("Failed")
+        .subtitle("Loading...")
+        .build();
+    let retry_button = gtk::Button::builder()
+        .label("Retry now")
+        .valign(gtk::Align::Center)
+        .sensitive(false)
+        .build();
+    retry_button.add_css_class("flat");
+    failed.add_suffix(&retry_button);
+    group.add(&failed);
+
+    let dead_letter = adw::ActionRow::builder()
+        .title("Stopped retrying")
+        .subtitle("Loading...")
+        .build();
+    let clear_button = gtk::Button::builder()
+        .label("Clear")
+        .valign(gtk::Align::Center)
+        .sensitive(false)
+        .build();
+    clear_button.add_css_class("flat");
+    clear_button.add_css_class("destructive-action");
+    dead_letter.add_suffix(&clear_button);
+    group.add(&dead_letter);
+
+    let rows = OutboxRows {
+        pending,
+        failed,
+        dead_letter,
+        retry_button,
+        clear_button,
+    };
+    (group, rows)
+}
+
+fn spawn_outbox_status(rows: OutboxRows) {
+    let Some(sync_client) = crate::application::MomentsApplication::default().sync_client() else {
+        return;
+    };
+    if !sync_client.has_outbox() {
+        return;
+    }
+
+    // Wire button handlers. Each one calls the admin method, then
+    // refreshes counts so the rows reflect the new state immediately.
+    let sc = sync_client.clone();
+    let r_weak = (
+        rows.pending.downgrade(),
+        rows.failed.downgrade(),
+        rows.dead_letter.downgrade(),
+        rows.retry_button.downgrade(),
+        rows.clear_button.downgrade(),
+    );
+    rows.retry_button.connect_clicked(move |btn| {
+        btn.set_sensitive(false);
+        let sc = sc.clone();
+        let r_weak = r_weak.clone();
+        glib::MainContext::default().spawn_local(async move {
+            match sc.retry_failed_outbox().await {
+                Ok(n) => {
+                    debug!("retry_failed_outbox reset {n} entries");
+                    crate::client::show_toast(&format!(
+                        "Retrying {n} failed {}",
+                        if n == 1 { "entry" } else { "entries" }
+                    ));
+                }
+                Err(e) => crate::client::show_error_toast(&e),
+            }
+            refresh_outbox_counts(&sc, &r_weak).await;
+        });
+    });
+
+    let sc = sync_client.clone();
+    let r_weak = (
+        rows.pending.downgrade(),
+        rows.failed.downgrade(),
+        rows.dead_letter.downgrade(),
+        rows.retry_button.downgrade(),
+        rows.clear_button.downgrade(),
+    );
+    rows.clear_button.connect_clicked(move |btn| {
+        btn.set_sensitive(false);
+        let sc = sc.clone();
+        let r_weak = r_weak.clone();
+        glib::MainContext::default().spawn_local(async move {
+            match sc.clear_outbox_dead_letters().await {
+                Ok(n) => {
+                    debug!("clear_outbox_dead_letters removed {n} entries");
+                    crate::client::show_toast(&format!(
+                        "Cleared {n} dead-letter {}",
+                        if n == 1 { "entry" } else { "entries" }
+                    ));
+                }
+                Err(e) => crate::client::show_error_toast(&e),
+            }
+            refresh_outbox_counts(&sc, &r_weak).await;
+        });
+    });
+
+    // Initial load.
+    let r_weak = (
+        rows.pending.downgrade(),
+        rows.failed.downgrade(),
+        rows.dead_letter.downgrade(),
+        rows.retry_button.downgrade(),
+        rows.clear_button.downgrade(),
+    );
+    glib::MainContext::default().spawn_local(async move {
+        refresh_outbox_counts(&sync_client, &r_weak).await;
+    });
+}
+
+type OutboxRowWeakRefs = (
+    glib::WeakRef<adw::ActionRow>,
+    glib::WeakRef<adw::ActionRow>,
+    glib::WeakRef<adw::ActionRow>,
+    glib::WeakRef<gtk::Button>,
+    glib::WeakRef<gtk::Button>,
+);
+
+async fn refresh_outbox_counts(
+    sync_client: &crate::client::SyncClient,
+    r_weak: &OutboxRowWeakRefs,
+) {
+    let counts = match sync_client.outbox_counts().await {
+        Ok(c) => c,
+        Err(e) => {
+            crate::client::show_error_toast(&e);
+            return;
+        }
+    };
+
+    if let Some(r) = r_weak.0.upgrade() {
+        r.set_subtitle(&format_number(counts.pending));
+    }
+    if let Some(r) = r_weak.1.upgrade() {
+        r.set_subtitle(&format_number(counts.failed));
+    }
+    if let Some(r) = r_weak.2.upgrade() {
+        r.set_subtitle(&format_number(counts.dead_letter));
+    }
+    if let Some(b) = r_weak.3.upgrade() {
+        b.set_sensitive(counts.failed > 0);
+    }
+    if let Some(b) = r_weak.4.upgrade() {
+        b.set_sensitive(counts.dead_letter > 0);
+    }
 }
 
 /// Format a count with singular/plural label (e.g. "1,976 photos").

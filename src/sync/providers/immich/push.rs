@@ -7,19 +7,10 @@ use tracing::{debug, error, info, instrument, warn};
 
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
-use crate::library::mutation::Mutation;
 use crate::sync::event::SyncEvent;
+use crate::sync::outbox::{OutboxMutation, OutboxStatus};
 
 use super::client::ImmichClient;
-
-/// Outbox entry lifecycle status stored in the `status` column.
-#[repr(i64)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OutboxStatus {
-    Pending = 0,
-    Done = 1,
-    Failed = 2,
-}
 
 /// A pending outbox entry read from the database.
 #[derive(Debug)]
@@ -29,10 +20,46 @@ struct OutboxEntry {
     entity_id: String,
     action: String,
     payload: Option<String>,
+    /// Number of times this entry has previously been attempted.
+    attempts: i64,
 }
 
 /// How many entries to process per push cycle.
 const BATCH_SIZE: i64 = 100;
+
+/// After this many consecutive failures an entry is moved to
+/// [`OutboxStatus::DeadLetter`] and stops being retried.
+const MAX_ATTEMPTS: i64 = 10;
+
+/// Cap stored error messages so a misbehaving server can't bloat the DB.
+const MAX_ERROR_LEN: usize = 500;
+
+/// Cap exponential backoff at one hour. Without a cap, attempt 10 would
+/// sleep for ~17 hours.
+const MAX_BACKOFF_SECS: i64 = 3600;
+
+/// Compute when a row that just failed becomes eligible again.
+///
+/// `60 * 2^attempts`, capped at `MAX_BACKOFF_SECS`. attempts=1 → 120 s,
+/// attempts=2 → 240 s, …, attempts=6 → 3840 s → capped to 3600.
+fn backoff_seconds(attempts: i64) -> i64 {
+    let exp = attempts.clamp(1, 30) as u32;
+    let unclamped = 60_i64.saturating_mul(1_i64 << exp.min(20));
+    unclamped.min(MAX_BACKOFF_SECS)
+}
+
+/// Truncate an error message to `MAX_ERROR_LEN` chars without splitting
+/// a UTF-8 codepoint.
+fn truncate_error(err: &str) -> String {
+    if err.len() <= MAX_ERROR_LEN {
+        return err.to_owned();
+    }
+    let mut end = MAX_ERROR_LEN;
+    while !err.is_char_boundary(end) {
+        end -= 1;
+    }
+    err[..end].to_owned()
+}
 
 /// Push sync engine — drains the outbox and makes Immich API calls.
 pub(crate) struct PushManager {
@@ -115,6 +142,10 @@ impl PushManager {
 
         let mut pushed = 0usize;
         let mut errors = 0usize;
+        // Track the worst stuck entry in this batch so we can surface
+        // a single SyncEvent::Error for the sidebar status bar.
+        let mut stuck: Option<(i64, String)> = None;
+
         for entry in &entries {
             match self.push_entry(entry).await {
                 Ok(()) => {
@@ -122,17 +153,31 @@ impl PushManager {
                     pushed += 1;
                 }
                 Err(e) => {
+                    let err_msg = e.to_string();
                     warn!(
                         id = entry.id,
                         entity_type = %entry.entity_type,
                         action = %entry.action,
-                        error = %e,
-                        "push failed, marking as failed"
+                        attempts = entry.attempts,
+                        error = %err_msg,
+                        "push failed"
                     );
-                    self.mark_failed(entry.id, &e.to_string()).await?;
+                    let new_attempts = entry.attempts + 1;
+                    self.mark_failed(entry.id, new_attempts, &err_msg).await?;
                     errors += 1;
+                    if stuck.as_ref().is_none_or(|(a, _)| new_attempts > *a) {
+                        stuck = Some((new_attempts, err_msg));
+                    }
                 }
             }
+        }
+
+        // If anything has been retried more than once, hint the user via
+        // the sidebar so a poisoned entry doesn't fail silently forever.
+        if let Some((attempts, msg)) = stuck.filter(|(a, _)| *a > 1) {
+            let _ = self.sync_events.send(SyncEvent::Error {
+                message: format!("Sync entry stuck (attempt {attempts}): {msg}"),
+            });
         }
 
         let _ = self.sync_events.send(SyncEvent::Complete {
@@ -151,8 +196,7 @@ impl PushManager {
             action: entry.action.clone(),
             payload: entry.payload.clone(),
         };
-        let mutation = Mutation::from_outbox_row(&outbox_row);
-        let Some(mutation) = mutation else {
+        let Some(mutation) = OutboxMutation::from_row(&outbox_row) else {
             warn!(
                 entity_type = %entry.entity_type,
                 action = %entry.action,
@@ -163,10 +207,10 @@ impl PushManager {
 
         match mutation {
             // ── Asset mutations ──────────────────────────────────────
-            Mutation::AssetImported { .. } => self.push_asset_import(entry).await,
+            OutboxMutation::AssetImported { .. } => self.push_asset_import(entry).await,
 
-            Mutation::AssetFavorited { ids, favorite } => {
-                let external_id = self.lookup_media_external_id(ids[0].as_str()).await?;
+            OutboxMutation::AssetFavorited { id, favorite } => {
+                let external_id = self.lookup_media_external_id(id.as_str()).await?;
                 self.client
                     .put_no_content(
                         "/assets",
@@ -178,15 +222,15 @@ impl PushManager {
                     .await
             }
 
-            Mutation::AssetTrashed { ids } => {
-                let external_id = self.lookup_media_external_id(ids[0].as_str()).await?;
+            OutboxMutation::AssetTrashed { id } => {
+                let external_id = self.lookup_media_external_id(id.as_str()).await?;
                 self.client
                     .delete_with_body("/assets", &serde_json::json!({ "ids": [external_id] }))
                     .await
             }
 
-            Mutation::AssetRestored { ids } => {
-                let external_id = self.lookup_media_external_id(ids[0].as_str()).await?;
+            OutboxMutation::AssetRestored { id } => {
+                let external_id = self.lookup_media_external_id(id.as_str()).await?;
                 self.client
                     .post_no_content(
                         "/trash/restore/assets",
@@ -195,8 +239,7 @@ impl PushManager {
                     .await
             }
 
-            Mutation::AssetDeleted { items } => {
-                let (id, external_id) = &items[0];
+            OutboxMutation::AssetDeleted { id, external_id } => {
                 let Some(external_id) = external_id else {
                     warn!(id = %id, "no external_id for deleted asset, skipping push");
                     return Ok(());
@@ -213,7 +256,7 @@ impl PushManager {
             }
 
             // ── Album mutations ─────────────────────────────────────
-            Mutation::AlbumCreated { id, name } => {
+            OutboxMutation::AlbumCreated { id, name } => {
                 let resp: serde_json::Value = self
                     .client
                     .post("/albums", &serde_json::json!({ "albumName": name }))
@@ -224,7 +267,7 @@ impl PushManager {
                 Ok(())
             }
 
-            Mutation::AlbumRenamed { id, name } => {
+            OutboxMutation::AlbumRenamed { id, name } => {
                 let external_id = self.lookup_album_external_id(id.as_str()).await?;
                 self.client
                     .patch_no_content(
@@ -234,7 +277,7 @@ impl PushManager {
                     .await
             }
 
-            Mutation::AlbumDeleted { id, external_id } => {
+            OutboxMutation::AlbumDeleted { id, external_id } => {
                 let Some(external_id) = external_id else {
                     warn!(id = %id, "no external_id for deleted album, skipping push");
                     return Ok(());
@@ -244,7 +287,7 @@ impl PushManager {
                     .await
             }
 
-            Mutation::AlbumMediaAdded {
+            OutboxMutation::AlbumMediaAdded {
                 album_id,
                 media_ids,
             } => {
@@ -258,7 +301,7 @@ impl PushManager {
                     .await
             }
 
-            Mutation::AlbumMediaRemoved {
+            OutboxMutation::AlbumMediaRemoved {
                 album_id,
                 media_ids,
             } => {
@@ -273,7 +316,7 @@ impl PushManager {
             }
 
             // ── People mutations ────────────────────────────────────
-            Mutation::PersonRenamed { id, name } => {
+            OutboxMutation::PersonRenamed { id, name } => {
                 let external_id = self.lookup_person_external_id(id.as_str()).await?;
                 self.client
                     .put_no_content(
@@ -283,7 +326,7 @@ impl PushManager {
                     .await
             }
 
-            Mutation::PersonHidden { id, hidden } => {
+            OutboxMutation::PersonHidden { id, hidden } => {
                 let external_id = self.lookup_person_external_id(id.as_str()).await?;
                 self.client
                     .put_no_content(
@@ -344,13 +387,16 @@ impl PushManager {
     // ── Database helpers ─────────────────────────────────────────────
 
     async fn fetch_pending(&self) -> Result<Vec<OutboxEntry>, LibraryError> {
-        let rows: Vec<(i64, String, String, String, Option<String>)> = sqlx::query_as(
-            "SELECT id, entity_type, entity_id, action, payload
-             FROM sync_outbox WHERE status IN (?, ?)
+        let now = chrono::Utc::now().timestamp();
+        let rows: Vec<(i64, String, String, String, Option<String>, i64)> = sqlx::query_as(
+            "SELECT id, entity_type, entity_id, action, payload, attempts
+             FROM sync_outbox
+             WHERE status IN (?, ?) AND next_attempt_at <= ?
              ORDER BY id ASC LIMIT ?",
         )
         .bind(OutboxStatus::Pending as i64)
         .bind(OutboxStatus::Failed as i64)
+        .bind(now)
         .bind(BATCH_SIZE)
         .fetch_all(self.db.pool())
         .await
@@ -359,12 +405,13 @@ impl PushManager {
         Ok(rows
             .into_iter()
             .map(
-                |(id, entity_type, entity_id, action, payload)| OutboxEntry {
+                |(id, entity_type, entity_id, action, payload, attempts)| OutboxEntry {
                     id,
                     entity_type,
                     entity_id,
                     action,
                     payload,
+                    attempts,
                 },
             )
             .collect())
@@ -380,13 +427,50 @@ impl PushManager {
         Ok(())
     }
 
-    async fn mark_failed(&self, id: i64, _error: &str) -> Result<(), LibraryError> {
-        sqlx::query("UPDATE sync_outbox SET status = ? WHERE id = ?")
-            .bind(OutboxStatus::Failed as i64)
+    /// Record a push failure. After [`MAX_ATTEMPTS`] the entry is moved
+    /// to [`OutboxStatus::DeadLetter`] and stops being retried.
+    async fn mark_failed(
+        &self,
+        id: i64,
+        new_attempts: i64,
+        error: &str,
+    ) -> Result<(), LibraryError> {
+        let truncated = truncate_error(error);
+        if new_attempts >= MAX_ATTEMPTS {
+            sqlx::query(
+                "UPDATE sync_outbox
+                 SET status = ?, attempts = ?, last_error = ?, next_attempt_at = 0
+                 WHERE id = ?",
+            )
+            .bind(OutboxStatus::DeadLetter as i64)
+            .bind(new_attempts)
+            .bind(&truncated)
             .bind(id)
             .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
+            warn!(
+                id,
+                attempts = new_attempts,
+                "outbox entry exceeded MAX_ATTEMPTS, moved to dead-letter"
+            );
+        } else {
+            let now = chrono::Utc::now().timestamp();
+            let next_attempt_at = now.saturating_add(backoff_seconds(new_attempts));
+            sqlx::query(
+                "UPDATE sync_outbox
+                 SET status = ?, attempts = ?, last_error = ?, next_attempt_at = ?
+                 WHERE id = ?",
+            )
+            .bind(OutboxStatus::Failed as i64)
+            .bind(new_attempts)
+            .bind(&truncated)
+            .bind(next_attempt_at)
+            .bind(id)
+            .execute(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
+        }
         Ok(())
     }
 
@@ -657,21 +741,130 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mark_failed_sets_status_preserves_payload() {
+    async fn mark_failed_first_attempt_records_error_and_schedules_backoff() {
         let (_dir, db) = setup_push_db().await;
         insert_outbox_entry(&db, "asset", "a1", "trash", Some("original")).await;
 
         let push = make_push_manager(db.clone()).await;
-        push.mark_failed(1, "connection timeout").await.unwrap();
+        let before = chrono::Utc::now().timestamp();
+        push.mark_failed(1, 1, "connection timeout").await.unwrap();
 
-        let row: (i64, Option<String>) =
-            sqlx::query_as("SELECT status, payload FROM sync_outbox WHERE id = 1")
+        let row: (i64, i64, Option<String>, i64, Option<String>) = sqlx::query_as(
+            "SELECT status, attempts, last_error, next_attempt_at, payload
+             FROM sync_outbox WHERE id = 1",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+
+        assert_eq!(row.0, OutboxStatus::Failed as i64);
+        assert_eq!(row.1, 1);
+        assert_eq!(row.2.as_deref(), Some("connection timeout"));
+        // backoff_seconds(1) = 120
+        assert!(row.3 >= before + 120);
+        // Payload preserved for retry.
+        assert_eq!(row.4.as_deref(), Some("original"));
+    }
+
+    #[tokio::test]
+    async fn mark_failed_at_max_attempts_moves_to_dead_letter() {
+        let (_dir, db) = setup_push_db().await;
+        insert_outbox_entry(&db, "asset", "a1", "trash", None).await;
+
+        let push = make_push_manager(db.clone()).await;
+        push.mark_failed(1, MAX_ATTEMPTS, "permanent server error")
+            .await
+            .unwrap();
+
+        let row: (i64, i64, Option<String>) =
+            sqlx::query_as("SELECT status, attempts, last_error FROM sync_outbox WHERE id = 1")
                 .fetch_one(db.pool())
                 .await
                 .unwrap();
-        assert_eq!(row.0, 2);
-        // Payload is preserved for retry — error is only in the logs.
-        assert_eq!(row.1.as_deref(), Some("original"));
+
+        assert_eq!(row.0, OutboxStatus::DeadLetter as i64);
+        assert_eq!(row.1, MAX_ATTEMPTS);
+        assert_eq!(row.2.as_deref(), Some("permanent server error"));
+    }
+
+    #[tokio::test]
+    async fn mark_failed_truncates_long_error() {
+        let (_dir, db) = setup_push_db().await;
+        insert_outbox_entry(&db, "asset", "a1", "trash", None).await;
+
+        let push = make_push_manager(db.clone()).await;
+        let huge = "x".repeat(MAX_ERROR_LEN * 4);
+        push.mark_failed(1, 1, &huge).await.unwrap();
+
+        let row: (Option<String>,) =
+            sqlx::query_as("SELECT last_error FROM sync_outbox WHERE id = 1")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        let stored = row.0.unwrap();
+        assert_eq!(stored.len(), MAX_ERROR_LEN);
+    }
+
+    #[tokio::test]
+    async fn fetch_pending_excludes_rows_in_backoff() {
+        let (_dir, db) = setup_push_db().await;
+        insert_outbox_entry(&db, "asset", "ready", "trash", None).await;
+        insert_outbox_entry(&db, "asset", "waiting", "trash", None).await;
+
+        // Push 'waiting' an hour into the future via mark_failed.
+        let push = make_push_manager(db.clone()).await;
+        sqlx::query("UPDATE sync_outbox SET status = 2 WHERE entity_id = 'waiting'")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let future = chrono::Utc::now().timestamp() + 3600;
+        sqlx::query("UPDATE sync_outbox SET next_attempt_at = ? WHERE entity_id = 'waiting'")
+            .bind(future)
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        let entries = push.fetch_pending().await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].entity_id, "ready");
+    }
+
+    #[tokio::test]
+    async fn fetch_pending_excludes_dead_letters() {
+        let (_dir, db) = setup_push_db().await;
+        insert_outbox_entry(&db, "asset", "alive", "trash", None).await;
+        insert_outbox_entry(&db, "asset", "dead", "trash", None).await;
+
+        sqlx::query("UPDATE sync_outbox SET status = ? WHERE entity_id = 'dead'")
+            .bind(OutboxStatus::DeadLetter as i64)
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        let push = make_push_manager(db).await;
+        let entries = push.fetch_pending().await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].entity_id, "alive");
+    }
+
+    #[test]
+    fn backoff_grows_then_caps_at_one_hour() {
+        // Linear-ish growth at first, then clamped.
+        assert_eq!(backoff_seconds(1), 120);
+        assert_eq!(backoff_seconds(2), 240);
+        assert_eq!(backoff_seconds(3), 480);
+        assert_eq!(backoff_seconds(5), 1920);
+        assert_eq!(backoff_seconds(6), MAX_BACKOFF_SECS);
+        assert_eq!(backoff_seconds(20), MAX_BACKOFF_SECS);
+    }
+
+    #[test]
+    fn truncate_error_respects_char_boundaries() {
+        let s = "é".repeat(MAX_ERROR_LEN); // each char is 2 bytes
+        let out = truncate_error(&s);
+        assert!(out.len() <= MAX_ERROR_LEN);
+        // Must be valid UTF-8 (this would panic if we split a codepoint).
+        assert!(out.chars().all(|c| c == 'é'));
     }
 
     #[tokio::test]
@@ -713,6 +906,7 @@ mod tests {
             entity_id: "alb1".to_string(),
             action: "create".to_string(),
             payload: Some(r#"{"name":"Photos"}"#.to_string()),
+            attempts: 0,
         };
 
         let val = push.parse_payload(&entry).unwrap();
@@ -730,6 +924,7 @@ mod tests {
             entity_id: "a1".to_string(),
             action: "trash".to_string(),
             payload: None,
+            attempts: 0,
         };
 
         let val = push.parse_payload(&entry).unwrap();
@@ -748,6 +943,7 @@ mod tests {
             entity_id: "alb1".to_string(),
             action: "create".to_string(),
             payload: Some("not json".to_string()),
+            attempts: 0,
         };
 
         let result = push.parse_payload(&entry);
