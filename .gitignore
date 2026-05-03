@@ -20,7 +20,11 @@ flatpak-build-dev/
 *.db-shm
 
 # Editor files
-.vscode/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/tasks.json
+!.vscode/settings.json
+!.vscode/launch.json
 .idea/
 *.swp
 *.swo
