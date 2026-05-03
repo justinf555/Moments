@@ -164,7 +164,7 @@ pub fn build_factory(
             } else {
                 cell.imp().days_label.set_visible(false);
 
-                // Wire star button click → optimistic toggle + MediaClient command.
+                // Wire star button click → optimistic toggle + MediaClientV2 command.
                 let star_btn = cell.imp().star_btn.clone();
                 let item_weak = item.downgrade();
                 let mc = media_client.clone();

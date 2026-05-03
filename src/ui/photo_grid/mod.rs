@@ -416,7 +416,7 @@ mod view_imp {
         fn realize(&self) {
             self.parent_realize();
 
-            // Trigger initial page load via MediaClient.
+            // Trigger initial page load via MediaClientV2.
             if let (Some(store), Some(mc)) = (
                 self.photo_grid.imp().store.borrow().as_ref(),
                 self.photo_grid.imp().media_client.get(),

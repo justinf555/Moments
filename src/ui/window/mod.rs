@@ -153,7 +153,7 @@ impl MomentsWindow {
     /// Wire the full shell: sidebar, coordinator, views.
     ///
     /// Components react to mutations via GObject signals on the client
-    /// singletons (`MediaClient`, `AlbumClientV2`), not via the event bus.
+    /// singletons (`MediaClientV2`, `AlbumClientV2`), not via an event bus.
     pub fn setup(&self, settings: gio::Settings) {
         let imp = self.imp();
 

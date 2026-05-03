@@ -98,10 +98,9 @@ src/
   main.rs              — Entry point: gettext, GResources, MomentsApplication
   config.rs            — Compile-time constants (VERSION, PKGDATADIR, etc.)
   application/         — MomentsApplication (adw::Application subclass)
-  app_event/           — AppEvent enum (commands + results)
-  event_bus/           — EventBus (push-based fan-out via glib::idle_add_once)
+  event_emitter/       — EventEmitter<T> fan-out primitive (per-service mpsc subscribe/emit)
   library/             — Core domain: Library struct + feature services
-  client/              — GObject bridge layer (MediaClient, AlbumClient, etc.)
+  client/              — GObject bridge layer (MediaClientV2, AlbumClientV2, etc.)
   renderer/            — RenderPipeline (decode → orient → resize → edits)
   importer/            — Import pipeline (discovery → hash → metadata → persist)
   sync/                — Bidirectional Immich sync engine
@@ -134,9 +133,9 @@ Key abstractions injected at construction:
 
 `src/client/` — GObject singletons that bridge Library services to GTK widgets:
 
-- **`MediaClient`** — media queries, filtering, ListStore model factory
-- **`AlbumClient`** — album CRUD, album picker data
-- **`PeopleClient`** — person queries, visibility management
+- **`MediaClientV2`** — media queries + commands (trash/restore/delete/favorite/empty_trash/restore_all_trash), filtering, ListStore model factory
+- **`AlbumClientV2`** — album CRUD, album picker data
+- **`PeopleClientV2`** — person queries, visibility management
 - **`ImportClient`** — import pipeline orchestration, progress tracking
 
 Clients are GObject subclasses with property notifications. They create and manage `ListStore` models via weak refs (factory pattern). GTK widgets bind to client properties and models — they never import `Library` directly.
@@ -200,16 +199,20 @@ Results flow from Tokio → GTK via the event bus (`glib::idle_add_once`) or GOb
 
 ### Application singleton pattern
 
-Access shared state via `MomentsApplication::default()` with typed accessors: `tokio_handle()`, `library()`, `media_client()`, `album_client()`, `people_client()`, `import_client()`, `render_pipeline()`. Don't walk the widget tree with `.root().application()`.
+Access shared state via `MomentsApplication::default()` with typed accessors: `tokio_handle()`, `library()`, `media_client_v2()`, `album_client_v2()`, `people_client()`, `import_client()`, `render_pipeline()`. Don't walk the widget tree with `.root().application()`.
 
-### Event bus and command dispatch
+### Events and command flow
 
-`src/event_bus/mod.rs` — centralised push-based event delivery using `glib::idle_add_once`. Components subscribe in their own constructors; parents do assembly only.
+There is no central event bus. Events are delivered through two cooperating mechanisms:
 
-- **`AppEvent`** (`app_event/mod.rs`) — command variants (`*Requested`) and result variants (`*Changed`, `Trashed`, etc.)
-- **`EventSender`** — `Send + Clone` wrapper around `mpsc::Sender`. Safe to call from Tokio threads.
-- **`CommandDispatcher`** (`library/commands/mod.rs`) — subscribes to the bus, routes `*Requested` events to `CommandHandler` impls on the Tokio runtime.
-- **Error toasts** — `AppEvent::Error` → `AdwToast` via `WidgetExt::activate_action("win.show-toast", ...)`. Use `WidgetExt` not `ActionGroupExt`.
+- **Per-service `EventEmitter<T>` channels** (`src/event_emitter.rs`). Each library service owns a typed emitter — `MediaService` → `MediaEvent`, `ThumbnailService` → `ThumbnailEvent`, `AlbumService` → `AlbumEvent`, `FacesService` → `FacesEvent`. Subscribers call `service.subscribe()` for an `mpsc::UnboundedReceiver` on the Tokio side. Used by client GObjects to react to library state changes.
+- **GObject signals on client singletons**. UI-side fan-out for command results: `MediaClientV2` emits `items-trashed`/`items-restored`/`items-deleted`/`favorite-changed`; `AlbumClientV2` emits `album-media-changed`/`album-deleted`. Widgets `connect_closure` in `realize` and disconnect in `unrealize`.
+
+Commands flow directly: UI → client method (e.g. `MediaClientV2::trash(ids)`) → library service on Tokio → service emits its event. No `*Requested` / `CommandDispatcher` indirection.
+
+Errors surface as toasts via `crate::client::show_error_toast(&err)` from the failing client method — safe to call from Tokio threads (uses `glib::idle_add_once` internally).
+
+See `docs/design-event-bus.md` for the migration history that produced this shape.
 
 ### GTK/GObject subclassing pattern
 
@@ -245,7 +248,7 @@ Photo and video viewers: `[★] [ℹ] [✏] [⋮]`. The overflow menu uses a man
 
 ### Album picker dialog
 
-`src/ui/album_picker_dialog/` — `adw::Dialog` with search, cover thumbnails, "Already added" pills, inline creation. Architecture: async data fetch → `AlbumPickerData` (plain structs) → dialog → `AppEvent` bus commands. Never imports `Library`.
+`src/ui/album_picker_dialog/` — `adw::Dialog` with search, cover thumbnails, "Already added" pills, inline creation. Architecture: async data fetch → `AlbumPickerData` (plain structs) → dialog → `AlbumClientV2` method calls. Never imports `Library`.
 
 ### Icons
 
@@ -281,7 +284,7 @@ Design docs live in `docs/` and follow a consistent format with issue links, sta
 - `docs/design-lazy-view-loading.md` — Lazy view registration pattern
 - `docs/design-video-import.md` — Video format detection and import
 - `docs/design-photo-editing.md` — Non-destructive editing: data model, renderer, UI, Immich integration
-- `docs/design-event-bus.md` — EventBus architecture, AppEvent enum, CommandDispatcher pattern
+- `docs/design-event-bus.md` — historical record of the EventBus architecture (removed in #580); pointer to current per-service EventEmitter shape
 - `docs/design-integration-testing.md` — Headless GTK4 testing with mutter, CI config, coverage tracking
 
 ### Blueprint templates
