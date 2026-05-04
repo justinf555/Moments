@@ -63,7 +63,7 @@ impl Library {
         db.open(&db_path).await?;
 
         let albums = AlbumService::new(db.clone(), Arc::clone(&recorder));
-        let faces = FacesService::new(db.clone(), None, Arc::clone(&recorder));
+        let faces = FacesService::new(db.clone(), bundle.thumbnails.clone(), Arc::clone(&recorder));
         let editing = EditingService::new(db.clone());
         let media = MediaService::new(
             db.clone(),
