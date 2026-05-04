@@ -56,34 +56,32 @@ impl FormatHandler for RawHandler {
                 .map_err(|e| RenderError::DecodeFailed(format!("RAW full decode failed: {e}")))
         };
 
+        // Fall through past `Err(...)` from earlier options too — rawler
+        // can fail on a particular embedded JPEG or demosaic variant while
+        // a different path on the same file still works. Only the last
+        // option in each chain propagates its error, so a useful message
+        // surfaces when nothing succeeded.
         match hint {
             DecodeHint::Thumbnail => {
-                if let Some(img) = thumb()? {
+                if let Ok(Some(img)) = thumb() {
                     return Ok(img);
                 }
-                if let Some(img) = preview()? {
+                if let Ok(Some(img)) = preview() {
                     return Ok(img);
                 }
-                if let Some(img) = full()? {
-                    return Ok(img);
-                }
+                full()?
             }
             DecodeHint::Full => {
-                if let Some(img) = full()? {
+                if let Ok(Some(img)) = full() {
                     return Ok(img);
                 }
-                if let Some(img) = preview()? {
+                if let Ok(Some(img)) = preview() {
                     return Ok(img);
                 }
-                if let Some(img) = thumb()? {
-                    return Ok(img);
-                }
+                thumb()?
             }
         }
-
-        Err(RenderError::DecodeFailed(
-            "RAW decoder returned no image".to_string(),
-        ))
+        .ok_or_else(|| RenderError::DecodeFailed("RAW decoder returned no image".to_string()))
     }
 }
 
