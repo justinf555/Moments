@@ -57,13 +57,15 @@ pub fn lookup_access_token(server_url: &str) -> Result<Option<String>, String> {
 /// a legitimately missing entry (user must sign in again), an empty
 /// stored value (treated as missing), and a keyring/D-Bus failure
 /// (system-level problem the user should see).
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum TokenError {
     /// No keyring entry exists for this server, or the stored value
     /// was empty.
+    #[error("no keyring entry for the configured Immich server")]
     Missing,
     /// libsecret returned an error (e.g. D-Bus unavailable, locked
     /// collection, schema mismatch). The string is the underlying error.
+    #[error("keyring lookup failed: {0}")]
     KeyringFailed(String),
 }
 
@@ -111,7 +113,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn schema_has_correct_name() {
+    fn schema_constructs_without_panic() {
         let s = schema();
         let _ = format!("{s:?}");
     }

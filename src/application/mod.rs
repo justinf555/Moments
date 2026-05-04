@@ -504,25 +504,34 @@ impl MomentsApplication {
                         access_token,
                     },
                     Err(err) => {
-                        let settings = self.imp().settings.get().expect("settings initialised");
-                        if let Err(e) = settings.set_string("library-path", "") {
-                            error!("failed to clear stale library path: {e}");
-                        }
+                        // Only `Missing` warrants clearing `library-path`: the
+                        // user has no credential for this server and must
+                        // re-run setup. `KeyringFailed` is typically transient
+                        // (D-Bus race during session start, locked collection
+                        // prompt timeout) — leave the saved path intact so a
+                        // simple relaunch recovers once the keyring is healthy.
                         let setup_win = self.show_setup_window();
                         let (heading, body) = match err {
-                            keyring::TokenError::Missing => (
-                                gettext("Sign in required"),
-                                gettext(
-                                    "Your saved Immich session was not found in the system keyring. Please sign in again to continue.",
-                                ),
-                            ),
+                            keyring::TokenError::Missing => {
+                                let settings =
+                                    self.imp().settings.get().expect("settings initialised");
+                                if let Err(e) = settings.set_string("library-path", "") {
+                                    error!("failed to clear stale library path: {e}");
+                                }
+                                (
+                                    gettext("Sign in required"),
+                                    gettext(
+                                        "Your saved Immich session was not found in the system keyring. Please sign in again to continue.",
+                                    ),
+                                )
+                            }
                             keyring::TokenError::KeyringFailed(e) => {
                                 error!("keyring lookup failed during open_library: {e}");
                                 (
                                     gettext("Could not access the system keyring"),
                                     format!(
                                         "{}\n\nDetails: {e}",
-                                        gettext("Moments could not read your saved Immich session. Please sign in again or check your keyring service.")
+                                        gettext("Moments could not read your saved Immich session. Try restarting the app once your keyring service is available, or sign in again to continue.")
                                     ),
                                 )
                             }

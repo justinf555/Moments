@@ -219,12 +219,22 @@ impl MomentsImmichSetupPage {
             return;
         }
 
-        // Capture the keyring state *before* writing the new token. This lets
-        // us distinguish a fresh setup from a re-setup triggered by the
-        // "sign in required" path in `open_library` (issue #605): in that
-        // path the bundle on disk is still valid but the keyring entry is
-        // missing, so reusing the existing bundle is the correct behaviour.
+        // Decide whether this is a fresh setup, a #605 re-sign-in (keyring
+        // missing but bundle still valid), or an unwanted overwrite of a
+        // configured library — *before* mutating any persistent state, so an
+        // error path leaves the keyring untouched.
+        let bundle_path = default_immich_library_path();
         let had_existing_token = keyring::resolve_immich_token(&server_url).is_ok();
+        if bundle_path.exists() && had_existing_token {
+            // Bundle and keyring entry both already existed — refuse to
+            // silently overwrite. The user likely re-ran setup against a
+            // working library by mistake.
+            let msg = format!("Library already exists at {}", bundle_path.display());
+            error!("{msg}");
+            imp.status_label.set_text(&msg);
+            imp.status_label.add_css_class("error");
+            return;
+        }
 
         // Store session token in GNOME Keyring.
         if let Err(e) = keyring::store_access_token(&server_url, &access_token) {
@@ -236,22 +246,11 @@ impl MomentsImmichSetupPage {
         }
 
         // Create (or reuse) the Immich bundle.
-        let bundle_path = default_immich_library_path();
         let config = LibraryConfig::Immich {
             server_url,
             access_token,
         };
         if bundle_path.exists() {
-            if had_existing_token {
-                // Bundle and keyring entry both already existed — refuse to
-                // silently overwrite. The user likely re-ran setup against a
-                // working library by mistake.
-                let msg = format!("Library already exists at {}", bundle_path.display());
-                error!("{msg}");
-                imp.status_label.set_text(&msg);
-                imp.status_label.add_css_class("error");
-                return;
-            }
             info!(
                 path = %bundle_path.display(),
                 "reusing existing Immich bundle (post sign-in re-setup)",
