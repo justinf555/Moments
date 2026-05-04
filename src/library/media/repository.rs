@@ -340,7 +340,29 @@ impl MediaRepository {
     /// Without this, the UI would still hold a model item keyed on the
     /// local id even though the row has been replaced server-side
     /// (issue #610).
+    ///
+    /// `imported_at` is treated as a **local-only** field: when an existing
+    /// row is being replaced (matched by id, or by external_id during the
+    /// local→server UUID swap), its `imported_at` is preserved instead of
+    /// being overwritten by the incoming value. This stops sync from
+    /// retroactively rewriting "when this asset entered my library" to
+    /// the server's `file_created_at` (the photo's capture time), which
+    /// would silently move assets out of the Recent Imports view (issue #614).
     pub async fn upsert(&self, record: &MediaRecord) -> Result<Option<MediaId>, LibraryError> {
+        // Capture the existing local row's imported_at — by id (plain
+        // update) or by external_id (local→server UUID swap). At most one
+        // row matches in practice; if both somehow do, take the id match.
+        let existing_imported_at: Option<i64> = sqlx::query_scalar(
+            "SELECT imported_at FROM media
+             WHERE id = ?1 OR external_id = ?1
+             ORDER BY (id = ?1) DESC LIMIT 1",
+        )
+        .bind(record.id.as_str())
+        .fetch_optional(self.db.pool())
+        .await
+        .map_err(LibraryError::Db)?;
+        let imported_at = existing_imported_at.unwrap_or(record.imported_at);
+
         // Atomic delete-and-return so the replaced-id observation can
         // never disagree with the row that was actually removed. SQLite
         // 3.35+ supports RETURNING; sqlx surfaces it via fetch_optional.
@@ -366,7 +388,7 @@ impl MediaRepository {
         .bind(&record.relative_path)
         .bind(&record.original_filename)
         .bind(record.file_size)
-        .bind(record.imported_at)
+        .bind(imported_at)
         .bind(record.media_type as i64)
         .bind(record.taken_at)
         .bind(record.width)
@@ -668,6 +690,53 @@ mod tests {
 
         let replaced = repo.upsert(&record).await.unwrap();
         assert!(replaced.is_none());
+    }
+
+    /// Re-syncing an existing asset must not overwrite its `imported_at` —
+    /// that field belongs to the local library's view of "when did this
+    /// arrive", not the server's view of "when was it captured". See #614.
+    #[tokio::test]
+    async fn upsert_preserves_imported_at_for_existing_id() {
+        let dir = tempdir().unwrap();
+        let (repo, _db) = test_repo(dir.path()).await;
+        let id = MediaId::new("e".repeat(64));
+
+        let mut record = test_record(id.clone());
+        record.imported_at = 1_700_000_000; // original local import
+        repo.insert(&record).await.unwrap();
+
+        // Pull-sync upserts with a much older capture-time-derived value
+        // (what the asset handler used to do).
+        record.imported_at = 1_400_000_000;
+        repo.upsert(&record).await.unwrap();
+
+        let item = repo.get(&id).await.unwrap().unwrap();
+        assert_eq!(item.imported_at, 1_700_000_000);
+    }
+
+    /// Local→server UUID swap: the new server-keyed row inherits the local
+    /// row's `imported_at` rather than starting fresh, so the freshly
+    /// round-tripped asset stays in the Recent Imports view (#614).
+    #[tokio::test]
+    async fn upsert_preserves_imported_at_across_external_id_swap() {
+        let dir = tempdir().unwrap();
+        let (repo, _db) = test_repo(dir.path()).await;
+
+        let local_id = MediaId::new("local-uuid-eeeeeeeeeeeeeeeeeeee".to_string());
+        let server_id = MediaId::new("server-uuid-ffffffffffffffffffff".to_string());
+
+        let mut local = test_record(local_id.clone());
+        local.external_id = Some(server_id.as_str().to_string());
+        local.imported_at = 1_700_000_000;
+        repo.insert(&local).await.unwrap();
+
+        let mut from_server = test_record(server_id.clone());
+        from_server.external_id = Some(server_id.as_str().to_string());
+        from_server.imported_at = 1_400_000_000;
+        repo.upsert(&from_server).await.unwrap();
+
+        let item = repo.get(&server_id).await.unwrap().unwrap();
+        assert_eq!(item.imported_at, 1_700_000_000);
     }
 
     #[tokio::test]

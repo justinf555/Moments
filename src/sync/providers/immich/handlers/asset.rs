@@ -43,8 +43,14 @@ async fn handle_asset(asset: SyncAssetV1, ctx: &SyncContext) -> Result<(), Libra
     let taken_at =
         parse_datetime(&asset.local_date_time).or_else(|| parse_datetime(&asset.file_created_at));
 
-    let imported_at =
-        parse_datetime(&asset.file_created_at).unwrap_or_else(|| chrono::Utc::now().timestamp());
+    // `imported_at` means "when did this asset enter the local library", not
+    // "when was the photo taken". For a row we've never seen, that's now;
+    // for a row that already exists, the repository preserves the prior
+    // value during upsert. See issue #614 — previously this was set to the
+    // server's `file_created_at`, which Immich's own EXIF-extraction job
+    // overwrites with the photo's capture date, silently moving assets
+    // out of the Recent Imports view as soon as they round-tripped.
+    let imported_at = chrono::Utc::now().timestamp();
 
     let is_trashed = asset.deleted_at.is_some();
     let trashed_at = parse_datetime(&asset.deleted_at);
