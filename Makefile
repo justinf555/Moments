@@ -8,8 +8,67 @@ run-dev:
 		flatpak-build-dev io.github.justinf555.Moments.dev.json && \
 	flatpak run --env=RUST_LOG=moments=debug io.github.justinf555.Moments.Devel
 
+# Fast iterative dev build (mirrors GNOME Builder's inner loop).
+#
+# Builder doesn't use flatpak-builder for the moments module itself —
+# it uses `flatpak-builder --stop-at=moments` to set up the SDK + deps,
+# then drives meson and cargo directly via `flatpak build` so the build
+# dir (and cargo's target/) persist across runs. Editing one .rs file
+# then triggers an incremental cargo rebuild instead of a full one.
+#
+# `make dev-bootstrap` is the one-time setup (also re-run after manifest
+# changes). `make dev` is the fast inner loop. `make clean-dev` resets.
+#
+# Use `make run-dev` if you want the unmodified full-rebuild flow.
+DEV_APP_DIR    = .flatpak-builder-dev/app
+DEV_BUILD_DIR  = .flatpak-builder-dev/builddir
+DEV_STATE_DIR  = .flatpak-builder-dev
+
+dev-bootstrap:
+	flatpak-builder --user --force-clean \
+		--keep-build-dirs --disable-rofiles-fuse --ccache \
+		--stop-at=moments \
+		--state-dir=$(DEV_STATE_DIR) \
+		$(DEV_APP_DIR) io.github.justinf555.Moments.dev.json
+	flatpak build \
+		--filesystem=$(CURDIR) \
+		--filesystem=$(CURDIR)/$(DEV_BUILD_DIR):create \
+		--env=PATH=/usr/lib/sdk/rust-stable/bin:/app/bin:/usr/bin \
+		--env=RUST_BACKTRACE=1 \
+		$(DEV_APP_DIR) \
+		meson setup --prefix=/app --libdir=lib -Dprofile=development \
+			$(CURDIR)/$(DEV_BUILD_DIR) $(CURDIR)
+
+dev:
+	@if [ ! -f $(DEV_BUILD_DIR)/build.ninja ]; then \
+		echo "==> No build dir — running dev-bootstrap first"; \
+		$(MAKE) dev-bootstrap; \
+	fi
+	flatpak build --share=network \
+		--filesystem=$(CURDIR) \
+		--filesystem=$(CURDIR)/$(DEV_BUILD_DIR) \
+		--env=PATH=/usr/lib/sdk/rust-stable/bin:/app/bin:/usr/bin \
+		--env=RUST_BACKTRACE=1 \
+		$(DEV_APP_DIR) \
+		meson install -C $(CURDIR)/$(DEV_BUILD_DIR)
+	flatpak build \
+		--share=network --share=ipc \
+		--socket=wayland --socket=fallback-x11 \
+		--device=dri --socket=pulseaudio \
+		--talk-name=org.freedesktop.secrets \
+		--filesystem=$(HOME)/.var/app/io.github.justinf555.Moments.Devel:create \
+		--env=GTK_A11Y=none \
+		--env=RUST_LOG=moments=debug \
+		--env=XDG_DATA_HOME=$(HOME)/.var/app/io.github.justinf555.Moments.Devel/data \
+		--env=XDG_CONFIG_HOME=$(HOME)/.var/app/io.github.justinf555.Moments.Devel/config \
+		--env=XDG_CACHE_HOME=$(HOME)/.var/app/io.github.justinf555.Moments.Devel/cache \
+		$(DEV_APP_DIR) moments
+
 clean:
 	rm -rf flatpak-build-dir flatpak-build-dev
+
+clean-dev:
+	rm -rf .flatpak-builder-dev
 
 # ── Testing (inside GNOME 50 Flatpak SDK) ────────────────────────────────────
 #
