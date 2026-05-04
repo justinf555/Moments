@@ -51,6 +51,38 @@ pub fn lookup_access_token(server_url: &str) -> Result<Option<String>, String> {
     Ok(secret.map(|s| s.to_string()))
 }
 
+/// Why an Immich session token could not be resolved at startup.
+///
+/// Distinguishes the three states callers need to surface differently:
+/// a legitimately missing entry (user must sign in again), an empty
+/// stored value (treated as missing), and a keyring/D-Bus failure
+/// (system-level problem the user should see).
+#[derive(Debug)]
+pub enum TokenError {
+    /// No keyring entry exists for this server, or the stored value
+    /// was empty.
+    Missing,
+    /// libsecret returned an error (e.g. D-Bus unavailable, locked
+    /// collection, schema mismatch). The string is the underlying error.
+    KeyringFailed(String),
+}
+
+/// Resolve an Immich session token from the keyring, collapsing the
+/// three keyring outcomes into a strict `Ok(non-empty token)` /
+/// `Err(reason)` shape so call sites cannot accidentally pass an
+/// empty string downstream.
+pub fn resolve_immich_token(server_url: &str) -> Result<String, TokenError> {
+    map_lookup_result(lookup_access_token(server_url))
+}
+
+fn map_lookup_result(result: Result<Option<String>, String>) -> Result<String, TokenError> {
+    match result {
+        Ok(Some(token)) if !token.is_empty() => Ok(token),
+        Ok(_) => Err(TokenError::Missing),
+        Err(e) => Err(TokenError::KeyringFailed(e)),
+    }
+}
+
 /// Delete a stored Immich session token from the GNOME Keyring.
 #[allow(dead_code)] // Will be called by logout flow (not yet implemented)
 #[instrument(fields(server_url = %server_url))]
@@ -82,5 +114,29 @@ mod tests {
     fn schema_has_correct_name() {
         let s = schema();
         let _ = format!("{s:?}");
+    }
+
+    #[test]
+    fn map_lookup_present_returns_ok() {
+        let r = map_lookup_result(Ok(Some("abc".into())));
+        assert!(matches!(r, Ok(t) if t == "abc"));
+    }
+
+    #[test]
+    fn map_lookup_empty_string_treated_as_missing() {
+        let r = map_lookup_result(Ok(Some(String::new())));
+        assert!(matches!(r, Err(TokenError::Missing)));
+    }
+
+    #[test]
+    fn map_lookup_none_is_missing() {
+        let r = map_lookup_result(Ok(None));
+        assert!(matches!(r, Err(TokenError::Missing)));
+    }
+
+    #[test]
+    fn map_lookup_error_is_keyring_failed() {
+        let r = map_lookup_result(Err("dbus down".into()));
+        assert!(matches!(r, Err(TokenError::KeyringFailed(e)) if e == "dbus down"));
     }
 }

@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::glib;
-use tracing::{debug, error, instrument};
+use tracing::{debug, error, info, instrument};
 
 use crate::application::keyring;
 use crate::library::bundle::Bundle;
@@ -219,6 +219,13 @@ impl MomentsImmichSetupPage {
             return;
         }
 
+        // Capture the keyring state *before* writing the new token. This lets
+        // us distinguish a fresh setup from a re-setup triggered by the
+        // "sign in required" path in `open_library` (issue #605): in that
+        // path the bundle on disk is still valid but the keyring entry is
+        // missing, so reusing the existing bundle is the correct behaviour.
+        let had_existing_token = keyring::resolve_immich_token(&server_url).is_ok();
+
         // Store session token in GNOME Keyring.
         if let Err(e) = keyring::store_access_token(&server_url, &access_token) {
             error!("failed to store access token: {e}");
@@ -228,13 +235,28 @@ impl MomentsImmichSetupPage {
             return;
         }
 
-        // Create the Immich bundle.
+        // Create (or reuse) the Immich bundle.
         let bundle_path = default_immich_library_path();
         let config = LibraryConfig::Immich {
             server_url,
             access_token,
         };
-        if let Err(e) = Bundle::create(&bundle_path, &config) {
+        if bundle_path.exists() {
+            if had_existing_token {
+                // Bundle and keyring entry both already existed — refuse to
+                // silently overwrite. The user likely re-ran setup against a
+                // working library by mistake.
+                let msg = format!("Library already exists at {}", bundle_path.display());
+                error!("{msg}");
+                imp.status_label.set_text(&msg);
+                imp.status_label.add_css_class("error");
+                return;
+            }
+            info!(
+                path = %bundle_path.display(),
+                "reusing existing Immich bundle (post sign-in re-setup)",
+            );
+        } else if let Err(e) = Bundle::create(&bundle_path, &config) {
             error!("failed to create Immich bundle: {e}");
             imp.status_label
                 .set_text(&format!("Failed to create library: {e}"));
