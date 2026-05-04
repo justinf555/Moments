@@ -14,6 +14,22 @@ pub const VIDEO_EXTENSIONS: &[&str] = &[
     "mp4", "mov", "m4v", "mkv", "webm", "avi", "mts", "m2ts", "3gp",
 ];
 
+/// Hint to decoders about the size the caller actually needs.
+///
+/// Some formats (notably RAW) have multiple decode paths with very different
+/// cost: a full sensor demosaic produces a sensor-resolution image and a
+/// large transient allocation, while an embedded JPEG preview is small and
+/// almost free. When the caller only wants a thumbnail, decoders should
+/// prefer the cheap path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecodeHint {
+    /// Best quality available (e.g. full demosaic for RAW). Used by the
+    /// viewer's full-resolution path.
+    Full,
+    /// Smallest acceptable result. Used by the thumbnail pipeline.
+    Thumbnail,
+}
+
 /// Decodes image files of a specific set of formats into a [`image::DynamicImage`].
 ///
 /// Implement this trait for each format family (standard, RAW, etc.) and
@@ -24,7 +40,11 @@ pub trait FormatHandler: Send + Sync {
     fn extensions(&self) -> &[&str];
 
     /// Decode the file at `path` to a [`image::DynamicImage`].
-    fn decode(&self, path: &Path) -> Result<image::DynamicImage, RenderError>;
+    ///
+    /// `hint` lets the handler pick a cheaper decode path when only a
+    /// thumbnail is needed; handlers may ignore it if they have only one
+    /// decode path.
+    fn decode(&self, path: &Path, hint: DecodeHint) -> Result<image::DynamicImage, RenderError>;
 }
 
 /// Single source of truth for all supported image formats.
@@ -64,16 +84,20 @@ impl FormatRegistry {
     ///
     /// Returns [`RenderError::DecodeFailed`] if no handler is registered or
     /// decoding fails.
-    pub fn decode(&self, path: &Path) -> Result<image::DynamicImage, RenderError> {
+    pub fn decode(
+        &self,
+        path: &Path,
+        hint: DecodeHint,
+    ) -> Result<image::DynamicImage, RenderError> {
         // Try magic-byte detection first (works for extensionless files).
         if let Some(handler) = self.handler_by_magic(path) {
-            match handler.decode(path) {
+            match handler.decode(path, hint) {
                 Ok(img) => return Ok(img),
                 Err(_) => {
                     // Magic-byte match failed (e.g. TIFF header but actually
                     // a RAW format). Try all other handlers.
                     for other in self.handlers.values() {
-                        if let Ok(img) = other.decode(path) {
+                        if let Ok(img) = other.decode(path, hint) {
                             return Ok(img);
                         }
                     }
@@ -93,7 +117,7 @@ impl FormatRegistry {
             .get(&ext)
             .ok_or_else(|| RenderError::FormatNotRecognised(path.to_path_buf()))?;
 
-        handler.decode(path)
+        handler.decode(path, hint)
     }
 
     /// Try to find a handler by reading magic bytes from the file.
@@ -183,14 +207,37 @@ impl FormatRegistry {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use std::sync::Mutex;
 
     struct FakeHandler;
     impl FormatHandler for FakeHandler {
         fn extensions(&self) -> &[&str] {
             &["fake"]
         }
-        fn decode(&self, _path: &Path) -> Result<image::DynamicImage, RenderError> {
+        fn decode(
+            &self,
+            _path: &Path,
+            _hint: DecodeHint,
+        ) -> Result<image::DynamicImage, RenderError> {
             Err(RenderError::DecodeFailed("fake handler".into()))
+        }
+    }
+
+    /// Records the hint passed to `decode` so tests can assert it.
+    struct RecordingHandler {
+        last_hint: Arc<Mutex<Option<DecodeHint>>>,
+    }
+    impl FormatHandler for RecordingHandler {
+        fn extensions(&self) -> &[&str] {
+            &["rec"]
+        }
+        fn decode(
+            &self,
+            _path: &Path,
+            hint: DecodeHint,
+        ) -> Result<image::DynamicImage, RenderError> {
+            *self.last_hint.lock().unwrap() = Some(hint);
+            Err(RenderError::DecodeFailed("recording handler".into()))
         }
     }
 
@@ -213,7 +260,9 @@ mod tests {
     #[test]
     fn decode_returns_error_for_unknown_extension() {
         let reg = FormatRegistry::new();
-        let err = reg.decode(&PathBuf::from("photo.jpg")).unwrap_err();
+        let err = reg
+            .decode(&PathBuf::from("photo.jpg"), DecodeHint::Full)
+            .unwrap_err();
         assert!(matches!(err, RenderError::FormatNotRecognised(_)));
     }
 
@@ -265,6 +314,22 @@ mod tests {
             reg.media_type_with_sniff(f.path(), "fake"),
             Some(MediaType::Video),
         );
+    }
+
+    #[test]
+    fn decode_forwards_hint_to_handler() {
+        let last_hint = Arc::new(Mutex::new(None));
+        let handler = Arc::new(RecordingHandler {
+            last_hint: Arc::clone(&last_hint),
+        });
+        let mut reg = FormatRegistry::new();
+        reg.register(handler);
+
+        let _ = reg.decode(&PathBuf::from("photo.rec"), DecodeHint::Thumbnail);
+        assert_eq!(*last_hint.lock().unwrap(), Some(DecodeHint::Thumbnail));
+
+        let _ = reg.decode(&PathBuf::from("photo.rec"), DecodeHint::Full);
+        assert_eq!(*last_hint.lock().unwrap(), Some(DecodeHint::Full));
     }
 
     #[test]

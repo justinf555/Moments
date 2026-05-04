@@ -4,16 +4,20 @@ use rawler::decoders::RawDecodeParams;
 use rawler::rawsource::RawSource;
 
 use crate::renderer::error::RenderError;
-use crate::renderer::format::registry::FormatHandler;
+use crate::renderer::format::registry::{DecodeHint, FormatHandler};
 
 /// Decodes RAW camera files via the `rawler` crate.
 ///
-/// Attempts to extract an embedded JPEG preview in this order:
-///   1. `thumbnail_image` — smallest embedded preview
-///   2. `preview_image`   — larger embedded preview
+/// The decode chain order depends on [`DecodeHint`]:
 ///
-/// Thumbnails are cached on disk after import, so the decode cost is
-/// paid only once per asset.
+/// * [`DecodeHint::Full`] — `full_image` (full demosaic) → `preview_image`
+///   → `thumbnail_image`. Used by the viewer's full-resolution path so
+///   editing operations work on real sensor data when available.
+/// * [`DecodeHint::Thumbnail`] — `thumbnail_image` → `preview_image` →
+///   `full_image`. Used by the import thumbnail pipeline. The embedded
+///   JPEGs are typically 160-2048 px and decode in milliseconds with a
+///   ~5 MB transient allocation, vs ~150 MB+ for a 50 MP demosaic. See
+///   issue #617.
 pub struct RawHandler;
 
 impl FormatHandler for RawHandler {
@@ -27,7 +31,7 @@ impl FormatHandler for RawHandler {
         ]
     }
 
-    fn decode(&self, path: &Path) -> Result<image::DynamicImage, RenderError> {
+    fn decode(&self, path: &Path, hint: DecodeHint) -> Result<image::DynamicImage, RenderError> {
         let source = RawSource::new(path)
             .map_err(|e| RenderError::DecodeFailed(format!("failed to open RAW file: {e}")))?;
 
@@ -36,33 +40,48 @@ impl FormatHandler for RawHandler {
 
         let params = RawDecodeParams::default();
 
-        // Full demosaicing — highest quality. Thumbnails are cached on disk
-        // so this cost is paid only once per import.
-        if let Some(img) = decoder
-            .full_image(&source, &params)
-            .map_err(|e| RenderError::DecodeFailed(format!("RAW full decode failed: {e}")))?
-        {
-            return Ok(img);
-        }
+        let thumb = || {
+            decoder.thumbnail_image(&source, &params).map_err(|e| {
+                RenderError::DecodeFailed(format!("RAW thumbnail extraction failed: {e}"))
+            })
+        };
+        let preview = || {
+            decoder.preview_image(&source, &params).map_err(|e| {
+                RenderError::DecodeFailed(format!("RAW preview extraction failed: {e}"))
+            })
+        };
+        let full = || {
+            decoder
+                .full_image(&source, &params)
+                .map_err(|e| RenderError::DecodeFailed(format!("RAW full decode failed: {e}")))
+        };
 
-        // Embedded full-size preview — fast fallback if demosaic unavailable.
-        if let Some(img) = decoder
-            .preview_image(&source, &params)
-            .map_err(|e| RenderError::DecodeFailed(format!("RAW preview extraction failed: {e}")))?
-        {
-            return Ok(img);
+        // Fall through past `Err(...)` from earlier options too — rawler
+        // can fail on a particular embedded JPEG or demosaic variant while
+        // a different path on the same file still works. Only the last
+        // option in each chain propagates its error, so a useful message
+        // surfaces when nothing succeeded.
+        match hint {
+            DecodeHint::Thumbnail => {
+                if let Ok(Some(img)) = thumb() {
+                    return Ok(img);
+                }
+                if let Ok(Some(img)) = preview() {
+                    return Ok(img);
+                }
+                full()?
+            }
+            DecodeHint::Full => {
+                if let Ok(Some(img)) = full() {
+                    return Ok(img);
+                }
+                if let Ok(Some(img)) = preview() {
+                    return Ok(img);
+                }
+                thumb()?
+            }
         }
-
-        // Last resort: smallest embedded thumbnail.
-        if let Some(img) = decoder.thumbnail_image(&source, &params).map_err(|e| {
-            RenderError::DecodeFailed(format!("RAW thumbnail extraction failed: {e}"))
-        })? {
-            return Ok(img);
-        }
-
-        Err(RenderError::DecodeFailed(
-            "RAW decoder returned no image".to_string(),
-        ))
+        .ok_or_else(|| RenderError::DecodeFailed("RAW decoder returned no image".to_string()))
     }
 }
 

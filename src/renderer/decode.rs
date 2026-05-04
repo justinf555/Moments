@@ -11,12 +11,16 @@ use image::DynamicImage;
 use tracing::instrument;
 
 use crate::renderer::error::RenderError;
-use crate::renderer::format::FormatRegistry;
+use crate::renderer::format::{DecodeHint, FormatRegistry};
 
 /// Decode an image from a file path using magic-byte detection.
 #[instrument(skip(formats))]
-pub fn decode(path: &Path, formats: &Arc<FormatRegistry>) -> Result<DynamicImage, RenderError> {
-    formats.decode(path)
+pub fn decode(
+    path: &Path,
+    formats: &Arc<FormatRegistry>,
+    hint: DecodeHint,
+) -> Result<DynamicImage, RenderError> {
+    formats.decode(path, hint)
 }
 
 #[cfg(test)]
@@ -48,14 +52,14 @@ mod tests {
         let path = write_test_jpeg(dir.path(), "no_extension");
         let formats = test_formats();
 
-        let img = decode(&path, &formats).unwrap();
+        let img = decode(&path, &formats, DecodeHint::Full).unwrap();
         assert_eq!((img.width(), img.height()), (100, 50));
     }
 
     #[test]
     fn decode_missing_file_returns_error() {
         let formats = test_formats();
-        let result = decode(Path::new("/nonexistent/photo"), &formats);
+        let result = decode(Path::new("/nonexistent/photo"), &formats, DecodeHint::Full);
         assert!(result.is_err());
     }
 }
