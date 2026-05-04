@@ -359,10 +359,19 @@ impl PushManager {
         // `original_filename` (e.g. `IMG_1234.jpg`) instead.
         let filename = self.lookup_original_filename(&entry.entity_id).await?;
 
-        let now = chrono::Utc::now().to_rfc3339();
+        let (file_created_at, file_modified_at) = self
+            .lookup_upload_timestamps(&entry.entity_id, path)
+            .await?;
         let resp = self
             .client
-            .upload_asset(path, &filename, &entry.entity_id, &now, &now, None)
+            .upload_asset(
+                path,
+                &filename,
+                &entry.entity_id,
+                &file_created_at,
+                &file_modified_at,
+                None,
+            )
             .await?;
 
         // Store the server-assigned ID as external_id.
@@ -505,6 +514,43 @@ impl PushManager {
             ))),
             None => Err(LibraryError::Immich(format!("media not found: {local_id}"))),
         }
+    }
+
+    /// Resolve the timestamps Immich expects on upload.
+    ///
+    /// Returns `(file_created_at, file_modified_at)` as RFC 3339 strings:
+    /// - `file_created_at` — capture time, sourced from `media.taken_at`
+    ///   (set by the importer from EXIF DateTimeOriginal). Falls back to the
+    ///   file's on-disk mtime when EXIF is missing — matches what Immich
+    ///   would derive for itself, and avoids `Utc::now()` collapsing the
+    ///   whole library onto today's timeline. See issue #616.
+    /// - `file_modified_at` — the on-disk file's mtime.
+    async fn lookup_upload_timestamps(
+        &self,
+        local_id: &str,
+        path: &std::path::Path,
+    ) -> Result<(String, String), LibraryError> {
+        let row: Option<(Option<i64>,)> = sqlx::query_as("SELECT taken_at FROM media WHERE id = ?")
+            .bind(local_id)
+            .fetch_optional(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
+
+        let taken_at = row
+            .ok_or_else(|| LibraryError::Immich(format!("media not found: {local_id}")))?
+            .0;
+
+        let mtime = tokio::fs::metadata(path)
+            .await
+            .and_then(|m| m.modified())
+            .map_err(LibraryError::Io)?;
+        let modified_at: chrono::DateTime<chrono::Utc> = mtime.into();
+
+        let created_at = taken_at
+            .and_then(|secs| chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0))
+            .unwrap_or(modified_at);
+
+        Ok((created_at.to_rfc3339(), modified_at.to_rfc3339()))
     }
 
     async fn lookup_media_external_id(&self, local_id: &str) -> Result<String, LibraryError> {
@@ -995,6 +1041,84 @@ mod tests {
         let result = push.lookup_original_filename("nope").await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("media not found"));
+    }
+
+    #[tokio::test]
+    async fn lookup_upload_timestamps_uses_taken_at_when_set() {
+        let (_dir, db) = setup_push_db().await;
+
+        // 2023-06-15T12:34:56Z
+        let taken_at_secs: i64 = 1_686_832_496;
+        let mut record = test_record(MediaId::new("local-1".to_string()));
+        record.taken_at = Some(taken_at_secs);
+        db.upsert_media(&record).await.unwrap();
+
+        // Real on-disk file so the metadata() call succeeds.
+        let file = tempfile::NamedTempFile::new().unwrap();
+
+        let push = make_push_manager(db).await;
+        let (created, modified) = push
+            .lookup_upload_timestamps("local-1", file.path())
+            .await
+            .unwrap();
+
+        // file_created_at must reflect the EXIF capture time, not Utc::now().
+        let parsed = chrono::DateTime::parse_from_rfc3339(&created).unwrap();
+        assert_eq!(parsed.timestamp(), taken_at_secs);
+
+        // file_modified_at must parse and be close to the file's actual mtime.
+        let parsed_mod = chrono::DateTime::parse_from_rfc3339(&modified).unwrap();
+        let now = chrono::Utc::now().timestamp();
+        assert!((now - parsed_mod.timestamp()).abs() < 60);
+    }
+
+    #[tokio::test]
+    async fn lookup_upload_timestamps_falls_back_to_mtime_when_taken_at_null() {
+        let (_dir, db) = setup_push_db().await;
+
+        // taken_at is None by default in test_record.
+        let record = test_record(MediaId::new("local-2".to_string()));
+        assert!(record.taken_at.is_none());
+        db.upsert_media(&record).await.unwrap();
+
+        let file = tempfile::NamedTempFile::new().unwrap();
+
+        let push = make_push_manager(db).await;
+        let (created, modified) = push
+            .lookup_upload_timestamps("local-2", file.path())
+            .await
+            .unwrap();
+
+        // Without EXIF, both timestamps should equal the file mtime — matches
+        // what Immich would derive on its own.
+        assert_eq!(created, modified);
+    }
+
+    #[tokio::test]
+    async fn lookup_upload_timestamps_missing_media_returns_error() {
+        let (_dir, db) = setup_push_db().await;
+        let file = tempfile::NamedTempFile::new().unwrap();
+
+        let push = make_push_manager(db).await;
+        let result = push
+            .lookup_upload_timestamps("nonexistent", file.path())
+            .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("media not found"));
+    }
+
+    #[tokio::test]
+    async fn lookup_upload_timestamps_missing_file_returns_error() {
+        let (_dir, db) = setup_push_db().await;
+
+        let record = test_record(MediaId::new("local-3".to_string()));
+        db.upsert_media(&record).await.unwrap();
+
+        let push = make_push_manager(db).await;
+        let result = push
+            .lookup_upload_timestamps("local-3", std::path::Path::new("/nonexistent/file"))
+            .await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
