@@ -23,7 +23,7 @@ use crate::library::recorder::MutationRecorder;
 #[derive(Clone)]
 pub struct FacesService {
     repo: FacesRepository,
-    thumbnails_dir: Option<std::path::PathBuf>,
+    thumbnails_dir: std::path::PathBuf,
     recorder: Arc<dyn MutationRecorder>,
     events: EventEmitter<FacesEvent>,
 }
@@ -31,11 +31,14 @@ pub struct FacesService {
 impl FacesService {
     /// Create a faces service backed by a database.
     ///
-    /// Pass `thumbnails_dir` for backends that store person thumbnails
-    /// (Immich). Pass `None` for backends without face detection (local).
+    /// `thumbnails_dir` is the bundle's thumbnails root — person face
+    /// thumbnails are stored under `{thumbnails_dir}/people/{id}.jpg`
+    /// by the sync handler and read back by [`Self::person_thumbnail_path`].
+    /// Local backends pass the same dir even though they never write into
+    /// it; that keeps the contract uniform across backends.
     pub fn new(
         db: Database,
-        thumbnails_dir: Option<std::path::PathBuf>,
+        thumbnails_dir: std::path::PathBuf,
         recorder: Arc<dyn MutationRecorder>,
     ) -> Self {
         Self {
@@ -236,9 +239,12 @@ impl FacesService {
         Ok(())
     }
 
+    /// Return the on-disk path of a person's face thumbnail, if it has
+    /// been downloaded. Returns `None` when the file is missing — UI
+    /// callers fall back to rendering the person's initials.
     pub fn person_thumbnail_path(&self, person_id: &PersonId) -> Option<std::path::PathBuf> {
-        let dir = self.thumbnails_dir.as_ref()?;
-        let path = dir
+        let path = self
+            .thumbnails_dir
             .join("people")
             .join(format!("{}.jpg", person_id.as_str()));
         if path.exists() {
@@ -246,5 +252,45 @@ impl FacesService {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::library::db::test_helpers::open_test_db;
+    use crate::sync::outbox::NoOpRecorder;
+
+    async fn make_service(thumbnails_dir: std::path::PathBuf) -> (tempfile::TempDir, FacesService) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let svc = FacesService::new(db, thumbnails_dir, Arc::new(NoOpRecorder));
+        (dir, svc)
+    }
+
+    /// Sync handler writes to `{thumbnails_dir}/people/{id}.jpg`; the
+    /// service must read from the same location (#611).
+    #[tokio::test]
+    async fn person_thumbnail_path_returns_file_when_present() {
+        let thumb_root = tempfile::tempdir().unwrap();
+        let people_dir = thumb_root.path().join("people");
+        std::fs::create_dir_all(&people_dir).unwrap();
+        let person_id = PersonId::from_raw("person-uuid".to_string());
+        let thumb_file = people_dir.join("person-uuid.jpg");
+        std::fs::write(&thumb_file, b"jpeg bytes").unwrap();
+
+        let (_dir, svc) = make_service(thumb_root.path().to_path_buf()).await;
+        let result = svc.person_thumbnail_path(&person_id);
+        assert_eq!(result, Some(thumb_file));
+    }
+
+    /// No file on disk → None, so the UI falls back to initials.
+    #[tokio::test]
+    async fn person_thumbnail_path_returns_none_when_absent() {
+        let thumb_root = tempfile::tempdir().unwrap();
+        let person_id = PersonId::from_raw("never-downloaded".to_string());
+
+        let (_dir, svc) = make_service(thumb_root.path().to_path_buf()).await;
+        assert!(svc.person_thumbnail_path(&person_id).is_none());
     }
 }
