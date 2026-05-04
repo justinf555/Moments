@@ -406,15 +406,41 @@ impl MomentsApplication {
         };
 
         // For Immich configs, inject the session token from the keyring.
+        // The setup wizard stores the token before emitting setup-complete,
+        // so a failure here means the keyring became unavailable between
+        // store and lookup — surface it rather than booting the user into a
+        // library that can never authenticate.
         let config = match config {
             LibraryConfig::Immich { server_url, .. } => {
-                let access_token = keyring::lookup_access_token(&server_url)
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default();
-                LibraryConfig::Immich {
-                    server_url,
-                    access_token,
+                match keyring::resolve_immich_token(&server_url) {
+                    Ok(access_token) => LibraryConfig::Immich {
+                        server_url,
+                        access_token,
+                    },
+                    Err(err) => {
+                        let (heading, body) = match err {
+                            keyring::TokenError::Missing => (
+                                gettext("Sign in required"),
+                                gettext(
+                                    "The session token saved during setup could not be read back. Please try signing in again.",
+                                ),
+                            ),
+                            keyring::TokenError::KeyringFailed(e) => {
+                                error!(
+                                    "keyring lookup failed immediately after setup: {e}"
+                                );
+                                (
+                                    gettext("Could not access the system keyring"),
+                                    format!(
+                                        "{}\n\nDetails: {e}",
+                                        gettext("Moments stored your session in the keyring but could not read it back. Please check your keyring service and try again.")
+                                    ),
+                                )
+                            }
+                        };
+                        show_library_error_dialog(setup_win, &heading, &body);
+                        return;
+                    }
                 }
             }
             other => other,
@@ -466,15 +492,53 @@ impl MomentsApplication {
         };
 
         // For Immich configs, inject the session token from the keyring.
+        // If the token cannot be resolved, refuse to load the library — passing
+        // an empty string downstream produces opaque 401 toasts and keeps the
+        // outbox spinning. Bounce the user back to the setup window with an
+        // explanation instead.
         let config = match config {
             LibraryConfig::Immich { server_url, .. } => {
-                let access_token = keyring::lookup_access_token(&server_url)
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default();
-                LibraryConfig::Immich {
-                    server_url,
-                    access_token,
+                match keyring::resolve_immich_token(&server_url) {
+                    Ok(access_token) => LibraryConfig::Immich {
+                        server_url,
+                        access_token,
+                    },
+                    Err(err) => {
+                        // Only `Missing` warrants clearing `library-path`: the
+                        // user has no credential for this server and must
+                        // re-run setup. `KeyringFailed` is typically transient
+                        // (D-Bus race during session start, locked collection
+                        // prompt timeout) — leave the saved path intact so a
+                        // simple relaunch recovers once the keyring is healthy.
+                        let setup_win = self.show_setup_window();
+                        let (heading, body) = match err {
+                            keyring::TokenError::Missing => {
+                                let settings =
+                                    self.imp().settings.get().expect("settings initialised");
+                                if let Err(e) = settings.set_string("library-path", "") {
+                                    error!("failed to clear stale library path: {e}");
+                                }
+                                (
+                                    gettext("Sign in required"),
+                                    gettext(
+                                        "Your saved Immich session was not found in the system keyring. Please sign in again to continue.",
+                                    ),
+                                )
+                            }
+                            keyring::TokenError::KeyringFailed(e) => {
+                                error!("keyring lookup failed during open_library: {e}");
+                                (
+                                    gettext("Could not access the system keyring"),
+                                    format!(
+                                        "{}\n\nDetails: {e}",
+                                        gettext("Moments could not read your saved Immich session. Try restarting the app once your keyring service is available, or sign in again to continue.")
+                                    ),
+                                )
+                            }
+                        };
+                        show_library_error_dialog(&setup_win, &heading, &body);
+                        return;
+                    }
                 }
             }
             other => other,
