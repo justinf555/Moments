@@ -105,11 +105,21 @@ impl MediaService {
     ///
     /// Pre-queries existence so the emitted event distinguishes a new row
     /// (`Added`) from a refreshed row (`Updated`).
+    ///
+    /// Special case: when a locally-imported asset is uploaded to Immich
+    /// and streamed back with the server's UUID as the `id`, the
+    /// repository deletes the old local-keyed row before inserting the
+    /// new server-keyed one. We emit a `Removed` event for the replaced
+    /// id ahead of the `Added` so UI models drop the old item — without
+    /// this, both rows live in the model until the next restart (#610).
     pub async fn upsert_media(&self, record: &MediaRecord) -> Result<(), LibraryError> {
         let existed = self.repo.exists(&record.id).await?;
-        self.repo.upsert(record).await?;
+        let replaced = self.repo.upsert(record).await?;
         let ids = vec![record.id.clone()];
-        if existed {
+        if let Some(old) = replaced {
+            self.emit(MediaEvent::Removed(vec![old]));
+            self.emit(MediaEvent::Added(ids));
+        } else if existed {
             self.emit(MediaEvent::Updated(ids));
         } else {
             self.emit(MediaEvent::Added(ids));
@@ -251,5 +261,121 @@ impl MediaService {
 
     pub async fn library_stats(&self) -> Result<LibraryStats, LibraryError> {
         self.repo.library_stats().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::library::db::test_helpers::{open_test_db, record_with_taken_at};
+    use crate::library::media::MediaId;
+    use crate::library::resolver::LocalResolver;
+    use crate::sync::outbox::NoOpRecorder;
+
+    async fn make_service() -> (tempfile::TempDir, MediaService) {
+        let dir = tempfile::tempdir().unwrap();
+        let originals = dir.path().join("originals");
+        std::fs::create_dir_all(&originals).unwrap();
+        let db = open_test_db(dir.path()).await;
+        let svc = MediaService::new(
+            db,
+            originals.clone(),
+            LocalStorageMode::Managed,
+            Arc::new(NoOpRecorder),
+            Arc::new(LocalResolver::new(originals, LocalStorageMode::Managed)),
+        );
+        (dir, svc)
+    }
+
+    /// Drain a receiver into a Vec, but stop after a short timeout so the
+    /// test doesn't hang waiting for a hypothetical extra event.
+    async fn drain(rx: &mut mpsc::UnboundedReceiver<MediaEvent>) -> Vec<MediaEvent> {
+        let mut events = Vec::new();
+        loop {
+            match tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv()).await {
+                Ok(Some(e)) => events.push(e),
+                Ok(None) => break, // channel closed
+                Err(_) => break,   // timeout — no more events
+            }
+        }
+        events
+    }
+
+    /// Issue #610: when an upload-then-sync round-trip causes the
+    /// repository to replace a local-keyed row with a server-keyed one,
+    /// the service must emit `Removed(local_id)` before `Added(server_id)`
+    /// so UI models drop the stale item.
+    #[tokio::test]
+    async fn upsert_media_emits_remove_then_add_when_replacing_local_row() {
+        let (_dir, svc) = make_service().await;
+        let mut rx = svc.subscribe();
+
+        let local_id = MediaId::new("local-uuid-aaaaaaaaaaaaaaaaaaaaaaaa".to_string());
+        let server_id = MediaId::new("server-uuid-bbbbbbbbbbbbbbbbbbbbbbb".to_string());
+
+        // 1) Local import where push has already assigned the server's
+        //    UUID as external_id (i.e. the row state immediately before
+        //    the sync stream replays the asset).
+        let mut local_record =
+            record_with_taken_at(local_id.clone(), "local/photo.jpg", Some(1_000));
+        local_record.external_id = Some(server_id.as_str().to_string());
+        svc.insert_media(&local_record).await.unwrap();
+
+        // Drop the Added event from step 1 so we only see what upsert emits.
+        let _ = drain(&mut rx).await;
+
+        // 3) Pull-sync now upserts the asset keyed on the server UUID.
+        let mut from_server =
+            record_with_taken_at(server_id.clone(), "server/photo.jpg", Some(1_000));
+        from_server.external_id = Some(server_id.as_str().to_string());
+        svc.upsert_media(&from_server).await.unwrap();
+
+        let events = drain(&mut rx).await;
+        assert_eq!(events.len(), 2, "expected Removed + Added; got {events:?}");
+        match &events[0] {
+            MediaEvent::Removed(ids) => assert_eq!(ids, std::slice::from_ref(&local_id)),
+            other => panic!("expected first event to be Removed; got {other:?}"),
+        }
+        match &events[1] {
+            MediaEvent::Added(ids) => assert_eq!(ids, std::slice::from_ref(&server_id)),
+            other => panic!("expected second event to be Added; got {other:?}"),
+        }
+    }
+
+    /// Plain sync upsert of a brand-new row emits a single `Added`.
+    #[tokio::test]
+    async fn upsert_media_emits_added_for_fresh_row() {
+        let (_dir, svc) = make_service().await;
+        let mut rx = svc.subscribe();
+
+        let record = record_with_taken_at(
+            MediaId::new("fresh-server-uuid-cccccccccccccccccc".to_string()),
+            "fresh/photo.jpg",
+            Some(2_000),
+        );
+        svc.upsert_media(&record).await.unwrap();
+
+        let events = drain(&mut rx).await;
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], MediaEvent::Added(ids) if ids.len() == 1));
+    }
+
+    /// Re-syncing an asset that already exists by id emits a single
+    /// `Updated` (no replacement happened).
+    #[tokio::test]
+    async fn upsert_media_emits_updated_for_known_id() {
+        let (_dir, svc) = make_service().await;
+
+        let id = MediaId::new("known-id-dddddddddddddddddddddddddd".to_string());
+        let record = record_with_taken_at(id.clone(), "known/photo.jpg", Some(3_000));
+        svc.upsert_media(&record).await.unwrap();
+
+        let mut rx = svc.subscribe();
+        // Re-upsert the same id.
+        svc.upsert_media(&record).await.unwrap();
+
+        let events = drain(&mut rx).await;
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], MediaEvent::Updated(ids) if ids == &[id]));
     }
 }

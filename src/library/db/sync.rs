@@ -1,13 +1,19 @@
 use crate::library::error::LibraryError;
 use crate::library::media::repository::MediaRepository;
-use crate::library::media::MediaRecord;
+use crate::library::media::{MediaId, MediaRecord};
 use crate::library::metadata::MediaMetadataRecord;
 
 use super::Database;
 
 impl Database {
     /// Forwarding shim — delegates to `MediaRepository`.
-    pub async fn upsert_media(&self, record: &MediaRecord) -> Result<(), LibraryError> {
+    ///
+    /// Returns the id of any local-keyed row that was replaced by an
+    /// `external_id` match (see [`MediaRepository::upsert`]).
+    pub async fn upsert_media(
+        &self,
+        record: &MediaRecord,
+    ) -> Result<Option<MediaId>, LibraryError> {
         MediaRepository::new(self.clone()).upsert(record).await
     }
 
