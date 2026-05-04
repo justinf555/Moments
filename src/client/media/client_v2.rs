@@ -643,6 +643,27 @@ impl MediaClientV2 {
                         }
                     });
                 }
+                MediaEvent::Replaced { old, new } => {
+                    // Fetch the new row so we can insert it with full
+                    // field data (same shape as Added).
+                    let new_item = match library
+                        .media()
+                        .get_media_items(std::slice::from_ref(&new))
+                        .await
+                    {
+                        Ok(mut items) => items.pop(),
+                        Err(e) => {
+                            error!("get_media_items failed for Replaced: {e}");
+                            continue;
+                        }
+                    };
+                    let weak = client_weak.clone();
+                    glib::idle_add_once(move || {
+                        if let Some(client) = weak.upgrade() {
+                            client.on_media_replaced(&old, new_item);
+                        }
+                    });
+                }
             }
         }
         debug!("media event listener shutting down");
@@ -790,6 +811,39 @@ impl MediaClientV2 {
         // (e.g. the sidebar trash badge) react to all deletion paths.
         if !ids.is_empty() {
             self.emit_by_name::<()>("items-deleted", &[&(ids.len() as u32)]);
+        }
+    }
+
+    /// Swap a model entry whose id was reassigned by the sync stream
+    /// (local UUID → server UUID). Removes `old`, inserts `new` if the
+    /// filter matches — but does **not** emit `items-deleted`. The
+    /// asset wasn't deleted, only re-keyed; firing the deletion signal
+    /// here would decrement the sidebar trash count and bounce users
+    /// out of selection mode.
+    fn on_media_replaced(&self, old: &MediaId, new_item: Option<MediaItem>) {
+        let model_snapshot: Vec<(gio::ListStore, MediaFilter)> = {
+            let models = self.imp().models.borrow();
+            models
+                .iter()
+                .filter_map(|t| Some((t.store.upgrade()?, t.filter.clone())))
+                .collect()
+        };
+        for (store, filter) in model_snapshot {
+            // Always drop the stale id from this store, regardless of
+            // filter — it referenced a row that no longer exists.
+            self.remove_item(&store, old);
+
+            if !filter.supports_inline_match() {
+                continue;
+            }
+            if let Some(item) = &new_item {
+                if filter.matches(item) {
+                    self.insert_item_sorted(&store, item.clone());
+                }
+            }
+            // None new_item: server row vanished between the event
+            // and the fetch. Nothing to insert. The remove above is
+            // sufficient.
         }
     }
 

@@ -26,4 +26,15 @@ pub enum MediaEvent {
     /// Media rows were permanently deleted (`delete_permanently`, either
     /// from local user action or from the sync stream).
     Removed(Vec<MediaId>),
+    /// A locally-keyed row was replaced by a server-keyed row from the
+    /// sync stream — issued by `upsert_media` when the repository's
+    /// `external_id` match deletes a local row before inserting the
+    /// server-keyed one.
+    ///
+    /// Carries the `old` (now-deleted) and `new` (just-inserted) ids so
+    /// clients can swap their model entry in place without going through
+    /// the `Removed` path. `Removed` triggers user-facing side effects
+    /// (sidebar trash badge decrement, photo-grid selection exit) that
+    /// would be incorrect for a sync swap.
+    Replaced { old: MediaId, new: MediaId },
 }

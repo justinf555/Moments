@@ -334,15 +334,23 @@ impl MediaRepository {
     /// matches the incoming `id` — this handles the case where a locally
     /// imported asset (local UUID) was uploaded to Immich and the server
     /// now streams it back with its own UUID as the `id`.
-    pub async fn upsert(&self, record: &MediaRecord) -> Result<(), LibraryError> {
-        // If a local row was uploaded and assigned this server ID as its
-        // external_id, remove it so the server-keyed row takes over.
-        sqlx::query("DELETE FROM media WHERE external_id = ? AND id != ?")
-            .bind(record.id.as_str())
-            .bind(record.id.as_str())
-            .execute(self.db.pool())
-            .await
-            .map_err(LibraryError::Db)?;
+    ///
+    /// Returns the id of the replaced local row if one was deleted by the
+    /// external_id match, so the caller can emit a `Removed` event for it.
+    /// Without this, the UI would still hold a model item keyed on the
+    /// local id even though the row has been replaced server-side
+    /// (issue #610).
+    pub async fn upsert(&self, record: &MediaRecord) -> Result<Option<MediaId>, LibraryError> {
+        // Atomic delete-and-return so the replaced-id observation can
+        // never disagree with the row that was actually removed. SQLite
+        // 3.35+ supports RETURNING; sqlx surfaces it via fetch_optional.
+        let replaced: Option<String> =
+            sqlx::query_scalar("DELETE FROM media WHERE external_id = ? AND id != ? RETURNING id")
+                .bind(record.id.as_str())
+                .bind(record.id.as_str())
+                .fetch_optional(self.db.pool())
+                .await
+                .map_err(LibraryError::Db)?;
 
         sqlx::query(
             "INSERT OR REPLACE INTO media (id, content_hash, external_id, relative_path,
@@ -371,7 +379,8 @@ impl MediaRepository {
         .execute(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
-        Ok(())
+
+        Ok(replaced.map(MediaId::new))
     }
 
     /// Set or clear the favourite flag on one or more assets.
@@ -596,13 +605,69 @@ mod tests {
         let (repo, _db) = test_repo(dir.path()).await;
         let id = MediaId::new("g".repeat(64));
         let mut record = test_record(id.clone());
-        repo.upsert(&record).await.unwrap();
+        let replaced = repo.upsert(&record).await.unwrap();
+        assert!(replaced.is_none(), "fresh insert returns None");
         assert!(repo.exists(&id).await.unwrap());
 
         record.original_filename = "updated.jpg".to_string();
-        repo.upsert(&record).await.unwrap();
+        let replaced = repo.upsert(&record).await.unwrap();
+        assert!(replaced.is_none(), "same-id upsert returns None");
         let item = repo.get(&id).await.unwrap().unwrap();
         assert_eq!(item.original_filename, "updated.jpg");
+    }
+
+    /// Round-trip a locally-imported asset that gets uploaded to Immich
+    /// and streamed back with the server's UUID — `upsert` must report
+    /// the local id it just replaced so the service can emit a
+    /// `Removed` event for it (issue #610).
+    #[tokio::test]
+    async fn upsert_returns_replaced_local_id_when_external_id_matches() {
+        let dir = tempdir().unwrap();
+        let (repo, _db) = test_repo(dir.path()).await;
+
+        // Local row keyed on a local UUID, with the server UUID stored
+        // as external_id (this is the state after a successful push).
+        let local_id = MediaId::new("local-uuid-aaaaaaaaaaaaaaaaaaaa".to_string());
+        let server_id = MediaId::new("server-uuid-bbbbbbbbbbbbbbbbbbbb".to_string());
+        let mut local = test_record(local_id.clone());
+        local.external_id = Some(server_id.as_str().to_string());
+        repo.insert(&local).await.unwrap();
+
+        // Pull-sync now upserts the asset keyed on the server UUID.
+        let mut from_server = test_record(server_id.clone());
+        from_server.external_id = Some(server_id.as_str().to_string());
+        // Different relative_path is fine — the upsert REPLACEs.
+        from_server.relative_path = "from-server.jpg".to_string();
+
+        let replaced = repo.upsert(&from_server).await.unwrap();
+
+        assert_eq!(
+            replaced.as_ref().map(|i| i.as_str()),
+            Some(local_id.as_str())
+        );
+        assert!(
+            !repo.exists(&local_id).await.unwrap(),
+            "old local row deleted"
+        );
+        assert!(
+            repo.exists(&server_id).await.unwrap(),
+            "new server row inserted"
+        );
+    }
+
+    /// Upsert with an external_id that doesn't match any existing row
+    /// must not report a phantom replacement.
+    #[tokio::test]
+    async fn upsert_returns_none_when_no_external_id_match() {
+        let dir = tempdir().unwrap();
+        let (repo, _db) = test_repo(dir.path()).await;
+
+        let id = MediaId::new("just-a-fresh-row-cccccccccccccccccc".to_string());
+        let mut record = test_record(id.clone());
+        record.external_id = Some("server-uuid-not-otherwise-known".to_string());
+
+        let replaced = repo.upsert(&record).await.unwrap();
+        assert!(replaced.is_none());
     }
 
     #[tokio::test]
