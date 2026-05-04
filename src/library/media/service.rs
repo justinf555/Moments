@@ -109,20 +109,22 @@ impl MediaService {
     /// Special case: when a locally-imported asset is uploaded to Immich
     /// and streamed back with the server's UUID as the `id`, the
     /// repository deletes the old local-keyed row before inserting the
-    /// new server-keyed one. We emit a `Removed` event for the replaced
-    /// id ahead of the `Added` so UI models drop the old item — without
-    /// this, both rows live in the model until the next restart (#610).
+    /// new server-keyed one. We emit a single [`MediaEvent::Replaced`]
+    /// so UI models can swap entries in place without triggering the
+    /// `Removed`-path side effects (sidebar trash badge, selection
+    /// exit) — see #610.
     pub async fn upsert_media(&self, record: &MediaRecord) -> Result<(), LibraryError> {
         let existed = self.repo.exists(&record.id).await?;
         let replaced = self.repo.upsert(record).await?;
-        let ids = vec![record.id.clone()];
         if let Some(old) = replaced {
-            self.emit(MediaEvent::Removed(vec![old]));
-            self.emit(MediaEvent::Added(ids));
+            self.emit(MediaEvent::Replaced {
+                old,
+                new: record.id.clone(),
+            });
         } else if existed {
-            self.emit(MediaEvent::Updated(ids));
+            self.emit(MediaEvent::Updated(vec![record.id.clone()]));
         } else {
-            self.emit(MediaEvent::Added(ids));
+            self.emit(MediaEvent::Added(vec![record.id.clone()]));
         }
         Ok(())
     }
@@ -303,10 +305,11 @@ mod tests {
 
     /// Issue #610: when an upload-then-sync round-trip causes the
     /// repository to replace a local-keyed row with a server-keyed one,
-    /// the service must emit `Removed(local_id)` before `Added(server_id)`
-    /// so UI models drop the stale item.
+    /// the service emits a single `Replaced { old, new }` event so UI
+    /// models can swap entries in place — without triggering the
+    /// `Removed`-path side effects (sidebar trash badge, selection exit).
     #[tokio::test]
-    async fn upsert_media_emits_remove_then_add_when_replacing_local_row() {
+    async fn upsert_media_emits_replaced_when_local_row_swapped_for_server() {
         let (_dir, svc) = make_service().await;
         let mut rx = svc.subscribe();
 
@@ -321,7 +324,8 @@ mod tests {
         local_record.external_id = Some(server_id.as_str().to_string());
         svc.insert_media(&local_record).await.unwrap();
 
-        // Drop the Added event from step 1 so we only see what upsert emits.
+        // 2) Drop the Added event from the import so we only see what
+        //    upsert emits.
         let _ = drain(&mut rx).await;
 
         // 3) Pull-sync now upserts the asset keyed on the server UUID.
@@ -331,14 +335,13 @@ mod tests {
         svc.upsert_media(&from_server).await.unwrap();
 
         let events = drain(&mut rx).await;
-        assert_eq!(events.len(), 2, "expected Removed + Added; got {events:?}");
+        assert_eq!(events.len(), 1, "expected single Replaced; got {events:?}");
         match &events[0] {
-            MediaEvent::Removed(ids) => assert_eq!(ids, std::slice::from_ref(&local_id)),
-            other => panic!("expected first event to be Removed; got {other:?}"),
-        }
-        match &events[1] {
-            MediaEvent::Added(ids) => assert_eq!(ids, std::slice::from_ref(&server_id)),
-            other => panic!("expected second event to be Added; got {other:?}"),
+            MediaEvent::Replaced { old, new } => {
+                assert_eq!(old, &local_id);
+                assert_eq!(new, &server_id);
+            }
+            other => panic!("expected Replaced; got {other:?}"),
         }
     }
 

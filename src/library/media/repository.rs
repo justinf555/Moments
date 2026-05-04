@@ -341,25 +341,16 @@ impl MediaRepository {
     /// local id even though the row has been replaced server-side
     /// (issue #610).
     pub async fn upsert(&self, record: &MediaRecord) -> Result<Option<MediaId>, LibraryError> {
-        // Find the local-keyed row this upsert is going to replace, if any.
-        // We look up first so we can return the id; the DELETE itself is
-        // idempotent.
+        // Atomic delete-and-return so the replaced-id observation can
+        // never disagree with the row that was actually removed. SQLite
+        // 3.35+ supports RETURNING; sqlx surfaces it via fetch_optional.
         let replaced: Option<String> =
-            sqlx::query_scalar("SELECT id FROM media WHERE external_id = ? AND id != ?")
+            sqlx::query_scalar("DELETE FROM media WHERE external_id = ? AND id != ? RETURNING id")
                 .bind(record.id.as_str())
                 .bind(record.id.as_str())
                 .fetch_optional(self.db.pool())
                 .await
                 .map_err(LibraryError::Db)?;
-
-        if replaced.is_some() {
-            sqlx::query("DELETE FROM media WHERE external_id = ? AND id != ?")
-                .bind(record.id.as_str())
-                .bind(record.id.as_str())
-                .execute(self.db.pool())
-                .await
-                .map_err(LibraryError::Db)?;
-        }
 
         sqlx::query(
             "INSERT OR REPLACE INTO media (id, content_hash, external_id, relative_path,
