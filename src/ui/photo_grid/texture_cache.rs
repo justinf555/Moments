@@ -1,7 +1,8 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::num::NonZeroUsize;
 
 use gtk::glib;
+use lru::LruCache;
 
 use crate::library::media::MediaId;
 
@@ -14,10 +15,10 @@ const DEFAULT_CAPACITY: usize = 500;
 /// Using `glib::Bytes` instead of `Vec<u8>` allows zero-copy sharing
 /// between the cache and `GdkMemoryTexture` — cloning a `glib::Bytes`
 /// is just an atomic refcount increment, not a data copy.
-pub struct CachedTexture {
-    pub pixels: glib::Bytes,
-    pub width: u32,
-    pub height: u32,
+struct CachedTexture {
+    pixels: glib::Bytes,
+    width: u32,
+    height: u32,
 }
 
 /// LRU cache for decoded thumbnail textures.
@@ -29,27 +30,18 @@ pub struct CachedTexture {
 ///
 /// Only accessed from the GTK main thread — uses [`RefCell`], not `Mutex`.
 pub struct TextureCache {
-    inner: RefCell<CacheInner>,
-}
-
-struct CacheInner {
-    /// Decoded textures keyed by media ID.
-    map: HashMap<MediaId, CachedTexture>,
-    /// Access order — most recently used at the back.
-    order: Vec<MediaId>,
-    /// Maximum number of entries before LRU eviction.
-    capacity: usize,
+    inner: RefCell<LruCache<MediaId, CachedTexture>>,
 }
 
 impl TextureCache {
     /// Create a new texture cache with the default capacity.
     pub fn new() -> Self {
+        Self::with_capacity(NonZeroUsize::new(DEFAULT_CAPACITY).expect("DEFAULT_CAPACITY > 0"))
+    }
+
+    fn with_capacity(capacity: NonZeroUsize) -> Self {
         Self {
-            inner: RefCell::new(CacheInner {
-                map: HashMap::with_capacity(DEFAULT_CAPACITY),
-                order: Vec::with_capacity(DEFAULT_CAPACITY),
-                capacity: DEFAULT_CAPACITY,
-            }),
+            inner: RefCell::new(LruCache::new(capacity)),
         }
     }
 
@@ -59,17 +51,8 @@ impl TextureCache {
     /// Cloning `glib::Bytes` is a refcount bump — zero data copy.
     pub fn get(&self, id: &MediaId) -> Option<(glib::Bytes, u32, u32)> {
         let mut inner = self.inner.borrow_mut();
-        if inner.map.contains_key(id) {
-            // Promote to MRU.
-            if let Some(pos) = inner.order.iter().position(|k| k == id) {
-                inner.order.remove(pos);
-            }
-            inner.order.push(id.clone());
-            let entry = &inner.map[id];
-            Some((entry.pixels.clone(), entry.width, entry.height))
-        } else {
-            None
-        }
+        let entry = inner.get(id)?;
+        Some((entry.pixels.clone(), entry.width, entry.height))
     }
 
     /// Insert decoded pixel data into the cache.
@@ -82,42 +65,14 @@ impl TextureCache {
     pub fn insert(&self, id: MediaId, pixels: Vec<u8>, width: u32, height: u32) -> glib::Bytes {
         let bytes = glib::Bytes::from_owned(pixels);
         let ret = bytes.clone();
-        let mut inner = self.inner.borrow_mut();
-
-        // Update existing entry.
-        if inner.map.contains_key(&id) {
-            inner.map.insert(
-                id.clone(),
-                CachedTexture {
-                    pixels: bytes,
-                    width,
-                    height,
-                },
-            );
-            if let Some(pos) = inner.order.iter().position(|k| k == &id) {
-                inner.order.remove(pos);
-            }
-            inner.order.push(id);
-            return ret;
-        }
-
-        // Evict LRU if at capacity.
-        if inner.map.len() >= inner.capacity {
-            if let Some(evicted) = inner.order.first().cloned() {
-                inner.order.remove(0);
-                inner.map.remove(&evicted);
-            }
-        }
-
-        inner.map.insert(
-            id.clone(),
+        self.inner.borrow_mut().put(
+            id,
             CachedTexture {
                 pixels: bytes,
                 width,
                 height,
             },
         );
-        inner.order.push(id);
         ret
     }
 }
@@ -140,6 +95,10 @@ mod tests {
         vec![val; 100]
     }
 
+    fn cache_with_capacity(capacity: usize) -> TextureCache {
+        TextureCache::with_capacity(NonZeroUsize::new(capacity).unwrap())
+    }
+
     #[test]
     fn insert_and_retrieve() {
         let cache = TextureCache::new();
@@ -158,13 +117,7 @@ mod tests {
 
     #[test]
     fn evicts_lru_at_capacity() {
-        let cache = TextureCache {
-            inner: RefCell::new(CacheInner {
-                map: HashMap::new(),
-                order: Vec::new(),
-                capacity: 2,
-            }),
-        };
+        let cache = cache_with_capacity(2);
         cache.insert(make_id("a"), make_pixels(1), 1, 1);
         cache.insert(make_id("b"), make_pixels(2), 1, 1);
         cache.insert(make_id("c"), make_pixels(3), 1, 1);
@@ -176,13 +129,7 @@ mod tests {
 
     #[test]
     fn access_promotes_to_mru() {
-        let cache = TextureCache {
-            inner: RefCell::new(CacheInner {
-                map: HashMap::new(),
-                order: Vec::new(),
-                capacity: 2,
-            }),
-        };
+        let cache = cache_with_capacity(2);
         cache.insert(make_id("a"), make_pixels(1), 1, 1);
         cache.insert(make_id("b"), make_pixels(2), 1, 1);
 
