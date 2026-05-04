@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::renderer::error::RenderError;
-use crate::renderer::format::registry::FormatHandler;
+use crate::renderer::format::registry::{DecodeHint, FormatHandler};
 
 /// Decodes all formats supported by the [`image`] crate via `image::open`.
 ///
@@ -15,7 +15,11 @@ impl FormatHandler for StandardHandler {
         &["jpg", "jpeg", "png", "webp", "tiff", "tif", "heic", "heif"]
     }
 
-    fn decode(&self, path: &Path) -> Result<image::DynamicImage, RenderError> {
+    fn decode(&self, path: &Path, _hint: DecodeHint) -> Result<image::DynamicImage, RenderError> {
+        // The hint is ignored for now. JPEG DCT-scale decoding (1/2, 1/4, 1/8)
+        // would let us honour DecodeHint::Thumbnail at near-zero cost — see
+        // issue #617 follow-up.
+        //
         // Use Reader with format guessing instead of image::open() so that
         // extensionless files (UUID-sharded originals) are decoded via magic
         // bytes rather than relying on the file extension.

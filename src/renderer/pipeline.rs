@@ -18,7 +18,7 @@ use tracing::instrument;
 use crate::library::editing::EditState;
 use crate::library::media::MediaType;
 use crate::renderer::error::RenderError;
-use crate::renderer::format::FormatRegistry;
+use crate::renderer::format::{DecodeHint, FormatRegistry};
 
 /// What size to render.
 #[derive(Debug, Clone)]
@@ -81,7 +81,13 @@ impl RenderPipeline {
         options: &RenderOptions<'_>,
     ) -> Result<DynamicImage, RenderError> {
         // Step 1: Decode — detect format from magic bytes, dispatch to handler.
-        let img = super::decode::decode(path, &self.formats)?;
+        // Map RenderSize → DecodeHint so RAW (and future format-specific
+        // optimisations) can pick a cheaper decode path for thumbnails.
+        let hint = match options.size {
+            RenderSize::FullRes => DecodeHint::Full,
+            RenderSize::Thumbnail(_) => DecodeHint::Thumbnail,
+        };
+        let img = super::decode::decode(path, &self.formats, hint)?;
 
         // Step 2: Orient — apply EXIF rotation/flip (skips video and HEIF).
         let img = super::orientation::orient(path, img, &self.formats);

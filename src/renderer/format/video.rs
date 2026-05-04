@@ -8,7 +8,7 @@ use tracing::{debug, instrument, warn};
 use crate::renderer::error::RenderError;
 use crate::renderer::orientation::apply_orientation;
 
-use super::registry::{FormatHandler, VIDEO_EXTENSIONS};
+use super::registry::{DecodeHint, FormatHandler, VIDEO_EXTENSIONS};
 
 /// Extracts a poster frame from video files via GStreamer.
 ///
@@ -24,7 +24,7 @@ impl FormatHandler for VideoHandler {
     }
 
     #[instrument(skip(self), fields(path = %path.display()))]
-    fn decode(&self, path: &Path) -> Result<image::DynamicImage, RenderError> {
+    fn decode(&self, path: &Path, _hint: DecodeHint) -> Result<image::DynamicImage, RenderError> {
         extract_poster_frame(path)
     }
 }
