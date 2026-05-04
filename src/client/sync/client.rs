@@ -6,7 +6,9 @@ use gtk::subclass::prelude::*;
 use tokio::sync::mpsc;
 use tracing::debug;
 
+use crate::library::error::LibraryError;
 use crate::sync::event::SyncEvent;
+use crate::sync::outbox::{OutboxCounts, OutboxRepository};
 
 /// Sync lifecycle state exposed as a GObject property.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, glib::Enum)]
@@ -31,6 +33,10 @@ mod imp {
         pub(super) errors: Cell<u32>,
         pub(super) last_synced_at: Cell<i64>,
         pub(super) error_message: RefCell<String>,
+        // ── Outbox admin surface ────────────────────────────────────
+        // Set by Application during Immich bootstrap; absent for the
+        // local backend.
+        pub(super) outbox_repo: RefCell<Option<OutboxRepository>>,
     }
 
     impl Default for SyncClient {
@@ -41,6 +47,7 @@ mod imp {
                 errors: Cell::new(0),
                 last_synced_at: Cell::new(0),
                 error_message: RefCell::new(String::new()),
+                outbox_repo: RefCell::new(None),
             }
         }
     }
@@ -143,6 +150,50 @@ impl SyncClient {
 
     pub fn error_message(&self) -> String {
         self.imp().error_message.borrow().clone()
+    }
+
+    // ── Outbox admin ─────────────────────────────────────────────────
+
+    /// Inject the outbox repository. Called by the application during
+    /// Immich bootstrap; never called for the local backend.
+    pub fn set_outbox_repository(&self, repo: OutboxRepository) {
+        *self.imp().outbox_repo.borrow_mut() = Some(repo);
+    }
+
+    /// True if the outbox admin surface is wired up (Immich backend).
+    pub fn has_outbox(&self) -> bool {
+        self.imp().outbox_repo.borrow().is_some()
+    }
+
+    /// Counts of pending / failed / dead-letter outbox entries.
+    pub async fn outbox_counts(&self) -> Result<OutboxCounts, LibraryError> {
+        let repo = self.outbox_repo()?;
+        let tokio = crate::application::MomentsApplication::default().tokio_handle();
+        crate::client::spawn_on(&tokio, async move { repo.count_by_status().await }).await
+    }
+
+    /// Reset every Failed entry so the push loop tries again immediately.
+    /// Returns the number of rows reset.
+    pub async fn retry_failed_outbox(&self) -> Result<u64, LibraryError> {
+        let repo = self.outbox_repo()?;
+        let tokio = crate::application::MomentsApplication::default().tokio_handle();
+        crate::client::spawn_on(&tokio, async move { repo.retry_failed().await }).await
+    }
+
+    /// Permanently delete dead-letter entries. Returns the number of
+    /// rows removed.
+    pub async fn clear_outbox_dead_letters(&self) -> Result<u64, LibraryError> {
+        let repo = self.outbox_repo()?;
+        let tokio = crate::application::MomentsApplication::default().tokio_handle();
+        crate::client::spawn_on(&tokio, async move { repo.clear_dead_letters().await }).await
+    }
+
+    fn outbox_repo(&self) -> Result<OutboxRepository, LibraryError> {
+        self.imp()
+            .outbox_repo
+            .borrow()
+            .clone()
+            .ok_or_else(|| LibraryError::Runtime("outbox not available on this backend".into()))
     }
 
     // ── Property setters (notify on change) ──────────────────────────

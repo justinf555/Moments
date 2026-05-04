@@ -733,7 +733,7 @@ impl MomentsApplication {
                             let handle = crate::sync::SyncHandle::start(
                                 client,
                                 lib,
-                                db_for_sync,
+                                db_for_sync.clone(),
                                 sync_events_tx,
                                 sync_thumbnails_dir,
                                 sync_interval,
@@ -743,6 +743,9 @@ impl MomentsApplication {
 
                             let sync_client = crate::client::SyncClient::new();
                             sync_client.configure(sync_events_rx, tokio.clone());
+                            sync_client.set_outbox_repository(
+                                crate::sync::outbox::OutboxRepository::new(db_for_sync),
+                            );
                             app.set_sync_client(sync_client);
                         }
                     }

@@ -3,9 +3,11 @@
 //! - [`NoOpRecorder`] — local backend, does nothing.
 //! - [`QueueWriterOutbox`] — Immich backend, writes to the `sync_outbox` table.
 
+mod mutation;
 mod repository;
 
-pub use repository::OutboxRepository;
+pub use mutation::OutboxMutation;
+pub use repository::{OutboxCounts, OutboxRepository, OutboxStatus};
 
 use async_trait::async_trait;
 
