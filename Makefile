@@ -30,7 +30,7 @@ dev-bootstrap:
 		--stop-at=moments \
 		--state-dir=$(DEV_STATE_DIR) \
 		$(DEV_APP_DIR) io.github.justinf555.Moments.dev.json
-	flatpak build --share=network \
+	flatpak build \
 		--filesystem=$(CURDIR) \
 		--filesystem=$(CURDIR)/$(DEV_BUILD_DIR):create \
 		--env=PATH=/usr/lib/sdk/rust-stable/bin:/app/bin:/usr/bin \
@@ -68,7 +68,7 @@ clean:
 	rm -rf flatpak-build-dir flatpak-build-dev
 
 clean-dev:
-	rm -rf flatpak-build-dev .flatpak-builder-dev
+	rm -rf .flatpak-builder-dev
 
 # ── Testing (inside GNOME 50 Flatpak SDK) ────────────────────────────────────
 #
