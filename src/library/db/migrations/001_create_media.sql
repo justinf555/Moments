@@ -1,5 +1,5 @@
 CREATE TABLE media (
-    id                TEXT    PRIMARY KEY NOT NULL,  -- BLAKE3 hex (64 chars)
+    id                TEXT    PRIMARY KEY NOT NULL,  -- UUID v4 (32-char hex, no dashes)
     relative_path     TEXT    NOT NULL UNIQUE,       -- e.g. "2025/01/15/photo.jpg"
     original_filename TEXT    NOT NULL,
     file_size         INTEGER NOT NULL,

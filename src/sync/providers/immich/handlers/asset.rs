@@ -56,12 +56,49 @@ async fn handle_asset(asset: SyncAssetV1, ctx: &SyncContext) -> Result<(), Libra
     let trashed_at = parse_datetime(&asset.deleted_at);
     let duration_ms = asset.duration.as_deref().and_then(parse_duration_ms);
 
-    let id_str = asset.id.clone();
+    // Issue #626: keep the locally-owned `MediaId` stable across the
+    // upload→pull round-trip. The Immich UUID lives only in
+    // `external_id` from now on — never as the primary key.
+    //
+    // Resolution order:
+    //   1. `external_id` — already-stamped row from a previous sync
+    //      cycle or a completed push. This is the steady-state path.
+    //   2. `content_hash` (only if Immich emitted `checksum` and only
+    //      against rows with `external_id IS NULL`) — adopt a local
+    //      row whose push hasn't yet stamped the server id. This
+    //      closes the import-then-pull race that would otherwise
+    //      create a parallel stub row and wedge push's external_id
+    //      stamp behind a UNIQUE-constraint violation.
+    //   3. Generate a fresh `MediaId` — server-origin asset that has
+    //      no local twin.
+    let external_id = asset.id.clone();
+    let media_id =
+        if let Some(existing) = ctx.library.media().id_by_external_id(&external_id).await? {
+            existing
+        } else if let Some(hash) = asset.checksum.as_deref() {
+            match ctx
+                .library
+                .media()
+                .id_by_content_hash_pending_push(hash)
+                .await?
+            {
+                Some(local) => local,
+                None => MediaId::generate(),
+            }
+        } else {
+            MediaId::generate()
+        };
+
+    // Issue #626 follow-up: populate `content_hash` from Immich's own
+    // `checksum` field (SHA-1 base64). The local importer hashes the
+    // same way, so a file pulled from Immich and then re-selected in
+    // the import dialog is rejected as a duplicate without needing to
+    // download the original first.
     let record = MediaRecord {
-        id: MediaId::new(id_str.clone()),
-        content_hash: None,
-        external_id: Some(id_str.clone()),
-        relative_path: sharded_original_relative(&MediaId::new(id_str.clone())),
+        id: media_id.clone(),
+        content_hash: asset.checksum,
+        external_id: Some(external_id),
+        relative_path: sharded_original_relative(&media_id),
         original_filename: asset.original_file_name,
         file_size: 0,
         imported_at,
@@ -76,11 +113,17 @@ async fn handle_asset(asset: SyncAssetV1, ctx: &SyncContext) -> Result<(), Libra
         trashed_at,
     };
 
-    let media_id = record.id.clone();
+    let server_id = record.external_id.clone().expect("external_id set above");
     ctx.library.media().upsert_media(&record).await?;
 
-    if let Err(e) =
-        download_thumbnail(&ctx.client, &ctx.library, &ctx.thumbnails_dir, &media_id).await
+    if let Err(e) = download_thumbnail(
+        &ctx.client,
+        &ctx.library,
+        &ctx.thumbnails_dir,
+        &media_id,
+        &server_id,
+    )
+    .await
     {
         debug!(id = %media_id, "thumbnail download failed: {e}");
     }
@@ -103,13 +146,22 @@ impl SyncEntityHandler for AssetDeleteHandler {
         ctx: &SyncContext,
     ) -> Result<HandlerResult, LibraryError> {
         let delete: SyncAssetDeleteV1 = deserialize_entity(data, "AssetDeleteV1", line_number)?;
-        let id = delete.asset_id.clone();
-        let media_id = MediaId::new(id.clone());
-        ctx.library
-            .delete_permanently_from_sync(std::slice::from_ref(&media_id))
-            .await?;
+        let external_id = delete.asset_id.clone();
+        // Issue #626: the stream carries the Immich UUID; translate to
+        // the local `MediaId` before deleting. Missing row is a no-op —
+        // the asset was already gone or never reached us.
+        match ctx.library.media().id_by_external_id(&external_id).await? {
+            Some(media_id) => {
+                ctx.library
+                    .delete_permanently_from_sync(std::slice::from_ref(&media_id))
+                    .await?;
+            }
+            None => {
+                debug!(external_id = %external_id, "asset delete: no local row, skipping");
+            }
+        }
         Ok(HandlerResult {
-            entity_id: id,
+            entity_id: external_id,
             audit_action: "delete",
             counter: CounterKind::Deletes,
         })
@@ -127,6 +179,7 @@ async fn download_thumbnail(
     library: &crate::library::Library,
     thumbnails_dir: &std::path::Path,
     media_id: &MediaId,
+    server_id: &str,
 ) -> Result<(), LibraryError> {
     let path = sharded_thumbnail_path(thumbnails_dir, media_id);
 
@@ -140,7 +193,7 @@ async fn download_thumbnail(
         return Ok(());
     }
 
-    let api_path = format!("/assets/{}/thumbnail?size=thumbnail", media_id.as_str());
+    let api_path = format!("/assets/{server_id}/thumbnail?size=thumbnail");
     let bytes = client.get_bytes(&api_path).await?;
 
     if let Some(parent) = path.parent() {

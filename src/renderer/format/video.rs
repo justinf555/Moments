@@ -27,6 +27,18 @@ impl FormatHandler for VideoHandler {
     fn decode(&self, path: &Path, _hint: DecodeHint) -> Result<image::DynamicImage, RenderError> {
         extract_poster_frame(path)
     }
+
+    /// GStreamer's `uridecodebin` runs `typefind` to identify the
+    /// container format. Given input it can't classify (e.g. a CR2
+    /// file with TIFF magic bytes that the registry's magic-byte
+    /// fallback hands us), `typefind` parks waiting for buffers it
+    /// will never receive — the whole importer thread hangs with no
+    /// CPU activity. So this handler is reachable only through
+    /// positive identification (extension or magic match), never
+    /// through the registry's "try every handler" fallback path.
+    fn fallback_safe(&self) -> bool {
+        false
+    }
 }
 
 /// Extract the first video frame as an `image::DynamicImage`.
