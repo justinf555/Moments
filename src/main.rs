@@ -28,7 +28,23 @@ use gtk::{gio, glib};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 fn main() -> glib::ExitCode {
+    // Heap profiler. Captures every allocation/deallocation and writes a
+    // JSON dump on drop; viewer: https://nnethercote.github.io/dh_view/.
+    // Lives at the top of `main` and is moved into a binding that drops
+    // when `main` returns — the JSON is written from `Drop`.
+    #[cfg(feature = "dhat-heap")]
+    let _dhat_profiler = {
+        let path = glib::user_cache_dir().join("moments-dhat-heap.json");
+        let profiler = dhat::Profiler::builder().file_name(&path).build();
+        eprintln!("dhat-heap: writing to {}", path.display());
+        profiler
+    };
+
     // Register libheif-rs as a decoder plugin for the `image` crate so that
     // image::open() transparently handles HEIC and HEIF files throughout the app.
     libheif_rs::integration::image::register_all_decoding_hooks();

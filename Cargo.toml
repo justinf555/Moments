@@ -11,6 +11,11 @@ categories = ["multimedia::images"]
 
 [features]
 integration-tests = []
+# Heap profiling via dhat-rs. When enabled, replaces the global allocator
+# with `dhat::Alloc` and writes a `dhat-heap.json` capture (viewable at
+# https://nnethercote.github.io/dh_view/dh_view.html) to the cache dir
+# at exit. Off by default — there is a real per-allocation overhead.
+dhat-heap = ["dep:dhat"]
 
 [dependencies]
 
@@ -69,6 +74,10 @@ chrono = "0.4"
 uuid = { version = "1", features = ["v4"] }
 rawler = "0.7.2"
 lru = "0.18"
+
+# Heap profiling — only pulled in with `--features dhat-heap`. Adds
+# `dhat::Alloc` as the global allocator while the feature is on.
+dhat = { version = "0.3", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

@@ -1,4 +1,4 @@
-.PHONY: run run-dev dev-bootstrap dev clean clean-dev \
+.PHONY: run run-dev run-dhat dev-bootstrap dev clean clean-dev \
         check test test-nextest test-integration test-all \
         lint fmt fmt-check typos audit coverage metrics \
         check-potfiles ci-all stack attach release
@@ -61,6 +61,8 @@ dev:
 		--socket=wayland --socket=fallback-x11 \
 		--device=dri --socket=pulseaudio \
 		--talk-name=org.freedesktop.secrets \
+		--talk-name=org.freedesktop.portal.* \
+		--bind-mount=/run/user/$(shell id -u)/doc=/run/user/$(shell id -u)/doc/by-app/io.github.justinf555.Moments.Devel \
 		--filesystem=$(HOME)/.var/app/io.github.justinf555.Moments.Devel:create \
 		--env=GTK_A11Y=none \
 		--env=RUST_LOG=moments=debug \
@@ -68,6 +70,33 @@ dev:
 		--env=XDG_CONFIG_HOME=$(HOME)/.var/app/io.github.justinf555.Moments.Devel/config \
 		--env=XDG_CACHE_HOME=$(HOME)/.var/app/io.github.justinf555.Moments.Devel/cache \
 		$(DEV_APP_DIR) moments
+
+DHAT_OUT = $(HOME)/.var/app/io.github.justinf555.Moments.Devel/cache/moments-dhat-heap.json
+
+# One-shot heap profile: rebuild with dhat-heap enabled, run, restore.
+# Requires `make dev-bootstrap` to have been done. Captures every alloc
+# during the session and writes a JSON dump on exit. View at:
+#   https://nnethercote.github.io/dh_view/dh_view.html
+run-dhat:
+	@if [ ! -f $(DEV_BUILD_DIR)/build.ninja ]; then \
+		echo "==> No build dir — running dev-bootstrap first"; \
+		$(MAKE) dev-bootstrap; \
+	fi
+	flatpak build --share=network \
+		--filesystem=$(CURDIR) \
+		--filesystem=$(CURDIR)/$(DEV_BUILD_DIR) \
+		--env=PATH=/usr/lib/sdk/rust-stable/bin:/app/bin:/usr/bin \
+		$(DEV_APP_DIR) \
+		meson configure -Ddhat-heap=true $(CURDIR)/$(DEV_BUILD_DIR)
+	-$(MAKE) dev
+	flatpak build --share=network \
+		--filesystem=$(CURDIR) \
+		--filesystem=$(CURDIR)/$(DEV_BUILD_DIR) \
+		--env=PATH=/usr/lib/sdk/rust-stable/bin:/app/bin:/usr/bin \
+		$(DEV_APP_DIR) \
+		meson configure -Ddhat-heap=false $(CURDIR)/$(DEV_BUILD_DIR)
+	@echo "==> dhat-heap capture written to: $(DHAT_OUT)"
+	@echo "==> View at: https://nnethercote.github.io/dh_view/dh_view.html"
 
 clean:
 	rm -rf flatpak-build-dir flatpak-build-dev

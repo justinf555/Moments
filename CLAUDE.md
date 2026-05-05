@@ -50,6 +50,10 @@ GNOME Builder can also use the dev manifest — configure it in the project buil
 
 Instruct the user to test via GNOME Builder or `make run-dev` — do not attempt to run the app binary directly.
 
+### Heap profiling (dhat-rs)
+
+`make run-dhat` rebuilds the dev Flatpak with `-Ddhat-heap=true` (Cargo `--features dhat-heap`), which swaps the global allocator for `dhat::Alloc`, runs the app, then flips the option back off. On exit dhat writes `~/.var/app/io.github.justinf555.Moments.Devel/cache/moments-dhat-heap.json`; load that into <https://nnethercote.github.io/dh_view/dh_view.html> for a flame view of allocations by Rust call path. There's measurable per-allocation overhead, so don't ship with the feature on.
+
 ## Architecture & Platform Constraints
 
 This is a Rust/GTK4 GNOME application using Flatpak. Key constraints:
