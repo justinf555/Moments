@@ -163,7 +163,10 @@ test-all: test test-integration
 # ── Linting & Analysis ──────────────────────────────────────────────────────
 
 lint:
-	$(FLATPAK_RUN) -c '$(SDK_INIT) && cargo fmt -- --check && cargo clippy --all-targets -- -D warnings'
+	$(FLATPAK_RUN) -c '$(SDK_INIT) && \
+		cargo fmt -- --check && \
+		cargo clippy --all-targets -- -D warnings && \
+		cargo clippy --all-targets --features dhat-heap -- -D warnings'
 
 fmt:
 	$(FLATPAK_RUN) -c '$(SDK_INIT) && cargo fmt'

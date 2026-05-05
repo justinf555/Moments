@@ -33,15 +33,25 @@ use tracing_subscriber::EnvFilter;
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
 fn main() -> glib::ExitCode {
+    // Initialise tracing first so the dhat-heap feature can use info!
+    // (project convention: never println!/eprintln!). The subscriber's
+    // own setup allocations land in the dhat capture for free — < 1 ms
+    // worth of churn at startup, negligible against a sync run.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("moments=info")),
+        )
+        .init();
+
     // Heap profiler. Captures every allocation/deallocation and writes a
     // JSON dump on drop; viewer: https://nnethercote.github.io/dh_view/.
-    // Lives at the top of `main` and is moved into a binding that drops
+    // Lives near the top of `main` and is moved into a binding that drops
     // when `main` returns — the JSON is written from `Drop`.
     #[cfg(feature = "dhat-heap")]
     let _dhat_profiler = {
         let path = glib::user_cache_dir().join("moments-dhat-heap.json");
         let profiler = dhat::Profiler::builder().file_name(&path).build();
-        eprintln!("dhat-heap: writing to {}", path.display());
+        info!(path = %path.display(), "dhat-heap profiler active");
         profiler
     };
 
@@ -51,13 +61,6 @@ fn main() -> glib::ExitCode {
 
     // Initialise GStreamer for video poster-frame extraction.
     gstreamer::init().expect("failed to initialise GStreamer");
-
-    // Initialise tracing — RUST_LOG controls verbosity (e.g. RUST_LOG=moments=debug)
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("moments=info")),
-        )
-        .init();
 
     info!(version = config::VERSION, "Moments starting");
 
