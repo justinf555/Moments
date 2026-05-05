@@ -1,11 +1,30 @@
+use gettextrs::gettext;
+
 /// Describes a single entry in the sidebar navigation.
 pub struct SidebarRoute {
     /// Internal page identifier — used as the `GtkStack` child name.
     pub id: &'static str,
-    /// Human-readable label shown in the sidebar row.
-    pub label: &'static str,
     /// Symbolic icon name for the sidebar row.
     pub icon: &'static str,
+}
+
+impl SidebarRoute {
+    /// Translated, human-readable label shown in the sidebar row.
+    ///
+    /// Labels are matched on `id` so the literals appear at this call
+    /// site for `xgettext` extraction. Storing them on the struct
+    /// hides the literal behind a variable and breaks extraction.
+    pub fn label(&self) -> String {
+        match self.id {
+            "photos" => gettext("Photos"),
+            "favorites" => gettext("Favorites"),
+            "recent" => gettext("Recent Imports"),
+            "people" => gettext("People"),
+            "albums" => gettext("Albums"),
+            "trash" => gettext("Trash"),
+            other => other.to_string(),
+        }
+    }
 }
 
 /// All sidebar routes in display order.
@@ -16,32 +35,26 @@ pub struct SidebarRoute {
 pub const ROUTES: &[SidebarRoute] = &[
     SidebarRoute {
         id: "photos",
-        label: "Photos",
         icon: "image-x-generic-symbolic",
     },
     SidebarRoute {
         id: "favorites",
-        label: "Favorites",
         icon: "starred-symbolic",
     },
     SidebarRoute {
         id: "recent",
-        label: "Recent Imports",
         icon: "document-open-recent-symbolic",
     },
     SidebarRoute {
         id: "people",
-        label: "People",
         icon: "system-users-symbolic",
     },
     SidebarRoute {
         id: "albums",
-        label: "Albums",
         icon: "folder-symbolic",
     },
     SidebarRoute {
         id: "trash",
-        label: "Trash",
         icon: "user-trash-symbolic",
     },
 ];

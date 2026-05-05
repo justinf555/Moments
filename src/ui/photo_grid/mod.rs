@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
-use gettextrs::gettext;
+use gettextrs::{gettext, ngettext};
 use gtk::{gio, glib};
 use tracing::instrument;
 
@@ -121,8 +121,8 @@ mod photo_grid_imp {
 
             let empty_page = adw::StatusPage::builder()
                 .icon_name("folder-pictures-symbolic")
-                .title("No photos yet")
-                .description("Import photos to get started")
+                .title(gettext("No photos yet"))
+                .description(gettext("Import photos to get started"))
                 .vexpand(true)
                 .build();
 
@@ -531,12 +531,12 @@ impl PhotoGridView {
         // Content overflow menu.
         let content_menu = gio::Menu::new();
         let content_section = gio::Menu::new();
-        content_section.append(Some("_Select"), Some("view.enter-selection"));
+        content_section.append(Some(&gettext("_Select")), Some("view.enter-selection"));
         content_menu.append_section(None, &content_section);
         imp.content_menu_btn.set_menu_model(Some(&content_menu));
 
         // Selection title label.
-        let selection_title = gtk::Label::new(Some("0 selected"));
+        let selection_title = gtk::Label::new(Some(&selection_count_label(0)));
         selection_title.add_css_class("heading");
         selection_title.set_visible(false);
         assert!(imp.selection_title.set(selection_title).is_ok());
@@ -839,12 +839,7 @@ impl PhotoGridView {
             let fav_btn = imp.fav_btn.borrow().clone();
             selection.connect_selection_changed(move |sel, _, _| {
                 let count = sel.selection().size();
-                let text = match count {
-                    0 => "0 selected".to_string(),
-                    1 => "1 selected".to_string(),
-                    n => format!("{n} selected"),
-                };
-                title.set_label(&text);
+                title.set_label(&selection_count_label(count));
 
                 if let Some(ref fav) = fav_btn {
                     if count > 0 {
@@ -887,43 +882,53 @@ pub(super) fn collect_selected_ids(
 }
 
 /// Configure the empty state status page for the given filter.
+///
+/// Each branch passes its title/description literals directly to `gettext()`
+/// so `xgettext` can extract them. Hoisting them into a tuple variable
+/// would hide the literal behind `let` and break extraction.
 fn set_empty_state_for_filter(page: &adw::StatusPage, filter: &crate::library::media::MediaFilter) {
     use crate::library::media::MediaFilter;
     let (icon, title, description) = match filter {
         MediaFilter::All => (
             "folder-pictures-symbolic",
-            "No photos yet",
-            "Import photos to get started",
+            gettext("No photos yet"),
+            gettext("Import photos to get started"),
         ),
         MediaFilter::Favorites => (
             "starred-symbolic",
-            "No favourites yet",
-            "Star a photo to add it here",
+            gettext("No favourites yet"),
+            gettext("Star a photo to add it here"),
         ),
         MediaFilter::RecentImports { .. } => (
             "document-send-symbolic",
-            "No recent imports",
-            "Import photos from the hamburger menu",
+            gettext("No recent imports"),
+            gettext("Import photos from the hamburger menu"),
         ),
         MediaFilter::Trashed => (
             "user-trash-symbolic",
-            "Trash is empty",
-            "Deleted photos appear here for 30 days",
+            gettext("Trash is empty"),
+            gettext("Deleted photos appear here for 30 days"),
         ),
         MediaFilter::Album { .. } => (
             "folder-symbolic",
-            "This album is empty",
-            "Use Add to Album to add photos",
+            gettext("This album is empty"),
+            gettext("Use Add to Album to add photos"),
         ),
         MediaFilter::Person { .. } => (
             "avatar-default-symbolic",
-            "No photos found",
-            "Photos of this person will appear here",
+            gettext("No photos found"),
+            gettext("Photos of this person will appear here"),
         ),
     };
     page.set_icon_name(Some(icon));
-    page.set_title(title);
-    page.set_description(Some(description));
+    page.set_title(&title);
+    page.set_description(Some(&description));
+}
+
+/// Translated, plural-correct selection counter ("3 selected").
+fn selection_count_label(count: u64) -> String {
+    let template = ngettext("{n} selected", "{n} selected", count as u32);
+    template.replace("{n}", &count.to_string())
 }
 
 #[cfg(test)]
