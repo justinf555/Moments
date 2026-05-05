@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use tracing::instrument;
+use tracing::{instrument, warn};
 
 use crate::library::album::AlbumId;
 use crate::library::error::LibraryError;
@@ -73,11 +73,31 @@ impl SyncEntityHandler for AlbumDeleteHandler {
         ctx: &SyncContext,
     ) -> Result<HandlerResult, LibraryError> {
         let delete: SyncAlbumDeleteV1 = deserialize_entity(data, "AlbumDeleteV1", line_number)?;
-        let id_str = delete.album_id.clone();
-        let id = AlbumId::from_raw(id_str.clone());
-        ctx.library.albums().delete_album(&id).await?;
+        let external_id = delete.album_id.clone();
+
+        // Issue #585: `delete.album_id` is the Immich UUID; the local
+        // row is keyed by the locally-minted `AlbumId`. Translate via
+        // `external_id` lookup before deleting. Warn-and-skip on miss
+        // — the album either was never pulled locally or has already
+        // been removed.
+        let local_id = match ctx.library.albums().id_by_external_id(&external_id).await? {
+            Some(id) => id,
+            None => {
+                warn!(
+                    album_id = %external_id,
+                    "AlbumDeleteV1: no local row for this external_id; nothing to delete"
+                );
+                return Ok(HandlerResult {
+                    entity_id: external_id,
+                    audit_action: "delete",
+                    counter: CounterKind::Deletes,
+                });
+            }
+        };
+
+        ctx.library.albums().delete_album(&local_id).await?;
         Ok(HandlerResult {
-            entity_id: id_str,
+            entity_id: external_id,
             audit_action: "delete",
             counter: CounterKind::Deletes,
         })

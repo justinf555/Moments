@@ -254,16 +254,16 @@ mod tests {
         let (_dir, svc) = make_service().await;
         let mut rx = svc.subscribe();
 
-        // Local create. Push has stamped the server UUID as external_id.
+        // Local create. `create_album` writes the row but does not emit
+        // an event. Then push stamps the server UUID as external_id —
+        // simulated here by an `upsert_album` that lands on the existing
+        // row, which emits `AlbumUpdated`. Drain it so we can isolate
+        // the second upsert below.
         let local_id = svc.create_album("Vacation").await.unwrap();
         let server_id = "server-album-uuid";
         svc.upsert_album(local_id.as_str(), "Vacation", 0, 0, Some(server_id))
             .await
             .unwrap();
-
-        // Drain events emitted so far (the upsert above will fire
-        // `AlbumAdded` on the first call because there's no prior row
-        // — `create_album` itself doesn't emit).
         while rx.try_recv().is_ok() {}
 
         // Pull-sync arrives. The new handler resolves external_id →
