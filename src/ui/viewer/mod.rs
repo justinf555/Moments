@@ -274,6 +274,29 @@ impl PhotoViewer {
             });
         }
 
+        // The viewer is a NavigationView page, so popping it doesn't drop the
+        // widget — `imp.picture` keeps its `GdkMemoryTexture`, which holds
+        // the decoded full-res RGBA buffer (50–200 MB; RAW from a 50 MP
+        // sensor lands at the high end). Clear the paintable on `hidden` so
+        // that buffer is freed when the user backs out to the grid. The
+        // edit panel's `EditSession` (preview_image ~3 MB, render output
+        // ~4 MB) is held similarly when the user pops while edit-mode is
+        // still active — call `end_session` to drop them too.
+        {
+            let viewer = self.downgrade();
+            self.connect_hidden(move |_| {
+                let Some(viewer) = viewer.upgrade() else {
+                    return;
+                };
+                let imp = viewer.imp();
+                imp.picture.set_paintable(gdk::Paintable::NONE);
+                let panel = imp.edit_panel.borrow().clone();
+                if let Some(panel) = panel {
+                    panel.end_session();
+                }
+            });
+        }
+
         // Prev button
         {
             let viewer = self.downgrade();

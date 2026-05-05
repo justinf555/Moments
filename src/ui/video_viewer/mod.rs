@@ -289,6 +289,20 @@ impl VideoViewer {
     ) {
         let imp = self.imp();
 
+        // The video viewer is a NavigationView page, so popping it doesn't
+        // drop the widget — `imp.video` keeps its GStreamer pipeline alive.
+        // Clear the file on `hidden` so playback stops and the demuxer's
+        // buffers are released when the user backs out to the grid.
+        {
+            let weak = self.downgrade();
+            self.connect_hidden(move |_| {
+                let Some(viewer) = weak.upgrade() else {
+                    return;
+                };
+                viewer.imp().video.set_file(None::<&gio::File>);
+            });
+        }
+
         // Prev button
         {
             let weak = self.downgrade();
