@@ -34,6 +34,10 @@ template $MomentsEditPanel : Gtk.Widget {
         icon-name: "view-reveal-symbolic";
         tooltip-text: _("Hold to compare with the original");
         valign: center;
+
+        accessibility {
+          label: _("Compare with original");
+        }
       }
 
       Gtk.Button revert_btn {
