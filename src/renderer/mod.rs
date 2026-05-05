@@ -7,6 +7,7 @@
 //! - [`edits`] — non-destructive edit application
 //! - [`output`] — RGBA / WebP conversion helpers
 //! - [`pipeline`] — orchestrator that composes the steps
+//! - [`target`] — `RenderTarget` hint for kernel-scaling stages
 
 pub mod decode;
 pub mod edits;
@@ -16,3 +17,4 @@ pub mod orientation;
 pub mod output;
 pub mod pipeline;
 pub mod resize;
+pub mod target;

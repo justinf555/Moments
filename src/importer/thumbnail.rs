@@ -16,6 +16,7 @@ use crate::library::media::MediaId;
 use crate::library::thumbnail::{sharded_thumbnail_path, ThumbnailService};
 use crate::renderer::output;
 use crate::renderer::pipeline::{RenderOptions, RenderPipeline, RenderSize};
+use crate::renderer::target::RenderTarget;
 
 /// Longest edge in pixels for the grid thumbnail.
 const GRID_SIZE: u32 = 360;
@@ -70,6 +71,7 @@ async fn try_generate(
         let options = RenderOptions {
             size: RenderSize::Thumbnail(GRID_SIZE),
             edits: None,
+            target: RenderTarget::Final,
         };
         let img = pipeline.render(&source, &options)?;
         let webp_bytes = output::to_webp(&img)?;

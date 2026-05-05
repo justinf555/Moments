@@ -43,6 +43,14 @@ pub struct ColorState {
     pub tint: f64,
 }
 
+/// Detail-section adjustments — vignette, clarity, sharpness, noise reduction.
+///
+/// Empty until the per-feature issues land (#252, #474, #250, #251). The
+/// struct exists now so `EditState` is shape-stable: each new field can be
+/// added with `#[serde(default)]` without a schema migration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct DetailState {}
+
 /// Complete non-destructive edit state for a media asset.
 ///
 /// Stored as JSON in the `edits` table. All fields default to identity
@@ -59,6 +67,8 @@ pub struct EditState {
     pub exposure: ExposureState,
     #[serde(default)]
     pub color: ColorState,
+    #[serde(default)]
+    pub detail: DetailState,
     /// Name of the applied filter preset, or `None`.
     #[serde(default)]
     pub filter: Option<String>,
@@ -79,6 +89,7 @@ impl Default for EditState {
             transforms: TransformState::default(),
             exposure: ExposureState::default(),
             color: ColorState::default(),
+            detail: DetailState::default(),
             filter: None,
             filter_strength: 1.0,
         }
@@ -91,6 +102,7 @@ impl EditState {
         self.transforms == TransformState::default()
             && self.exposure == ExposureState::default()
             && self.color == ColorState::default()
+            && self.detail == DetailState::default()
             && self.filter.is_none()
     }
 
@@ -98,6 +110,13 @@ impl EditState {
     ///
     /// Sets this state's exposure and color fields to the preset values
     /// multiplied by `strength` (0.0–1.0), and records the filter strength.
+    ///
+    /// **Filter-preset policy for new sections:** when fields land in
+    /// `DetailState` (#252/#474/#250/#251) and a future `HslState` (#473),
+    /// decide per-field whether filters should scale into them. Suggested
+    /// defaults: scale clarity (it's a "look" component), don't scale
+    /// noise reduction (it's a per-photo cleanup, not stylistic). Update
+    /// this method when each field lands.
     pub fn apply_filter_at_strength(&mut self, preset: &EditState, strength: f64) {
         self.exposure.brightness = preset.exposure.brightness * strength;
         self.exposure.contrast = preset.exposure.contrast * strength;
@@ -170,6 +189,7 @@ mod tests {
                 temperature: 0.3,
                 tint: -0.05,
             },
+            detail: DetailState::default(),
             filter: Some("vintage".to_string()),
             filter_strength: 0.75,
         };
@@ -184,5 +204,20 @@ mod tests {
         let json = r#"{"version": 1}"#;
         let state: EditState = serde_json::from_str(json).unwrap();
         assert!(state.is_identity());
+    }
+
+    #[test]
+    fn deserialize_v1_json_without_detail_uses_default_detail() {
+        // Simulates an EditState row written before DetailState existed:
+        // a real edit (filter set), no `detail` key. The new field must
+        // default rather than fail deserialization.
+        let json = r#"{
+            "version": 1,
+            "filter": "vintage"
+        }"#;
+        let state: EditState = serde_json::from_str(json).unwrap();
+        assert_eq!(state.detail, DetailState::default());
+        assert_eq!(state.filter.as_deref(), Some("vintage"));
+        assert!(!state.is_identity());
     }
 }

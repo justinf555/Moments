@@ -19,6 +19,7 @@ use crate::library::editing::EditState;
 use crate::library::media::MediaType;
 use crate::renderer::error::RenderError;
 use crate::renderer::format::{DecodeHint, FormatRegistry};
+use crate::renderer::target::RenderTarget;
 
 /// What size to render.
 #[derive(Debug, Clone)]
@@ -30,10 +31,15 @@ pub enum RenderSize {
 }
 
 /// Options controlling what the pipeline produces.
+///
+/// `target` is forwarded to [`super::edits::apply_edits`] when `edits` is
+/// `Some`. It is required even when `edits` is `None` so that any future
+/// non-edit stage that becomes target-sensitive picks it up automatically.
 #[derive(Debug, Clone)]
 pub struct RenderOptions<'a> {
     pub size: RenderSize,
     pub edits: Option<&'a EditState>,
+    pub target: RenderTarget,
 }
 
 /// Central stateless render pipeline.
@@ -100,7 +106,7 @@ impl RenderPipeline {
 
         // Step 4: Edit — apply non-destructive edits if provided.
         let img = match options.edits {
-            Some(edits) => super::edits::apply_edits(&img, edits),
+            Some(edits) => super::edits::apply_edits(&img, edits, options.target),
             None => img,
         };
 
@@ -142,6 +148,7 @@ mod tests {
                 &RenderOptions {
                     size: RenderSize::FullRes,
                     edits: None,
+                    target: RenderTarget::Final,
                 },
             )
             .unwrap();
@@ -160,6 +167,7 @@ mod tests {
                 &RenderOptions {
                     size: RenderSize::Thumbnail(20),
                     edits: None,
+                    target: RenderTarget::Final,
                 },
             )
             .unwrap();
@@ -192,6 +200,7 @@ mod tests {
                 &RenderOptions {
                     size: RenderSize::FullRes,
                     edits: Some(&edits),
+                    target: RenderTarget::Final,
                 },
             )
             .unwrap();
@@ -212,6 +221,7 @@ mod tests {
                 &RenderOptions {
                     size: RenderSize::FullRes,
                     edits: None,
+                    target: RenderTarget::Final,
                 },
             )
             .unwrap();
@@ -230,6 +240,7 @@ mod tests {
                 &RenderOptions {
                     size: RenderSize::FullRes,
                     edits: None,
+                    target: RenderTarget::Final,
                 },
             )
             .unwrap();

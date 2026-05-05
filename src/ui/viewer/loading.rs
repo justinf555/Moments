@@ -5,6 +5,7 @@ use tracing::{debug, error};
 
 use crate::renderer::output;
 use crate::renderer::pipeline::{RenderOptions, RenderSize};
+use crate::renderer::target::RenderTarget;
 
 use super::PhotoViewer;
 
@@ -75,6 +76,7 @@ impl PhotoViewer {
                             let options = RenderOptions {
                                 size: RenderSize::FullRes,
                                 edits: None,
+                                target: RenderTarget::Final,
                             };
                             let img = pipeline.render(&path, &options)?;
                             Ok(output::to_rgba(&img))
@@ -193,6 +195,7 @@ impl PhotoViewer {
                                     let options = RenderOptions {
                                         size: RenderSize::Thumbnail(1200),
                                         edits: None,
+                                        target: RenderTarget::Final,
                                     };
                                     let img = pipeline
                                         .render(&path, &options)

@@ -91,26 +91,64 @@ Added to the `Library` supertrait in `src/library.rs`. DB methods in new `src/li
 
 ## 4. Rendering Pipeline
 
-New file: `src/library/edit_renderer.rs`
-
-Pure function, no I/O:
+Lives in `src/renderer/edits.rs`. Pure function, no I/O:
 
 ```rust
-pub fn apply_edits(img: DynamicImage, state: &EditState) -> DynamicImage;
+pub fn apply_edits(
+    img: &DynamicImage,
+    state: &EditState,
+    target: RenderTarget,
+) -> DynamicImage;
 ```
 
-Fixed application order:
-1. Rotate (90° steps) → Flip → Straighten (freeform)
-2. Crop (denormalize coordinates)
-3. Brightness → Contrast → Highlights → Shadows → White balance
-4. Saturation → Vibrance → Hue shift → Temperature → Tint
+`RenderTarget` (`src/renderer/target.rs`) is a hint for neighbourhood-operation
+stages — per-pixel stages ignore it. There is intentionally no `Default` impl;
+every call site states intent so the performance-sensitive `Preview` path is
+never selected by accident.
 
-**Real-time preview strategy**: downscaled preview (~1200px), full-res only on save.
+| Variant | When | Behaviour |
+|---------|------|-----------|
+| `Preview` | Live edit-panel slider drag | Neighbourhood stages may use cheaper kernels for snappy response |
+| `Final` | Persisted thumbnails, viewer full-res, exports, Immich upload | Full-quality kernels |
+
+### Canonical stage order
+
+Stages are applied in a fixed order, encoded as a sequence of function calls
+in `apply_edits`. Industry-standard convention places noise reduction before
+tonal adjustments (so we don't smooth out detail that exposure has shaped) and
+sharpness after them (so it operates on corrected colour/tone, not raw input).
+Vignette is intentionally last so it darkens the final composition.
+
+| # | Stage | Type | Status |
+|---|-------|------|--------|
+| 1 | Geometric transforms (rotate / flip / crop) | Per-pixel | Implemented |
+| 2 | Noise reduction (bilateral filter) | Neighbourhood | Pending #251 |
+| 3 | Pixel pass — exposure + color (+ vignette + HSL) | Per-pixel | Implemented (vignette pending #252, HSL pending #473) |
+| 4 | Sharpness (convolution / unsharp mask) | Neighbourhood | Pending #250 |
+
+Per-pixel stages merge into a single per-pixel loop for cache locality.
+Neighbourhood stages are separate passes because they read pixel neighbours.
+**When adding a new stage, place it at the canonical position above and add a
+function call at the matching point in `apply_edits` — do not reorder existing
+stages without considering the visual impact.**
+
+### Real-time preview strategy
+
+Downscaled preview (~1200px), full-res only on save.
 
 ```
-Slider change → debounce (50ms) → apply_edits on spawn_blocking
+Slider change → debounce (50ms) → apply_edits(.., RenderTarget::Preview) on spawn_blocking
   → MemoryTexture → set_paintable on gtk::Picture
 ```
+
+### Filter-preset policy
+
+`EditState::apply_filter_at_strength` currently scales exposure + color. When
+`DetailState` and a future `HslState` get fields, decide per-field whether
+filter presets should scale into them. Suggested defaults: scale clarity
+(stylistic), don't scale noise reduction (per-photo cleanup, not stylistic).
+Update the doc comment on `apply_filter_at_strength` whenever a new field
+lands.
 
 ## 5. Immich Integration
 

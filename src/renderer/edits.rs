@@ -6,21 +6,35 @@
 use image::{DynamicImage, GenericImageView, Rgba};
 
 use crate::library::editing::{ColorState, EditState, ExposureState, TransformState};
+use crate::renderer::target::RenderTarget;
 
 /// Apply all edit operations to an image and return the result.
-///
-/// Operations are applied in a fixed order:
-/// 1. Geometric transforms (rotate 90° steps, flip, straighten)
-/// 2. Crop (normalized coordinates → pixel coordinates)
-/// 3. Pixel adjustments — exposure and color in a single pass
 ///
 /// Accepts a borrowed image to avoid cloning the source. The caller
 /// retains ownership of the original (useful for preview rendering
 /// where the same source image is reused across slider changes).
-pub fn apply_edits(img: &DynamicImage, state: &EditState) -> DynamicImage {
+///
+/// `target` is a hint for neighbourhood-operation stages — the per-pixel
+/// stages ignore it. See [`RenderTarget`] for semantics.
+pub fn apply_edits(img: &DynamicImage, state: &EditState, _target: RenderTarget) -> DynamicImage {
     if state.is_identity() {
         return img.clone();
     }
+
+    // ── Canonical stage order ────────────────────────────────────────────
+    // DO NOT REORDER without considering the visual impact. Industry-standard
+    // convention puts noise reduction *before* tonal adjustments (so we don't
+    // smooth out detail that exposure has already shaped) and sharpness *after*
+    // them (so it operates on the corrected colour/tone, not the raw input).
+    // Vignette is intentionally last so it darkens the final composition.
+    //
+    //   1. Geometric transforms — rotate / flip / crop. Must come first so all
+    //      pixel-space stages see the user-visible orientation.
+    //   2. (future #251) Noise reduction — bilateral filter, before tonal work.
+    //   3. Pixel pass — exposure + color (+ vignette + HSL once they land),
+    //      merged into a single per-pixel loop for cache locality.
+    //   4. (future #250) Sharpness — convolution after tone/colour are final.
+    // ─────────────────────────────────────────────────────────────────────
 
     let img = apply_transforms(img, &state.transforms);
     apply_pixel_adjustments(img, &state.exposure, &state.color)
@@ -260,7 +274,7 @@ mod tests {
     #[test]
     fn identity_is_noop() {
         let img = test_image();
-        let result = apply_edits(&img, &EditState::default());
+        let result = apply_edits(&img, &EditState::default(), RenderTarget::Final);
         assert_eq!(img.dimensions(), result.dimensions());
         assert_eq!(
             img.as_rgba8().unwrap().as_raw(),
@@ -273,7 +287,7 @@ mod tests {
         let img = DynamicImage::ImageRgba8(RgbaImage::new(4, 2));
         let mut state = EditState::default();
         state.transforms.rotate_degrees = 90;
-        let result = apply_edits(&img, &state);
+        let result = apply_edits(&img, &state, RenderTarget::Final);
         assert_eq!(result.dimensions(), (2, 4));
     }
 
@@ -282,7 +296,7 @@ mod tests {
         let img = DynamicImage::ImageRgba8(RgbaImage::new(4, 2));
         let mut state = EditState::default();
         state.transforms.rotate_degrees = 180;
-        let result = apply_edits(&img, &state);
+        let result = apply_edits(&img, &state, RenderTarget::Final);
         assert_eq!(result.dimensions(), (4, 2));
     }
 
@@ -295,7 +309,7 @@ mod tests {
 
         let mut state = EditState::default();
         state.transforms.flip_horizontal = true;
-        let result = apply_edits(&img, &state);
+        let result = apply_edits(&img, &state, RenderTarget::Final);
         let rgba = result.as_rgba8().unwrap();
         assert_eq!(rgba.get_pixel(0, 0).0, [0, 255, 0, 255]);
         assert_eq!(rgba.get_pixel(1, 0).0, [255, 0, 0, 255]);
@@ -311,7 +325,7 @@ mod tests {
             width: 0.5,
             height: 0.5,
         });
-        let result = apply_edits(&img, &state);
+        let result = apply_edits(&img, &state, RenderTarget::Final);
         assert_eq!(result.dimensions(), (50, 50));
     }
 
@@ -320,7 +334,7 @@ mod tests {
         let img = test_image();
         let mut state = EditState::default();
         state.exposure.brightness = 0.5;
-        let result = apply_edits(&img, &state);
+        let result = apply_edits(&img, &state, RenderTarget::Final);
 
         let orig_px = img.as_rgba8().unwrap().get_pixel(0, 0);
         let edit_px = result.as_rgba8().unwrap().get_pixel(0, 0);
@@ -334,7 +348,7 @@ mod tests {
         let img = test_image();
         let mut state = EditState::default();
         state.exposure.brightness = -0.5;
-        let result = apply_edits(&img, &state);
+        let result = apply_edits(&img, &state, RenderTarget::Final);
 
         let orig_px = img.as_rgba8().unwrap().get_pixel(0, 0);
         let edit_px = result.as_rgba8().unwrap().get_pixel(0, 0);
@@ -346,7 +360,7 @@ mod tests {
         let img = test_image();
         let mut state = EditState::default();
         state.color.saturation = -1.0;
-        let result = apply_edits(&img, &state);
+        let result = apply_edits(&img, &state, RenderTarget::Final);
 
         let px = result.as_rgba8().unwrap().get_pixel(0, 0);
         // In grayscale, R ≈ G ≈ B (may differ by 1 due to rounding).
@@ -376,7 +390,7 @@ mod tests {
             width: 0.5,
             height: 1.0,
         });
-        let result = apply_edits(&img, &state);
+        let result = apply_edits(&img, &state, RenderTarget::Final);
         assert_eq!(result.dimensions(), (25, 100));
     }
 
@@ -390,8 +404,24 @@ mod tests {
         let mut state = EditState::default();
         state.exposure.brightness = 0.5;
         state.color.saturation = 0.5;
-        let result = apply_edits(&img, &state);
+        let result = apply_edits(&img, &state, RenderTarget::Final);
         let px = result.as_rgba8().unwrap().get_pixel(0, 0);
         assert_eq!(px[3], 128); // Alpha unchanged
+    }
+
+    #[test]
+    fn target_does_not_affect_per_pixel_stages() {
+        // Until neighbourhood stages land, Preview and Final must produce
+        // identical output. This test guards against accidental coupling.
+        let img = test_image();
+        let mut state = EditState::default();
+        state.exposure.brightness = 0.3;
+        state.color.saturation = 0.4;
+        let preview = apply_edits(&img, &state, RenderTarget::Preview);
+        let final_render = apply_edits(&img, &state, RenderTarget::Final);
+        assert_eq!(
+            preview.as_rgba8().unwrap().as_raw(),
+            final_render.as_rgba8().unwrap().as_raw()
+        );
     }
 }
