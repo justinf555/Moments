@@ -88,6 +88,30 @@ impl AlbumService {
         Ok(())
     }
 
+    /// Sync-only: insert one membership row from the Immich pull stream.
+    ///
+    /// Caller is responsible for emitting `AlbumMediaChanged` after the
+    /// row lands.
+    pub async fn upsert_album_membership(
+        &self,
+        album_id: &AlbumId,
+        media_id: &MediaId,
+        added_at: i64,
+    ) -> Result<(), LibraryError> {
+        self.repo
+            .upsert_membership(album_id, media_id, added_at)
+            .await
+    }
+
+    /// Sync-only: delete one membership row from the Immich pull stream.
+    pub async fn delete_album_membership(
+        &self,
+        album_id: &AlbumId,
+        media_id: &MediaId,
+    ) -> Result<(), LibraryError> {
+        self.repo.delete_membership(album_id, media_id).await
+    }
+
     // ── Query methods ───────────────────────────────────────────────
 
     pub async fn list_albums(&self) -> Result<Vec<Album>, LibraryError> {

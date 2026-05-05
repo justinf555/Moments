@@ -25,7 +25,7 @@ impl SyncEntityHandler for SyncResetHandler {
     ) -> Result<HandlerResult, LibraryError> {
         ctx.library.faces().clear_asset_faces().await?;
         ctx.library.faces().clear_people().await?;
-        ctx.db.clear_sync_checkpoints().await?;
+        ctx.state.clear_checkpoints().await?;
         Ok(HandlerResult {
             entity_id: String::new(),
             audit_action: "reset",

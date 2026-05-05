@@ -289,6 +289,12 @@ impl MediaService {
     pub async fn library_stats(&self) -> Result<LibraryStats, LibraryError> {
         self.repo.library_stats().await
     }
+
+    /// Sync-only: return every media id currently stored. Used by the
+    /// Immich pull engine to seed reset-sync orphan tracking.
+    pub async fn all_ids(&self) -> Result<std::collections::HashSet<String>, LibraryError> {
+        self.repo.all_ids().await
+    }
 }
 
 #[cfg(test)]

@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use super::model::{Album, AlbumId};
-use crate::library::db::media::MediaRow;
 use crate::library::db::{id_placeholders, Database};
 use crate::library::error::LibraryError;
+use crate::library::media::repository::MediaRow;
 use crate::library::media::{MediaCursor, MediaId, MediaItem};
 
 /// Internal row type for album queries.
@@ -236,6 +236,47 @@ impl AlbumRepository {
         sqlx::query("UPDATE albums SET updated_at = ? WHERE id = ?")
             .bind(now)
             .bind(album_id.as_str())
+            .execute(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
+        Ok(())
+    }
+
+    /// Sync-only: insert one membership row from the Immich pull stream.
+    ///
+    /// Differs from [`add_media`]: takes the server-provided `added_at`
+    /// and does not bump `albums.updated_at` — sync replicates the
+    /// server's timestamp via the `AlbumV1` entity instead.
+    pub async fn upsert_membership(
+        &self,
+        album_id: &AlbumId,
+        media_id: &MediaId,
+        added_at: i64,
+    ) -> Result<(), LibraryError> {
+        sqlx::query(
+            "INSERT OR IGNORE INTO album_media (album_id, media_id, added_at) VALUES (?, ?, ?)",
+        )
+        .bind(album_id.as_str())
+        .bind(media_id.as_str())
+        .bind(added_at)
+        .execute(self.db.pool())
+        .await
+        .map_err(LibraryError::Db)?;
+        Ok(())
+    }
+
+    /// Sync-only: delete one membership row from the Immich pull stream.
+    ///
+    /// Counterpart to [`upsert_membership`] — does not bump
+    /// `albums.updated_at`.
+    pub async fn delete_membership(
+        &self,
+        album_id: &AlbumId,
+        media_id: &MediaId,
+    ) -> Result<(), LibraryError> {
+        sqlx::query("DELETE FROM album_media WHERE album_id = ? AND media_id = ?")
+            .bind(album_id.as_str())
+            .bind(media_id.as_str())
             .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
@@ -778,6 +819,53 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn upsert_membership_idempotent_then_delete() {
+        let dir = tempdir().unwrap();
+        let (repo, media, _db) = test_repo(dir.path()).await;
+
+        let album_id = repo.create("Sync Album").await.unwrap();
+        let media_id = MediaId::new("med-1".to_string());
+        media.insert(&test_record(media_id.clone())).await.unwrap();
+
+        let now = chrono::Utc::now().timestamp();
+        repo.upsert_membership(&album_id, &media_id, now)
+            .await
+            .unwrap();
+        repo.upsert_membership(&album_id, &media_id, now)
+            .await
+            .unwrap();
+
+        let album = repo.get(&album_id).await.unwrap().unwrap();
+        assert_eq!(album.media_count, 1);
+
+        repo.delete_membership(&album_id, &media_id).await.unwrap();
+        let album = repo.get(&album_id).await.unwrap().unwrap();
+        assert_eq!(album.media_count, 0);
+    }
+
+    /// Sync membership ops must NOT bump `albums.updated_at` — the
+    /// `AlbumV1` handler already replicates the server-side timestamp.
+    #[tokio::test]
+    async fn upsert_membership_does_not_bump_updated_at() {
+        let dir = tempdir().unwrap();
+        let (repo, media, _db) = test_repo(dir.path()).await;
+
+        let album_id = repo.create("Stable Updated At").await.unwrap();
+        let baseline = repo.get(&album_id).await.unwrap().unwrap().updated_at;
+
+        let media_id = MediaId::new("med-1".to_string());
+        media.insert(&test_record(media_id.clone())).await.unwrap();
+
+        // Use a clearly different timestamp so any bump would be visible.
+        repo.upsert_membership(&album_id, &media_id, baseline + 10_000)
+            .await
+            .unwrap();
+
+        let after = repo.get(&album_id).await.unwrap().unwrap().updated_at;
+        assert_eq!(after, baseline);
     }
 
     #[tokio::test]

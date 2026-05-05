@@ -11,11 +11,11 @@ use futures_util::TryStreamExt;
 use tokio::io::AsyncBufReadExt;
 use tracing::{debug, error, info, instrument, warn};
 
-use crate::library::db::Database;
 use crate::library::error::LibraryError;
 use crate::library::media::MediaId;
 use crate::library::Library;
 use crate::sync::event::SyncEvent;
+use crate::sync::state::SyncStateRepository;
 
 use super::client::ImmichClient;
 use super::handlers::{self, CounterKind, SyncContext};
@@ -52,8 +52,8 @@ impl SyncCounters {
 pub(crate) struct PullManager {
     pub client: ImmichClient,
     pub library: Arc<Library>,
-    /// Database handle for sync infrastructure (checkpoints, audit).
-    pub db: Database,
+    /// Sync-engine state (ack checkpoints + per-line audit log).
+    pub state: SyncStateRepository,
     /// Channel for UI state updates (sync progress, errors).
     pub sync_events: tokio::sync::mpsc::UnboundedSender<SyncEvent>,
     pub shutdown_rx: tokio::sync::watch::Receiver<bool>,
@@ -175,7 +175,7 @@ impl PullManager {
         let ctx = SyncContext {
             client: self.client.clone(),
             library: Arc::clone(&self.library),
-            db: self.db.clone(),
+            state: self.state.clone(),
             thumbnails_dir: self.thumbnails_dir.clone(),
         };
 
@@ -208,7 +208,7 @@ impl PullManager {
             if entity_type == "SyncResetV1" {
                 warn!("server requested sync reset — performing full resync");
                 is_reset = true;
-                let ids = self.db.all_media_ids().await?;
+                let ids = self.library.media().all_ids().await?;
                 info!(
                     existing_count = ids.len(),
                     "loaded existing media IDs for reset tracking"
@@ -222,15 +222,15 @@ impl PullManager {
                 .find(|h| h.entity_type() == entity_type)
             {
                 let audit_id = self
-                    .db
-                    .start_sync_audit(entity_type, "", &sync_cycle)
+                    .state
+                    .start_audit(entity_type, "", &sync_cycle)
                     .await
                     .ok();
 
                 match handler.handle(&sync_line.data, line_number, &ctx).await {
                     Ok(result) => {
                         if let Some(aid) = audit_id {
-                            let _ = self.db.complete_sync_audit(aid, result.audit_action).await;
+                            let _ = self.state.complete_audit(aid, result.audit_action).await;
                         }
                         acks.push(sync_line.ack);
                         counters.increment(result.counter);
@@ -256,7 +256,7 @@ impl PullManager {
                     Err(e) => {
                         warn!(entity_type, error = %e, "skipping sync entity");
                         if let Some(aid) = audit_id {
-                            let _ = self.db.fail_sync_audit(aid, &e.to_string()).await;
+                            let _ = self.state.fail_audit(aid, &e.to_string()).await;
                         }
                         counters.errors += 1;
                     }
@@ -367,7 +367,7 @@ impl PullManager {
                 }
             }
             let pairs: Vec<(String, String)> = checkpoints.into_iter().collect();
-            self.db.save_sync_checkpoints(&pairs).await?;
+            self.state.save_checkpoints(&pairs).await?;
         }
 
         acks.clear();
@@ -378,8 +378,6 @@ impl PullManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::library::db::test_helpers::{open_test_db, test_record};
-    use crate::library::media::MediaId;
 
     // ── SyncCounters ───────────────────────────────────────────────
 
@@ -405,179 +403,5 @@ mod tests {
         assert_eq!(c.assets, 2);
         assert_eq!(c.deletes, 1);
         assert_eq!(c.errors, 0);
-    }
-
-    // ── Database sync infrastructure ───────────────────────────────
-
-    #[tokio::test]
-    async fn sync_audit_start_and_complete() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = open_test_db(dir.path()).await;
-
-        let row_id = db
-            .start_sync_audit("AssetV1", "uuid-1", "cycle-1")
-            .await
-            .unwrap();
-        assert!(row_id > 0);
-
-        db.complete_sync_audit(row_id, "upsert").await.unwrap();
-
-        let row: (String, Option<String>) =
-            sqlx::query_as("SELECT action, completed_at FROM sync_audit WHERE id = ?")
-                .bind(row_id)
-                .fetch_one(db.pool())
-                .await
-                .unwrap();
-        assert_eq!(row.0, "upsert");
-        assert!(row.1.is_some());
-    }
-
-    #[tokio::test]
-    async fn sync_audit_fail() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = open_test_db(dir.path()).await;
-
-        let row_id = db
-            .start_sync_audit("AssetV1", "uuid-fail", "cycle-2")
-            .await
-            .unwrap();
-
-        db.fail_sync_audit(row_id, "parse error").await.unwrap();
-
-        let row: (String, Option<String>) =
-            sqlx::query_as("SELECT action, error_msg FROM sync_audit WHERE id = ?")
-                .bind(row_id)
-                .fetch_one(db.pool())
-                .await
-                .unwrap();
-        assert_eq!(row.0, "error");
-        assert_eq!(row.1.as_deref(), Some("parse error"));
-    }
-
-    #[tokio::test]
-    async fn sync_checkpoints_save_and_clear() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = open_test_db(dir.path()).await;
-
-        let pairs = vec![
-            ("AssetV1".to_string(), "ack-asset-100".to_string()),
-            ("AlbumV1".to_string(), "ack-album-50".to_string()),
-        ];
-        db.save_sync_checkpoints(&pairs).await.unwrap();
-
-        let row: (String,) =
-            sqlx::query_as("SELECT ack FROM sync_checkpoints WHERE entity_type = 'AssetV1'")
-                .fetch_one(db.pool())
-                .await
-                .unwrap();
-        assert_eq!(row.0, "ack-asset-100");
-
-        db.clear_sync_checkpoints().await.unwrap();
-
-        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sync_checkpoints")
-            .fetch_one(db.pool())
-            .await
-            .unwrap();
-        assert_eq!(count.0, 0);
-    }
-
-    #[tokio::test]
-    async fn sync_checkpoints_upsert_replaces() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = open_test_db(dir.path()).await;
-
-        let pairs1 = vec![("AssetV1".to_string(), "ack-1".to_string())];
-        db.save_sync_checkpoints(&pairs1).await.unwrap();
-
-        let pairs2 = vec![("AssetV1".to_string(), "ack-2".to_string())];
-        db.save_sync_checkpoints(&pairs2).await.unwrap();
-
-        let row: (String,) =
-            sqlx::query_as("SELECT ack FROM sync_checkpoints WHERE entity_type = 'AssetV1'")
-                .fetch_one(db.pool())
-                .await
-                .unwrap();
-        assert_eq!(row.0, "ack-2");
-    }
-
-    #[tokio::test]
-    async fn all_media_ids_returns_set() {
-        use crate::library::db::test_helpers::record_with_taken_at;
-
-        let dir = tempfile::tempdir().unwrap();
-        let db = open_test_db(dir.path()).await;
-
-        db.upsert_media(&record_with_taken_at(
-            MediaId::new("id-a".to_string()),
-            "2025/01/photo_a.jpg",
-            Some(1_000),
-        ))
-        .await
-        .unwrap();
-        db.upsert_media(&record_with_taken_at(
-            MediaId::new("id-b".to_string()),
-            "2025/01/photo_b.jpg",
-            Some(2_000),
-        ))
-        .await
-        .unwrap();
-
-        let ids = db.all_media_ids().await.unwrap();
-        assert_eq!(ids.len(), 2);
-        assert!(ids.contains("id-a"));
-        assert!(ids.contains("id-b"));
-    }
-
-    #[tokio::test]
-    async fn all_media_ids_empty_db() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = open_test_db(dir.path()).await;
-
-        let ids = db.all_media_ids().await.unwrap();
-        assert!(ids.is_empty());
-    }
-
-    #[tokio::test]
-    async fn upsert_album_media_and_delete() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = open_test_db(dir.path()).await;
-
-        let now = chrono::Utc::now().timestamp();
-        sqlx::query("INSERT INTO albums (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)")
-            .bind("alb-1")
-            .bind("Test")
-            .bind(now)
-            .bind(now)
-            .execute(db.pool())
-            .await
-            .unwrap();
-        db.upsert_media(&test_record(MediaId::new("med-1".to_string())))
-            .await
-            .unwrap();
-
-        db.upsert_album_media("alb-1", "med-1", now).await.unwrap();
-
-        let count: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM album_media WHERE album_id = 'alb-1'")
-                .fetch_one(db.pool())
-                .await
-                .unwrap();
-        assert_eq!(count.0, 1);
-
-        db.upsert_album_media("alb-1", "med-1", now).await.unwrap();
-        let count2: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM album_media WHERE album_id = 'alb-1'")
-                .fetch_one(db.pool())
-                .await
-                .unwrap();
-        assert_eq!(count2.0, 1);
-
-        db.delete_album_media_entry("alb-1", "med-1").await.unwrap();
-        let count3: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM album_media WHERE album_id = 'alb-1'")
-                .fetch_one(db.pool())
-                .await
-                .unwrap();
-        assert_eq!(count3.0, 0);
     }
 }

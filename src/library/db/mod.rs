@@ -7,14 +7,6 @@ use tracing::{info, instrument};
 
 use super::error::LibraryError;
 
-mod albums;
-mod edits;
-pub(crate) mod faces;
-pub(crate) mod media;
-mod metadata;
-mod sync;
-mod thumbnails;
-
 /// Aggregate library statistics for the preferences overview.
 #[derive(Debug, Clone, Default)]
 pub struct LibraryStats {
@@ -181,47 +173,6 @@ pub(crate) mod test_helpers {
             imported_at: 1_700_000_000,
             media_type: MediaType::Image,
             taken_at,
-            width: Some(1920),
-            height: Some(1080),
-            orientation: 1,
-            duration_ms: None,
-            is_favorite: false,
-            is_trashed: false,
-            trashed_at: None,
-        }
-    }
-
-    /// Query the audit action and error_msg for a given entity_id (test helper).
-    #[allow(dead_code)] // used by sync tests, will return in phase 4
-    pub async fn get_audit_record(
-        db: &Database,
-        entity_id: &str,
-    ) -> Option<(String, Option<String>)> {
-        sqlx::query_as::<_, (String, Option<String>)>(
-            "SELECT action, error_msg FROM sync_audit WHERE entity_id = ?",
-        )
-        .bind(entity_id)
-        .fetch_optional(db.pool())
-        .await
-        .unwrap()
-    }
-
-    #[allow(dead_code)] // used by db/media.rs filter tests when re-added
-    pub fn record_with_imported_at(id: MediaId, path: &str, imported_at: i64) -> MediaRecord {
-        MediaRecord {
-            id,
-            content_hash: None,
-            external_id: None,
-            relative_path: path.to_string(),
-            original_filename: path
-                .split('/')
-                .next_back()
-                .unwrap_or("photo.jpg")
-                .to_string(),
-            file_size: 512,
-            imported_at,
-            media_type: MediaType::Image,
-            taken_at: Some(1_000),
             width: Some(1920),
             height: Some(1080),
             orientation: 1,

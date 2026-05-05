@@ -17,9 +17,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::library::db::Database;
 use crate::library::error::LibraryError;
 use crate::library::Library;
+use crate::sync::state::SyncStateRepository;
 
 use super::client::ImmichClient;
 
@@ -64,7 +64,7 @@ pub struct HandlerResult {
 pub struct SyncContext {
     pub client: ImmichClient,
     pub library: Arc<Library>,
-    pub db: Database,
+    pub state: SyncStateRepository,
     pub thumbnails_dir: PathBuf,
 }
 
