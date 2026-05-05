@@ -18,6 +18,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::library::error::LibraryError;
+use crate::library::media::MediaId;
 use crate::library::Library;
 use crate::sync::state::SyncStateRepository;
 
@@ -55,16 +56,20 @@ pub struct HandlerResult {
     /// Entity ID for audit logging — typically the Immich-side UUID
     /// from the sync payload.
     pub entity_id: String,
-    /// Local [`MediaId`](crate::library::media::MediaId) for the row this
-    /// handler touched, if any. Populated by `AssetHandler` and
-    /// `AssetDeleteHandler` so that pull-side orphan tracking during a
-    /// `SyncResetV1` cycle compares like-for-like — the orphan set is
-    /// loaded from `media.id` (local namespace) and must be checked off
-    /// against handler results in that same namespace, not against the
-    /// Immich UUID. See issue #628 for the data-loss bug this prevents.
-    /// Other handlers (album, exif, face, lifecycle) leave this `None`;
-    /// they don't drive orphan tracking.
-    pub local_media_id: Option<String>,
+    /// Local [`MediaId`] for the row this handler touched, if any.
+    /// Populated by `AssetHandler` and `AssetDeleteHandler` so that
+    /// pull-side orphan tracking during a `SyncResetV1` cycle
+    /// compares like-for-like — the orphan set is loaded from
+    /// `media.id` (local namespace) and must be checked off against
+    /// handler results in that same namespace, not against the Immich
+    /// UUID. See issue #628 for the data-loss bug this prevents.
+    /// Other handlers (album, exif, face, lifecycle) leave this
+    /// `None`; they don't drive orphan tracking.
+    ///
+    /// Typed as [`MediaId`] rather than `String` so the namespace
+    /// invariant is enforced at compile time — it's not possible to
+    /// accidentally store an Immich UUID here.
+    pub local_media_id: Option<MediaId>,
     /// Audit action label (e.g. "upsert", "delete").
     pub audit_action: &'static str,
     /// Which counter to increment.

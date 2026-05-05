@@ -31,7 +31,7 @@ impl SyncEntityHandler for AssetHandler {
             // orphan-cleanup pass checks the right namespace off its
             // tracking set. Without this, every local row stays
             // "unseen" and gets deleted when the stream ends.
-            local_media_id: Some(media_id.as_str().to_string()),
+            local_media_id: Some(media_id),
             audit_action: "upsert",
             counter: CounterKind::Assets,
         })
@@ -157,11 +157,10 @@ impl SyncEntityHandler for AssetDeleteHandler {
         // the asset was already gone or never reached us.
         let local_media_id = match ctx.library.media().id_by_external_id(&external_id).await? {
             Some(media_id) => {
-                let local_str = media_id.as_str().to_string();
                 ctx.library
                     .delete_permanently_from_sync(std::slice::from_ref(&media_id))
                     .await?;
-                Some(local_str)
+                Some(media_id)
             }
             None => {
                 debug!(external_id = %external_id, "asset delete: no local row, skipping");
