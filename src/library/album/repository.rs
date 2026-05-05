@@ -35,8 +35,12 @@ impl AlbumRepository {
 
     /// Upsert an album with a known ID (used by sync and Immich write-through).
     ///
-    /// Inserts or replaces the album row. Unlike `create()`, this does not
-    /// generate a new UUID — the caller provides the ID.
+    /// Inserts a new row or updates the existing one in place. Unlike
+    /// `create()`, this does not generate a new UUID — the caller provides
+    /// the ID. Uses `ON CONFLICT(id) DO UPDATE` rather than
+    /// `INSERT OR REPLACE` so that columns not listed here (notably
+    /// `is_pinned`, which is locally-owned and never sent over sync) are
+    /// preserved across each pull cycle (#585 review).
     pub async fn upsert(
         &self,
         id: &str,
@@ -46,8 +50,13 @@ impl AlbumRepository {
         external_id: Option<&str>,
     ) -> Result<(), LibraryError> {
         sqlx::query(
-            "INSERT OR REPLACE INTO albums (id, name, created_at, updated_at, external_id)
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO albums (id, name, created_at, updated_at, external_id)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+                 name = excluded.name,
+                 created_at = excluded.created_at,
+                 updated_at = excluded.updated_at,
+                 external_id = excluded.external_id",
         )
         .bind(id)
         .bind(name)
@@ -160,6 +169,24 @@ impl AlbumRepository {
                 .await
                 .map_err(LibraryError::Db)?;
         Ok(row.and_then(|(eid,)| eid))
+    }
+
+    /// Look up the local [`AlbumId`] for a given `external_id`.
+    ///
+    /// Used by sync handlers to translate Immich-side album UUIDs into the
+    /// stable, locally-owned id under which we actually store the row —
+    /// preventing duplicate album rows on the post-push pull round-trip
+    /// (#585). Returns `None` if no row carries that `external_id`.
+    pub async fn id_by_external_id(
+        &self,
+        external_id: &str,
+    ) -> Result<Option<AlbumId>, LibraryError> {
+        let row: Option<String> = sqlx::query_scalar("SELECT id FROM albums WHERE external_id = ?")
+            .bind(external_id)
+            .fetch_optional(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
+        Ok(row.map(AlbumId::from_raw))
     }
 
     /// Delete an album and all its media associations.
@@ -427,6 +454,40 @@ mod tests {
         let id1 = repo.create("Album 1").await.unwrap();
         let id2 = repo.create("Album 2").await.unwrap();
         assert_ne!(id1, id2);
+    }
+
+    #[tokio::test]
+    async fn upsert_preserves_is_pinned() {
+        let dir = tempdir().unwrap();
+        let (repo, _media, _db) = test_repo(dir.path()).await;
+
+        let id = repo.create("Pinned").await.unwrap();
+        repo.set_pinned(&id, true).await.unwrap();
+        assert!(repo.get(&id).await.unwrap().unwrap().is_pinned);
+
+        // Sync pull arrives — must not clobber the locally-owned pin.
+        repo.upsert(id.as_str(), "Pinned", 0, 0, Some("server-uuid"))
+            .await
+            .unwrap();
+        assert!(repo.get(&id).await.unwrap().unwrap().is_pinned);
+    }
+
+    #[tokio::test]
+    async fn id_by_external_id_finds_row_or_returns_none() {
+        let dir = tempdir().unwrap();
+        let (repo, _media, _db) = test_repo(dir.path()).await;
+
+        let local_id = repo.create("Round-trip").await.unwrap();
+        let server_id = "server-album-uuid";
+        repo.upsert(local_id.as_str(), "Round-trip", 0, 0, Some(server_id))
+            .await
+            .unwrap();
+
+        let found = repo.id_by_external_id(server_id).await.unwrap();
+        assert_eq!(found, Some(local_id));
+
+        let missing = repo.id_by_external_id("nope").await.unwrap();
+        assert_eq!(missing, None);
     }
 
     #[tokio::test]

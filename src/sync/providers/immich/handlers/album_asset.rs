@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use tracing::warn;
 
-use crate::library::album::AlbumId;
 use crate::library::error::LibraryError;
 
 use super::{CounterKind, HandlerResult, SyncContext, SyncEntityHandler};
@@ -50,13 +49,38 @@ impl SyncEntityHandler for AlbumAssetHandler {
             }
         };
 
+        // Issue #585: same idea for the album side. `assoc.album_id` is
+        // the Immich UUID; `album_media.album_id` references the local
+        // `AlbumId`. The parent `AlbumV1` row is emitted in the same sync
+        // batch and resolved via `external_id`, so by the time membership
+        // rows arrive we expect the local album row to exist. Warn-and-
+        // skip on miss rather than wedge a dangling FK.
+        let album_id = match ctx
+            .library
+            .albums()
+            .id_by_external_id(&assoc.album_id)
+            .await?
+        {
+            Some(id) => id,
+            None => {
+                warn!(
+                    album_id = %assoc.album_id,
+                    asset_id = %assoc.asset_id,
+                    "AlbumToAssetV1: parent album not found locally; skipping membership row"
+                );
+                return Ok(HandlerResult {
+                    entity_id: id,
+                    audit_action: "upsert",
+                    counter: CounterKind::Albums,
+                });
+            }
+        };
+
         let now = chrono::Utc::now().timestamp();
         ctx.db
-            .upsert_album_media(&assoc.album_id, media_id.as_str(), now)
+            .upsert_album_media(album_id.as_str(), media_id.as_str(), now)
             .await?;
-        ctx.library
-            .albums()
-            .emit_album_media_changed(&AlbumId::from_raw(assoc.album_id));
+        ctx.library.albums().emit_album_media_changed(&album_id);
 
         Ok(HandlerResult {
             entity_id: id,
@@ -113,12 +137,34 @@ impl SyncEntityHandler for AlbumAssetDeleteHandler {
             }
         };
 
-        ctx.db
-            .delete_album_media_entry(&assoc.album_id, media_id.as_str())
-            .await?;
-        ctx.library
+        // Issue #585: translate the album side too. If the local album
+        // row has already been removed, the album_media join went with
+        // it (cascade) — nothing to delete.
+        let album_id = match ctx
+            .library
             .albums()
-            .emit_album_media_changed(&AlbumId::from_raw(assoc.album_id));
+            .id_by_external_id(&assoc.album_id)
+            .await?
+        {
+            Some(id) => id,
+            None => {
+                warn!(
+                    album_id = %assoc.album_id,
+                    asset_id = %assoc.asset_id,
+                    "AlbumToAssetDeleteV1: parent album not found locally; nothing to delete"
+                );
+                return Ok(HandlerResult {
+                    entity_id: id,
+                    audit_action: "delete",
+                    counter: CounterKind::Deletes,
+                });
+            }
+        };
+
+        ctx.db
+            .delete_album_media_entry(album_id.as_str(), media_id.as_str())
+            .await?;
+        ctx.library.albums().emit_album_media_changed(&album_id);
 
         Ok(HandlerResult {
             entity_id: id,

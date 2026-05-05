@@ -98,6 +98,17 @@ impl AlbumService {
         self.repo.get(id).await
     }
 
+    /// Translate an Immich-side album UUID to the local [`AlbumId`] under
+    /// which the row is stored. Returns `None` if no local row carries
+    /// that `external_id`. Sync handlers use this to land pulled albums on
+    /// the existing local row instead of inserting a duplicate (#585).
+    pub async fn id_by_external_id(
+        &self,
+        external_id: &str,
+    ) -> Result<Option<AlbumId>, LibraryError> {
+        self.repo.id_by_external_id(external_id).await
+    }
+
     pub async fn create_album(&self, name: &str) -> Result<AlbumId, LibraryError> {
         let id = self.repo.create(name).await?;
         if let Err(e) = self
@@ -216,5 +227,68 @@ impl AlbumService {
         limit: u32,
     ) -> Result<Vec<MediaId>, LibraryError> {
         self.repo.cover_media_ids(album_id, limit).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::library::db::test_helpers::open_test_db;
+    use crate::sync::outbox::NoOpRecorder;
+    use tempfile::tempdir;
+
+    async fn make_service() -> (tempfile::TempDir, AlbumService) {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let recorder: Arc<dyn MutationRecorder> = Arc::new(NoOpRecorder);
+        (dir, AlbumService::new(db, recorder))
+    }
+
+    /// Issue #585: a locally-created album that has been pushed (so it
+    /// carries an `external_id` for the server UUID) and then pulled
+    /// back via the sync stream must NOT produce a duplicate row. The
+    /// handler resolves `external_id` → local id and upserts in place.
+    /// The service must emit `AlbumUpdated`, not `AlbumAdded`.
+    #[tokio::test]
+    async fn upsert_album_emits_updated_when_round_tripped_via_external_id() {
+        let (_dir, svc) = make_service().await;
+        let mut rx = svc.subscribe();
+
+        // Local create. `create_album` writes the row but does not emit
+        // an event. Then push stamps the server UUID as external_id —
+        // simulated here by an `upsert_album` that lands on the existing
+        // row, which emits `AlbumUpdated`. Drain it so we can isolate
+        // the second upsert below.
+        let local_id = svc.create_album("Vacation").await.unwrap();
+        let server_id = "server-album-uuid";
+        svc.upsert_album(local_id.as_str(), "Vacation", 0, 0, Some(server_id))
+            .await
+            .unwrap();
+        while rx.try_recv().is_ok() {}
+
+        // Pull-sync arrives. The new handler resolves external_id →
+        // local_id and upserts under it.
+        let resolved = svc.id_by_external_id(server_id).await.unwrap();
+        assert_eq!(resolved.as_ref(), Some(&local_id));
+
+        svc.upsert_album(
+            resolved.unwrap().as_str(),
+            "Vacation",
+            0,
+            0,
+            Some(server_id),
+        )
+        .await
+        .unwrap();
+
+        let albums = svc.list_albums().await.unwrap();
+        assert_eq!(albums.len(), 1, "expected single album row; got {albums:?}");
+        assert_eq!(albums[0].id, local_id);
+
+        let event = rx.try_recv().expect("expected one event");
+        match event {
+            AlbumEvent::AlbumUpdated(id) => assert_eq!(id, local_id),
+            other => panic!("expected AlbumUpdated; got {other:?}"),
+        }
     }
 }
