@@ -261,9 +261,9 @@ impl PullManager {
                         // row classified as orphaned and silently
                         // wiping the library on a `SyncResetV1`.
                         if let (Some(ref mut ids), Some(local)) =
-                            (existing_ids.as_mut(), result.local_media_id.as_deref())
+                            (existing_ids.as_mut(), result.local_media_id.as_ref())
                         {
-                            ids.remove(local);
+                            ids.remove(local.as_str());
                         }
                     }
                     Err(e) => {
@@ -401,16 +401,15 @@ mod tests {
     /// `run_sync` so a contract test can assert the namespace
     /// invariant without spinning up an HTTP-backed sync stream.
     fn apply_handler_result(existing_ids: &mut Option<HashSet<String>>, result: &HandlerResult) {
-        if let (Some(ids), Some(local)) = (existing_ids.as_mut(), result.local_media_id.as_deref())
-        {
-            ids.remove(local);
+        if let (Some(ids), Some(local)) = (existing_ids.as_mut(), result.local_media_id.as_ref()) {
+            ids.remove(local.as_str());
         }
     }
 
     fn asset_result(entity_id: &str, local_media_id: &str) -> HandlerResult {
         HandlerResult {
             entity_id: entity_id.to_string(),
-            local_media_id: Some(local_media_id.to_string()),
+            local_media_id: Some(MediaId::new(local_media_id.to_string())),
             audit_action: "upsert",
             counter: CounterKind::Assets,
         }
