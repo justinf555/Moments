@@ -162,6 +162,24 @@ impl AlbumRepository {
         Ok(row.and_then(|(eid,)| eid))
     }
 
+    /// Look up the local [`AlbumId`] for a given `external_id`.
+    ///
+    /// Used by sync handlers to translate Immich-side album UUIDs into the
+    /// stable, locally-owned id under which we actually store the row —
+    /// preventing duplicate album rows on the post-push pull round-trip
+    /// (#585). Returns `None` if no row carries that `external_id`.
+    pub async fn id_by_external_id(
+        &self,
+        external_id: &str,
+    ) -> Result<Option<AlbumId>, LibraryError> {
+        let row: Option<String> = sqlx::query_scalar("SELECT id FROM albums WHERE external_id = ?")
+            .bind(external_id)
+            .fetch_optional(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
+        Ok(row.map(AlbumId::from_raw))
+    }
+
     /// Delete an album and all its media associations.
     pub async fn delete(&self, id: &AlbumId) -> Result<(), LibraryError> {
         let mut tx = self.db.pool().begin().await.map_err(LibraryError::Db)?;
@@ -427,6 +445,24 @@ mod tests {
         let id1 = repo.create("Album 1").await.unwrap();
         let id2 = repo.create("Album 2").await.unwrap();
         assert_ne!(id1, id2);
+    }
+
+    #[tokio::test]
+    async fn id_by_external_id_finds_row_or_returns_none() {
+        let dir = tempdir().unwrap();
+        let (repo, _media, _db) = test_repo(dir.path()).await;
+
+        let local_id = repo.create("Round-trip").await.unwrap();
+        let server_id = "server-album-uuid";
+        repo.upsert(local_id.as_str(), "Round-trip", 0, 0, Some(server_id))
+            .await
+            .unwrap();
+
+        let found = repo.id_by_external_id(server_id).await.unwrap();
+        assert_eq!(found, Some(local_id));
+
+        let missing = repo.id_by_external_id("nope").await.unwrap();
+        assert_eq!(missing, None);
     }
 
     #[tokio::test]
