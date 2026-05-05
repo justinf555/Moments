@@ -278,10 +278,13 @@ impl PhotoViewer {
         // widget — `imp.picture` keeps its `GdkMemoryTexture`, which holds
         // the decoded full-res RGBA buffer (50–200 MB; RAW from a 50 MP
         // sensor lands at the high end). Clear the paintable on `hidden` so
-        // that buffer is freed when the user backs out to the grid. The
-        // edit panel's `EditSession` (preview_image ~3 MB, render output
-        // ~4 MB) is held similarly when the user pops while edit-mode is
-        // still active — call `end_session` to drop them too.
+        // that buffer is freed when the user backs out to the grid. We also
+        // bump `load_gen` so an in-flight full-res decode that completes
+        // after the pop is rejected by the staleness check in
+        // `start_full_res_load` rather than reinstating the buffer we just
+        // cleared. Toggling `edit_toggle` off (if still active) routes the
+        // `EditSession` teardown through the existing toggled handler so
+        // the toggle's visual state stays in sync.
         {
             let viewer = self.downgrade();
             self.connect_hidden(move |_| {
@@ -289,10 +292,10 @@ impl PhotoViewer {
                     return;
                 };
                 let imp = viewer.imp();
+                imp.load_gen.set(imp.load_gen.get() + 1);
                 imp.picture.set_paintable(gdk::Paintable::NONE);
-                let panel = imp.edit_panel.borrow().clone();
-                if let Some(panel) = panel {
-                    panel.end_session();
+                if imp.edit_toggle.is_active() {
+                    imp.edit_toggle.set_active(false);
                 }
             });
         }
