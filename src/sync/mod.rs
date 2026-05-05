@@ -18,6 +18,7 @@ use crate::library::Library;
 pub mod event;
 pub mod outbox;
 pub mod providers;
+pub mod state;
 
 /// Handle to the running sync engine.
 ///
@@ -56,7 +57,7 @@ impl SyncHandle {
         let pull_mgr = pull::PullManager {
             client: client.clone(),
             library: Arc::clone(&library),
-            db: db.clone(),
+            state: state::SyncStateRepository::new(db.clone()),
             sync_events: sync_events.clone(),
             shutdown_rx: shutdown_rx.clone(),
             thumbnails_dir,

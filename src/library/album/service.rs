@@ -88,6 +88,39 @@ impl AlbumService {
         Ok(())
     }
 
+    /// Sync-only: insert one membership row from the Immich pull stream
+    /// and emit [`AlbumEvent::AlbumMediaChanged`].
+    ///
+    /// Mirrors how the user-driven [`add_to_album`] / [`remove_from_album`]
+    /// methods own their event emission — every public mutator on this
+    /// service that changes album-membership state emits, so callers
+    /// can't forget.
+    pub async fn upsert_album_membership(
+        &self,
+        album_id: &AlbumId,
+        media_id: &MediaId,
+        added_at: i64,
+    ) -> Result<(), LibraryError> {
+        self.repo
+            .upsert_membership(album_id, media_id, added_at)
+            .await?;
+        self.emit(AlbumEvent::AlbumMediaChanged(album_id.clone()));
+        Ok(())
+    }
+
+    /// Sync-only: delete one membership row from the Immich pull stream
+    /// and emit [`AlbumEvent::AlbumMediaChanged`]. Counterpart to
+    /// [`upsert_album_membership`].
+    pub async fn delete_album_membership(
+        &self,
+        album_id: &AlbumId,
+        media_id: &MediaId,
+    ) -> Result<(), LibraryError> {
+        self.repo.delete_membership(album_id, media_id).await?;
+        self.emit(AlbumEvent::AlbumMediaChanged(album_id.clone()));
+        Ok(())
+    }
+
     // ── Query methods ───────────────────────────────────────────────
 
     pub async fn list_albums(&self) -> Result<Vec<Album>, LibraryError> {

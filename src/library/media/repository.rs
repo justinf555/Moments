@@ -494,6 +494,20 @@ impl MediaRepository {
             .map_err(LibraryError::Db)
     }
 
+    /// Load every media row's id into a set.
+    ///
+    /// Used by the Immich pull engine to detect orphans during a reset
+    /// sync: the set is seeded from this query, every `AssetV1` line in
+    /// the stream removes its id, and whatever is left at the end is
+    /// deleted as having vanished from the server.
+    pub async fn all_ids(&self) -> Result<std::collections::HashSet<String>, LibraryError> {
+        let rows: Vec<(String,)> = sqlx::query_as("SELECT id FROM media")
+            .fetch_all(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
     /// Move assets to the trash (soft delete).
     pub async fn trash(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
         if ids.is_empty() {
@@ -821,6 +835,38 @@ mod tests {
 
         let item = repo.get(&id).await.unwrap().unwrap();
         assert_eq!(item.imported_at, 1_700_000_000);
+    }
+
+    #[tokio::test]
+    async fn all_ids_returns_every_stored_id() {
+        let dir = tempdir().unwrap();
+        let (repo, _db) = test_repo(dir.path()).await;
+        repo.insert(&record_with_taken_at(
+            MediaId::new("id-a".to_string()),
+            "2025/01/photo_a.jpg",
+            Some(1_000),
+        ))
+        .await
+        .unwrap();
+        repo.insert(&record_with_taken_at(
+            MediaId::new("id-b".to_string()),
+            "2025/01/photo_b.jpg",
+            Some(2_000),
+        ))
+        .await
+        .unwrap();
+
+        let ids = repo.all_ids().await.unwrap();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains("id-a"));
+        assert!(ids.contains("id-b"));
+    }
+
+    #[tokio::test]
+    async fn all_ids_empty_when_no_rows() {
+        let dir = tempdir().unwrap();
+        let (repo, _db) = test_repo(dir.path()).await;
+        assert!(repo.all_ids().await.unwrap().is_empty());
     }
 
     #[tokio::test]

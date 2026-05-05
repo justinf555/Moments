@@ -675,6 +675,7 @@ impl PushManager {
 mod tests {
     use super::*;
     use crate::library::db::test_helpers::{open_test_db, test_record};
+    use crate::library::media::repository::MediaRepository;
     use crate::library::media::MediaId;
 
     /// Helper: create DB, insert outbox entries, return a PushManager.
@@ -1006,7 +1007,10 @@ mod tests {
         // Insert a media record with external_id.
         let mut record = test_record(MediaId::new("local-1".to_string()));
         record.external_id = Some("immich-uuid-1".to_string());
-        db.upsert_media(&record).await.unwrap();
+        MediaRepository::new(db.clone())
+            .upsert(&record)
+            .await
+            .unwrap();
 
         let push = make_push_manager(db).await;
         let ext_id = push.lookup_media_external_id("local-1").await.unwrap();
@@ -1032,7 +1036,10 @@ mod tests {
         let mut record = test_record(MediaId::new("local-1".to_string()));
         record.original_filename = "IMG_1234.jpg".to_string();
         record.taken_at = Some(taken_at_secs);
-        db.upsert_media(&record).await.unwrap();
+        MediaRepository::new(db.clone())
+            .upsert(&record)
+            .await
+            .unwrap();
 
         // Real on-disk file so the metadata() call succeeds.
         let file = tempfile::NamedTempFile::new().unwrap();
@@ -1062,7 +1069,10 @@ mod tests {
         // taken_at is None by default in test_record.
         let record = test_record(MediaId::new("local-2".to_string()));
         assert!(record.taken_at.is_none());
-        db.upsert_media(&record).await.unwrap();
+        MediaRepository::new(db.clone())
+            .upsert(&record)
+            .await
+            .unwrap();
 
         let file = tempfile::NamedTempFile::new().unwrap();
 
@@ -1084,7 +1094,10 @@ mod tests {
         // Way out of chrono's representable range. from_timestamp returns None.
         let mut record = test_record(MediaId::new("local-bogus".to_string()));
         record.taken_at = Some(i64::MAX);
-        db.upsert_media(&record).await.unwrap();
+        MediaRepository::new(db.clone())
+            .upsert(&record)
+            .await
+            .unwrap();
 
         let file = tempfile::NamedTempFile::new().unwrap();
 
@@ -1117,7 +1130,10 @@ mod tests {
         let (_dir, db) = setup_push_db().await;
 
         let record = test_record(MediaId::new("local-3".to_string()));
-        db.upsert_media(&record).await.unwrap();
+        MediaRepository::new(db.clone())
+            .upsert(&record)
+            .await
+            .unwrap();
 
         let push = make_push_manager(db).await;
         let result = push
@@ -1132,7 +1148,10 @@ mod tests {
 
         let mut record = test_record(MediaId::new("local-empty".to_string()));
         record.original_filename = String::new();
-        db.upsert_media(&record).await.unwrap();
+        MediaRepository::new(db.clone())
+            .upsert(&record)
+            .await
+            .unwrap();
 
         let file = tempfile::NamedTempFile::new().unwrap();
         let push = make_push_manager(db).await;
@@ -1152,7 +1171,10 @@ mod tests {
 
         // Insert a media record with no external_id — COALESCE returns id.
         let record = test_record(MediaId::new("local-no-ext".to_string()));
-        db.upsert_media(&record).await.unwrap();
+        MediaRepository::new(db.clone())
+            .upsert(&record)
+            .await
+            .unwrap();
 
         let push = make_push_manager(db).await;
         let result = push.lookup_media_external_id("local-no-ext").await;
@@ -1229,7 +1251,10 @@ mod tests {
         let (_dir, db) = setup_push_db().await;
 
         let record = test_record(MediaId::new("local-m".to_string()));
-        db.upsert_media(&record).await.unwrap();
+        MediaRepository::new(db.clone())
+            .upsert(&record)
+            .await
+            .unwrap();
 
         let push = make_push_manager(db.clone()).await;
         push.set_media_external_id("local-m", "new-ext-id")
@@ -1284,8 +1309,9 @@ mod tests {
         let mut r2 =
             record_with_taken_at(MediaId::new("m2".to_string()), "photos/b.jpg", Some(2_000));
         r2.external_id = Some("ext-m2".to_string());
-        db.upsert_media(&r1).await.unwrap();
-        db.upsert_media(&r2).await.unwrap();
+        let media_repo = MediaRepository::new(db.clone());
+        media_repo.upsert(&r1).await.unwrap();
+        media_repo.upsert(&r2).await.unwrap();
 
         let push = make_push_manager(db).await;
         let payload = serde_json::json!({ "media_ids": ["m1", "m2"] });

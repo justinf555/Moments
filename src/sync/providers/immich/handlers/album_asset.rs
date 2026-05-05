@@ -77,10 +77,10 @@ impl SyncEntityHandler for AlbumAssetHandler {
         };
 
         let now = chrono::Utc::now().timestamp();
-        ctx.db
-            .upsert_album_media(album_id.as_str(), media_id.as_str(), now)
+        ctx.library
+            .albums()
+            .upsert_album_membership(&album_id, &media_id, now)
             .await?;
-        ctx.library.albums().emit_album_media_changed(&album_id);
 
         Ok(HandlerResult {
             entity_id: id,
@@ -161,10 +161,10 @@ impl SyncEntityHandler for AlbumAssetDeleteHandler {
             }
         };
 
-        ctx.db
-            .delete_album_media_entry(album_id.as_str(), media_id.as_str())
+        ctx.library
+            .albums()
+            .delete_album_membership(&album_id, &media_id)
             .await?;
-        ctx.library.albums().emit_album_media_changed(&album_id);
 
         Ok(HandlerResult {
             entity_id: id,
