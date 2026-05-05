@@ -124,15 +124,29 @@ impl Database {
     }
 
     /// Mark a sync audit record as completed (just before acking).
-    pub async fn complete_sync_audit(&self, row_id: i64, action: &str) -> Result<(), LibraryError> {
+    ///
+    /// `entity_id` is the id from the handler's result (typically the
+    /// Immich UUID). It's recorded at completion rather than at
+    /// `start_sync_audit` time because the dispatch loop in
+    /// `pull.rs` only knows the entity type before invoking the
+    /// handler — the id lives inside the JSON payload.
+    pub async fn complete_sync_audit(
+        &self,
+        row_id: i64,
+        entity_id: &str,
+        action: &str,
+    ) -> Result<(), LibraryError> {
         let now = chrono::Utc::now().to_rfc3339();
-        sqlx::query("UPDATE sync_audit SET completed_at = ?, action = ? WHERE id = ?")
-            .bind(&now)
-            .bind(action)
-            .bind(row_id)
-            .execute(self.pool())
-            .await
-            .map_err(LibraryError::Db)?;
+        sqlx::query(
+            "UPDATE sync_audit SET completed_at = ?, action = ?, entity_id = ? WHERE id = ?",
+        )
+        .bind(&now)
+        .bind(action)
+        .bind(entity_id)
+        .bind(row_id)
+        .execute(self.pool())
+        .await
+        .map_err(LibraryError::Db)?;
         Ok(())
     }
 

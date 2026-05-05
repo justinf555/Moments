@@ -23,10 +23,15 @@ impl SyncEntityHandler for AssetHandler {
         ctx: &SyncContext,
     ) -> Result<HandlerResult, LibraryError> {
         let asset: SyncAssetV1 = deserialize_entity(data, "AssetV1", line_number)?;
-        let id = asset.id.clone();
-        handle_asset(asset, ctx).await?;
+        let entity_id = asset.id.clone();
+        let media_id = handle_asset(asset, ctx).await?;
         Ok(HandlerResult {
-            entity_id: id,
+            entity_id,
+            // Issue #628: report the local `MediaId` so a `SyncResetV1`
+            // orphan-cleanup pass checks the right namespace off its
+            // tracking set. Without this, every local row stays
+            // "unseen" and gets deleted when the stream ends.
+            local_media_id: Some(media_id),
             audit_action: "upsert",
             counter: CounterKind::Assets,
         })
@@ -34,7 +39,7 @@ impl SyncEntityHandler for AssetHandler {
 }
 
 #[instrument(skip(ctx, asset), fields(asset_id = %asset.id))]
-async fn handle_asset(asset: SyncAssetV1, ctx: &SyncContext) -> Result<(), LibraryError> {
+async fn handle_asset(asset: SyncAssetV1, ctx: &SyncContext) -> Result<MediaId, LibraryError> {
     let media_type = match asset.asset_type.as_str() {
         "VIDEO" => MediaType::Video,
         _ => MediaType::Image,
@@ -128,7 +133,7 @@ async fn handle_asset(asset: SyncAssetV1, ctx: &SyncContext) -> Result<(), Libra
         debug!(id = %media_id, "thumbnail download failed: {e}");
     }
 
-    Ok(())
+    Ok(media_id)
 }
 
 pub struct AssetDeleteHandler;
@@ -150,18 +155,23 @@ impl SyncEntityHandler for AssetDeleteHandler {
         // Issue #626: the stream carries the Immich UUID; translate to
         // the local `MediaId` before deleting. Missing row is a no-op —
         // the asset was already gone or never reached us.
-        match ctx.library.media().id_by_external_id(&external_id).await? {
+        let local_media_id = match ctx.library.media().id_by_external_id(&external_id).await? {
             Some(media_id) => {
                 ctx.library
                     .delete_permanently_from_sync(std::slice::from_ref(&media_id))
                     .await?;
+                Some(media_id)
             }
             None => {
                 debug!(external_id = %external_id, "asset delete: no local row, skipping");
+                None
             }
-        }
+        };
         Ok(HandlerResult {
             entity_id: external_id,
+            // Issue #628: a delete during reset is also "we've seen
+            // this id", so check it off the orphan tracking set.
+            local_media_id,
             audit_action: "delete",
             counter: CounterKind::Deletes,
         })

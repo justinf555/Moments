@@ -44,6 +44,7 @@ impl SyncEntityHandler for AlbumAssetHandler {
                 );
                 return Ok(HandlerResult {
                     entity_id: id,
+                    local_media_id: None,
                     audit_action: "upsert",
                     counter: CounterKind::Albums,
                 });
@@ -60,6 +61,7 @@ impl SyncEntityHandler for AlbumAssetHandler {
 
         Ok(HandlerResult {
             entity_id: id,
+            local_media_id: None,
             audit_action: "upsert",
             counter: CounterKind::Albums,
         })
@@ -107,6 +109,7 @@ impl SyncEntityHandler for AlbumAssetDeleteHandler {
                 );
                 return Ok(HandlerResult {
                     entity_id: id,
+                    local_media_id: None,
                     audit_action: "delete",
                     counter: CounterKind::Deletes,
                 });
@@ -122,6 +125,7 @@ impl SyncEntityHandler for AlbumAssetDeleteHandler {
 
         Ok(HandlerResult {
             entity_id: id,
+            local_media_id: None,
             audit_action: "delete",
             counter: CounterKind::Deletes,
         })
