@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
-use tracing::warn;
+use tracing::{instrument, warn};
 
 use super::event::MediaEvent;
 use super::model::{MediaCursor, MediaFilter, MediaId, MediaItem, MediaRecord};
@@ -137,6 +137,7 @@ impl MediaService {
 
     /// Translate an `external_id` (e.g. an Immich asset UUID) to the local
     /// [`MediaId`] under which the row is stored, if any.
+    #[instrument(skip(self))]
     pub async fn id_by_external_id(
         &self,
         external_id: &str,
@@ -149,6 +150,7 @@ impl MediaService {
     /// to adopt a local row when push hasn't finished stamping the
     /// server id by the time the same asset arrives over the pull
     /// stream — see [`MediaRepository::id_by_content_hash_pending_push`].
+    #[instrument(skip(self))]
     pub async fn id_by_content_hash_pending_push(
         &self,
         content_hash: &str,

@@ -349,18 +349,18 @@ impl MediaRepository {
     /// the server's `file_created_at` (the photo's capture time), which
     /// would silently move assets out of the Recent Imports view (issue #614).
     pub async fn upsert(&self, record: &MediaRecord) -> Result<Option<MediaId>, LibraryError> {
-        // Capture the existing local row's imported_at — by id (plain
-        // update) or by external_id (local→server UUID swap). At most one
-        // row matches in practice; if both somehow do, take the id match.
-        let existing_imported_at: Option<i64> = sqlx::query_scalar(
-            "SELECT imported_at FROM media
-             WHERE id = ?1 OR external_id = ?1
-             ORDER BY (id = ?1) DESC LIMIT 1",
-        )
-        .bind(record.id.as_str())
-        .fetch_optional(self.db.pool())
-        .await
-        .map_err(LibraryError::Db)?;
+        // Capture the existing row's imported_at so we can preserve it —
+        // see #614. Post-#626 the upserting handler always passes the
+        // locally-owned `MediaId` (resolved via `id_by_external_id` /
+        // `id_by_content_hash_pending_push`), so a plain `id = ?` lookup
+        // is sufficient; the older `OR external_id = ?` arm was for the
+        // local→server UUID swap that no longer happens.
+        let existing_imported_at: Option<i64> =
+            sqlx::query_scalar("SELECT imported_at FROM media WHERE id = ?")
+                .bind(record.id.as_str())
+                .fetch_optional(self.db.pool())
+                .await
+                .map_err(LibraryError::Db)?;
         let imported_at = existing_imported_at.unwrap_or(record.imported_at);
 
         // Atomic delete-and-return so the replaced-id observation can
@@ -820,31 +820,6 @@ mod tests {
         repo.upsert(&record).await.unwrap();
 
         let item = repo.get(&id).await.unwrap().unwrap();
-        assert_eq!(item.imported_at, 1_700_000_000);
-    }
-
-    /// Local→server UUID swap: the new server-keyed row inherits the local
-    /// row's `imported_at` rather than starting fresh, so the freshly
-    /// round-tripped asset stays in the Recent Imports view (#614).
-    #[tokio::test]
-    async fn upsert_preserves_imported_at_across_external_id_swap() {
-        let dir = tempdir().unwrap();
-        let (repo, _db) = test_repo(dir.path()).await;
-
-        let local_id = MediaId::new("local-uuid-eeeeeeeeeeeeeeeeeeee".to_string());
-        let server_id = MediaId::new("server-uuid-ffffffffffffffffffff".to_string());
-
-        let mut local = test_record(local_id.clone());
-        local.external_id = Some(server_id.as_str().to_string());
-        local.imported_at = 1_700_000_000;
-        repo.insert(&local).await.unwrap();
-
-        let mut from_server = test_record(server_id.clone());
-        from_server.external_id = Some(server_id.as_str().to_string());
-        from_server.imported_at = 1_400_000_000;
-        repo.upsert(&from_server).await.unwrap();
-
-        let item = repo.get(&server_id).await.unwrap().unwrap();
         assert_eq!(item.imported_at, 1_700_000_000);
     }
 

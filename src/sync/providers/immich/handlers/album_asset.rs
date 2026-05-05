@@ -84,21 +84,37 @@ impl SyncEntityHandler for AlbumAssetDeleteHandler {
             deserialize_entity(data, "AlbumToAssetDeleteV1", line_number)?;
         let id = format!("{}:{}", assoc.album_id, assoc.asset_id);
 
-        // Issue #626: translate Immich UUID → local MediaId before
-        // deleting. For legacy rows where `id == external_id` the
-        // translation is a no-op; for post-#626 rows it's required to
-        // match the locally-keyed album_media row. Falls back to the
-        // raw UUID if the parent media has already been deleted.
-        let media_key = ctx
+        // Issue #626: `assoc.asset_id` is the Immich UUID; the
+        // album_media row references the local `MediaId`. Translate
+        // before deleting. If the parent media row has already been
+        // removed locally, the album_media join row went with it via
+        // the manual cascade in `delete_permanently`, so there's
+        // nothing left to clean up — match the add-path's pattern of
+        // warn-and-skip rather than firing a delete with a key that
+        // can't possibly hit anything.
+        let media_id = match ctx
             .library
             .media()
             .id_by_external_id(&assoc.asset_id)
             .await?
-            .map(|m| m.as_str().to_string())
-            .unwrap_or_else(|| assoc.asset_id.clone());
+        {
+            Some(id) => id,
+            None => {
+                warn!(
+                    album_id = %assoc.album_id,
+                    asset_id = %assoc.asset_id,
+                    "AlbumToAssetDeleteV1: parent asset not found locally; nothing to delete"
+                );
+                return Ok(HandlerResult {
+                    entity_id: id,
+                    audit_action: "delete",
+                    counter: CounterKind::Deletes,
+                });
+            }
+        };
 
         ctx.db
-            .delete_album_media_entry(&assoc.album_id, &media_key)
+            .delete_album_media_entry(&assoc.album_id, media_id.as_str())
             .await?;
         ctx.library
             .albums()
