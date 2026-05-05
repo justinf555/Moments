@@ -1,3 +1,8 @@
+.PHONY: run run-dev dev-bootstrap dev clean clean-dev \
+        check test test-nextest test-integration test-all \
+        lint fmt fmt-check typos audit coverage metrics \
+        check-potfiles ci-all stack attach release
+
 run:
 	flatpak-builder --user --install --force-clean flatpak-build-dir io.github.justinf555.Moments.json && \
 	flatpak run io.github.justinf555.Moments
@@ -196,9 +201,29 @@ attach:
 	echo "attaching gdb to PID $$PID — type 'continue' to resume, 'detach' to release"; \
 	flatpak run --command=gdb org.gnome.Sdk//50 -p "$$PID"
 
+# ── i18n ────────────────────────────────────────────────────────────────────
+
+# Fail if any path listed in po/POTFILES.in is missing on disk.
+# Catches stale entries left behind after file moves or deletions —
+# the translation pipeline silently skips missing files, so this guard
+# is the only thing that surfaces the breakage.
+check-potfiles:
+	@missing=0; \
+	while IFS= read -r f; do \
+		case "$$f" in ''|'#'*) continue;; esac; \
+		if [ ! -e "$$f" ]; then \
+			echo "POTFILES.in: missing $$f" >&2; \
+			missing=$$((missing + 1)); \
+		fi; \
+	done < po/POTFILES.in; \
+	if [ "$$missing" -gt 0 ]; then \
+		echo "==> $$missing missing path(s) — regenerate po/POTFILES.in" >&2; \
+		exit 1; \
+	fi
+
 # ── Full CI locally ─────────────────────────────────────────────────────────
 
-ci-all: lint test test-integration audit
+ci-all: lint check-potfiles test test-integration audit
 
 # ── Release ───────────────────────────────────────────────────────────────────
 #

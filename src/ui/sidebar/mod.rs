@@ -89,7 +89,7 @@ mod imp {
 
             for route in ROUTES.iter() {
                 let mut builder = adw::SidebarItem::builder()
-                    .title(gettext(route.label))
+                    .title(route.label())
                     .icon_name(route.icon);
 
                 if route.id == "trash" {
