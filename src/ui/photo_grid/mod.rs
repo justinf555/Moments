@@ -16,6 +16,7 @@ pub mod action_bar;
 pub mod actions;
 pub mod cell;
 pub mod factory;
+pub mod selection;
 pub mod texture_cache;
 
 /// Available cell sizes (px), smallest to largest.
@@ -34,7 +35,10 @@ mod photo_grid_imp {
         pub scrolled: OnceCell<gtk::ScrolledWindow>,
         pub grid_view: OnceCell<gtk::GridView>,
         pub empty_page: OnceCell<adw::StatusPage>,
-        pub selection: RefCell<Option<gtk::MultiSelection>>,
+        /// App-owned selection set (#547). Mutated by checkbox toggle and
+        /// cell-body clicks while in selection mode; consumed by action
+        /// bar / context menu wiring; observed via the `changed` signal.
+        pub selection_state: super::selection::SelectionState,
         pub store: RefCell<Option<gio::ListStore>>,
         pub zoom_level: Cell<usize>,
         pub media_client: OnceCell<crate::client::MediaClientV2>,
@@ -53,7 +57,7 @@ mod photo_grid_imp {
                 scrolled: OnceCell::default(),
                 grid_view: OnceCell::default(),
                 empty_page: OnceCell::default(),
-                selection: RefCell::default(),
+                selection_state: super::selection::SelectionState::new(),
                 store: RefCell::default(),
                 zoom_level: Cell::new(DEFAULT_ZOOM_INDEX),
                 media_client: OnceCell::default(),
@@ -206,7 +210,7 @@ impl PhotoGrid {
         let filter = imp.filter.borrow().clone();
         let cache = imp.texture_cache().clone();
         let sm = Rc::clone(&imp.selection_mode);
-        let selection = imp.selection.borrow().clone().unwrap();
+        let state = imp.selection_state.clone();
         let enter = imp.enter_selection.borrow().clone().unwrap();
         grid_view.set_factory(Some(&factory::build_factory(
             self.current_cell_size(),
@@ -214,7 +218,7 @@ impl PhotoGrid {
             filter,
             cache,
             sm,
-            selection,
+            state,
             enter,
         )));
     }
@@ -238,11 +242,14 @@ impl PhotoGrid {
         let grid_view = imp.grid_view();
         let scrolled = imp.scrolled();
 
-        let selection = gtk::MultiSelection::new(Some(store.clone()));
-        grid_view.set_model(Some(&selection));
-        *imp.selection.borrow_mut() = Some(selection.clone());
+        // Issue #547: NoSelection disables GTK's native click-to-select
+        // so checkbox state is the single source of truth. Selection
+        // lives in `imp.selection_state`, keyed on `MediaId`.
+        let no_selection = gtk::NoSelection::new(Some(store.clone()));
+        grid_view.set_model(Some(&no_selection));
 
         let sm = Rc::clone(&imp.selection_mode);
+        let state = imp.selection_state.clone();
         let enter = imp.enter_selection.borrow().clone().unwrap();
         grid_view.set_factory(Some(&factory::build_factory(
             self.current_cell_size(),
@@ -250,7 +257,7 @@ impl PhotoGrid {
             filter.clone(),
             cache,
             sm,
-            selection.clone(),
+            state,
             enter,
         )));
 
@@ -287,12 +294,12 @@ impl PhotoGrid {
             });
         }
 
-        let selection_ref = selection.clone();
+        let store_ref = store.clone();
         grid_view.connect_activate(move |_, position| {
-            let n = selection_ref.n_items();
+            let n = store_ref.n_items();
             let items: Vec<MediaItemObject> = (0..n)
                 .filter_map(|i| {
-                    selection_ref
+                    store_ref
                         .item(i)
                         .and_then(|obj| obj.downcast::<MediaItemObject>().ok())
                 })
@@ -347,8 +354,9 @@ mod view_imp {
         pub photo_viewer: OnceCell<PhotoViewer>,
         pub video_viewer: OnceCell<VideoViewer>,
 
-        // Selection mode state
-        pub selection_mode: Rc<Cell<bool>>,
+        // Selection mode state — `selection_mode` itself lives on the
+        // inner PhotoGrid widget so the factory bind path and the
+        // outer enter/exit handlers share one Rc<Cell<bool>>. (#547)
         pub exit_selection: OnceCell<gio::SimpleAction>,
         pub selection_title: OnceCell<gtk::Label>,
         pub bar_box: OnceCell<gtk::Box>,
@@ -584,7 +592,11 @@ impl PhotoGridView {
         action_group.add_action(&zoom_out_action);
 
         // ── Selection mode actions ───────────────────────────────────────
-        let selection_mode = Rc::clone(&imp.selection_mode);
+        // The Rc<Cell<bool>> lives on the inner PhotoGrid widget so the
+        // factory bind path (which decides cell checkbox visibility)
+        // and the cell-body click gesture (which toggles selection
+        // ids) read the same flag we set here.
+        let selection_mode = Rc::clone(&imp.photo_grid.imp().selection_mode);
 
         let enter_selection = gio::SimpleAction::new("enter-selection", None);
         {
@@ -632,9 +644,10 @@ impl PhotoGridView {
                 imp.header.set_title_widget(None::<&gtk::Widget>);
                 imp.action_bar.set_revealed(false);
 
-                if let Some(ref sel) = *imp.photo_grid.imp().selection.borrow() {
-                    sel.unselect_all();
-                }
+                // Drop the app-owned selection set; visible cells re-paint
+                // via the SelectionState `changed` signal subscribed in
+                // factory::build_factory.
+                imp.photo_grid.imp().selection_state.clear();
 
                 let grid_view = imp.photo_grid.imp().grid_view();
                 grid_view.remove_css_class("selection-active");
@@ -737,16 +750,18 @@ impl PhotoGridView {
             },
         );
 
-        let selection = imp.photo_grid.imp().selection.borrow().clone().unwrap();
+        let state = imp.photo_grid.imp().selection_state.clone();
         let grid_view = imp.photo_grid.imp().grid_view().clone();
 
         let ctx = actions::ActionContext {
-            selection: selection.clone(),
+            state: state.clone(),
+            store: store.clone(),
             filter: filter.clone(),
             grid_view,
         };
 
         actions::wire_context_menu(&ctx);
+        actions::wire_selection_click(&ctx, Rc::clone(&imp.photo_grid.imp().selection_mode));
 
         // ── Build action bar buttons for this filter ────────────────────
         let bar_box = imp.bar_box();
@@ -754,7 +769,7 @@ impl PhotoGridView {
             bar_box.remove(&child);
         }
 
-        let bar_buttons = action_bar::build_for_filter(&filter, &ctx.selection);
+        let bar_buttons = action_bar::build_for_filter(&filter, &ctx.state, &ctx.store);
         bar_box.append(&bar_buttons.container);
         *imp.fav_btn.borrow_mut() = bar_buttons.fav_btn;
 
@@ -833,52 +848,53 @@ impl PhotoGridView {
 
         // ── Selection changed → update count, auto-exit ─────────────────
         {
-            let sm = Rc::clone(&imp.selection_mode);
+            let sm = Rc::clone(&imp.photo_grid.imp().selection_mode);
             let exit = imp.exit_selection().clone();
             let title = imp.selection_title().clone();
             let fav_btn = imp.fav_btn.borrow().clone();
-            selection.connect_selection_changed(move |sel, _, _| {
-                let count = sel.selection().size();
-                title.set_label(&selection_count_label(count));
+            let store_ref = store.clone();
+            state.connect_closure(
+                "changed",
+                false,
+                glib::closure_local!(move |s: selection::SelectionState| {
+                    let count = s.len() as u64;
+                    title.set_label(&selection_count_label(count));
 
-                if let Some(ref fav) = fav_btn {
-                    if count > 0 {
-                        let bitset = sel.selection();
-                        let all_fav = (0..bitset.size() as u32).all(|i| {
-                            sel.item(bitset.nth(i))
-                                .and_then(|o| o.downcast::<MediaItemObject>().ok())
-                                .map(|o| o.is_favorite())
-                                .unwrap_or(false)
-                        });
-                        actions::update_fav_button(fav, all_fav);
+                    if let Some(ref fav) = fav_btn {
+                        if count > 0 {
+                            let ids = s.ids();
+                            let all_fav = ids.iter().all(|id| {
+                                find_item_in_store(&store_ref, id)
+                                    .map(|o| o.is_favorite())
+                                    .unwrap_or(false)
+                            });
+                            actions::update_fav_button(fav, all_fav);
+                        }
                     }
-                }
 
-                if count == 0 && sm.get() {
-                    exit.activate(None);
-                }
-            });
+                    if count == 0 && sm.get() {
+                        exit.activate(None);
+                    }
+                }),
+            );
         }
     }
 }
 
-/// Collect media IDs from the current selection.
-pub(super) fn collect_selected_ids(
-    selection: &gtk::MultiSelection,
-) -> Vec<crate::library::media::MediaId> {
-    let bitset = selection.selection();
-    let n = bitset.size();
-    let mut ids = Vec::with_capacity(n as usize);
+/// Find a `MediaItemObject` in the store by id. Walks the store linearly.
+pub(super) fn find_item_in_store(
+    store: &gio::ListStore,
+    id: &crate::library::media::MediaId,
+) -> Option<MediaItemObject> {
+    let n = store.n_items();
     for i in 0..n {
-        let pos = bitset.nth(i as u32);
-        if let Some(obj) = selection
-            .item(pos)
-            .and_then(|o| o.downcast::<MediaItemObject>().ok())
-        {
-            ids.push(obj.item().id.clone());
+        if let Some(obj) = store.item(i).and_downcast::<MediaItemObject>() {
+            if &obj.item().id == id {
+                return Some(obj);
+            }
         }
     }
-    ids
+    None
 }
 
 /// Configure the empty state status page for the given filter.

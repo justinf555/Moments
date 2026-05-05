@@ -1,20 +1,20 @@
 /* ── Selection highlighting for the photo grid ────────────────────────────
  *
- * Custom rule because GtkGridView's default :selected styling is a full
- * background fill — we need a tight accent-coloured border around each
- * cell instead.  Only shown when the grid has the .selection-active class
- * (set by enter/exit selection mode).  Without the class, clicking cells
- * does not show a selection border — selection is driven by checkboxes.
+ * Selection is driven by checkboxes via the app-owned SelectionState
+ * (#547).  PhotoGridCell::set_checked toggles a `.selected` CSS class
+ * on the cell whenever its id is in the set.  These rules only paint
+ * during selection mode (the GridView gets `.selection-active` from
+ * enter/exit-selection) — outside selection mode the class is never
+ * applied because cells are never checked.
  */
-gridview.selection-active > child:selected photo-grid-cell {
+gridview.selection-active photo-grid-cell.selected {
     border: 3px solid @accent_bg_color;
     border-radius: 6px;
 }
 
-/* Custom rule: GTK's default :selected state does not dim the picture.
- * A subtle opacity reduction gives visual feedback that the cell is
- * selected without obscuring the image content. */
-gridview.selection-active > child:selected photo-grid-cell picture {
+/* Subtle opacity reduction on the picture itself reinforces the border
+ * without obscuring the image content. */
+gridview.selection-active photo-grid-cell.selected picture {
     opacity: 0.85;
 }
 

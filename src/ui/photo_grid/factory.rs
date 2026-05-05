@@ -11,6 +11,7 @@ use crate::client::{MediaClientV2, MediaItemObject};
 use crate::library::media::{MediaFilter, MediaItem};
 
 use super::cell::PhotoGridCell;
+use super::selection::SelectionState;
 use super::texture_cache::TextureCache;
 
 /// Concurrent thumbnail decodes: half of available cores, minimum 2.
@@ -30,7 +31,7 @@ pub fn build_factory(
     filter: MediaFilter,
     cache: Rc<TextureCache>,
     selection_mode: Rc<Cell<bool>>,
-    selection: gtk::MultiSelection,
+    state: SelectionState,
     enter_selection: gio::SimpleAction,
 ) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
@@ -56,7 +57,7 @@ pub fn build_factory(
         #[strong]
         selection_mode,
         #[strong]
-        selection,
+        state,
         #[strong]
         enter_selection,
         move |_, obj| {
@@ -69,15 +70,17 @@ pub fn build_factory(
                 .item()
                 .and_downcast::<MediaItemObject>()
                 .expect("item is MediaItemObject");
-            let position = list_item.position();
+            let media_id = item.item().id.clone();
 
             // Configure cell for the view type before binding.
             let is_trash = filter == MediaFilter::Trashed;
             cell.imp().show_star.set(!is_trash);
 
-            // Set checkbox state based on current selection mode.
+            // Set checkbox state from the app-owned SelectionState
+            // (#547). With NoSelection on the GridView, GTK no longer
+            // tracks per-row selection — `state` is the source of truth.
             cell.set_selection_mode(selection_mode.get());
-            cell.set_checked(list_item.is_selected());
+            cell.set_checked(state.contains(&media_id));
 
             cell.bind(&item);
 
@@ -184,10 +187,11 @@ pub fn build_factory(
                     .replace(handler_id);
             }
 
-            // Wire checkbox → select/deselect item + enter selection mode.
+            // Wire checkbox → mutate SelectionState + enter selection mode.
             {
                 let checkbox = cell.imp().checkbox.clone();
-                let sel = selection.clone();
+                let s = state.clone();
+                let id_for_checkbox = media_id.clone();
                 let enter = enter_selection.clone();
                 let sm = Rc::clone(&selection_mode);
                 let handler_id = checkbox.connect_toggled(move |cb| {
@@ -195,12 +199,35 @@ pub fn build_factory(
                         if !sm.get() {
                             enter.activate(None);
                         }
-                        sel.select_item(position, false);
+                        s.insert(id_for_checkbox.clone());
                     } else {
-                        sel.unselect_item(position);
+                        s.remove(&id_for_checkbox);
                     }
                 });
                 cell.imp().checkbox_handler.borrow_mut().replace(handler_id);
+            }
+
+            // Subscribe this cell to SelectionState changes so its
+            // checkbox reflects mutations from any source (other cells,
+            // exit-selection clearing, future select-all). Disconnect in
+            // unbind — the cell is recycled and a stale handler would
+            // fire against the wrong id.
+            {
+                let cell_weak = cell.downgrade();
+                let id_for_signal = media_id.clone();
+                let handler_id = state.connect_closure(
+                    "changed",
+                    false,
+                    glib::closure_local!(move |s: SelectionState| {
+                        if let Some(cell) = cell_weak.upgrade() {
+                            cell.set_checked(s.contains(&id_for_signal));
+                        }
+                    }),
+                );
+                cell.imp()
+                    .state_changed_handler
+                    .borrow_mut()
+                    .replace((state.clone(), handler_id));
             }
         }
     ));
@@ -216,6 +243,9 @@ pub fn build_factory(
         }
         if let Some(handler) = cell.imp().checkbox_handler.borrow_mut().take() {
             cell.imp().checkbox.disconnect(handler);
+        }
+        if let Some((state, handler)) = cell.imp().state_changed_handler.borrow_mut().take() {
+            state.disconnect(handler);
         }
         cell.unbind();
 

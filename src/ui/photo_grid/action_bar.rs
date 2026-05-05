@@ -6,12 +6,13 @@
 //! - **Album**: Favourite, Remove from album, Delete
 
 use adw::prelude::*;
+use gtk::gio;
 
 use crate::library::album::AlbumId;
 use crate::library::media::MediaFilter;
 
 use super::actions;
-use crate::client::MediaItemObject;
+use super::selection::SelectionState;
 
 /// The built action bar buttons and the container box.
 pub struct ActionBarButtons {
@@ -27,24 +28,28 @@ pub struct ActionBarButtons {
 /// Build action bar buttons appropriate for the given filter.
 ///
 /// Returns wired buttons ready to be placed in a `gtk::ActionBar`.
-pub fn build_for_filter(filter: &MediaFilter, selection: &gtk::MultiSelection) -> ActionBarButtons {
+pub fn build_for_filter(
+    filter: &MediaFilter,
+    state: &SelectionState,
+    store: &gio::ListStore,
+) -> ActionBarButtons {
     match filter {
-        MediaFilter::Trashed => build_trash_bar(selection),
-        MediaFilter::Album { album_id } => build_album_bar(selection, album_id),
-        _ => build_standard_bar(selection),
+        MediaFilter::Trashed => build_trash_bar(state),
+        MediaFilter::Album { album_id } => build_album_bar(state, store, album_id),
+        _ => build_standard_bar(state, store),
     }
 }
 
 // ── Standard: Favourite, Add to album, Delete ────────────────────────────────
 
-fn build_standard_bar(selection: &gtk::MultiSelection) -> ActionBarButtons {
+fn build_standard_bar(state: &SelectionState, store: &gio::ListStore) -> ActionBarButtons {
     let fav_btn = make_button("starred-symbolic", "Favourite");
     fav_btn.set_width_request(150);
     let album_btn = make_button("folder-new-symbolic", "Add to album");
     let trash_btn = make_button("user-trash-symbolic", "Delete");
 
-    wire_favourite(&fav_btn, selection);
-    wire_trash(&trash_btn, selection);
+    wire_favourite(&fav_btn, state, store);
+    wire_trash(&trash_btn, state);
 
     let container = bar_container();
     container.append(&fav_btn);
@@ -60,12 +65,12 @@ fn build_standard_bar(selection: &gtk::MultiSelection) -> ActionBarButtons {
 
 // ── Trash: Restore, Delete permanently ───────────────────────────────────────
 
-fn build_trash_bar(selection: &gtk::MultiSelection) -> ActionBarButtons {
+fn build_trash_bar(state: &SelectionState) -> ActionBarButtons {
     let restore_btn = make_button("edit-undo-symbolic", "Restore");
     let delete_btn = make_button("edit-delete-symbolic", "Delete permanently");
 
-    wire_restore(&restore_btn, selection);
-    wire_delete_permanently(&delete_btn, selection);
+    wire_restore(&restore_btn, state);
+    wire_delete_permanently(&delete_btn, state);
 
     let container = bar_container();
     container.append(&restore_btn);
@@ -80,15 +85,19 @@ fn build_trash_bar(selection: &gtk::MultiSelection) -> ActionBarButtons {
 
 // ── Album: Favourite, Remove from album, Delete ──────────────────────────────
 
-fn build_album_bar(selection: &gtk::MultiSelection, album_id: &AlbumId) -> ActionBarButtons {
+fn build_album_bar(
+    state: &SelectionState,
+    store: &gio::ListStore,
+    album_id: &AlbumId,
+) -> ActionBarButtons {
     let fav_btn = make_button("starred-symbolic", "Favourite");
     fav_btn.set_width_request(150);
     let remove_btn = make_button("list-remove-symbolic", "Remove from album");
     let trash_btn = make_button("user-trash-symbolic", "Delete");
 
-    wire_favourite(&fav_btn, selection);
-    wire_remove_from_album(&remove_btn, selection, album_id);
-    wire_trash(&trash_btn, selection);
+    wire_favourite(&fav_btn, state, store);
+    wire_remove_from_album(&remove_btn, state, album_id);
+    wire_trash(&trash_btn, state);
 
     let container = bar_container();
     container.append(&fav_btn);
@@ -128,18 +137,23 @@ fn bar_container() -> gtk::Box {
 
 // ── Wiring ───────────────────────────────────────────────────────────────────
 
-fn wire_favourite(btn: &gtk::Button, selection: &gtk::MultiSelection) {
-    let sel = selection.clone();
+fn wire_favourite(btn: &gtk::Button, state: &SelectionState, store: &gio::ListStore) {
+    let s = state.clone();
+    let st = store.clone();
     let btn_ref = btn.clone();
     btn.connect_clicked(move |_| {
-        let ids = super::collect_selected_ids(&sel);
-        if ids.is_empty() {
+        let ids = s.ids();
+        let Some(first_id) = ids.first() else {
             return;
-        }
+        };
 
-        let first_fav = sel
-            .item(sel.selection().nth(0))
-            .and_then(|o| o.downcast::<MediaItemObject>().ok())
+        // Toggle direction is decided by the first selected item's
+        // current favourite state — same as the legacy MultiSelection
+        // path. With NoSelection there's no order from GTK, so "first"
+        // here is HashSet iteration order; for the toggle direction
+        // this matches the legacy semantics of "do the opposite of
+        // whatever the lead item shows".
+        let first_fav = super::find_item_in_store(&st, first_id)
             .map(|o| o.is_favorite())
             .unwrap_or(false);
         let new_state = !first_fav;
@@ -151,10 +165,10 @@ fn wire_favourite(btn: &gtk::Button, selection: &gtk::MultiSelection) {
     });
 }
 
-fn wire_trash(btn: &gtk::Button, selection: &gtk::MultiSelection) {
-    let sel = selection.clone();
+fn wire_trash(btn: &gtk::Button, state: &SelectionState) {
+    let s = state.clone();
     btn.connect_clicked(move |_| {
-        let ids = super::collect_selected_ids(&sel);
+        let ids = s.ids();
         if ids.is_empty() {
             return;
         }
@@ -164,10 +178,10 @@ fn wire_trash(btn: &gtk::Button, selection: &gtk::MultiSelection) {
     });
 }
 
-fn wire_restore(btn: &gtk::Button, selection: &gtk::MultiSelection) {
-    let sel = selection.clone();
+fn wire_restore(btn: &gtk::Button, state: &SelectionState) {
+    let s = state.clone();
     btn.connect_clicked(move |_| {
-        let ids = super::collect_selected_ids(&sel);
+        let ids = s.ids();
         if ids.is_empty() {
             return;
         }
@@ -177,10 +191,10 @@ fn wire_restore(btn: &gtk::Button, selection: &gtk::MultiSelection) {
     });
 }
 
-fn wire_delete_permanently(btn: &gtk::Button, selection: &gtk::MultiSelection) {
-    let sel = selection.clone();
+fn wire_delete_permanently(btn: &gtk::Button, state: &SelectionState) {
+    let s = state.clone();
     btn.connect_clicked(move |btn| {
-        let ids = super::collect_selected_ids(&sel);
+        let ids = s.ids();
         if ids.is_empty() {
             return;
         }
@@ -218,11 +232,11 @@ fn wire_delete_permanently(btn: &gtk::Button, selection: &gtk::MultiSelection) {
     });
 }
 
-fn wire_remove_from_album(btn: &gtk::Button, selection: &gtk::MultiSelection, album_id: &AlbumId) {
-    let sel = selection.clone();
+fn wire_remove_from_album(btn: &gtk::Button, state: &SelectionState, album_id: &AlbumId) {
+    let s = state.clone();
     let aid = album_id.clone();
     btn.connect_clicked(move |_| {
-        let ids = super::collect_selected_ids(&sel);
+        let ids = s.ids();
         if ids.is_empty() {
             return;
         }
