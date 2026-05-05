@@ -41,6 +41,7 @@ impl SyncEntityHandler for AssetExifHandler {
                 );
                 return Ok(HandlerResult {
                     entity_id: id,
+                    local_media_id: None,
                     audit_action: "upsert",
                     counter: CounterKind::Exifs,
                 });
@@ -66,6 +67,7 @@ impl SyncEntityHandler for AssetExifHandler {
 
         Ok(HandlerResult {
             entity_id: id,
+            local_media_id: None,
             audit_action: "upsert",
             counter: CounterKind::Exifs,
         })

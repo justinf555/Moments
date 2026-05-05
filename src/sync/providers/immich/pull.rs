@@ -230,7 +230,10 @@ impl PullManager {
                 match handler.handle(&sync_line.data, line_number, &ctx).await {
                     Ok(result) => {
                         if let Some(aid) = audit_id {
-                            let _ = self.db.complete_sync_audit(aid, result.audit_action).await;
+                            let _ = self
+                                .db
+                                .complete_sync_audit(aid, &result.entity_id, result.audit_action)
+                                .await;
                         }
                         acks.push(sync_line.ack);
                         counters.increment(result.counter);
@@ -246,11 +249,21 @@ impl PullManager {
                             notified_processing = true;
                         }
 
-                        // Track asset IDs for reset orphan detection.
-                        if let Some(ref mut ids) = existing_ids {
-                            if !result.entity_id.is_empty() {
-                                ids.remove(&result.entity_id);
-                            }
+                        // Issue #628: track *local* MediaIds for reset
+                        // orphan detection. `existing_ids` is loaded
+                        // from `media.id` (local namespace); only
+                        // AssetHandler / AssetDeleteHandler populate
+                        // `local_media_id` and they're the only
+                        // handlers whose results affect orphan
+                        // tracking. Removing by `entity_id` (the
+                        // Immich UUID) — as the previous version did —
+                        // never matched anything, leaving every local
+                        // row classified as orphaned and silently
+                        // wiping the library on a `SyncResetV1`.
+                        if let (Some(ref mut ids), Some(local)) =
+                            (existing_ids.as_mut(), result.local_media_id.as_deref())
+                        {
+                            ids.remove(local);
                         }
                     }
                     Err(e) => {
@@ -381,6 +394,91 @@ mod tests {
     use crate::library::db::test_helpers::{open_test_db, test_record};
     use crate::library::media::MediaId;
 
+    use super::handlers::{CounterKind, HandlerResult};
+
+    /// Drive the same `(existing_ids, result) → existing_ids` reduction
+    /// the dispatch loop does. Mirrors the conditional in
+    /// `run_sync` so a contract test can assert the namespace
+    /// invariant without spinning up an HTTP-backed sync stream.
+    fn apply_handler_result(existing_ids: &mut Option<HashSet<String>>, result: &HandlerResult) {
+        if let (Some(ids), Some(local)) = (existing_ids.as_mut(), result.local_media_id.as_deref())
+        {
+            ids.remove(local);
+        }
+    }
+
+    fn asset_result(entity_id: &str, local_media_id: &str) -> HandlerResult {
+        HandlerResult {
+            entity_id: entity_id.to_string(),
+            local_media_id: Some(local_media_id.to_string()),
+            audit_action: "upsert",
+            counter: CounterKind::Assets,
+        }
+    }
+
+    fn non_asset_result(entity_id: &str, kind: CounterKind) -> HandlerResult {
+        HandlerResult {
+            entity_id: entity_id.to_string(),
+            // Album / Face / Exif / Person handlers don't drive
+            // orphan tracking; their `local_media_id` is None.
+            local_media_id: None,
+            audit_action: "upsert",
+            counter: kind,
+        }
+    }
+
+    /// Issue #628: regression. After a `SyncResetV1`, the dispatch
+    /// loop must check seen assets off `existing_ids` using the
+    /// *local* `MediaId`, not the Immich UUID. With the old code
+    /// (removed by passing `result.entity_id`, which carried the
+    /// Immich UUID), the set never shrank and every locally-stored
+    /// asset got classified as orphaned and deleted in
+    /// `finish_sync`. This test pins the namespace.
+    #[test]
+    fn orphan_tracking_uses_local_media_id_not_immich_uuid() {
+        let mut existing: Option<HashSet<String>> = Some(
+            ["local-a", "local-b", "local-c", "local-d"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+        );
+
+        // Stream re-emits assets a and c (both with Immich UUIDs that
+        // are deliberately *different* from the local ids the rows
+        // were stored under — exactly the gap the bug exploited).
+        apply_handler_result(&mut existing, &asset_result("immich-1", "local-a"));
+        apply_handler_result(&mut existing, &asset_result("immich-2", "local-c"));
+        // Album-membership and face entities arrive too; these must
+        // not affect orphan tracking.
+        apply_handler_result(
+            &mut existing,
+            &non_asset_result("immich-album:immich-1", CounterKind::Albums),
+        );
+        apply_handler_result(
+            &mut existing,
+            &non_asset_result("immich-face-x", CounterKind::Faces),
+        );
+
+        let remaining = existing.expect("set still present");
+        let expected: HashSet<String> = ["local-b", "local-d"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        assert_eq!(
+            remaining, expected,
+            "orphan set must contain only rows the stream did not re-emit"
+        );
+    }
+
+    /// Sanity: when the server doesn't request a reset, `existing_ids`
+    /// is `None` and handler results don't try to mutate it.
+    #[test]
+    fn apply_handler_result_no_op_when_not_in_reset() {
+        let mut existing: Option<HashSet<String>> = None;
+        apply_handler_result(&mut existing, &asset_result("any", "local-x"));
+        assert!(existing.is_none());
+    }
+
     // ── SyncCounters ───────────────────────────────────────────────
 
     #[test]
@@ -420,16 +518,22 @@ mod tests {
             .unwrap();
         assert!(row_id > 0);
 
-        db.complete_sync_audit(row_id, "upsert").await.unwrap();
+        db.complete_sync_audit(row_id, "uuid-1", "upsert")
+            .await
+            .unwrap();
 
-        let row: (String, Option<String>) =
-            sqlx::query_as("SELECT action, completed_at FROM sync_audit WHERE id = ?")
+        let row: (String, Option<String>, String) =
+            sqlx::query_as("SELECT action, completed_at, entity_id FROM sync_audit WHERE id = ?")
                 .bind(row_id)
                 .fetch_one(db.pool())
                 .await
                 .unwrap();
         assert_eq!(row.0, "upsert");
         assert!(row.1.is_some());
+        assert_eq!(
+            row.2, "uuid-1",
+            "complete_sync_audit must record the entity_id so the audit log isn't blank"
+        );
     }
 
     #[tokio::test]
