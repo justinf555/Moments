@@ -57,6 +57,12 @@ impl SyncStateRepository {
     /// Record the start of processing one sync record. Returns the row
     /// id, which the caller passes to [`complete_audit`] / [`fail_audit`]
     /// once the line is settled.
+    ///
+    /// The row is inserted with `action = 'started'` as a sentinel.
+    /// `complete_audit` overwrites it with the actual action ("upsert" /
+    /// "delete" / "reset" / …) and `fail_audit` overwrites it with
+    /// "error". A row left on `'started'` is the post-mortem signal for
+    /// a crash between `start_audit` and the settling call.
     pub async fn start_audit(
         &self,
         entity_type: &str,
@@ -66,7 +72,7 @@ impl SyncStateRepository {
         let now = chrono::Utc::now().to_rfc3339();
         let result = sqlx::query(
             "INSERT INTO sync_audit (entity_type, entity_id, action, started_at, sync_cycle)
-             VALUES (?, ?, 'upsert', ?, ?)",
+             VALUES (?, ?, 'started', ?, ?)",
         )
         .bind(entity_type)
         .bind(entity_id)

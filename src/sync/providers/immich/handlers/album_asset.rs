@@ -81,7 +81,6 @@ impl SyncEntityHandler for AlbumAssetHandler {
             .albums()
             .upsert_album_membership(&album_id, &media_id, now)
             .await?;
-        ctx.library.albums().emit_album_media_changed(&album_id);
 
         Ok(HandlerResult {
             entity_id: id,
@@ -166,7 +165,6 @@ impl SyncEntityHandler for AlbumAssetDeleteHandler {
             .albums()
             .delete_album_membership(&album_id, &media_id)
             .await?;
-        ctx.library.albums().emit_album_media_changed(&album_id);
 
         Ok(HandlerResult {
             entity_id: id,

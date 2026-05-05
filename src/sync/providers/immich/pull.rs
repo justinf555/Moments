@@ -359,12 +359,18 @@ impl PullManager {
 
             // Save checkpoints after each successful chunk so that a
             // failure in a later chunk doesn't lose already-acked progress.
+            //
+            // Ack format is `entity_type|cursor`. `split('|').next()` is
+            // infallible (returns the whole string when the separator is
+            // absent), so we don't gate the insert on `if let Some`. A
+            // malformed ack would key the checkpoint by the whole string
+            // and the next sync cycle would resume from there — degraded
+            // but not incorrect.
             let mut checkpoints: std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
             for ack in chunk {
-                if let Some(entity_type) = ack.split('|').next() {
-                    checkpoints.insert(entity_type.to_string(), ack.clone());
-                }
+                let entity_type = ack.split('|').next().unwrap_or(ack.as_str());
+                checkpoints.insert(entity_type.to_string(), ack.clone());
             }
             let pairs: Vec<(String, String)> = checkpoints.into_iter().collect();
             self.state.save_checkpoints(&pairs).await?;
