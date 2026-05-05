@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use tracing::instrument;
+use tracing::{instrument, warn};
 
 use crate::library::error::LibraryError;
 use crate::library::faces::repository::AssetFaceRow;
@@ -25,9 +25,33 @@ impl SyncEntityHandler for AssetFaceHandler {
         let face: SyncAssetFaceV1 = deserialize_entity(data, "AssetFaceV1", line_number)?;
         let id = face.id.clone();
 
+        // Issue #626: `face.asset_id` is the Immich UUID; `asset_faces.asset_id`
+        // references the local `MediaId`. Translate via `external_id` lookup;
+        // skip with a warning if the parent asset hasn't been processed yet.
+        let local_asset_id = match ctx
+            .library
+            .media()
+            .id_by_external_id(&face.asset_id)
+            .await?
+        {
+            Some(local) => local.as_str().to_string(),
+            None => {
+                warn!(
+                    face_id = %face.id,
+                    asset_id = %face.asset_id,
+                    "AssetFaceV1: parent asset not found locally; skipping face row"
+                );
+                return Ok(HandlerResult {
+                    entity_id: id,
+                    audit_action: "upsert",
+                    counter: CounterKind::Faces,
+                });
+            }
+        };
+
         let row = AssetFaceRow {
             id: face.id,
-            asset_id: face.asset_id,
+            asset_id: local_asset_id,
             person_id: face.person_id.clone(),
             image_width: face.image_width,
             image_height: face.image_height,

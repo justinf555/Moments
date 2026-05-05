@@ -135,6 +135,29 @@ impl MediaService {
         self.repo.exists(id).await
     }
 
+    /// Translate an `external_id` (e.g. an Immich asset UUID) to the local
+    /// [`MediaId`] under which the row is stored, if any.
+    pub async fn id_by_external_id(
+        &self,
+        external_id: &str,
+    ) -> Result<Option<MediaId>, LibraryError> {
+        self.repo.id_by_external_id(external_id).await
+    }
+
+    /// Find a locally-imported row by `content_hash` that has not yet
+    /// been pushed (i.e. has no `external_id`). Used by the sync handler
+    /// to adopt a local row when push hasn't finished stamping the
+    /// server id by the time the same asset arrives over the pull
+    /// stream — see [`MediaRepository::id_by_content_hash_pending_push`].
+    pub async fn id_by_content_hash_pending_push(
+        &self,
+        content_hash: &str,
+    ) -> Result<Option<MediaId>, LibraryError> {
+        self.repo
+            .id_by_content_hash_pending_push(content_hash)
+            .await
+    }
+
     /// Check if an asset with this content hash already exists (dedup).
     pub async fn exists_by_content_hash(&self, hash: &str) -> Result<bool, LibraryError> {
         self.repo.exists_by_content_hash(hash).await
@@ -361,6 +384,75 @@ mod tests {
         let events = drain(&mut rx).await;
         assert_eq!(events.len(), 1);
         assert!(matches!(&events[0], MediaEvent::Added(ids) if ids.len() == 1));
+    }
+
+    /// Sync-then-import dedup: when Immich pulls down an asset with a
+    /// `checksum` (SHA-1 base64), it lands in `content_hash`. A local
+    /// import of the same bytes hashes to the same value, so the
+    /// importer's `exists_by_content_hash` check rejects it as a
+    /// duplicate — no second row, no parallel upload, no UNIQUE-index
+    /// collision when push later tries to stamp `external_id`.
+    #[tokio::test]
+    async fn exists_by_content_hash_matches_immich_pulled_row() {
+        let (_dir, svc) = make_service().await;
+
+        let server_id = MediaId::new("server-uuid-aaaaaaaaaaaaaaaaaaaaaa".to_string());
+        let mut server_row =
+            record_with_taken_at(server_id.clone(), "server/photo.jpg", Some(1_000));
+        server_row.external_id = Some("immich-uuid".to_string());
+        // SHA-1 base64 of "abc" — same value the importer would compute
+        // for an identical file.
+        server_row.content_hash = Some("qZk+NkcGgWq6PiVxeFDCbJzQ2J0=".to_string());
+        svc.upsert_media(&server_row).await.unwrap();
+
+        let dup = svc
+            .exists_by_content_hash("qZk+NkcGgWq6PiVxeFDCbJzQ2J0=")
+            .await
+            .unwrap();
+        assert!(dup, "importer must see the pulled row as a duplicate");
+
+        let miss = svc
+            .exists_by_content_hash("aGVsbG8gd29ybGQ=")
+            .await
+            .unwrap();
+        assert!(!miss, "an unrelated hash must not match");
+    }
+
+    /// Issue #626: with the stable-MediaId sync handler, an upload→pull
+    /// round-trip no longer swaps the row's primary key. The handler
+    /// looks up by `external_id`, finds the existing local row, and
+    /// upserts using its locally-owned id. The service must emit a
+    /// single `Updated` — no `Replaced`, no `Removed`+`Added` churn.
+    #[tokio::test]
+    async fn upsert_media_emits_updated_when_round_tripped_via_external_id() {
+        let (_dir, svc) = make_service().await;
+        let mut rx = svc.subscribe();
+
+        let local_id = MediaId::new("local-uuid-aaaaaaaaaaaaaaaaaaaaaaaa".to_string());
+        let server_id = "server-uuid-bbbbbbbbbbbbbbbbbbbbb".to_string();
+
+        // Local import; push has stamped the server UUID as external_id.
+        let mut local = record_with_taken_at(local_id.clone(), "local/photo.jpg", Some(1_000));
+        local.external_id = Some(server_id.clone());
+        svc.insert_media(&local).await.unwrap();
+        let _ = drain(&mut rx).await; // drop the Added event from import
+
+        // Pull-sync now arrives. The new handler resolves external_id →
+        // local_id and reuses it as the record's primary key.
+        let resolved = svc.id_by_external_id(&server_id).await.unwrap();
+        assert_eq!(resolved.as_ref(), Some(&local_id));
+
+        let mut from_server =
+            record_with_taken_at(local_id.clone(), "local/photo.jpg", Some(1_000));
+        from_server.external_id = Some(server_id.clone());
+        svc.upsert_media(&from_server).await.unwrap();
+
+        let events = drain(&mut rx).await;
+        assert_eq!(events.len(), 1, "expected single Updated; got {events:?}");
+        match &events[0] {
+            MediaEvent::Updated(ids) => assert_eq!(ids, &[local_id]),
+            other => panic!("expected Updated; got {other:?}"),
+        }
     }
 
     /// Re-syncing an asset that already exists by id emits a single

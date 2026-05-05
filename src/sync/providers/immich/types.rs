@@ -47,6 +47,13 @@ pub(crate) struct SyncAssetV1 {
     pub width: Option<i64>,
     pub height: Option<i64>,
     pub duration: Option<String>,
+    /// SHA-1 of the file's bytes, base64-encoded. Stored verbatim into
+    /// `media.content_hash` so locally-imported and server-pulled rows
+    /// share a comparable dedup key. Optional in the serde shape so
+    /// older Immich versions (pre-checksum-on-stream) don't break
+    /// deserialisation; when absent, sync rows still work but won't
+    /// participate in cross-origin dedup.
+    pub checksum: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -284,7 +291,8 @@ mod tests {
             "isFavorite": true,
             "width": 4032,
             "height": 3024,
-            "duration": null
+            "duration": null,
+            "checksum": "qZk+NkcGgWq6PiVxeFDCbJzQ2J0="
         });
 
         let asset: SyncAssetV1 = serde_json::from_value(json).unwrap();
@@ -296,6 +304,31 @@ mod tests {
         assert_eq!(asset.width, Some(4032));
         assert_eq!(asset.height, Some(3024));
         assert!(asset.duration.is_none());
+        assert_eq!(
+            asset.checksum.as_deref(),
+            Some("qZk+NkcGgWq6PiVxeFDCbJzQ2J0=")
+        );
+    }
+
+    /// Older Immich versions (pre-checksum-on-stream) don't emit the
+    /// `checksum` field — deserialisation must still succeed and leave
+    /// the field as `None` rather than failing the whole sync line.
+    #[test]
+    fn deserialize_sync_asset_v1_without_checksum_is_optional() {
+        let json = serde_json::json!({
+            "id": "uuid-noosum",
+            "originalFileName": "old.jpg",
+            "fileCreatedAt": "2024-01-01T00:00:00.000Z",
+            "localDateTime": null,
+            "type": "IMAGE",
+            "deletedAt": null,
+            "isFavorite": false,
+            "width": null,
+            "height": null,
+            "duration": null
+        });
+        let asset: SyncAssetV1 = serde_json::from_value(json).unwrap();
+        assert!(asset.checksum.is_none());
     }
 
     #[test]

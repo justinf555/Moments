@@ -154,6 +154,48 @@ metrics:
 	@rust-code-analysis-cli --metrics -O json -p src/ 2>/dev/null | \
 	python3 scripts/complexity-report.py
 
+# ── Debug a hung process ────────────────────────────────────────────────────
+#
+# Usage: make stack [PID=<pid>]
+#
+# When the dev app hangs (no CPU activity, no log progress), this target
+# attaches gdb from the GNOME SDK runtime and dumps a 30-frame backtrace
+# for every thread. Auto-detects the PID by matching the dev app id; pass
+# PID=… explicitly if more than one moments process is running.
+#
+# Example: a CR2 import sat forever on `typefind:sink`; `make stack` over
+# the same process showed `gst::Pipeline::set_state` / `pull_sample` in
+# seconds and named the deadlock unambiguously.
+
+stack:
+	@PID="$${PID:-$$(pgrep -f io.github.justinf555.Moments.Devel | tail -1)}"; \
+	if [ -z "$$PID" ]; then \
+		echo "no PID given and no Moments.Devel process found" >&2; exit 1; \
+	fi; \
+	echo "===== thread backtraces for PID $$PID ====="; \
+	flatpak run --command=gdb org.gnome.Sdk//50 -p "$$PID" \
+		-ex 'set pagination off' \
+		-ex 'thread apply all bt 30' \
+		-ex quit 2>&1 | grep -v '^\[New '
+
+# Attach an interactive gdb session to a running dev app. The dev binary
+# is built with debug symbols, so Rust function names tab-complete:
+#
+#   (gdb) break moments::importer::pipeline::ImportPipeline::import_one
+#   (gdb) break src/renderer/format/registry.rs:99
+#   (gdb) continue
+#   (gdb) bt        # when it stops
+#   (gdb) detach    # let the app run free again
+#
+# Auto-detects the dev app's PID; pass PID=… to override.
+attach:
+	@PID="$${PID:-$$(pgrep -f io.github.justinf555.Moments.Devel | tail -1)}"; \
+	if [ -z "$$PID" ]; then \
+		echo "no PID given and no Moments.Devel process found" >&2; exit 1; \
+	fi; \
+	echo "attaching gdb to PID $$PID — type 'continue' to resume, 'detach' to release"; \
+	flatpak run --command=gdb org.gnome.Sdk//50 -p "$$PID"
+
 # ── Full CI locally ─────────────────────────────────────────────────────────
 
 ci-all: lint test test-integration audit

@@ -45,6 +45,24 @@ pub trait FormatHandler: Send + Sync {
     /// thumbnail is needed; handlers may ignore it if they have only one
     /// decode path.
     fn decode(&self, path: &Path, hint: DecodeHint) -> Result<image::DynamicImage, RenderError>;
+
+    /// Whether this handler is safe to invoke *speculatively* — i.e.
+    /// when the registry has fallen back to "try every handler" because
+    /// the magic-byte handler errored out (e.g. a TIFF-headered CR2
+    /// file).
+    ///
+    /// Defaults to `true`. Handlers that wrap external pipelines whose
+    /// failure modes can hang the calling thread (rather than returning
+    /// a quick `Err`) must override this to `false`. Such handlers are
+    /// still reachable through extension and magic-byte matches; they
+    /// just won't be tried blindly on unidentified data.
+    ///
+    /// See `VideoHandler` — GStreamer's `uridecodebin`/`typefind`
+    /// probe can sit forever waiting for buffers when handed input it
+    /// doesn't recognise.
+    fn fallback_safe(&self) -> bool {
+        true
+    }
 }
 
 /// Single source of truth for all supported image formats.
@@ -94,9 +112,17 @@ impl FormatRegistry {
             match handler.decode(path, hint) {
                 Ok(img) => return Ok(img),
                 Err(_) => {
-                    // Magic-byte match failed (e.g. TIFF header but actually
-                    // a RAW format). Try all other handlers.
+                    // Magic-byte match failed (e.g. TIFF header but the
+                    // file is actually a CR2 — Canon's TIFF-derived RAW
+                    // format). Try every other *fallback-safe* handler
+                    // until one succeeds. We deliberately exclude
+                    // handlers whose decode path can hang on
+                    // unidentified input — see `fallback_safe` and
+                    // `VideoHandler` for context.
                     for other in self.handlers.values() {
+                        if !other.fallback_safe() {
+                            continue;
+                        }
                         if let Ok(img) = other.decode(path, hint) {
                             return Ok(img);
                         }
@@ -223,6 +249,30 @@ mod tests {
         }
     }
 
+    /// Stand-in for a hang-prone handler (e.g. `VideoHandler` wrapping
+    /// GStreamer). The test asserts that the registry's blind
+    /// fallback iteration *never* invokes its `decode` — the symptom
+    /// would be a hung importer thread parked inside `typefind:sink`.
+    struct UnsafeFallbackHandler {
+        invoked: Arc<Mutex<bool>>,
+    }
+    impl FormatHandler for UnsafeFallbackHandler {
+        fn extensions(&self) -> &[&str] {
+            &["unsafe"]
+        }
+        fn decode(
+            &self,
+            _path: &Path,
+            _hint: DecodeHint,
+        ) -> Result<image::DynamicImage, RenderError> {
+            *self.invoked.lock().unwrap() = true;
+            Err(RenderError::DecodeFailed("unsafe-fallback".into()))
+        }
+        fn fallback_safe(&self) -> bool {
+            false
+        }
+    }
+
     /// Records the hint passed to `decode` so tests can assert it.
     struct RecordingHandler {
         last_hint: Arc<Mutex<Option<DecodeHint>>>,
@@ -330,6 +380,57 @@ mod tests {
 
         let _ = reg.decode(&PathBuf::from("photo.rec"), DecodeHint::Full);
         assert_eq!(*last_hint.lock().unwrap(), Some(DecodeHint::Full));
+    }
+
+    /// Regression for the CR2 import hang: when the magic-byte handler
+    /// errors out, the registry's blind retry loop must not invoke a
+    /// handler that has opted out of speculative dispatch. Otherwise
+    /// `VideoHandler` (wrapping GStreamer's `typefind`) would sit
+    /// forever on a TIFF-headered CR2 file.
+    /// Always-erroring stand-in for `StandardHandler` so we can drive
+    /// the registry into its "magic match → decode failed → blind
+    /// retry" path with a controlled handler set.
+    struct ErroringJpegHandler;
+    impl FormatHandler for ErroringJpegHandler {
+        fn extensions(&self) -> &[&str] {
+            &["jpg"]
+        }
+        fn decode(
+            &self,
+            _path: &Path,
+            _hint: DecodeHint,
+        ) -> Result<image::DynamicImage, RenderError> {
+            Err(RenderError::DecodeFailed("forced fail".into()))
+        }
+    }
+
+    #[test]
+    fn fallback_iteration_skips_handlers_that_opt_out() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let invoked = Arc::new(Mutex::new(false));
+        let mut reg = FormatRegistry::new();
+        // ErroringJpegHandler claims "jpg" so JPEG magic-byte matching
+        // picks it; its decode errors out, triggering the blind
+        // fallback iteration.
+        reg.register(Arc::new(ErroringJpegHandler));
+        reg.register(Arc::new(UnsafeFallbackHandler {
+            invoked: Arc::clone(&invoked),
+        }));
+
+        let mut f = NamedTempFile::with_suffix(".jpg").unwrap();
+        f.write_all(&[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10]).unwrap();
+        f.flush().unwrap();
+
+        // We don't care about the eventual error — only that
+        // `UnsafeFallbackHandler::decode` is never reached.
+        let _ = reg.decode(f.path(), DecodeHint::Thumbnail);
+
+        assert!(
+            !*invoked.lock().unwrap(),
+            "fallback-unsafe handler must not be invoked during blind retry"
+        );
     }
 
     #[test]

@@ -27,7 +27,6 @@ futures-util = "0.3"
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
-blake3 = "1"
 
 # Observability
 tracing = "0.1"
@@ -57,9 +56,14 @@ serde_json = "1"
 libsecret = "0.9"
 
 # Utilities
-# Used for Immich protocol compatibility (asset deduplication checksums).
-# Not used for any security function.
+# Content hashing for dedup. SHA-1 + base64 matches Immich's `checksum`
+# wire format, so locally-imported and server-pulled rows share the
+# same `media.content_hash` column and dedup symmetrically (#626 fix).
+# SHA-1 is sufficient for accidental-collision detection in a personal
+# photo library — `content_hash` is never the asset's identity (that's
+# a UUID), so this is not a security-sensitive use of the algorithm.
 sha1 = "0.10"
+base64 = "0.22"
 thiserror = "2"
 chrono = "0.4"
 uuid = { version = "1", features = ["v4"] }

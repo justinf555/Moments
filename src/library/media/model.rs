@@ -135,7 +135,12 @@ pub struct MediaCursor {
 #[derive(Debug, Clone)]
 pub struct MediaRecord {
     pub id: MediaId,
-    /// BLAKE3 content hash (64-char hex). Used for dedup, not identity.
+    /// SHA-1 content hash, base64-encoded — matches Immich's wire format.
+    /// Used for dedup, not identity. Local imports compute this from the
+    /// file bytes; sync-origin rows take it from the Immich `AssetV1`
+    /// stream's `checksum` field. Symmetric format means a file pulled
+    /// from Immich and then re-imported locally is rejected as a dup
+    /// without needing to download the original.
     pub content_hash: Option<String>,
     /// Immich server UUID. Set when synced with an Immich server.
     pub external_id: Option<String>,

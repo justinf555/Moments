@@ -1,13 +1,21 @@
 use std::path::Path;
 
+use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine;
+use sha1::{Digest, Sha1};
 use tracing::instrument;
 
 use super::error::ImportError;
 
-/// Compute the BLAKE3 content hash of a file.
+/// Compute the SHA-1 content hash of a file, base64-encoded.
 ///
-/// Returns a 64-char lowercase hex string. Used for deduplication —
-/// not as the asset's identity (which is a UUID).
+/// Matches Immich's `checksum` wire format byte-for-byte so that
+/// locally-imported and server-pulled rows share a single `content_hash`
+/// column and can dedup symmetrically (issue #626 follow-up).
+///
+/// Used for deduplication only — never as the asset's identity (which is
+/// a UUID). SHA-1 is sufficient for accidental-collision detection in a
+/// personal photo library; we are not in an adversarial threat model.
 ///
 /// Runs on a blocking thread via [`tokio::task::spawn_blocking`] so the
 /// async executor stays free during the streaming hash. Large video files
@@ -18,9 +26,10 @@ pub async fn hash_file(path: &Path) -> Result<String, ImportError> {
     tokio::task::spawn_blocking(move || -> Result<String, ImportError> {
         let file = std::fs::File::open(&path).map_err(ImportError::Io)?;
         let mut reader = std::io::BufReader::new(file);
-        let mut hasher = blake3::Hasher::new();
+        let mut hasher = Sha1::new();
         std::io::copy(&mut reader, &mut hasher).map_err(ImportError::Io)?;
-        Ok(hasher.finalize().to_hex().to_string())
+        let digest = hasher.finalize();
+        Ok(B64.encode(digest))
     })
     .await
     .map_err(|e| ImportError::Runtime(e.to_string()))?
@@ -56,13 +65,17 @@ mod tests {
         assert_ne!(h1, h2);
     }
 
+    /// SHA-1 base64 of "abc" is `qZk+NkcGgWq6PiVxeFDCbJzQ2J0=` — a fixed
+    /// vector from the SHA-1 spec, encoded the way Immich emits it. Using
+    /// a known-answer test pins both the algorithm and the encoding so
+    /// that a future swap can't silently desync our local hashes from
+    /// what we receive over the sync stream.
     #[tokio::test]
-    async fn hash_is_64_char_hex() {
+    async fn matches_immich_sha1_base64_for_known_input() {
         let mut f = NamedTempFile::new().unwrap();
-        f.write_all(b"test").unwrap();
+        f.write_all(b"abc").unwrap();
         let hash = hash_file(f.path()).await.unwrap();
-        assert_eq!(hash.len(), 64);
-        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(hash, "qZk+NkcGgWq6PiVxeFDCbJzQ2J0=");
     }
 
     #[tokio::test]

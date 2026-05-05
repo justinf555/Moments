@@ -425,6 +425,50 @@ impl MediaRepository {
         Ok(())
     }
 
+    /// Look up a locally-imported row by `content_hash` that has not yet
+    /// been pushed to a server (i.e. `external_id IS NULL`).
+    ///
+    /// Used by the sync handler to *adopt* a local row when the same
+    /// asset arrives over the pull stream before push has finished
+    /// stamping the server id. Without this step the AssetHandler would
+    /// generate a fresh `MediaId` and `INSERT` a parallel stub row,
+    /// then push's eventual `UPDATE … SET external_id = ?` would hit
+    /// the unique partial index on `external_id` and fail.
+    ///
+    /// Restricting the match to `external_id IS NULL` is deliberate:
+    /// rows already mapped to a *different* Immich asset must never be
+    /// silently re-pointed by a hash collision.
+    pub async fn id_by_content_hash_pending_push(
+        &self,
+        content_hash: &str,
+    ) -> Result<Option<MediaId>, LibraryError> {
+        let row: Option<String> = sqlx::query_scalar(
+            "SELECT id FROM media WHERE content_hash = ? AND external_id IS NULL",
+        )
+        .bind(content_hash)
+        .fetch_optional(self.db.pool())
+        .await
+        .map_err(LibraryError::Db)?;
+        Ok(row.map(MediaId::new))
+    }
+
+    /// Look up the local [`MediaId`] for a given `external_id`.
+    ///
+    /// Used by sync handlers to translate Immich-side asset UUIDs into the
+    /// stable, locally-owned id under which we actually store the row.
+    /// Returns `None` if no row carries that `external_id`.
+    pub async fn id_by_external_id(
+        &self,
+        external_id: &str,
+    ) -> Result<Option<MediaId>, LibraryError> {
+        let row: Option<String> = sqlx::query_scalar("SELECT id FROM media WHERE external_id = ?")
+            .bind(external_id)
+            .fetch_optional(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
+        Ok(row.map(MediaId::new))
+    }
+
     /// Look up external_ids for a batch of media IDs.
     ///
     /// Returns `(local_id, external_id)` pairs. IDs without an external_id
@@ -675,6 +719,71 @@ mod tests {
             repo.exists(&server_id).await.unwrap(),
             "new server row inserted"
         );
+    }
+
+    /// Adopt-by-content_hash: pull's `AssetHandler` looks up a local
+    /// row that has the same hash but no `external_id`, so the same
+    /// asset arriving from sync before push has stamped the server id
+    /// is merged in place. A row that *already* has an `external_id`
+    /// — i.e. is mapped to a different (or even the same) Immich
+    /// asset — must never be returned, since silently re-pointing it
+    /// would corrupt the mapping.
+    #[tokio::test]
+    async fn id_by_content_hash_pending_push_only_matches_unstamped_rows() {
+        let dir = tempdir().unwrap();
+        let (repo, db) = test_repo(dir.path()).await;
+
+        let hash = "qZk+NkcGgWq6PiVxeFDCbJzQ2J0=".to_string();
+
+        // Locally-imported, push hasn't run yet → eligible for adoption.
+        let pending = MediaId::new("local-pending-aaaaaaaaaaaaaaaaaaa".to_string());
+        let mut pending_rec = test_record(pending.clone());
+        pending_rec.content_hash = Some(hash.clone());
+        pending_rec.external_id = None;
+        repo.insert(&pending_rec).await.unwrap();
+
+        let found = repo.id_by_content_hash_pending_push(&hash).await.unwrap();
+        assert_eq!(found.as_ref().map(|m| m.as_str()), Some(pending.as_str()));
+
+        // Now stamp external_id — the row must no longer be eligible.
+        sqlx::query("UPDATE media SET external_id = ? WHERE id = ?")
+            .bind("immich-uuid")
+            .bind(pending.as_str())
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        let after_stamp = repo.id_by_content_hash_pending_push(&hash).await.unwrap();
+        assert!(
+            after_stamp.is_none(),
+            "stamped rows must never be adopted by content_hash"
+        );
+
+        // A different hash never matches.
+        let miss = repo.id_by_content_hash_pending_push("other").await.unwrap();
+        assert!(miss.is_none());
+    }
+
+    /// Issue #626: sync handlers translate Immich UUIDs to local
+    /// `MediaId`s via `id_by_external_id`. The lookup must return the
+    /// row's primary key when `external_id` matches, and `None`
+    /// otherwise.
+    #[tokio::test]
+    async fn id_by_external_id_finds_row_or_returns_none() {
+        let dir = tempdir().unwrap();
+        let (repo, _db) = test_repo(dir.path()).await;
+
+        let local_id = MediaId::new("local-uuid-eeeeeeeeeeeeeeeeeeeeeee".to_string());
+        let server_id = "server-uuid-ffffffffffffffffffffff".to_string();
+        let mut rec = test_record(local_id.clone());
+        rec.external_id = Some(server_id.clone());
+        repo.insert(&rec).await.unwrap();
+
+        let found = repo.id_by_external_id(&server_id).await.unwrap();
+        assert_eq!(found.as_ref().map(|m| m.as_str()), Some(local_id.as_str()));
+
+        let missing = repo.id_by_external_id("nope").await.unwrap();
+        assert!(missing.is_none());
     }
 
     /// Upsert with an external_id that doesn't match any existing row
