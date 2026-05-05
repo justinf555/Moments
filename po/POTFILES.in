@@ -15,6 +15,8 @@ src/ui/import_dialog/import_dialog.blp
 src/ui/people_grid/actions.rs
 src/ui/people_grid/cell.rs
 src/ui/people_grid/people_grid.blp
+src/ui/photo_grid/action_bar.rs
+src/ui/photo_grid/actions.rs
 src/ui/photo_grid/cell.rs
 src/ui/photo_grid/factory.rs
 src/ui/photo_grid/mod.rs

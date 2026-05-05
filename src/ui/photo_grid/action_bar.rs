@@ -6,6 +6,7 @@
 //! - **Album**: Favourite, Remove from album, Delete
 
 use adw::prelude::*;
+use gettextrs::{gettext, ngettext};
 use gtk::gio;
 
 use crate::library::album::AlbumId;
@@ -43,10 +44,10 @@ pub fn build_for_filter(
 // ── Standard: Favourite, Add to album, Delete ────────────────────────────────
 
 fn build_standard_bar(state: &SelectionState, store: &gio::ListStore) -> ActionBarButtons {
-    let fav_btn = make_button("starred-symbolic", "Favourite");
+    let fav_btn = make_button("starred-symbolic", &gettext("Favourite"));
     fav_btn.set_width_request(150);
-    let album_btn = make_button("folder-new-symbolic", "Add to album");
-    let trash_btn = make_button("user-trash-symbolic", "Delete");
+    let album_btn = make_button("folder-new-symbolic", &gettext("Add to album"));
+    let trash_btn = make_button("user-trash-symbolic", &gettext("Delete"));
 
     wire_favourite(&fav_btn, state, store);
     wire_trash(&trash_btn, state);
@@ -66,8 +67,8 @@ fn build_standard_bar(state: &SelectionState, store: &gio::ListStore) -> ActionB
 // ── Trash: Restore, Delete permanently ───────────────────────────────────────
 
 fn build_trash_bar(state: &SelectionState) -> ActionBarButtons {
-    let restore_btn = make_button("edit-undo-symbolic", "Restore");
-    let delete_btn = make_button("edit-delete-symbolic", "Delete permanently");
+    let restore_btn = make_button("edit-undo-symbolic", &gettext("Restore"));
+    let delete_btn = make_button("edit-delete-symbolic", &gettext("Delete permanently"));
 
     wire_restore(&restore_btn, state);
     wire_delete_permanently(&delete_btn, state);
@@ -90,10 +91,10 @@ fn build_album_bar(
     store: &gio::ListStore,
     album_id: &AlbumId,
 ) -> ActionBarButtons {
-    let fav_btn = make_button("starred-symbolic", "Favourite");
+    let fav_btn = make_button("starred-symbolic", &gettext("Favourite"));
     fav_btn.set_width_request(150);
-    let remove_btn = make_button("list-remove-symbolic", "Remove from album");
-    let trash_btn = make_button("user-trash-symbolic", "Delete");
+    let remove_btn = make_button("list-remove-symbolic", &gettext("Remove from album"));
+    let trash_btn = make_button("user-trash-symbolic", &gettext("Delete"));
 
     wire_favourite(&fav_btn, state, store);
     wire_remove_from_album(&remove_btn, state, album_id);
@@ -143,20 +144,22 @@ fn wire_favourite(btn: &gtk::Button, state: &SelectionState, store: &gio::ListSt
     let btn_ref = btn.clone();
     btn.connect_clicked(move |_| {
         let ids = s.ids();
-        let Some(first_id) = ids.first() else {
+        if ids.is_empty() {
             return;
-        };
+        }
 
-        // Toggle direction is decided by the first selected item's
-        // current favourite state — same as the legacy MultiSelection
-        // path. With NoSelection there's no order from GTK, so "first"
-        // here is HashSet iteration order; for the toggle direction
-        // this matches the legacy semantics of "do the opposite of
-        // whatever the lead item shows".
-        let first_fav = super::find_item_in_store(&st, first_id)
-            .map(|o| o.is_favorite())
-            .unwrap_or(false);
-        let new_state = !first_fav;
+        // Toggle direction matches the visible button label, which is
+        // derived from `all_fav` in the selection-changed handler:
+        //   all favourited → label "Unfavourite" → click unfavourites all
+        //   any unfavourited → label "Favourite"  → click favourites all
+        // This is order-independent, unlike `s.ids().first()` which
+        // would depend on HashSet iteration order.
+        let all_fav = ids.iter().all(|id| {
+            super::find_item_in_store(&st, id)
+                .map(|o| o.is_favorite())
+                .unwrap_or(false)
+        });
+        let new_state = !all_fav;
 
         if let Some(mc) = crate::application::MomentsApplication::default().media_client_v2() {
             mc.set_favorite(ids, new_state);
@@ -200,18 +203,19 @@ fn wire_delete_permanently(btn: &gtk::Button, state: &SelectionState) {
         }
 
         let count = ids.len();
-        let message = if count == 1 {
-            "Permanently delete this photo? This cannot be undone.".to_string()
-        } else {
-            format!("Permanently delete {count} photos? This cannot be undone.")
-        };
+        let message = ngettext(
+            "Permanently delete this photo? This cannot be undone.",
+            "Permanently delete {} photos? This cannot be undone.",
+            count as u32,
+        )
+        .replace("{}", &count.to_string());
 
         let dialog = adw::AlertDialog::builder()
-            .heading("Delete permanently?")
+            .heading(gettext("Delete permanently?"))
             .body(&message)
             .build();
-        dialog.add_response("cancel", "Cancel");
-        dialog.add_response("delete", "Delete");
+        dialog.add_response("cancel", &gettext("Cancel"));
+        dialog.add_response("delete", &gettext("Delete"));
         dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
         dialog.set_default_response(Some("cancel"));
 

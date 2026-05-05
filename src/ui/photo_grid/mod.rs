@@ -211,7 +211,11 @@ impl PhotoGrid {
         let cache = imp.texture_cache().clone();
         let sm = Rc::clone(&imp.selection_mode);
         let state = imp.selection_state.clone();
-        let enter = imp.enter_selection.borrow().clone().unwrap();
+        let enter = imp
+            .enter_selection
+            .borrow()
+            .clone()
+            .expect("PhotoGridView::setup() must be called before set_store()/apply_zoom()");
         grid_view.set_factory(Some(&factory::build_factory(
             self.current_cell_size(),
             media_client,
@@ -250,7 +254,11 @@ impl PhotoGrid {
 
         let sm = Rc::clone(&imp.selection_mode);
         let state = imp.selection_state.clone();
-        let enter = imp.enter_selection.borrow().clone().unwrap();
+        let enter = imp
+            .enter_selection
+            .borrow()
+            .clone()
+            .expect("PhotoGridView::setup() must be called before set_store()/apply_zoom()");
         grid_view.set_factory(Some(&factory::build_factory(
             self.current_cell_size(),
             media_client.clone(),
@@ -364,6 +372,11 @@ mod view_imp {
         /// Signal handler IDs — disconnected on unrealize.
         /// Stores (client_object, handler_id) pairs for later disconnect.
         pub _signal_handlers: RefCell<Vec<(glib::Object, glib::SignalHandlerId)>>,
+        /// Handler id for the `SelectionState::changed` closure installed
+        /// by `set_store`. Disconnected on re-entry so a second
+        /// `set_store` doesn't leave a stale closure capturing the
+        /// previous store.
+        pub selection_changed_handler: RefCell<Option<glib::SignalHandlerId>>,
     }
 
     impl PhotoGridView {
@@ -702,6 +715,14 @@ impl PhotoGridView {
 
     pub fn set_store(&self, store: gio::ListStore, filter: MediaFilter) {
         let imp = self.imp();
+
+        // Disconnect any previous `SelectionState::changed` closure so a
+        // second `set_store` call doesn't leave a stale handler bound to
+        // the previous store.
+        if let Some(handler) = imp.selection_changed_handler.borrow_mut().take() {
+            imp.photo_grid.imp().selection_state.disconnect(handler);
+        }
+
         let media_client = crate::application::MomentsApplication::default()
             .media_client_v2()
             .expect("media client available");
@@ -853,7 +874,7 @@ impl PhotoGridView {
             let title = imp.selection_title().clone();
             let fav_btn = imp.fav_btn.borrow().clone();
             let store_ref = store.clone();
-            state.connect_closure(
+            let handler = state.connect_closure(
                 "changed",
                 false,
                 glib::closure_local!(move |s: selection::SelectionState| {
@@ -877,6 +898,7 @@ impl PhotoGridView {
                     }
                 }),
             );
+            *imp.selection_changed_handler.borrow_mut() = Some(handler);
         }
     }
 }

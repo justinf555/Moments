@@ -4,6 +4,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use adw::prelude::*;
+use gettextrs::{gettext, ngettext};
 use gtk::{gio, glib};
 use tracing::debug;
 
@@ -158,11 +159,11 @@ fn find_clicked_item(grid_view: &gtk::GridView, x: f64, y: f64) -> Option<MediaI
 
 /// Build the trash-view context menu: Restore, Delete Permanently.
 fn build_trash_menu(vbox: &gtk::Box, pop_ref: &glib::WeakRef<gtk::Popover>, ids: Vec<MediaId>) {
-    let restore_btn = gtk::Button::with_label("Restore");
+    let restore_btn = gtk::Button::with_label(&gettext("Restore"));
     restore_btn.add_css_class("flat");
     vbox.append(&restore_btn);
 
-    let delete_btn = gtk::Button::with_label("Delete Permanently");
+    let delete_btn = gtk::Button::with_label(&gettext("Delete Permanently"));
     delete_btn.add_css_class("flat");
     delete_btn.add_css_class("error");
     vbox.append(&delete_btn);
@@ -181,21 +182,21 @@ fn build_standard_menu(
     is_favorite: bool,
 ) {
     let fav_label = if is_favorite {
-        "Unfavourite"
+        gettext("Unfavourite")
     } else {
-        "Favourite"
+        gettext("Favourite")
     };
-    let fav_btn = gtk::Button::with_label(fav_label);
+    let fav_btn = gtk::Button::with_label(&fav_label);
     fav_btn.add_css_class("flat");
     vbox.append(&fav_btn);
 
-    let trash_btn = gtk::Button::with_label("Move to Trash");
+    let trash_btn = gtk::Button::with_label(&gettext("Move to Trash"));
     trash_btn.add_css_class("flat");
     trash_btn.add_css_class("error");
     vbox.append(&trash_btn);
 
     if let MediaFilter::Album { ref album_id } = *filter {
-        let remove_btn = gtk::Button::with_label("Remove from Album");
+        let remove_btn = gtk::Button::with_label(&gettext("Remove from Album"));
         remove_btn.add_css_class("flat");
         vbox.append(&remove_btn);
 
@@ -255,18 +256,19 @@ fn wire_permanent_delete_button(
         }
 
         let count = ids.len();
-        let message = if count == 1 {
-            "Permanently delete this photo? This cannot be undone.".to_string()
-        } else {
-            format!("Permanently delete {count} photos? This cannot be undone.")
-        };
+        let message = ngettext(
+            "Permanently delete this photo? This cannot be undone.",
+            "Permanently delete {} photos? This cannot be undone.",
+            count as u32,
+        )
+        .replace("{}", &count.to_string());
 
         let dialog = adw::AlertDialog::builder()
-            .heading("Delete permanently?")
+            .heading(gettext("Delete permanently?"))
             .body(&message)
             .build();
-        dialog.add_response("cancel", "Cancel");
-        dialog.add_response("delete", "Delete");
+        dialog.add_response("cancel", &gettext("Cancel"));
+        dialog.add_response("delete", &gettext("Delete"));
         dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
         dialog.set_default_response(Some("cancel"));
 
@@ -340,9 +342,9 @@ pub(super) fn update_fav_button(btn: &gtk::Button, all_fav: bool) {
 
     if all_fav {
         icon.set_icon_name(Some("non-starred-symbolic"));
-        label.set_label("Unfavourite");
+        label.set_label(&gettext("Unfavourite"));
     } else {
         icon.set_icon_name(Some("starred-symbolic"));
-        label.set_label("Favourite");
+        label.set_label(&gettext("Favourite"));
     }
 }
