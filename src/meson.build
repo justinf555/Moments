@@ -84,6 +84,13 @@ else
   rust_target = 'debug'
 endif
 
+# Heap profiling — only used when explicitly opted into via -Ddhat-heap=true.
+# Replaces the global allocator with dhat::Alloc and writes a JSON dump to
+# the cache dir on exit. Real per-allocation overhead, so off by default.
+if get_option('dhat-heap')
+  cargo_opt += [ '--features', 'dhat-heap' ]
+endif
+
 
 cargo_build = custom_target(
   'cargo-build',
