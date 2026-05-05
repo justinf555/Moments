@@ -927,7 +927,7 @@ fn set_empty_state_for_filter(page: &adw::StatusPage, filter: &crate::library::m
 
 /// Translated, plural-correct selection counter ("3 selected").
 fn selection_count_label(count: u64) -> String {
-    let template = ngettext("{n} selected", "{n} selected", count as u32);
+    let template = ngettext("1 selected", "{n} selected", count as u32);
     template.replace("{n}", &count.to_string())
 }
 

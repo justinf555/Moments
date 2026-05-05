@@ -1,4 +1,5 @@
 use gettextrs::gettext;
+use tracing::warn;
 
 /// Describes a single entry in the sidebar navigation.
 pub struct SidebarRoute {
@@ -22,7 +23,10 @@ impl SidebarRoute {
             "people" => gettext("People"),
             "albums" => gettext("Albums"),
             "trash" => gettext("Trash"),
-            other => other.to_string(),
+            other => {
+                warn!(id = other, "SidebarRoute::label: no translation registered");
+                other.to_string()
+            }
         }
     }
 }

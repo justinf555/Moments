@@ -1,3 +1,8 @@
+.PHONY: run run-dev dev-bootstrap dev clean clean-dev \
+        check test test-nextest test-integration test-all \
+        lint fmt fmt-check typos audit coverage metrics \
+        check-potfiles ci-all stack attach release
+
 run:
 	flatpak-builder --user --install --force-clean flatpak-build-dir io.github.justinf555.Moments.json && \
 	flatpak run io.github.justinf555.Moments
