@@ -62,6 +62,21 @@ fn main() -> glib::ExitCode {
     // Initialise GStreamer for video poster-frame extraction.
     gstreamer::init().expect("failed to initialise GStreamer");
 
+    // Initialise tracing — RUST_LOG controls verbosity (e.g. RUST_LOG=moments=debug).
+    // Debug builds default to `moments=debug` so dev runs (make run-dev,
+    // GNOME Builder) get verbose output without needing the env var
+    // wired through the Flatpak sandbox; release defaults to `info`.
+    let default_filter = if cfg!(debug_assertions) {
+        "moments=debug"
+    } else {
+        "moments=info"
+    };
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter)),
+        )
+        .init();
+
     info!(version = config::VERSION, "Moments starting");
 
     // Set up gettext translations

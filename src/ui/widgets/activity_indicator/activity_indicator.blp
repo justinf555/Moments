@@ -9,7 +9,14 @@ template $MomentsActivityIndicator : Gtk.Widget {
     child: Gtk.Stack stack {
       transition-type: crossfade;
       transition-duration: 200;
-      visible-child-name: "hidden";
+
+      // First page is the default visible child. Keep "hidden" first so
+      // GTK doesn't warn about visible-child-name resolving before pages
+      // are added — Blueprint applies stack properties before children.
+      Gtk.StackPage {
+        name: "hidden";
+        child: Gtk.Box {};
+      }
 
       Gtk.StackPage {
         name: "active";
@@ -23,11 +30,6 @@ template $MomentsActivityIndicator : Gtk.Widget {
         child: Gtk.Image status_icon {
           icon-name: "object-select-symbolic";
         };
-      }
-
-      Gtk.StackPage {
-        name: "hidden";
-        child: Gtk.Box {};
       }
     };
 
