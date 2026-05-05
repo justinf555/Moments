@@ -22,15 +22,26 @@ template $MomentsEditPanel : Gtk.Widget {
       };
     }
 
-    Gtk.Button revert_btn {
-      label: "Revert to Original";
-      tooltip-text: _("Remove all edits and restore the original image");
-      hexpand: true;
+    Gtk.Box {
+      orientation: horizontal;
+      spacing: 6;
       margin-top: 12;
       margin-bottom: 12;
       margin-start: 12;
       margin-end: 12;
-      styles ["destructive-action"]
+
+      Gtk.Button compare_btn {
+        icon-name: "view-reveal-symbolic";
+        tooltip-text: _("Hold to compare with the original");
+        valign: center;
+      }
+
+      Gtk.Button revert_btn {
+        label: "Revert to Original";
+        tooltip-text: _("Remove all edits and restore the original image");
+        hexpand: true;
+        styles ["destructive-action"]
+      }
     }
   }
 }

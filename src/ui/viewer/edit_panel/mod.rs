@@ -60,6 +60,8 @@ mod imp {
         pub adjust_section: TemplateChild<EditAdjustSection>,
         #[template_child]
         pub revert_btn: TemplateChild<gtk::Button>,
+        #[template_child]
+        pub compare_btn: TemplateChild<gtk::Button>,
 
         // Service dependencies (set once in setup)
         pub picture: OnceCell<gtk::Picture>,
@@ -154,6 +156,7 @@ impl EditPanel {
         imp.adjust_section.setup(Rc::clone(&session), changed);
 
         self.wire_revert_button();
+        self.wire_compare_button();
     }
 
     /// Create a callback closure that sections call after mutating the session.
@@ -444,5 +447,62 @@ impl EditPanel {
                 });
             }
         });
+    }
+
+    /// Wire the hold-to-compare button.
+    ///
+    /// Press → render the original (no edits applied). Release / cancel →
+    /// render the current edited state. Uses a `GestureClick` controller so
+    /// we get the press and release events the bare `clicked` signal can't
+    /// give us. The button's own `clicked` is intentionally not wired.
+    fn wire_compare_button(&self) {
+        let gesture = gtk::GestureClick::new();
+
+        let weak_press = self.downgrade();
+        gesture.connect_pressed(move |_, _, _, _| {
+            if let Some(panel) = weak_press.upgrade() {
+                panel.render_compare(true);
+            }
+        });
+
+        let weak_release = self.downgrade();
+        gesture.connect_released(move |_, _, _, _| {
+            if let Some(panel) = weak_release.upgrade() {
+                panel.render_compare(false);
+            }
+        });
+
+        // If the gesture is cancelled (pointer leaves the button while held,
+        // touch sequence cancelled, etc.) we must still restore the edited
+        // view — otherwise the user is stuck looking at the original.
+        let weak_cancel = self.downgrade();
+        gesture.connect_cancel(move |_, _| {
+            if let Some(panel) = weak_cancel.upgrade() {
+                panel.render_compare(false);
+            }
+        });
+
+        self.imp().compare_btn.add_controller(gesture);
+    }
+
+    /// Render either the original (no edits) or the current edited state.
+    ///
+    /// Bumps `render_gen` to ensure the compare render wins any in-flight
+    /// slider-driven render — and so the eventual restore-to-edited render
+    /// also wins this one.
+    fn render_compare(&self, show_original: bool) {
+        let imp = self.imp();
+        let preview = {
+            let mut session = imp.session_rc().borrow_mut();
+            let Some(s) = session.as_mut() else { return };
+            s.render_gen += 1;
+            let state = if show_original {
+                EditState::default()
+            } else {
+                s.state.clone()
+            };
+            (Arc::clone(&s.preview_image), state, s.render_gen)
+        };
+        self.render_to_picture(preview);
     }
 }
