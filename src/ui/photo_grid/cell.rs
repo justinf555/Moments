@@ -4,6 +4,7 @@ use gettextrs::gettext;
 use gtk::{glib, prelude::*, subclass::prelude::*};
 
 use crate::client::MediaItemObject;
+use crate::ui::photo_grid::selection::SelectionState;
 
 /// Handler IDs stored between `bind` and `unbind` calls.
 ///
@@ -50,6 +51,11 @@ mod imp {
         /// Click handler for the checkbox — connected in factory `bind`,
         /// disconnected in factory `unbind`.
         pub checkbox_handler: RefCell<Option<glib::SignalHandlerId>>,
+        /// `SelectionState::changed` subscription — connected in `bind`,
+        /// disconnected in `unbind`. Disconnecting is essential: cells
+        /// are recycled by virtualization, and a stale handler would fire
+        /// against the wrong bound id (#547).
+        pub state_changed_handler: RefCell<Option<(SelectionState, glib::SignalHandlerId)>>,
     }
 
     #[glib::object_subclass]
@@ -228,8 +234,11 @@ impl PhotoGridCell {
     /// Update the checkbox without firing the `toggled` handler.
     ///
     /// Blocks the signal while setting the active state so that
-    /// programmatic updates don't trigger select/unselect on the
-    /// `MultiSelection` model with a potentially stale position.
+    /// programmatic updates (e.g. from a `SelectionState::changed`
+    /// broadcast on a sibling cell) don't re-enter the toggle handler
+    /// and double-mutate the state. Also reflects the checked state
+    /// as a `.selected` CSS class so the cell's selected styling
+    /// (#547) can target it directly.
     pub fn set_checked(&self, checked: bool) {
         let imp = self.imp();
         let handler = imp.checkbox_handler.borrow();
@@ -239,6 +248,11 @@ impl PhotoGridCell {
         imp.checkbox.set_active(checked);
         if let Some(ref id) = *handler {
             imp.checkbox.unblock_signal(id);
+        }
+        if checked {
+            self.add_css_class("selected");
+        } else {
+            self.remove_css_class("selected");
         }
     }
 

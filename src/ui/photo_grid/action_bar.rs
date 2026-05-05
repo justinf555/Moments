@@ -6,12 +6,14 @@
 //! - **Album**: Favourite, Remove from album, Delete
 
 use adw::prelude::*;
+use gettextrs::{gettext, ngettext};
+use gtk::gio;
 
 use crate::library::album::AlbumId;
 use crate::library::media::MediaFilter;
 
 use super::actions;
-use crate::client::MediaItemObject;
+use super::selection::SelectionState;
 
 /// The built action bar buttons and the container box.
 pub struct ActionBarButtons {
@@ -27,24 +29,28 @@ pub struct ActionBarButtons {
 /// Build action bar buttons appropriate for the given filter.
 ///
 /// Returns wired buttons ready to be placed in a `gtk::ActionBar`.
-pub fn build_for_filter(filter: &MediaFilter, selection: &gtk::MultiSelection) -> ActionBarButtons {
+pub fn build_for_filter(
+    filter: &MediaFilter,
+    state: &SelectionState,
+    store: &gio::ListStore,
+) -> ActionBarButtons {
     match filter {
-        MediaFilter::Trashed => build_trash_bar(selection),
-        MediaFilter::Album { album_id } => build_album_bar(selection, album_id),
-        _ => build_standard_bar(selection),
+        MediaFilter::Trashed => build_trash_bar(state),
+        MediaFilter::Album { album_id } => build_album_bar(state, store, album_id),
+        _ => build_standard_bar(state, store),
     }
 }
 
 // ── Standard: Favourite, Add to album, Delete ────────────────────────────────
 
-fn build_standard_bar(selection: &gtk::MultiSelection) -> ActionBarButtons {
-    let fav_btn = make_button("starred-symbolic", "Favourite");
+fn build_standard_bar(state: &SelectionState, store: &gio::ListStore) -> ActionBarButtons {
+    let fav_btn = make_button("starred-symbolic", &gettext("Favourite"));
     fav_btn.set_width_request(150);
-    let album_btn = make_button("folder-new-symbolic", "Add to album");
-    let trash_btn = make_button("user-trash-symbolic", "Delete");
+    let album_btn = make_button("folder-new-symbolic", &gettext("Add to album"));
+    let trash_btn = make_button("user-trash-symbolic", &gettext("Delete"));
 
-    wire_favourite(&fav_btn, selection);
-    wire_trash(&trash_btn, selection);
+    wire_favourite(&fav_btn, state, store);
+    wire_trash(&trash_btn, state);
 
     let container = bar_container();
     container.append(&fav_btn);
@@ -60,12 +66,12 @@ fn build_standard_bar(selection: &gtk::MultiSelection) -> ActionBarButtons {
 
 // ── Trash: Restore, Delete permanently ───────────────────────────────────────
 
-fn build_trash_bar(selection: &gtk::MultiSelection) -> ActionBarButtons {
-    let restore_btn = make_button("edit-undo-symbolic", "Restore");
-    let delete_btn = make_button("edit-delete-symbolic", "Delete permanently");
+fn build_trash_bar(state: &SelectionState) -> ActionBarButtons {
+    let restore_btn = make_button("edit-undo-symbolic", &gettext("Restore"));
+    let delete_btn = make_button("edit-delete-symbolic", &gettext("Delete permanently"));
 
-    wire_restore(&restore_btn, selection);
-    wire_delete_permanently(&delete_btn, selection);
+    wire_restore(&restore_btn, state);
+    wire_delete_permanently(&delete_btn, state);
 
     let container = bar_container();
     container.append(&restore_btn);
@@ -80,15 +86,19 @@ fn build_trash_bar(selection: &gtk::MultiSelection) -> ActionBarButtons {
 
 // ── Album: Favourite, Remove from album, Delete ──────────────────────────────
 
-fn build_album_bar(selection: &gtk::MultiSelection, album_id: &AlbumId) -> ActionBarButtons {
-    let fav_btn = make_button("starred-symbolic", "Favourite");
+fn build_album_bar(
+    state: &SelectionState,
+    store: &gio::ListStore,
+    album_id: &AlbumId,
+) -> ActionBarButtons {
+    let fav_btn = make_button("starred-symbolic", &gettext("Favourite"));
     fav_btn.set_width_request(150);
-    let remove_btn = make_button("list-remove-symbolic", "Remove from album");
-    let trash_btn = make_button("user-trash-symbolic", "Delete");
+    let remove_btn = make_button("list-remove-symbolic", &gettext("Remove from album"));
+    let trash_btn = make_button("user-trash-symbolic", &gettext("Delete"));
 
-    wire_favourite(&fav_btn, selection);
-    wire_remove_from_album(&remove_btn, selection, album_id);
-    wire_trash(&trash_btn, selection);
+    wire_favourite(&fav_btn, state, store);
+    wire_remove_from_album(&remove_btn, state, album_id);
+    wire_trash(&trash_btn, state);
 
     let container = bar_container();
     container.append(&fav_btn);
@@ -128,21 +138,28 @@ fn bar_container() -> gtk::Box {
 
 // ── Wiring ───────────────────────────────────────────────────────────────────
 
-fn wire_favourite(btn: &gtk::Button, selection: &gtk::MultiSelection) {
-    let sel = selection.clone();
+fn wire_favourite(btn: &gtk::Button, state: &SelectionState, store: &gio::ListStore) {
+    let s = state.clone();
+    let st = store.clone();
     let btn_ref = btn.clone();
     btn.connect_clicked(move |_| {
-        let ids = super::collect_selected_ids(&sel);
+        let ids = s.ids();
         if ids.is_empty() {
             return;
         }
 
-        let first_fav = sel
-            .item(sel.selection().nth(0))
-            .and_then(|o| o.downcast::<MediaItemObject>().ok())
-            .map(|o| o.is_favorite())
-            .unwrap_or(false);
-        let new_state = !first_fav;
+        // Toggle direction matches the visible button label, which is
+        // derived from `all_fav` in the selection-changed handler:
+        //   all favourited → label "Unfavourite" → click unfavourites all
+        //   any unfavourited → label "Favourite"  → click favourites all
+        // This is order-independent, unlike `s.ids().first()` which
+        // would depend on HashSet iteration order.
+        let all_fav = ids.iter().all(|id| {
+            super::find_item_in_store(&st, id)
+                .map(|o| o.is_favorite())
+                .unwrap_or(false)
+        });
+        let new_state = !all_fav;
 
         if let Some(mc) = crate::application::MomentsApplication::default().media_client_v2() {
             mc.set_favorite(ids, new_state);
@@ -151,10 +168,10 @@ fn wire_favourite(btn: &gtk::Button, selection: &gtk::MultiSelection) {
     });
 }
 
-fn wire_trash(btn: &gtk::Button, selection: &gtk::MultiSelection) {
-    let sel = selection.clone();
+fn wire_trash(btn: &gtk::Button, state: &SelectionState) {
+    let s = state.clone();
     btn.connect_clicked(move |_| {
-        let ids = super::collect_selected_ids(&sel);
+        let ids = s.ids();
         if ids.is_empty() {
             return;
         }
@@ -164,10 +181,10 @@ fn wire_trash(btn: &gtk::Button, selection: &gtk::MultiSelection) {
     });
 }
 
-fn wire_restore(btn: &gtk::Button, selection: &gtk::MultiSelection) {
-    let sel = selection.clone();
+fn wire_restore(btn: &gtk::Button, state: &SelectionState) {
+    let s = state.clone();
     btn.connect_clicked(move |_| {
-        let ids = super::collect_selected_ids(&sel);
+        let ids = s.ids();
         if ids.is_empty() {
             return;
         }
@@ -177,27 +194,28 @@ fn wire_restore(btn: &gtk::Button, selection: &gtk::MultiSelection) {
     });
 }
 
-fn wire_delete_permanently(btn: &gtk::Button, selection: &gtk::MultiSelection) {
-    let sel = selection.clone();
+fn wire_delete_permanently(btn: &gtk::Button, state: &SelectionState) {
+    let s = state.clone();
     btn.connect_clicked(move |btn| {
-        let ids = super::collect_selected_ids(&sel);
+        let ids = s.ids();
         if ids.is_empty() {
             return;
         }
 
         let count = ids.len();
-        let message = if count == 1 {
-            "Permanently delete this photo? This cannot be undone.".to_string()
-        } else {
-            format!("Permanently delete {count} photos? This cannot be undone.")
-        };
+        let message = ngettext(
+            "Permanently delete this photo? This cannot be undone.",
+            "Permanently delete {} photos? This cannot be undone.",
+            count as u32,
+        )
+        .replace("{}", &count.to_string());
 
         let dialog = adw::AlertDialog::builder()
-            .heading("Delete permanently?")
+            .heading(gettext("Delete permanently?"))
             .body(&message)
             .build();
-        dialog.add_response("cancel", "Cancel");
-        dialog.add_response("delete", "Delete");
+        dialog.add_response("cancel", &gettext("Cancel"));
+        dialog.add_response("delete", &gettext("Delete"));
         dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
         dialog.set_default_response(Some("cancel"));
 
@@ -218,11 +236,11 @@ fn wire_delete_permanently(btn: &gtk::Button, selection: &gtk::MultiSelection) {
     });
 }
 
-fn wire_remove_from_album(btn: &gtk::Button, selection: &gtk::MultiSelection, album_id: &AlbumId) {
-    let sel = selection.clone();
+fn wire_remove_from_album(btn: &gtk::Button, state: &SelectionState, album_id: &AlbumId) {
+    let s = state.clone();
     let aid = album_id.clone();
     btn.connect_clicked(move |_| {
-        let ids = super::collect_selected_ids(&sel);
+        let ids = s.ids();
         if ids.is_empty() {
             return;
         }
