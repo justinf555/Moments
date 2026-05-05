@@ -59,6 +59,7 @@ impl SyncEntityHandler for PersonHandler {
 
         Ok(HandlerResult {
             entity_id: id,
+            local_media_id: None,
             audit_action: "upsert",
             counter: CounterKind::People,
         })
@@ -84,6 +85,7 @@ impl SyncEntityHandler for PersonDeleteHandler {
         ctx.library.faces().delete_person_by_id(&id).await?;
         Ok(HandlerResult {
             entity_id: id,
+            local_media_id: None,
             audit_action: "delete",
             counter: CounterKind::Deletes,
         })

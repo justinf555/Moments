@@ -43,6 +43,7 @@ impl SyncEntityHandler for AssetFaceHandler {
                 );
                 return Ok(HandlerResult {
                     entity_id: id,
+                    local_media_id: None,
                     audit_action: "upsert",
                     counter: CounterKind::Faces,
                 });
@@ -72,6 +73,7 @@ impl SyncEntityHandler for AssetFaceHandler {
 
         Ok(HandlerResult {
             entity_id: id,
+            local_media_id: None,
             audit_action: "upsert",
             counter: CounterKind::Faces,
         })
@@ -98,6 +100,7 @@ impl SyncEntityHandler for AssetFaceDeleteHandler {
         ctx.library.faces().delete_asset_face(&id).await?;
         Ok(HandlerResult {
             entity_id: id,
+            local_media_id: None,
             audit_action: "delete",
             counter: CounterKind::Deletes,
         })

@@ -28,6 +28,7 @@ impl SyncEntityHandler for SyncResetHandler {
         ctx.state.clear_checkpoints().await?;
         Ok(HandlerResult {
             entity_id: String::new(),
+            local_media_id: None,
             audit_action: "reset",
             counter: CounterKind::None,
         })
@@ -52,6 +53,7 @@ impl SyncEntityHandler for SyncCompleteHandler {
     ) -> Result<HandlerResult, LibraryError> {
         Ok(HandlerResult {
             entity_id: String::new(),
+            local_media_id: None,
             audit_action: "complete",
             counter: CounterKind::None,
         })

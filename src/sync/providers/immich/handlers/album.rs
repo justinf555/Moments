@@ -52,6 +52,7 @@ impl SyncEntityHandler for AlbumHandler {
 
         Ok(HandlerResult {
             entity_id: external_id,
+            local_media_id: None,
             audit_action: "upsert",
             counter: CounterKind::Albums,
         })
@@ -89,6 +90,7 @@ impl SyncEntityHandler for AlbumDeleteHandler {
                 );
                 return Ok(HandlerResult {
                     entity_id: external_id,
+                    local_media_id: None,
                     audit_action: "delete",
                     counter: CounterKind::Deletes,
                 });
@@ -98,6 +100,7 @@ impl SyncEntityHandler for AlbumDeleteHandler {
         ctx.library.albums().delete_album(&local_id).await?;
         Ok(HandlerResult {
             entity_id: external_id,
+            local_media_id: None,
             audit_action: "delete",
             counter: CounterKind::Deletes,
         })
