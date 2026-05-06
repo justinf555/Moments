@@ -44,11 +44,16 @@ pub struct ColorState {
 
 /// Detail-section adjustments — vignette, clarity, sharpness, noise reduction.
 ///
-/// Empty until the per-feature issues land (#252, #474, #250, #251). The
-/// struct exists now so `EditState` is shape-stable: each new field can be
-/// added with `#[serde(default)]` without a schema migration.
+/// Fields land per-feature (#252 vignette, #474 clarity, #250 sharpness,
+/// #251 noise reduction). Each field uses `#[serde(default)]` so adding
+/// the next one doesn't require a schema migration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct DetailState {}
+pub struct DetailState {
+    /// Radial darkening (positive) or brightening (negative) of the
+    /// corners. -1.0 to 1.0, 0.0 = no effect.
+    #[serde(default)]
+    pub vignette: f64,
+}
 
 /// Complete non-destructive edit state for a media asset.
 ///
@@ -105,17 +110,20 @@ impl EditState {
             && self.filter.is_none()
     }
 
-    /// Apply a filter preset's exposure/color values scaled by strength.
+    /// Apply a filter preset's exposure/color/detail values scaled by strength.
     ///
-    /// Sets this state's exposure and color fields to the preset values
-    /// multiplied by `strength` (0.0–1.0), and records the filter strength.
+    /// Sets this state's exposure, color, and detail fields to the preset
+    /// values multiplied by `strength` (0.0–1.0), and records the filter
+    /// strength.
     ///
     /// **Filter-preset policy for new sections:** when fields land in
-    /// `DetailState` (#252/#474/#250/#251) and a future `HslState` (#473),
-    /// decide per-field whether filters should scale into them. Suggested
-    /// defaults: scale clarity (it's a "look" component), don't scale
-    /// noise reduction (it's a per-photo cleanup, not stylistic). Update
-    /// this method when each field lands.
+    /// `DetailState` (#474 clarity, #250 sharpness, #251 noise reduction)
+    /// and a future `HslState` (#473), decide per-field whether filters
+    /// should scale into them. Defaults so far: scale vignette (stylistic
+    /// — Vintage/Noir presets often include darkened corners); scale
+    /// clarity when it lands (also stylistic); don't scale noise reduction
+    /// (per-photo cleanup, not stylistic). Update this method when each
+    /// field lands.
     pub fn apply_filter_at_strength(&mut self, preset: &EditState, strength: f64) {
         self.exposure.brightness = preset.exposure.brightness * strength;
         self.exposure.contrast = preset.exposure.contrast * strength;
@@ -126,6 +134,7 @@ impl EditState {
         self.color.hue_shift = preset.color.hue_shift * strength;
         self.color.temperature = preset.color.temperature * strength;
         self.color.tint = preset.color.tint * strength;
+        self.detail.vignette = preset.detail.vignette * strength;
         self.filter_strength = strength;
     }
 }
@@ -186,7 +195,7 @@ mod tests {
                 temperature: 0.3,
                 tint: -0.05,
             },
-            detail: DetailState::default(),
+            detail: DetailState { vignette: 0.4 },
             filter: Some("vintage".to_string()),
             filter_strength: 0.75,
         };
@@ -194,6 +203,17 @@ mod tests {
         let json = serde_json::to_string(&state).unwrap();
         let restored: EditState = serde_json::from_str(&json).unwrap();
         assert_eq!(state, restored);
+    }
+
+    #[test]
+    fn filter_scales_into_vignette() {
+        let preset = EditState {
+            detail: DetailState { vignette: 0.6 },
+            ..Default::default()
+        };
+        let mut state = EditState::default();
+        state.apply_filter_at_strength(&preset, 0.5);
+        assert!((state.detail.vignette - 0.3).abs() < f64::EPSILON);
     }
 
     #[test]
