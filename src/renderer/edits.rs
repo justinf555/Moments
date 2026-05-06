@@ -136,11 +136,6 @@ fn apply_pixel_adjustments(img: DynamicImage, e: &ExposureState, c: &ColorState)
                     gf += e.shadows * t * 0.3;
                     bf += e.shadows * t * 0.3;
                 }
-
-                // White balance: shift blue-yellow axis.
-                rf += e.white_balance * 0.1;
-                gf += e.white_balance * 0.05;
-                bf -= e.white_balance * 0.1;
             }
 
             // ── Color ────────────────────────────────────────────────

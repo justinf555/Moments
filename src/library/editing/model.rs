@@ -30,7 +30,6 @@ pub struct ExposureState {
     pub contrast: f64,
     pub highlights: f64,
     pub shadows: f64,
-    pub white_balance: f64,
 }
 
 /// Color adjustments. All values range from -1.0 to 1.0 with 0.0 as neutral.
@@ -122,7 +121,6 @@ impl EditState {
         self.exposure.contrast = preset.exposure.contrast * strength;
         self.exposure.highlights = preset.exposure.highlights * strength;
         self.exposure.shadows = preset.exposure.shadows * strength;
-        self.exposure.white_balance = preset.exposure.white_balance * strength;
         self.color.saturation = preset.color.saturation * strength;
         self.color.vibrance = preset.color.vibrance * strength;
         self.color.hue_shift = preset.color.hue_shift * strength;
@@ -180,7 +178,6 @@ mod tests {
                 contrast: -0.2,
                 highlights: 0.1,
                 shadows: -0.1,
-                white_balance: 0.0,
             },
             color: ColorState {
                 saturation: 0.5,
