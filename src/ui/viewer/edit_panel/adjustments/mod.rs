@@ -6,7 +6,6 @@ mod shadows;
 mod temperature;
 mod tint;
 mod vibrance;
-mod white_balance;
 
 use crate::library::editing::EditState;
 
@@ -43,7 +42,6 @@ pub fn adjustment_registry() -> Vec<Box<dyn Adjustment>> {
         Box::new(contrast::Contrast),
         Box::new(highlights::Highlights),
         Box::new(shadows::Shadows),
-        Box::new(white_balance::WhiteBalance),
         // Colour group
         Box::new(saturation::Saturation),
         Box::new(vibrance::Vibrance),
@@ -57,8 +55,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_nine_adjustments() {
-        assert_eq!(adjustment_registry().len(), 9);
+    fn registry_returns_eight_adjustments() {
+        assert_eq!(adjustment_registry().len(), 8);
     }
 
     #[test]
