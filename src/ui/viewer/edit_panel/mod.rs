@@ -23,6 +23,7 @@ use transform_section::EditTransformSection;
 use crate::library::editing::EditState;
 use crate::library::media::MediaId;
 use crate::renderer::edits::apply_edits;
+use crate::renderer::target::RenderTarget;
 use crate::ui::widgets::wire_single_expansion;
 
 /// Delay before auto-saving edit state to DB after the last change (milliseconds).
@@ -351,7 +352,9 @@ impl EditPanel {
             let result = tk
                 .spawn(async move {
                     tokio::task::spawn_blocking(move || {
-                        let edited = apply_edits(&preview_img, &state);
+                        // Live slider preview — neighbourhood stages may use
+                        // cheaper kernels to keep slider response snappy.
+                        let edited = apply_edits(&preview_img, &state, RenderTarget::Preview);
                         let rgba = edited.into_rgba8();
                         let (w, h) = image::GenericImageView::dimensions(&rgba);
                         (rgba.into_raw(), w as i32, h as i32)

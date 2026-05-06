@@ -31,8 +31,11 @@ mod imp {
         pub session: OnceCell<Rc<RefCell<Option<EditSession>>>>,
         pub changed_cb: OnceCell<Rc<dyn Fn()>>,
         pub render_debounce: Cell<Option<glib::SourceId>>,
-        /// All slider scales (for reset and subtitle counting).
-        pub scales: RefCell<Vec<gtk::Scale>>,
+        /// All slider scales paired with their `value-changed` handler ID.
+        /// Stored together so programmatic `set_value` (sync/reset) can
+        /// block the handler — otherwise the synchronous re-entry into
+        /// the session `RefCell` panics.
+        pub scales: RefCell<Vec<(gtk::Scale, glib::SignalHandlerId)>>,
     }
 
     #[glib::object_subclass]
@@ -157,14 +160,11 @@ impl EditAdjustSection {
         row.append(&header_box);
         row.append(&scale);
 
-        // Register this scale for reset and subtitle tracking.
-        imp.scales.borrow_mut().push(scale.clone());
-
         let session_ref = Rc::clone(session);
         let changed_ref = Rc::clone(changed);
         let weak = self.downgrade();
 
-        scale.connect_value_changed(move |scale| {
+        let handler_id = scale.connect_value_changed(move |scale| {
             let Some(section) = weak.upgrade() else {
                 return;
             };
@@ -205,6 +205,10 @@ impl EditAdjustSection {
             simp.render_debounce.set(Some(source_id));
         });
 
+        // Register scale + handler ID for reset, subtitle counting, and
+        // signal blocking during programmatic value updates.
+        imp.scales.borrow_mut().push((scale.clone(), handler_id));
+
         row
     }
 
@@ -215,7 +219,7 @@ impl EditAdjustSection {
             .scales
             .borrow()
             .iter()
-            .filter(|s| s.value().abs() > DEADZONE)
+            .filter(|(s, _)| s.value().abs() > DEADZONE)
             .count();
 
         let text = match count {
@@ -228,30 +232,45 @@ impl EditAdjustSection {
     }
 
     /// Update slider values from the current session state.
+    ///
+    /// Snapshots the target values from the session before touching any
+    /// scale, so the session borrow is released before `set_value` can
+    /// fire the (now-blocked) `value-changed` handler.
     pub fn sync_from_state(&self) {
         let imp = self.imp();
         let Some(session_rc) = imp.session.get() else {
             return;
         };
 
-        let session = session_rc.borrow();
-        let Some(s) = session.as_ref() else { return };
-
         let adjustments = adjustment_registry();
+        let values: Vec<f64> = {
+            let session = session_rc.borrow();
+            let Some(s) = session.as_ref() else { return };
+            adjustments.iter().map(|adj| adj.get(&s.state)).collect()
+        };
+
         let scales = imp.scales.borrow();
-
-        for (adj, scale) in adjustments.iter().zip(scales.iter()) {
-            scale.set_value(adj.get(&s.state));
+        for ((scale, handler_id), value) in scales.iter().zip(values.iter()) {
+            // Block the user-edit handler so this programmatic load
+            // doesn't re-enter the session RefCell or schedule a redundant
+            // render of the just-loaded state.
+            scale.block_signal(handler_id);
+            scale.set_value(*value);
+            scale.unblock_signal(handler_id);
         }
+        drop(scales);
 
-        drop(session);
         self.update_subtitle();
     }
 
     /// Reset all sliders to 0.0 and update subtitle.
+    ///
+    /// Lets each scale's `value-changed` handler fire so it propagates
+    /// the zero into session state. Safe because we don't hold the
+    /// session borrow here.
     pub fn reset(&self) {
         let imp = self.imp();
-        for scale in imp.scales.borrow().iter() {
+        for (scale, _) in imp.scales.borrow().iter() {
             scale.set_value(0.0);
         }
         imp.subtitle_label.set_label("No changes");

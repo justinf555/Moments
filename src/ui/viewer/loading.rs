@@ -5,6 +5,7 @@ use tracing::{debug, error};
 
 use crate::renderer::output;
 use crate::renderer::pipeline::{RenderOptions, RenderSize};
+use crate::renderer::target::RenderTarget;
 
 use super::PhotoViewer;
 
@@ -75,6 +76,7 @@ impl PhotoViewer {
                             let options = RenderOptions {
                                 size: RenderSize::FullRes,
                                 edits: None,
+                                target: RenderTarget::Final,
                             };
                             let img = pipeline.render(&path, &options)?;
                             Ok(output::to_rgba(&img))
@@ -190,9 +192,14 @@ impl PhotoViewer {
                         .spawn(async move {
                             tokio::task::spawn_blocking(
                                 move || -> Option<std::sync::Arc<image::DynamicImage>> {
+                                    // This image is the EditSession::preview_image base —
+                                    // it is only ever fed back into apply_edits with
+                                    // RenderTarget::Preview, so any future target-sensitive
+                                    // decode-side stage should treat it as Preview too.
                                     let options = RenderOptions {
                                         size: RenderSize::Thumbnail(1200),
                                         edits: None,
+                                        target: RenderTarget::Preview,
                                     };
                                     let img = pipeline
                                         .render(&path, &options)
