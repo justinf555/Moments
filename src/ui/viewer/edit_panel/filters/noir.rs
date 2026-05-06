@@ -19,6 +19,7 @@ impl Filter for Noir {
         state.color.saturation = -1.0;
         state.exposure.contrast = 0.3;
         state.exposure.brightness = -0.05;
+        state.detail.vignette = 0.35;
         state
     }
 }
@@ -32,5 +33,11 @@ mod tests {
         let preset = Noir.preset();
         assert_eq!(preset.color.saturation, -1.0);
         assert!(preset.exposure.contrast > 0.2);
+    }
+
+    #[test]
+    fn noir_has_pronounced_vignette() {
+        let preset = Noir.preset();
+        assert!(preset.detail.vignette > 0.0);
     }
 }

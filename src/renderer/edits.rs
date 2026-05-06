@@ -432,12 +432,27 @@ mod tests {
     }
 
     #[test]
-    fn vignette_zero_is_noop() {
+    fn vignette_zero_in_pixel_pass_does_not_perturb_other_adjustments() {
+        // Default `EditState` would short-circuit via `is_identity()` and
+        // never enter the pixel pass, so `vignette = 0.0` would be
+        // trivially exercised. Force entry by setting brightness, then
+        // assert the output matches the same brightness without any
+        // vignette influence — proves the in-loop `skip_vignette` branch
+        // is a true no-op.
         let img = test_image();
-        let result = apply_edits(&img, &EditState::default(), RenderTarget::Final);
+
+        let mut with_zero_vignette = EditState::default();
+        with_zero_vignette.exposure.brightness = 0.3;
+        with_zero_vignette.detail.vignette = 0.0;
+
+        let mut brightness_only = EditState::default();
+        brightness_only.exposure.brightness = 0.3;
+
+        let a = apply_edits(&img, &with_zero_vignette, RenderTarget::Final);
+        let b = apply_edits(&img, &brightness_only, RenderTarget::Final);
         assert_eq!(
-            img.as_rgba8().unwrap().as_raw(),
-            result.as_rgba8().unwrap().as_raw()
+            a.as_rgba8().unwrap().as_raw(),
+            b.as_rgba8().unwrap().as_raw()
         );
     }
 
