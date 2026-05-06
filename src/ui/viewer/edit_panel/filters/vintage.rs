@@ -20,6 +20,7 @@ impl Filter for Vintage {
         state.color.temperature = 0.3;
         state.exposure.contrast = -0.1;
         state.exposure.brightness = 0.05;
+        state.detail.vignette = 0.25;
         state
     }
 }
@@ -33,5 +34,11 @@ mod tests {
         let preset = Vintage.preset();
         assert!(preset.color.saturation < 0.0);
         assert!(preset.color.temperature > 0.0);
+    }
+
+    #[test]
+    fn vintage_has_subtle_vignette() {
+        let preset = Vintage.preset();
+        assert!(preset.detail.vignette > 0.0);
     }
 }

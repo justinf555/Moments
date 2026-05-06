@@ -6,6 +6,7 @@ mod shadows;
 mod temperature;
 mod tint;
 mod vibrance;
+mod vignette;
 
 use crate::library::editing::EditState;
 
@@ -14,6 +15,7 @@ use crate::library::editing::EditState;
 pub enum AdjustGroup {
     Light,
     Colour,
+    Detail,
 }
 
 /// A single adjustment parameter that reads/writes one field of `EditState`.
@@ -34,7 +36,7 @@ pub trait Adjustment: Send + Sync {
     fn set(&self, state: &mut EditState, value: f64);
 }
 
-/// Return all built-in adjustments in display order (Light group first, then Colour).
+/// Return all built-in adjustments in display order: Light, Colour, Detail.
 pub fn adjustment_registry() -> Vec<Box<dyn Adjustment>> {
     vec![
         // Light group
@@ -47,6 +49,8 @@ pub fn adjustment_registry() -> Vec<Box<dyn Adjustment>> {
         Box::new(vibrance::Vibrance),
         Box::new(temperature::Temperature),
         Box::new(tint::Tint),
+        // Detail group
+        Box::new(vignette::Vignette),
     ]
 }
 
@@ -55,8 +59,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_eight_adjustments() {
-        assert_eq!(adjustment_registry().len(), 8);
+    fn registry_returns_nine_adjustments() {
+        assert_eq!(adjustment_registry().len(), 9);
     }
 
     #[test]
@@ -67,17 +71,28 @@ mod tests {
     }
 
     #[test]
-    fn light_group_comes_first() {
+    fn groups_appear_in_canonical_order() {
+        // Display order: Light → Colour → Detail. Each group's last entry
+        // must come before the next group's first entry.
         let adjustments = adjustment_registry();
-        let first_colour = adjustments
-            .iter()
-            .position(|a| a.group() == AdjustGroup::Colour)
-            .unwrap();
         let last_light = adjustments
             .iter()
             .rposition(|a| a.group() == AdjustGroup::Light)
             .unwrap();
+        let first_colour = adjustments
+            .iter()
+            .position(|a| a.group() == AdjustGroup::Colour)
+            .unwrap();
+        let last_colour = adjustments
+            .iter()
+            .rposition(|a| a.group() == AdjustGroup::Colour)
+            .unwrap();
+        let first_detail = adjustments
+            .iter()
+            .position(|a| a.group() == AdjustGroup::Detail)
+            .unwrap();
         assert!(last_light < first_colour);
+        assert!(last_colour < first_detail);
     }
 
     #[test]

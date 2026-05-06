@@ -93,6 +93,7 @@ impl EditAdjustSection {
                 let group_name = match group {
                     AdjustGroup::Light => "LIGHT",
                     AdjustGroup::Colour => "COLOUR",
+                    AdjustGroup::Detail => "DETAIL",
                 };
                 let label = section_label(group_name);
                 imp.expander.add_row(&wrap_in_row(&label));

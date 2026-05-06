@@ -5,7 +5,7 @@
 
 use image::{DynamicImage, GenericImageView, Rgba};
 
-use crate::library::editing::{ColorState, EditState, ExposureState, TransformState};
+use crate::library::editing::{ColorState, DetailState, EditState, ExposureState, TransformState};
 use crate::renderer::target::RenderTarget;
 
 /// Apply all edit operations to an image and return the result.
@@ -37,7 +37,7 @@ pub fn apply_edits(img: &DynamicImage, state: &EditState, _target: RenderTarget)
     // ─────────────────────────────────────────────────────────────────────
 
     let img = apply_transforms(img, &state.transforms);
-    apply_pixel_adjustments(img, &state.exposure, &state.color)
+    apply_pixel_adjustments(img, &state.exposure, &state.color, &state.detail)
 }
 
 // ---------------------------------------------------------------------------
@@ -84,14 +84,20 @@ fn apply_transforms(img: &DynamicImage, t: &TransformState) -> DynamicImage {
 }
 
 // ---------------------------------------------------------------------------
-// Merged pixel adjustments (exposure + color in a single pass)
+// Merged pixel adjustments (exposure + color + detail in a single pass)
 // ---------------------------------------------------------------------------
 
-fn apply_pixel_adjustments(img: DynamicImage, e: &ExposureState, c: &ColorState) -> DynamicImage {
+fn apply_pixel_adjustments(
+    img: DynamicImage,
+    e: &ExposureState,
+    c: &ColorState,
+    d: &DetailState,
+) -> DynamicImage {
     let skip_exposure = *e == ExposureState::default();
     let skip_color = *c == ColorState::default();
+    let skip_vignette = d.vignette == 0.0;
 
-    if skip_exposure && skip_color {
+    if skip_exposure && skip_color && skip_vignette {
         return img;
     }
 
@@ -100,6 +106,13 @@ fn apply_pixel_adjustments(img: DynamicImage, e: &ExposureState, c: &ColorState)
 
     // Pre-compute contrast factor outside the loop.
     let contrast_factor = 1.0 + e.contrast;
+
+    // Pre-compute vignette geometry. Distance is squared and pre-normalised
+    // by the max squared distance (centre-to-corner) so the per-pixel path
+    // needs no sqrt — just a multiply.
+    let cx = w as f64 / 2.0;
+    let cy = h as f64 / 2.0;
+    let inv_max_dist_sq = 1.0 / (cx * cx + cy * cy);
 
     for y in 0..h {
         for x in 0..w {
@@ -166,6 +179,20 @@ fn apply_pixel_adjustments(img: DynamicImage, e: &ExposureState, c: &ColorState)
                 gf += c.tint * 0.1;
                 rf -= c.tint * 0.05;
                 bf -= c.tint * 0.05;
+            }
+
+            // ── Vignette ─────────────────────────────────────────────
+            // Last in the pixel pass so it darkens (or brightens) the
+            // composed result. Squared-distance falloff, no sqrt: the
+            // ratio dist^2 / max_dist^2 is what the curve already wants.
+            if !skip_vignette {
+                let dx = x as f64 - cx;
+                let dy = y as f64 - cy;
+                let norm_dist_sq = (dx * dx + dy * dy) * inv_max_dist_sq;
+                let factor = 1.0 - d.vignette * norm_dist_sq;
+                rf *= factor;
+                gf *= factor;
+                bf *= factor;
             }
 
             rgba.put_pixel(x, y, Rgba([clamp_u8(rf), clamp_u8(gf), clamp_u8(bf), a]));
@@ -402,6 +429,95 @@ mod tests {
         let result = apply_edits(&img, &state, RenderTarget::Final);
         let px = result.as_rgba8().unwrap().get_pixel(0, 0);
         assert_eq!(px[3], 128); // Alpha unchanged
+    }
+
+    #[test]
+    fn vignette_zero_in_pixel_pass_does_not_perturb_other_adjustments() {
+        // Default `EditState` would short-circuit via `is_identity()` and
+        // never enter the pixel pass, so `vignette = 0.0` would be
+        // trivially exercised. Force entry by setting brightness, then
+        // assert the output matches the same brightness without any
+        // vignette influence — proves the in-loop `skip_vignette` branch
+        // is a true no-op.
+        let img = test_image();
+
+        let mut with_zero_vignette = EditState::default();
+        with_zero_vignette.exposure.brightness = 0.3;
+        with_zero_vignette.detail.vignette = 0.0;
+
+        let mut brightness_only = EditState::default();
+        brightness_only.exposure.brightness = 0.3;
+
+        let a = apply_edits(&img, &with_zero_vignette, RenderTarget::Final);
+        let b = apply_edits(&img, &brightness_only, RenderTarget::Final);
+        assert_eq!(
+            a.as_rgba8().unwrap().as_raw(),
+            b.as_rgba8().unwrap().as_raw()
+        );
+    }
+
+    #[test]
+    fn positive_vignette_darkens_corners_more_than_centre() {
+        // Uniform mid-grey image so the only effect we measure is the
+        // radial darkening curve.
+        let mut img = RgbaImage::new(20, 20);
+        for px in img.pixels_mut() {
+            *px = Rgba([200, 200, 200, 255]);
+        }
+        let img = DynamicImage::ImageRgba8(img);
+
+        let mut state = EditState::default();
+        state.detail.vignette = 0.8;
+        let result = apply_edits(&img, &state, RenderTarget::Final);
+        let rgba = result.as_rgba8().unwrap();
+
+        let corner = rgba.get_pixel(0, 0)[0];
+        let centre = rgba.get_pixel(10, 10)[0];
+        assert!(
+            corner < centre,
+            "corner ({corner}) should be darker than centre ({centre})"
+        );
+        // Centre should also be ~unchanged at distance≈0.
+        assert!(
+            centre >= 195,
+            "centre should be barely affected, got {centre}"
+        );
+    }
+
+    #[test]
+    fn negative_vignette_brightens_corners() {
+        let mut img = RgbaImage::new(20, 20);
+        for px in img.pixels_mut() {
+            *px = Rgba([100, 100, 100, 255]);
+        }
+        let img = DynamicImage::ImageRgba8(img);
+
+        let mut state = EditState::default();
+        state.detail.vignette = -0.8;
+        let result = apply_edits(&img, &state, RenderTarget::Final);
+        let rgba = result.as_rgba8().unwrap();
+
+        let corner = rgba.get_pixel(0, 0)[0];
+        let centre = rgba.get_pixel(10, 10)[0];
+        assert!(
+            corner > centre,
+            "corner ({corner}) should be brighter than centre ({centre})"
+        );
+    }
+
+    #[test]
+    fn vignette_preserves_alpha() {
+        let mut img = RgbaImage::new(4, 4);
+        for px in img.pixels_mut() {
+            *px = Rgba([200, 200, 200, 128]);
+        }
+        let img = DynamicImage::ImageRgba8(img);
+        let mut state = EditState::default();
+        state.detail.vignette = 0.5;
+        let result = apply_edits(&img, &state, RenderTarget::Final);
+        for px in result.as_rgba8().unwrap().pixels() {
+            assert_eq!(px[3], 128);
+        }
     }
 
     #[test]
