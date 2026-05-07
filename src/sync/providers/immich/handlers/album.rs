@@ -53,7 +53,10 @@ impl SyncEntityHandler for AlbumHandler {
         // Issue #628: bump heartbeat so reset-cycle orphan sweeps see
         // this album as "still alive on the server".
         let now = chrono::Utc::now().timestamp();
-        ctx.library.albums().bump_last_seen_at(&local_id, now).await?;
+        ctx.library
+            .albums()
+            .bump_last_seen_at(&local_id, now)
+            .await?;
 
         Ok(HandlerResult {
             audit_action: "upsert",
@@ -92,7 +95,7 @@ impl SyncEntityHandler for AlbumDeleteHandler {
                     "AlbumDeleteV1: no local row for this external_id; nothing to delete"
                 );
                 return Ok(HandlerResult {
-                            audit_action: "delete",
+                    audit_action: "delete",
                     counter: CounterKind::Deletes,
                 });
             }

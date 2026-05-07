@@ -477,11 +477,7 @@ impl AlbumRepository {
     /// Issue #628: heartbeat for the reset-cycle orphan sweep on
     /// `albums`. Bumped from `AlbumHandler` (pull) and any
     /// server-confirmed album mutation (push).
-    pub async fn bump_last_seen_at(
-        &self,
-        id: &AlbumId,
-        now: i64,
-    ) -> Result<(), LibraryError> {
+    pub async fn bump_last_seen_at(&self, id: &AlbumId, now: i64) -> Result<(), LibraryError> {
         sqlx::query("UPDATE albums SET last_seen_at = ? WHERE id = ?")
             .bind(now)
             .bind(id.as_str())
@@ -1024,13 +1020,11 @@ mod tests {
         assert!(repo.get(&local_only).await.unwrap().is_some());
 
         // Membership row for the deleted album is gone too.
-        let count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM album_media WHERE album_id = ?",
-        )
-        .bind(stale_synced.as_str())
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM album_media WHERE album_id = ?")
+            .bind(stale_synced.as_str())
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
         assert_eq!(count.0, 0, "membership rows must cascade with the album");
     }
 

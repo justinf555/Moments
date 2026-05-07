@@ -361,10 +361,7 @@ mod tests {
             .unwrap();
         repo.complete_audit(reset_id, "reset").await.unwrap();
         for _ in 0..3 {
-            let aid = repo
-                .start_audit("AssetV1", "", "cycle-1")
-                .await
-                .unwrap();
+            let aid = repo.start_audit("AssetV1", "", "cycle-1").await.unwrap();
             repo.complete_audit(aid, "upsert").await.unwrap();
         }
 

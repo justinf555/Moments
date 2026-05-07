@@ -1375,11 +1375,10 @@ mod tests {
         let push = make_push_manager(db.clone()).await;
         push.bump_media_heartbeat("local-m").await.unwrap();
 
-        let row: (i64,) =
-            sqlx::query_as("SELECT last_seen_at FROM media WHERE id = 'local-m'")
-                .fetch_one(db.pool())
-                .await
-                .unwrap();
+        let row: (i64,) = sqlx::query_as("SELECT last_seen_at FROM media WHERE id = 'local-m'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
         assert!(row.0 >= before);
     }
 
@@ -1401,11 +1400,10 @@ mod tests {
         let push = make_push_manager(db.clone()).await;
         push.bump_album_heartbeat("alb-1").await.unwrap();
 
-        let row: (i64,) =
-            sqlx::query_as("SELECT last_seen_at FROM albums WHERE id = 'alb-1'")
-                .fetch_one(db.pool())
-                .await
-                .unwrap();
+        let row: (i64,) = sqlx::query_as("SELECT last_seen_at FROM albums WHERE id = 'alb-1'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
         assert!(row.0 >= before);
     }
 
@@ -1421,11 +1419,10 @@ mod tests {
         let push = make_push_manager(db.clone()).await;
         push.bump_person_heartbeat("p1").await.unwrap();
 
-        let row: (i64,) =
-            sqlx::query_as("SELECT last_seen_at FROM people WHERE id = 'p1'")
-                .fetch_one(db.pool())
-                .await
-                .unwrap();
+        let row: (i64,) = sqlx::query_as("SELECT last_seen_at FROM people WHERE id = 'p1'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
         assert!(row.0 >= before);
     }
 

@@ -293,11 +293,7 @@ impl MediaService {
     /// Sync-only: bump `last_seen_at` for one media row. See issue
     /// #628 — the heartbeat that the reset-cycle orphan sweep
     /// compares against.
-    pub async fn bump_last_seen_at(
-        &self,
-        id: &MediaId,
-        now: i64,
-    ) -> Result<(), LibraryError> {
+    pub async fn bump_last_seen_at(&self, id: &MediaId, now: i64) -> Result<(), LibraryError> {
         self.repo.bump_last_seen_at(id, now).await
     }
 

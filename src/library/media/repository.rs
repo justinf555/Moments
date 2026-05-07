@@ -494,7 +494,6 @@ impl MediaRepository {
             .map_err(LibraryError::Db)
     }
 
-
     /// Move assets to the trash (soft delete).
     pub async fn trash(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
         if ids.is_empty() {
@@ -596,11 +595,7 @@ impl MediaRepository {
     /// `external_id` are treated as deleted server-side.
     ///
     /// Missing row is a no-op — it was deleted under us, which is fine.
-    pub async fn bump_last_seen_at(
-        &self,
-        id: &MediaId,
-        now: i64,
-    ) -> Result<(), LibraryError> {
+    pub async fn bump_last_seen_at(&self, id: &MediaId, now: i64) -> Result<(), LibraryError> {
         sqlx::query("UPDATE media SET last_seen_at = ? WHERE id = ?")
             .bind(now)
             .bind(id.as_str())

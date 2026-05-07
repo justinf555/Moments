@@ -247,11 +247,7 @@ impl FacesService {
     /// Sync-only: bump `last_seen_at` for one person row. See issue
     /// #628 — the heartbeat that the reset-cycle orphan sweep
     /// compares against.
-    pub async fn bump_person_last_seen_at(
-        &self,
-        id: &str,
-        now: i64,
-    ) -> Result<(), LibraryError> {
+    pub async fn bump_person_last_seen_at(&self, id: &str, now: i64) -> Result<(), LibraryError> {
         self.repo.bump_person_last_seen_at(id, now).await
     }
 
@@ -271,7 +267,9 @@ impl FacesService {
         &self,
         checkpoint: i64,
     ) -> Result<u64, LibraryError> {
-        self.repo.delete_people_with_stale_heartbeat(checkpoint).await
+        self.repo
+            .delete_people_with_stale_heartbeat(checkpoint)
+            .await
     }
 
     /// Sync-only: delete asset_face rows whose heartbeat lags

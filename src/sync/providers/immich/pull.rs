@@ -175,8 +175,7 @@ impl PullManager {
         // Seed from the audit log so a stream that resumes mid-reset
         // — server picked up from last ack rather than re-sending
         // SyncResetV1 — still finishes the reconciliation correctly.
-        let mut reset_checkpoint_at: Option<i64> =
-            self.state.current_reset_checkpoint().await?;
+        let mut reset_checkpoint_at: Option<i64> = self.state.current_reset_checkpoint().await?;
         if reset_checkpoint_at.is_some() {
             info!(
                 checkpoint = ?reset_checkpoint_at,
@@ -360,7 +359,10 @@ impl PullManager {
                 .delete_people_with_stale_heartbeat(checkpoint)
                 .await?;
             if people_removed > 0 {
-                info!(count = people_removed, "removing orphaned people after reset sync");
+                info!(
+                    count = people_removed,
+                    "removing orphaned people after reset sync"
+                );
             }
 
             let faces_removed = self
@@ -369,7 +371,10 @@ impl PullManager {
                 .delete_asset_faces_with_stale_heartbeat(checkpoint)
                 .await?;
             if faces_removed > 0 {
-                info!(count = faces_removed, "removing orphaned asset_faces after reset sync");
+                info!(
+                    count = faces_removed,
+                    "removing orphaned asset_faces after reset sync"
+                );
             }
         }
 

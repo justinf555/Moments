@@ -119,7 +119,10 @@ async fn handle_asset(asset: SyncAssetV1, ctx: &SyncContext) -> Result<(), Libra
     // INSERT OR REPLACE resets last_seen_at to its DEFAULT (0); this
     // restores it to the cycle's wall time.
     let now = chrono::Utc::now().timestamp();
-    ctx.library.media().bump_last_seen_at(&media_id, now).await?;
+    ctx.library
+        .media()
+        .bump_last_seen_at(&media_id, now)
+        .await?;
 
     if let Err(e) = download_thumbnail(
         &ctx.client,

@@ -41,7 +41,7 @@ impl SyncEntityHandler for AssetFaceHandler {
                     "AssetFaceV1: parent asset not found locally; skipping face row"
                 );
                 return Ok(HandlerResult {
-                            audit_action: "upsert",
+                    audit_action: "upsert",
                     counter: CounterKind::Faces,
                 });
             }

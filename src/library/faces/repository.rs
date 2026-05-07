@@ -301,11 +301,7 @@ impl FacesRepository {
     /// `people`. Bumped from `PersonHandler` (pull). People are
     /// always server-sourced (no local-only counterpart), so the
     /// sweep DELETEs without an `external_id` filter.
-    pub async fn bump_person_last_seen_at(
-        &self,
-        id: &str,
-        now: i64,
-    ) -> Result<(), LibraryError> {
+    pub async fn bump_person_last_seen_at(&self, id: &str, now: i64) -> Result<(), LibraryError> {
         sqlx::query("UPDATE people SET last_seen_at = ? WHERE id = ?")
             .bind(now)
             .bind(id)
@@ -678,13 +674,14 @@ mod tests {
         };
         repo.upsert_asset_face(&face).await.unwrap();
 
-        repo.bump_asset_face_last_seen_at("f1", 12345).await.unwrap();
+        repo.bump_asset_face_last_seen_at("f1", 12345)
+            .await
+            .unwrap();
 
-        let row: (i64,) =
-            sqlx::query_as("SELECT last_seen_at FROM asset_faces WHERE id = 'f1'")
-                .fetch_one(db.pool())
-                .await
-                .unwrap();
+        let row: (i64,) = sqlx::query_as("SELECT last_seen_at FROM asset_faces WHERE id = 'f1'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
         assert_eq!(row.0, 12345);
     }
 
@@ -710,10 +707,7 @@ mod tests {
             .unwrap();
         repo.bump_person_last_seen_at("p2", 300).await.unwrap();
 
-        let removed = repo
-            .delete_people_with_stale_heartbeat(200)
-            .await
-            .unwrap();
+        let removed = repo.delete_people_with_stale_heartbeat(200).await.unwrap();
         assert_eq!(removed, 1);
 
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM people")
@@ -795,11 +789,10 @@ mod tests {
             .unwrap();
         assert_eq!(removed, 1);
 
-        let surviving: (String,) =
-            sqlx::query_as("SELECT id FROM asset_faces")
-                .fetch_one(db.pool())
-                .await
-                .unwrap();
+        let surviving: (String,) = sqlx::query_as("SELECT id FROM asset_faces")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
         assert_eq!(surviving.0, "fresh");
     }
 }
