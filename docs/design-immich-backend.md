@@ -83,13 +83,21 @@ All reads delegate to `self.db` — identical SQL to `LocalLibrary`. Writes go t
 - Transient errors don't abort the polling loop — logged and retried next cycle
 
 **Reset Sync (>30 days stale):**
-When the server sends `SyncResetV1`, we do NOT wipe the local cache. Instead:
-1. Load all existing MediaIds into a `HashSet<String>` (~24 MB for 200k library)
-2. Process the full stream normally — `INSERT OR REPLACE` handles create/update
-3. Remove each seen ID from the HashSet
-4. After `SyncCompleteV1`: batch delete anything remaining (orphaned entries)
+When the server sends `SyncResetV1`, we do NOT wipe the local cache. Reconciliation runs through per-row `last_seen_at` heartbeats (issue #628):
 
-This preserves existing cached data and thumbnails — no visible disruption to the user.
+1. **Enter reset mode.** On `SyncResetV1`, capture the unix-timestamp checkpoint in memory and clear the per-entity-type ack cursors (`sync_checkpoints`). The `SyncResetHandler` audit row's `started_at` is the durable copy of the checkpoint, used to resume reset mode after a crash or mid-stream disconnect.
+2. **Heartbeat each entity the stream emits.** `AssetV1`, `AlbumV1`, `PersonV1`, and `AssetFaceV1` handlers each `UPDATE … SET last_seen_at = now() WHERE id = ?` on the row they touched. Any locally-driven server interaction (push completion, favorite/restore round-trip) bumps the same column.
+3. **Sweep on `SyncCompleteV1`.** If a checkpoint is set, run four DELETEs in `finish_sync`:
+   - `media WHERE last_seen_at < checkpoint AND external_id IS NOT NULL` (via `delete_permanently_from_sync` so on-disk originals + recorder fire correctly)
+   - `albums WHERE last_seen_at < checkpoint AND external_id IS NOT NULL` (cascades through `album_media` in the same transaction)
+   - `people WHERE last_seen_at < checkpoint` (no local-only counterpart, so no `external_id` gate; orphan faces have their `person_id` nulled via `ON DELETE SET NULL`)
+   - `asset_faces WHERE last_seen_at < checkpoint`
+
+The `external_id IS NOT NULL` filter on `media`/`albums` keeps locally-imported / not-yet-pushed rows immune from server-driven orphan deletion.
+
+**Resuming after a disconnect.** On stream startup, `SyncStateRepository::current_reset_checkpoint()` queries the audit log for the most recent settled `SyncResetV1` / `SyncCompleteV1` row (`action IN ('reset', 'complete')`). If the latest is a `SyncResetV1`, we're resuming an interrupted cycle — re-populate the in-memory checkpoint from its `started_at` so heartbeats keep accumulating against the right deadline. Mid-flight (`'started'`) and errored rows don't influence state. This handles the case where Immich resumes from the last ack rather than re-issuing `SyncResetV1`.
+
+**Why per-row heartbeats instead of a HashSet snapshot.** The original design loaded every local `media.id` into a HashSet, removed each as the stream re-emitted it, and deleted the rest at end-of-stream. That had three latent bugs: (1) it used the wrong namespace — `media.id` is the local UUID; the stream's `entity_id` is the Immich UUID — so under #626's namespace separation the set never shrank and every reset cycle wiped the library; (2) locally-imported rows (`external_id IS NULL`) shouldn't have been candidates at all but were; (3) albums and `asset_faces` had no orphan tracking, so they leaked across resets. The heartbeat model fixes all three at once and is also crash-safe — partial heartbeats persist, so an interrupted reset cycle finishes correctly on the next pull.
 
 **Thumbnail Download Worker Pool:**
 ```
