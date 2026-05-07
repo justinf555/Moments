@@ -272,6 +272,16 @@ impl AlbumService {
     ) -> Result<(), LibraryError> {
         self.repo.bump_last_seen_at(id, now).await
     }
+
+    /// Sync-only: delete albums whose heartbeat lags `checkpoint`
+    /// and which have a non-null `external_id`. Returns the deleted
+    /// album ids. See issue #628.
+    pub async fn delete_with_stale_heartbeat(
+        &self,
+        checkpoint: i64,
+    ) -> Result<Vec<AlbumId>, LibraryError> {
+        self.repo.delete_with_stale_heartbeat(checkpoint).await
+    }
 }
 
 #[cfg(test)]

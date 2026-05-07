@@ -274,6 +274,27 @@ impl FacesService {
     ) -> Result<(), LibraryError> {
         self.repo.bump_asset_face_last_seen_at(id, now).await
     }
+
+    /// Sync-only: delete people whose heartbeat lags `checkpoint`.
+    /// Returns the count of deleted rows. See issue #628.
+    pub async fn delete_people_with_stale_heartbeat(
+        &self,
+        checkpoint: i64,
+    ) -> Result<u64, LibraryError> {
+        self.repo.delete_people_with_stale_heartbeat(checkpoint).await
+    }
+
+    /// Sync-only: delete asset_face rows whose heartbeat lags
+    /// `checkpoint`. Returns the count of deleted rows. See issue
+    /// #628.
+    pub async fn delete_asset_faces_with_stale_heartbeat(
+        &self,
+        checkpoint: i64,
+    ) -> Result<u64, LibraryError> {
+        self.repo
+            .delete_asset_faces_with_stale_heartbeat(checkpoint)
+            .await
+    }
 }
 
 #[cfg(test)]

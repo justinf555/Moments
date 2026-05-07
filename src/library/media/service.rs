@@ -290,12 +290,6 @@ impl MediaService {
         self.repo.library_stats().await
     }
 
-    /// Sync-only: return every media id currently stored. Used by the
-    /// Immich pull engine to seed reset-sync orphan tracking.
-    pub async fn all_ids(&self) -> Result<std::collections::HashSet<String>, LibraryError> {
-        self.repo.all_ids().await
-    }
-
     /// Sync-only: bump `last_seen_at` for one media row. See issue
     /// #628 — the heartbeat that the reset-cycle orphan sweep
     /// compares against.
@@ -305,6 +299,15 @@ impl MediaService {
         now: i64,
     ) -> Result<(), LibraryError> {
         self.repo.bump_last_seen_at(id, now).await
+    }
+
+    /// Sync-only: return media ids whose heartbeat lags `checkpoint`
+    /// and which have a non-null `external_id`. See issue #628.
+    pub async fn ids_with_stale_heartbeat(
+        &self,
+        checkpoint: i64,
+    ) -> Result<Vec<MediaId>, LibraryError> {
+        self.repo.ids_with_stale_heartbeat(checkpoint).await
     }
 }
 

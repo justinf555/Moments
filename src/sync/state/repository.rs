@@ -111,6 +111,47 @@ impl SyncStateRepository {
         .map_err(LibraryError::Db)?;
         Ok(())
     }
+
+    /// Determine whether a reset reconciliation is in progress, and
+    /// return its checkpoint timestamp if so.
+    ///
+    /// Issue #628: looks at the most recent successfully-handled
+    /// `SyncResetV1` / `SyncCompleteV1` audit row. If the latest one
+    /// is `SyncResetV1` (action `'reset'`), a reset cycle started
+    /// but hasn't been closed by a `SyncCompleteV1` — return
+    /// `Some(started_at_unix_seconds)` so the dispatch loop can
+    /// resume in reset mode. This covers the case where a previous
+    /// stream disconnected mid-reset and the server resumes from its
+    /// last ack rather than re-issuing `SyncResetV1`.
+    ///
+    /// The filter `action IN ('reset', 'complete')` excludes rows
+    /// whose dispatch crashed before completion (`'started'`) and
+    /// rows whose handler errored (`'error'`). Both should leave the
+    /// state machine in whatever mode the prior settled row implies.
+    pub async fn current_reset_checkpoint(&self) -> Result<Option<i64>, LibraryError> {
+        let row: Option<(String, String)> = sqlx::query_as(
+            "SELECT entity_type, started_at FROM sync_audit
+             WHERE entity_type IN ('SyncResetV1', 'SyncCompleteV1')
+               AND action IN ('reset', 'complete')
+             ORDER BY id DESC
+             LIMIT 1",
+        )
+        .fetch_optional(self.db.pool())
+        .await
+        .map_err(LibraryError::Db)?;
+
+        match row {
+            Some((entity_type, started_at)) if entity_type == "SyncResetV1" => {
+                let dt = chrono::DateTime::parse_from_rfc3339(&started_at).map_err(|e| {
+                    LibraryError::Immich(format!(
+                        "current_reset_checkpoint: invalid started_at {started_at:?}: {e}"
+                    ))
+                })?;
+                Ok(Some(dt.timestamp()))
+            }
+            _ => Ok(None),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -229,5 +270,107 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count.0, 0);
+    }
+
+    #[tokio::test]
+    async fn current_reset_checkpoint_none_when_no_audit_rows() {
+        let (_dir, db) = open_db().await;
+        let repo = SyncStateRepository::new(db.clone());
+        assert_eq!(repo.current_reset_checkpoint().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn current_reset_checkpoint_some_when_latest_is_reset() {
+        let (_dir, db) = open_db().await;
+        let repo = SyncStateRepository::new(db.clone());
+
+        let row_id = repo
+            .start_audit("SyncResetV1", "", "cycle-1")
+            .await
+            .unwrap();
+        repo.complete_audit(row_id, "reset").await.unwrap();
+
+        let result = repo.current_reset_checkpoint().await.unwrap();
+        assert!(result.is_some(), "expected checkpoint after SyncResetV1");
+    }
+
+    #[tokio::test]
+    async fn current_reset_checkpoint_none_when_latest_is_complete() {
+        let (_dir, db) = open_db().await;
+        let repo = SyncStateRepository::new(db.clone());
+
+        let reset_id = repo
+            .start_audit("SyncResetV1", "", "cycle-1")
+            .await
+            .unwrap();
+        repo.complete_audit(reset_id, "reset").await.unwrap();
+        let complete_id = repo
+            .start_audit("SyncCompleteV1", "", "cycle-1")
+            .await
+            .unwrap();
+        repo.complete_audit(complete_id, "complete").await.unwrap();
+
+        // Reset was closed by SyncCompleteV1; no longer in reset mode.
+        assert_eq!(repo.current_reset_checkpoint().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn current_reset_checkpoint_excludes_started_but_uncompleted() {
+        let (_dir, db) = open_db().await;
+        let repo = SyncStateRepository::new(db.clone());
+
+        // start_audit was called but neither complete_audit nor
+        // fail_audit followed — handler was still running when we
+        // crashed. action stays 'started', completed_at is NULL.
+        let _row_id = repo
+            .start_audit("SyncResetV1", "", "cycle-1")
+            .await
+            .unwrap();
+
+        // We can't trust that this cycle made any progress; treat as
+        // not-in-reset-mode. A future SyncResetV1 will start fresh.
+        assert_eq!(repo.current_reset_checkpoint().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn current_reset_checkpoint_excludes_errored_resets() {
+        let (_dir, db) = open_db().await;
+        let repo = SyncStateRepository::new(db.clone());
+
+        let row_id = repo
+            .start_audit("SyncResetV1", "", "cycle-1")
+            .await
+            .unwrap();
+        repo.fail_audit(row_id, "boom").await.unwrap();
+
+        // An errored reset shouldn't pin us in reset mode.
+        assert_eq!(repo.current_reset_checkpoint().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn current_reset_checkpoint_ignores_other_entity_types() {
+        let (_dir, db) = open_db().await;
+        let repo = SyncStateRepository::new(db.clone());
+
+        // Most recent reset/complete is the reset; AssetV1 rows after
+        // it (the dispatch in the resumed stream) shouldn't shift us
+        // out of reset mode.
+        let reset_id = repo
+            .start_audit("SyncResetV1", "", "cycle-1")
+            .await
+            .unwrap();
+        repo.complete_audit(reset_id, "reset").await.unwrap();
+        for _ in 0..3 {
+            let aid = repo
+                .start_audit("AssetV1", "", "cycle-1")
+                .await
+                .unwrap();
+            repo.complete_audit(aid, "upsert").await.unwrap();
+        }
+
+        assert!(
+            repo.current_reset_checkpoint().await.unwrap().is_some(),
+            "AssetV1 audit rows must not close the reset cycle"
+        );
     }
 }
