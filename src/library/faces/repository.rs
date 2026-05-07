@@ -261,8 +261,8 @@ impl FacesRepository {
     ///
     /// Issue #628: the reset-cycle orphan sweep on the `people` table.
     /// People are always server-sourced (no local-only counterpart),
-    /// so the sweep doesn't gate on `external_id`. Returns the number
-    /// of rows removed for logging.
+    /// so the sweep doesn't gate on `external_id`. Returns the deleted
+    /// person ids so the caller can emit `PersonRemoved` events.
     ///
     /// Asset face rows that referenced any of the deleted people have
     /// their `person_id` set to NULL via the FK's ON DELETE SET NULL
@@ -270,13 +270,47 @@ impl FacesRepository {
     pub async fn delete_people_with_stale_heartbeat(
         &self,
         checkpoint: i64,
-    ) -> Result<u64, LibraryError> {
-        let result = sqlx::query("DELETE FROM people WHERE last_seen_at < ?")
+    ) -> Result<Vec<String>, LibraryError> {
+        let mut tx = self.db.pool().begin().await.map_err(LibraryError::Db)?;
+        let rows: Vec<(String,)> =
+            sqlx::query_as("SELECT id FROM people WHERE last_seen_at < ?")
+                .bind(checkpoint)
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(LibraryError::Db)?;
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids: Vec<String> = rows.into_iter().map(|(id,)| id).collect();
+        sqlx::query("DELETE FROM people WHERE last_seen_at < ?")
             .bind(checkpoint)
-            .execute(self.db.pool())
+            .execute(&mut *tx)
             .await
             .map_err(LibraryError::Db)?;
-        Ok(result.rows_affected())
+        tx.commit().await.map_err(LibraryError::Db)?;
+        Ok(ids)
+    }
+
+    /// Distinct non-null `person_id` values among asset_face rows
+    /// whose heartbeat lags the checkpoint.
+    ///
+    /// Issue #628: the reset-cycle face sweep needs to know which
+    /// surviving people had faces removed so their denormalised
+    /// `face_count` can be recomputed. Called by the service before
+    /// `delete_asset_faces_with_stale_heartbeat`.
+    pub async fn persons_with_stale_faces(
+        &self,
+        checkpoint: i64,
+    ) -> Result<Vec<String>, LibraryError> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT DISTINCT person_id FROM asset_faces
+             WHERE last_seen_at < ? AND person_id IS NOT NULL",
+        )
+        .bind(checkpoint)
+        .fetch_all(self.db.pool())
+        .await
+        .map_err(LibraryError::Db)?;
+        Ok(rows.into_iter().map(|(p,)| p).collect())
     }
 
     /// Delete asset face rows whose heartbeat lags the given checkpoint.
@@ -300,7 +334,7 @@ impl FacesRepository {
     /// Issue #628: heartbeat for the reset-cycle orphan sweep on
     /// `people`. Bumped from `PersonHandler` (pull). People are
     /// always server-sourced (no local-only counterpart), so the
-    /// sweep DELETEs without an `external_id` filter.
+    /// sweep deletes without an `external_id` filter.
     pub async fn bump_person_last_seen_at(&self, id: &str, now: i64) -> Result<(), LibraryError> {
         sqlx::query("UPDATE people SET last_seen_at = ? WHERE id = ?")
             .bind(now)
@@ -708,7 +742,7 @@ mod tests {
         repo.bump_person_last_seen_at("p2", 300).await.unwrap();
 
         let removed = repo.delete_people_with_stale_heartbeat(200).await.unwrap();
-        assert_eq!(removed, 1);
+        assert_eq!(removed, vec!["p1".to_string()]);
 
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM people")
             .fetch_one(db.pool())

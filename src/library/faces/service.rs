@@ -262,26 +262,42 @@ impl FacesService {
     }
 
     /// Sync-only: delete people whose heartbeat lags `checkpoint`.
-    /// Returns the count of deleted rows. See issue #628.
+    /// Returns the deleted person ids. Emits
+    /// [`FacesEvent::PersonRemoved`] for each so client `ListStore`s
+    /// drop the rows without waiting for a UI refresh. See issue #628.
     pub async fn delete_people_with_stale_heartbeat(
         &self,
         checkpoint: i64,
-    ) -> Result<u64, LibraryError> {
-        self.repo
+    ) -> Result<Vec<String>, LibraryError> {
+        let removed_ids = self
+            .repo
             .delete_people_with_stale_heartbeat(checkpoint)
-            .await
+            .await?;
+        for id in &removed_ids {
+            self.emit(FacesEvent::PersonRemoved(PersonId::from_raw(id.clone())));
+        }
+        Ok(removed_ids)
     }
 
     /// Sync-only: delete asset_face rows whose heartbeat lags
-    /// `checkpoint`. Returns the count of deleted rows. See issue
-    /// #628.
+    /// `checkpoint`. Returns the count of deleted rows.
+    ///
+    /// Recomputes `face_count` on every surviving person whose stale
+    /// faces were swept — without this the denormalised count drifts
+    /// until the next sync cycle re-emits the person. See issue #628.
     pub async fn delete_asset_faces_with_stale_heartbeat(
         &self,
         checkpoint: i64,
     ) -> Result<u64, LibraryError> {
-        self.repo
+        let affected_persons = self.repo.persons_with_stale_faces(checkpoint).await?;
+        let removed = self
+            .repo
             .delete_asset_faces_with_stale_heartbeat(checkpoint)
-            .await
+            .await?;
+        for person_id in &affected_persons {
+            self.repo.update_face_count(person_id).await?;
+        }
+        Ok(removed)
     }
 }
 
@@ -322,5 +338,101 @@ mod tests {
 
         let (_dir, svc) = make_service(thumb_root.path().to_path_buf()).await;
         assert!(svc.person_thumbnail_path(&person_id).is_none());
+    }
+
+    /// Issue #628: orphan sweep emits `PersonRemoved` per deleted
+    /// person so client `ListStore`s drop them in real time.
+    #[tokio::test]
+    async fn delete_people_with_stale_heartbeat_emits_person_removed_per_id() {
+        let thumb_root = tempfile::tempdir().unwrap();
+        let (_dir, svc) = make_service(thumb_root.path().to_path_buf()).await;
+
+        svc.upsert_person("p1", "Stale", None, false, false, None, None, None)
+            .await
+            .unwrap();
+        svc.upsert_person("p2", "Fresh", None, false, false, None, None, None)
+            .await
+            .unwrap();
+        svc.repo.bump_person_last_seen_at("p1", 100).await.unwrap();
+        svc.repo.bump_person_last_seen_at("p2", 300).await.unwrap();
+
+        // Subscribe AFTER setup so the upsert events don't pollute the channel.
+        let mut rx = svc.subscribe();
+
+        let removed = svc.delete_people_with_stale_heartbeat(200).await.unwrap();
+        assert_eq!(removed, vec!["p1".to_string()]);
+
+        let event = rx.try_recv().expect("expected one event");
+        match event {
+            FacesEvent::PersonRemoved(id) => assert_eq!(id.as_str(), "p1"),
+            other => panic!("expected PersonRemoved; got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "fresh person wasn't swept");
+    }
+
+    /// Issue #628: when stale faces are swept, every surviving person
+    /// who lost faces gets their denormalised `face_count` recomputed.
+    /// Without this the count drifts until the next sync cycle re-emits
+    /// the person.
+    #[tokio::test]
+    async fn delete_asset_faces_with_stale_heartbeat_recomputes_face_count() {
+        use crate::library::db::test_helpers::test_record;
+        use crate::library::faces::repository::AssetFaceRow;
+        use crate::library::media::repository::MediaRepository;
+        use crate::library::media::MediaId;
+
+        let thumb_root = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let media = MediaRepository::new(db.clone());
+        let svc = FacesService::new(db.clone(), thumb_root.path().to_path_buf(), Arc::new(NoOpRecorder));
+
+        media
+            .insert(&test_record(MediaId::new("m1".to_string())))
+            .await
+            .unwrap();
+        svc.upsert_person("p1", "Survivor", None, false, false, None, None, None)
+            .await
+            .unwrap();
+        svc.repo.bump_person_last_seen_at("p1", 1_000).await.unwrap();
+
+        // Two faces attached to the same surviving person — one stale,
+        // one fresh.
+        for (id, beat) in [("stale-face", 100), ("fresh-face", 1_000)] {
+            let row = AssetFaceRow {
+                id: id.to_string(),
+                asset_id: "m1".to_string(),
+                person_id: Some("p1".to_string()),
+                image_width: 100,
+                image_height: 100,
+                bbox_x1: 0,
+                bbox_y1: 0,
+                bbox_x2: 50,
+                bbox_y2: 50,
+                source_type: "MachineLearning".to_string(),
+            };
+            svc.repo.upsert_asset_face(&row).await.unwrap();
+            svc.repo.bump_asset_face_last_seen_at(id, beat).await.unwrap();
+        }
+        // Pin face_count to a wrong value so we can prove the recompute fired.
+        sqlx::query("UPDATE people SET face_count = 99 WHERE id = 'p1'")
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        let removed = svc
+            .delete_asset_faces_with_stale_heartbeat(200)
+            .await
+            .unwrap();
+        assert_eq!(removed, 1);
+
+        let count: (i64,) = sqlx::query_as("SELECT face_count FROM people WHERE id = 'p1'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(
+            count.0, 1,
+            "face_count must be recomputed to 1 (only fresh-face survives)"
+        );
     }
 }

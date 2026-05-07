@@ -271,22 +271,14 @@ impl PullManager {
                 if counters.assets % 500 == 0 && counters.assets > 0 {
                     info!(assets = counters.assets, "sync progress");
                 }
-            } else if entity_type == "SyncCompleteV1" {
-                // Not dispatched through handlers — breaks the loop.
-                info!(
-                    assets = counters.assets,
-                    exifs = counters.exifs,
-                    deletes = counters.deletes,
-                    albums = counters.albums,
-                    people = counters.people,
-                    faces = counters.faces,
-                    errors = counters.errors,
-                    lines = line_number,
-                    "sync stream complete"
-                );
-                acks.push(sync_line.ack);
-                break;
             } else {
+                // Includes `SyncCompleteV1` only if the handler list
+                // didn't pick it up — `SyncCompleteHandler` is
+                // registered in `all_handlers()` so the normal
+                // dispatch path handles it. The stream then ends
+                // naturally when the server closes the connection;
+                // `lines.next_line()` returns `None` and we exit the
+                // loop. This branch covers genuinely-unknown types.
                 debug!(
                     entity_type,
                     line_number, "ignoring unknown sync entity type"
@@ -358,9 +350,9 @@ impl PullManager {
                 .faces()
                 .delete_people_with_stale_heartbeat(checkpoint)
                 .await?;
-            if people_removed > 0 {
+            if !people_removed.is_empty() {
                 info!(
-                    count = people_removed,
+                    count = people_removed.len(),
                     "removing orphaned people after reset sync"
                 );
             }

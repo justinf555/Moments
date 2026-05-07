@@ -39,8 +39,13 @@ impl SyncEntityHandler for SyncResetHandler {
     }
 }
 
-/// Marks the end of the sync stream. The PullManager breaks the loop
-/// when it sees this entity type. The handler itself is a no-op.
+/// Marks the end of the sync stream.
+///
+/// The handler itself is a no-op — its job is to produce a
+/// `complete` audit row so `current_reset_checkpoint()` can see the
+/// reset cycle was closed cleanly. The pull loop exits when the
+/// server closes the stream after `SyncCompleteV1`; there's no
+/// explicit `break` in `pull.rs`.
 pub struct SyncCompleteHandler;
 
 #[async_trait]

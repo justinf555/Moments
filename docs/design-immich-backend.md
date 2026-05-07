@@ -87,7 +87,7 @@ When the server sends `SyncResetV1`, we do NOT wipe the local cache. Reconciliat
 
 1. **Enter reset mode.** On `SyncResetV1`, capture the unix-timestamp checkpoint in memory and clear the per-entity-type ack cursors (`sync_checkpoints`). The `SyncResetHandler` audit row's `started_at` is the durable copy of the checkpoint, used to resume reset mode after a crash or mid-stream disconnect.
 2. **Heartbeat each entity the stream emits.** `AssetV1`, `AlbumV1`, `PersonV1`, and `AssetFaceV1` handlers each `UPDATE … SET last_seen_at = now() WHERE id = ?` on the row they touched. Any locally-driven server interaction (push completion, favorite/restore round-trip) bumps the same column.
-3. **Sweep on `SyncCompleteV1`.** If a checkpoint is set, run four DELETEs in `finish_sync`:
+3. **Sweep on `SyncCompleteV1`.** If a checkpoint is set, run four DELETE passes in `finish_sync`:
    - `media WHERE last_seen_at < checkpoint AND external_id IS NOT NULL` (via `delete_permanently_from_sync` so on-disk originals + recorder fire correctly)
    - `albums WHERE last_seen_at < checkpoint AND external_id IS NOT NULL` (cascades through `album_media` in the same transaction)
    - `people WHERE last_seen_at < checkpoint` (no local-only counterpart, so no `external_id` gate; orphan faces have their `person_id` nulled via `ON DELETE SET NULL`)
