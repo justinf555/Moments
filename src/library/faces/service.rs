@@ -385,7 +385,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = open_test_db(dir.path()).await;
         let media = MediaRepository::new(db.clone());
-        let svc = FacesService::new(db.clone(), thumb_root.path().to_path_buf(), Arc::new(NoOpRecorder));
+        let svc = FacesService::new(
+            db.clone(),
+            thumb_root.path().to_path_buf(),
+            Arc::new(NoOpRecorder),
+        );
 
         media
             .insert(&test_record(MediaId::new("m1".to_string())))
@@ -394,7 +398,10 @@ mod tests {
         svc.upsert_person("p1", "Survivor", None, false, false, None, None, None)
             .await
             .unwrap();
-        svc.repo.bump_person_last_seen_at("p1", 1_000).await.unwrap();
+        svc.repo
+            .bump_person_last_seen_at("p1", 1_000)
+            .await
+            .unwrap();
 
         // Two faces attached to the same surviving person — one stale,
         // one fresh.
@@ -412,7 +419,10 @@ mod tests {
                 source_type: "MachineLearning".to_string(),
             };
             svc.repo.upsert_asset_face(&row).await.unwrap();
-            svc.repo.bump_asset_face_last_seen_at(id, beat).await.unwrap();
+            svc.repo
+                .bump_asset_face_last_seen_at(id, beat)
+                .await
+                .unwrap();
         }
         // Pin face_count to a wrong value so we can prove the recompute fired.
         sqlx::query("UPDATE people SET face_count = 99 WHERE id = 'p1'")

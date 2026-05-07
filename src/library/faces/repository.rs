@@ -272,12 +272,11 @@ impl FacesRepository {
         checkpoint: i64,
     ) -> Result<Vec<String>, LibraryError> {
         let mut tx = self.db.pool().begin().await.map_err(LibraryError::Db)?;
-        let rows: Vec<(String,)> =
-            sqlx::query_as("SELECT id FROM people WHERE last_seen_at < ?")
-                .bind(checkpoint)
-                .fetch_all(&mut *tx)
-                .await
-                .map_err(LibraryError::Db)?;
+        let rows: Vec<(String,)> = sqlx::query_as("SELECT id FROM people WHERE last_seen_at < ?")
+            .bind(checkpoint)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(LibraryError::Db)?;
         if rows.is_empty() {
             return Ok(Vec::new());
         }
