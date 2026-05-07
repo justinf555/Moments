@@ -21,7 +21,6 @@ impl SyncEntityHandler for AlbumAssetHandler {
         ctx: &SyncContext,
     ) -> Result<HandlerResult, LibraryError> {
         let assoc: SyncAlbumToAssetV1 = deserialize_entity(data, "AlbumToAssetV1", line_number)?;
-        let id = format!("{}:{}", assoc.album_id, assoc.asset_id);
 
         // Issue #626: `assoc.asset_id` is the Immich UUID; `album_media.media_id`
         // references the local `MediaId`. Translate via `external_id` lookup.
@@ -42,7 +41,6 @@ impl SyncEntityHandler for AlbumAssetHandler {
                     "AlbumToAssetV1: parent asset not found locally; skipping membership row"
                 );
                 return Ok(HandlerResult {
-                    entity_id: id,
                     audit_action: "upsert",
                     counter: CounterKind::Albums,
                 });
@@ -69,7 +67,6 @@ impl SyncEntityHandler for AlbumAssetHandler {
                     "AlbumToAssetV1: parent album not found locally; skipping membership row"
                 );
                 return Ok(HandlerResult {
-                    entity_id: id,
                     audit_action: "upsert",
                     counter: CounterKind::Albums,
                 });
@@ -83,7 +80,6 @@ impl SyncEntityHandler for AlbumAssetHandler {
             .await?;
 
         Ok(HandlerResult {
-            entity_id: id,
             audit_action: "upsert",
             counter: CounterKind::Albums,
         })
@@ -106,7 +102,6 @@ impl SyncEntityHandler for AlbumAssetDeleteHandler {
     ) -> Result<HandlerResult, LibraryError> {
         let assoc: SyncAlbumToAssetDeleteV1 =
             deserialize_entity(data, "AlbumToAssetDeleteV1", line_number)?;
-        let id = format!("{}:{}", assoc.album_id, assoc.asset_id);
 
         // Issue #626: `assoc.asset_id` is the Immich UUID; the
         // album_media row references the local `MediaId`. Translate
@@ -130,7 +125,6 @@ impl SyncEntityHandler for AlbumAssetDeleteHandler {
                     "AlbumToAssetDeleteV1: parent asset not found locally; nothing to delete"
                 );
                 return Ok(HandlerResult {
-                    entity_id: id,
                     audit_action: "delete",
                     counter: CounterKind::Deletes,
                 });
@@ -154,7 +148,6 @@ impl SyncEntityHandler for AlbumAssetDeleteHandler {
                     "AlbumToAssetDeleteV1: parent album not found locally; nothing to delete"
                 );
                 return Ok(HandlerResult {
-                    entity_id: id,
                     audit_action: "delete",
                     counter: CounterKind::Deletes,
                 });
@@ -167,7 +160,6 @@ impl SyncEntityHandler for AlbumAssetDeleteHandler {
             .await?;
 
         Ok(HandlerResult {
-            entity_id: id,
             audit_action: "delete",
             counter: CounterKind::Deletes,
         })

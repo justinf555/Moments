@@ -417,6 +417,75 @@ impl AlbumRepository {
 
         Ok(rows.into_iter().map(|(id,)| MediaId::new(id)).collect())
     }
+
+    /// Delete albums whose heartbeat lags the checkpoint and have a
+    /// non-null `external_id`. Cascades to `album_media` membership rows
+    /// in the same transaction.
+    ///
+    /// Issue #628: the reset-cycle orphan sweep on the `albums` table.
+    /// `external_id IS NOT NULL` excludes locally-created albums the
+    /// server has never seen. Returns the deleted album ids for
+    /// logging.
+    pub async fn delete_with_stale_heartbeat(
+        &self,
+        checkpoint: i64,
+    ) -> Result<Vec<AlbumId>, LibraryError> {
+        let mut tx = self.db.pool().begin().await.map_err(LibraryError::Db)?;
+
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT id FROM albums
+             WHERE last_seen_at < ? AND external_id IS NOT NULL",
+        )
+        .bind(checkpoint)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(LibraryError::Db)?;
+
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let ids: Vec<AlbumId> = rows
+            .into_iter()
+            .map(|(id,)| AlbumId::from_raw(id))
+            .collect();
+
+        // Cascade-delete membership rows first, then the album rows
+        // themselves. Mirrors the manual cascade in `delete()` —
+        // `album_media.album_id` references `albums(id)` without
+        // ON DELETE CASCADE, so SQLite would reject the album DELETE
+        // otherwise.
+        for id in &ids {
+            sqlx::query("DELETE FROM album_media WHERE album_id = ?")
+                .bind(id.as_str())
+                .execute(&mut *tx)
+                .await
+                .map_err(LibraryError::Db)?;
+            sqlx::query("DELETE FROM albums WHERE id = ?")
+                .bind(id.as_str())
+                .execute(&mut *tx)
+                .await
+                .map_err(LibraryError::Db)?;
+        }
+
+        tx.commit().await.map_err(LibraryError::Db)?;
+        Ok(ids)
+    }
+
+    /// Update `last_seen_at` to the given unix timestamp for one album row.
+    ///
+    /// Issue #628: heartbeat for the reset-cycle orphan sweep on
+    /// `albums`. Bumped from `AlbumHandler` (pull) and any
+    /// server-confirmed album mutation (push).
+    pub async fn bump_last_seen_at(&self, id: &AlbumId, now: i64) -> Result<(), LibraryError> {
+        sqlx::query("UPDATE albums SET last_seen_at = ? WHERE id = ?")
+            .bind(now)
+            .bind(id.as_str())
+            .execute(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
+        Ok(())
+    }
 }
 
 /// Convert an `AlbumRow` into an `Album`.
@@ -880,5 +949,90 @@ mod tests {
 
         repo.set_pinned(&id, false).await.unwrap();
         assert!(!repo.get(&id).await.unwrap().unwrap().is_pinned);
+    }
+
+    #[tokio::test]
+    async fn bump_last_seen_at_writes_value() {
+        let dir = tempdir().unwrap();
+        let (repo, _media, db) = test_repo(dir.path()).await;
+        let id = repo.create("Heartbeat").await.unwrap();
+
+        repo.bump_last_seen_at(&id, 12345).await.unwrap();
+
+        let row: (i64,) = sqlx::query_as("SELECT last_seen_at FROM albums WHERE id = ?")
+            .bind(id.as_str())
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(row.0, 12345);
+    }
+
+    #[tokio::test]
+    async fn bump_last_seen_at_missing_id_is_noop() {
+        let dir = tempdir().unwrap();
+        let (repo, _media, _db) = test_repo(dir.path()).await;
+        let id = AlbumId::from_raw("nonexistent".to_string());
+        repo.bump_last_seen_at(&id, 12345).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn delete_with_stale_heartbeat_removes_only_eligible_rows() {
+        let dir = tempdir().unwrap();
+        let (repo, media, db) = test_repo(dir.path()).await;
+
+        // Insert one media row so we can attach an album_media membership
+        // and verify the cascade delete.
+        let media_id = MediaId::new("a".repeat(64));
+        media
+            .insert(&record_with_taken_at(media_id.clone(), "a.jpg", Some(1000)))
+            .await
+            .unwrap();
+
+        // Server-sourced album, stale heartbeat → orphan.
+        let stale_synced = repo.create("Stale Synced").await.unwrap();
+        sqlx::query("UPDATE albums SET external_id = 'immich-1', last_seen_at = 100 WHERE id = ?")
+            .bind(stale_synced.as_str())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        repo.add_media(&stale_synced, std::slice::from_ref(&media_id))
+            .await
+            .unwrap();
+
+        // Server-sourced album, fresh heartbeat → safe.
+        let fresh_synced = repo.create("Fresh Synced").await.unwrap();
+        sqlx::query("UPDATE albums SET external_id = 'immich-2', last_seen_at = 300 WHERE id = ?")
+            .bind(fresh_synced.as_str())
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        // Locally-created album (no external_id) → immune.
+        let local_only = repo.create("Local Only").await.unwrap();
+
+        let deleted = repo.delete_with_stale_heartbeat(200).await.unwrap();
+        assert_eq!(deleted.len(), 1);
+        assert_eq!(deleted[0].as_str(), stale_synced.as_str());
+
+        // Stale synced album is gone, fresh + local survive.
+        assert!(repo.get(&stale_synced).await.unwrap().is_none());
+        assert!(repo.get(&fresh_synced).await.unwrap().is_some());
+        assert!(repo.get(&local_only).await.unwrap().is_some());
+
+        // Membership row for the deleted album is gone too.
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM album_media WHERE album_id = ?")
+            .bind(stale_synced.as_str())
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(count.0, 0, "membership rows must cascade with the album");
+    }
+
+    #[tokio::test]
+    async fn delete_with_stale_heartbeat_empty_returns_empty() {
+        let dir = tempdir().unwrap();
+        let (repo, _media, _db) = test_repo(dir.path()).await;
+        let deleted = repo.delete_with_stale_heartbeat(100).await.unwrap();
+        assert!(deleted.is_empty());
     }
 }

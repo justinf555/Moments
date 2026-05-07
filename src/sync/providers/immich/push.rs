@@ -219,14 +219,16 @@ impl PushManager {
                             "isFavorite": favorite,
                         }),
                     )
-                    .await
+                    .await?;
+                self.bump_media_heartbeat(id.as_str()).await
             }
 
             OutboxMutation::AssetTrashed { id } => {
                 let external_id = self.lookup_media_external_id(id.as_str()).await?;
                 self.client
                     .delete_with_body("/assets", &serde_json::json!({ "ids": [external_id] }))
-                    .await
+                    .await?;
+                self.bump_media_heartbeat(id.as_str()).await
             }
 
             OutboxMutation::AssetRestored { id } => {
@@ -236,7 +238,8 @@ impl PushManager {
                         "/trash/restore/assets",
                         &serde_json::json!({ "ids": [external_id] }),
                     )
-                    .await
+                    .await?;
+                self.bump_media_heartbeat(id.as_str()).await
             }
 
             OutboxMutation::AssetDeleted { id, external_id } => {
@@ -274,7 +277,8 @@ impl PushManager {
                         &format!("/albums/{external_id}"),
                         &serde_json::json!({ "albumName": name }),
                     )
-                    .await
+                    .await?;
+                self.bump_album_heartbeat(id.as_str()).await
             }
 
             OutboxMutation::AlbumDeleted { id, external_id } => {
@@ -298,7 +302,8 @@ impl PushManager {
                         &format!("/albums/{external_id}/assets"),
                         &serde_json::json!({ "ids": external_media_ids }),
                     )
-                    .await
+                    .await?;
+                self.bump_album_heartbeat(album_id.as_str()).await
             }
 
             OutboxMutation::AlbumMediaRemoved {
@@ -312,7 +317,8 @@ impl PushManager {
                         &format!("/albums/{external_id}/assets"),
                         &serde_json::json!({ "ids": external_media_ids }),
                     )
-                    .await
+                    .await?;
+                self.bump_album_heartbeat(album_id.as_str()).await
             }
 
             // ── People mutations ────────────────────────────────────
@@ -323,7 +329,8 @@ impl PushManager {
                         &format!("/people/{external_id}"),
                         &serde_json::json!({ "name": name }),
                     )
-                    .await
+                    .await?;
+                self.bump_person_heartbeat(id.as_str()).await
             }
 
             OutboxMutation::PersonHidden { id, hidden } => {
@@ -333,7 +340,8 @@ impl PushManager {
                         &format!("/people/{external_id}"),
                         &serde_json::json!({ "isHidden": hidden }),
                     )
-                    .await
+                    .await?;
+                self.bump_person_heartbeat(id.as_str()).await
             }
         }
     }
@@ -605,8 +613,13 @@ impl PushManager {
         local_id: &str,
         external_id: &str,
     ) -> Result<(), LibraryError> {
-        sqlx::query("UPDATE media SET external_id = ? WHERE id = ?")
+        // Issue #628: stamping `external_id` after upload is also a
+        // server-confirmed mutation — bump the heartbeat so a future
+        // reset cycle's orphan sweep treats the row as alive.
+        let now = chrono::Utc::now().timestamp();
+        sqlx::query("UPDATE media SET external_id = ?, last_seen_at = ? WHERE id = ?")
             .bind(external_id)
+            .bind(now)
             .bind(local_id)
             .execute(self.db.pool())
             .await
@@ -619,8 +632,51 @@ impl PushManager {
         local_id: &str,
         external_id: &str,
     ) -> Result<(), LibraryError> {
-        sqlx::query("UPDATE albums SET external_id = ? WHERE id = ?")
+        let now = chrono::Utc::now().timestamp();
+        sqlx::query("UPDATE albums SET external_id = ?, last_seen_at = ? WHERE id = ?")
             .bind(external_id)
+            .bind(now)
+            .bind(local_id)
+            .execute(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
+        Ok(())
+    }
+
+    /// Issue #628: bump `media.last_seen_at` after a server-confirmed
+    /// non-stamping mutation (favorite, trash, restore). Mirrors
+    /// `MediaRepository::bump_last_seen_at` but via raw SQL, since
+    /// `PushManager` holds a `Database` rather than an `Arc<Library>`.
+    async fn bump_media_heartbeat(&self, local_id: &str) -> Result<(), LibraryError> {
+        let now = chrono::Utc::now().timestamp();
+        sqlx::query("UPDATE media SET last_seen_at = ? WHERE id = ?")
+            .bind(now)
+            .bind(local_id)
+            .execute(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
+        Ok(())
+    }
+
+    /// Issue #628: bump `albums.last_seen_at` after a server-confirmed
+    /// album mutation (rename, membership change).
+    async fn bump_album_heartbeat(&self, local_id: &str) -> Result<(), LibraryError> {
+        let now = chrono::Utc::now().timestamp();
+        sqlx::query("UPDATE albums SET last_seen_at = ? WHERE id = ?")
+            .bind(now)
+            .bind(local_id)
+            .execute(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
+        Ok(())
+    }
+
+    /// Issue #628: bump `people.last_seen_at` after a server-confirmed
+    /// person mutation (rename, hide).
+    async fn bump_person_heartbeat(&self, local_id: &str) -> Result<(), LibraryError> {
+        let now = chrono::Utc::now().timestamp();
+        sqlx::query("UPDATE people SET last_seen_at = ? WHERE id = ?")
+            .bind(now)
             .bind(local_id)
             .execute(self.db.pool())
             .await
@@ -1256,17 +1312,25 @@ mod tests {
             .await
             .unwrap();
 
+        let before = chrono::Utc::now().timestamp();
         let push = make_push_manager(db.clone()).await;
         push.set_media_external_id("local-m", "new-ext-id")
             .await
             .unwrap();
 
-        let row: (Option<String>,) =
-            sqlx::query_as("SELECT external_id FROM media WHERE id = 'local-m'")
+        let row: (Option<String>, i64) =
+            sqlx::query_as("SELECT external_id, last_seen_at FROM media WHERE id = 'local-m'")
                 .fetch_one(db.pool())
                 .await
                 .unwrap();
         assert_eq!(row.0.as_deref(), Some("new-ext-id"));
+        // Issue #628: stamping bumps the heartbeat too — the row was
+        // just confirmed-alive by the server.
+        assert!(
+            row.1 >= before,
+            "last_seen_at ({}) should be >= now ({before})",
+            row.1
+        );
     }
 
     #[tokio::test]
@@ -1283,17 +1347,83 @@ mod tests {
             .await
             .unwrap();
 
+        let before = chrono::Utc::now().timestamp();
         let push = make_push_manager(db.clone()).await;
         push.set_album_external_id("alb-local", "alb-ext-id")
             .await
             .unwrap();
 
-        let row: (Option<String>,) =
-            sqlx::query_as("SELECT external_id FROM albums WHERE id = 'alb-local'")
+        let row: (Option<String>, i64) =
+            sqlx::query_as("SELECT external_id, last_seen_at FROM albums WHERE id = 'alb-local'")
                 .fetch_one(db.pool())
                 .await
                 .unwrap();
         assert_eq!(row.0.as_deref(), Some("alb-ext-id"));
+        assert!(row.1 >= before);
+    }
+
+    #[tokio::test]
+    async fn bump_media_heartbeat_writes_last_seen_at() {
+        let (_dir, db) = setup_push_db().await;
+        let record = test_record(MediaId::new("local-m".to_string()));
+        MediaRepository::new(db.clone())
+            .upsert(&record)
+            .await
+            .unwrap();
+
+        let before = chrono::Utc::now().timestamp();
+        let push = make_push_manager(db.clone()).await;
+        push.bump_media_heartbeat("local-m").await.unwrap();
+
+        let row: (i64,) = sqlx::query_as("SELECT last_seen_at FROM media WHERE id = 'local-m'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert!(row.0 >= before);
+    }
+
+    #[tokio::test]
+    async fn bump_album_heartbeat_writes_last_seen_at() {
+        let (_dir, db) = setup_push_db().await;
+
+        let now = chrono::Utc::now().timestamp();
+        sqlx::query("INSERT INTO albums (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)")
+            .bind("alb-1")
+            .bind("Test")
+            .bind(now)
+            .bind(now)
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        let before = chrono::Utc::now().timestamp();
+        let push = make_push_manager(db.clone()).await;
+        push.bump_album_heartbeat("alb-1").await.unwrap();
+
+        let row: (i64,) = sqlx::query_as("SELECT last_seen_at FROM albums WHERE id = 'alb-1'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert!(row.0 >= before);
+    }
+
+    #[tokio::test]
+    async fn bump_person_heartbeat_writes_last_seen_at() {
+        let (_dir, db) = setup_push_db().await;
+        sqlx::query("INSERT INTO people (id, name) VALUES ('p1', 'Alice')")
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        let before = chrono::Utc::now().timestamp();
+        let push = make_push_manager(db.clone()).await;
+        push.bump_person_heartbeat("p1").await.unwrap();
+
+        let row: (i64,) = sqlx::query_as("SELECT last_seen_at FROM people WHERE id = 'p1'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert!(row.0 >= before);
     }
 
     #[tokio::test]

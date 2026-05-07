@@ -23,10 +23,8 @@ impl SyncEntityHandler for AssetHandler {
         ctx: &SyncContext,
     ) -> Result<HandlerResult, LibraryError> {
         let asset: SyncAssetV1 = deserialize_entity(data, "AssetV1", line_number)?;
-        let id = asset.id.clone();
         handle_asset(asset, ctx).await?;
         Ok(HandlerResult {
-            entity_id: id,
             audit_action: "upsert",
             counter: CounterKind::Assets,
         })
@@ -116,6 +114,16 @@ async fn handle_asset(asset: SyncAssetV1, ctx: &SyncContext) -> Result<(), Libra
     let server_id = record.external_id.clone().expect("external_id set above");
     ctx.library.media().upsert_media(&record).await?;
 
+    // Issue #628: bump heartbeat after the upsert so reset-cycle
+    // orphan sweeps see this asset as "still alive on the server".
+    // INSERT OR REPLACE resets last_seen_at to its DEFAULT (0); this
+    // restores it to the cycle's wall time.
+    let now = chrono::Utc::now().timestamp();
+    ctx.library
+        .media()
+        .bump_last_seen_at(&media_id, now)
+        .await?;
+
     if let Err(e) = download_thumbnail(
         &ctx.client,
         &ctx.library,
@@ -161,7 +169,6 @@ impl SyncEntityHandler for AssetDeleteHandler {
             }
         }
         Ok(HandlerResult {
-            entity_id: external_id,
             audit_action: "delete",
             counter: CounterKind::Deletes,
         })

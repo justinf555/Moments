@@ -23,7 +23,6 @@ impl SyncEntityHandler for AssetFaceHandler {
         ctx: &SyncContext,
     ) -> Result<HandlerResult, LibraryError> {
         let face: SyncAssetFaceV1 = deserialize_entity(data, "AssetFaceV1", line_number)?;
-        let id = face.id.clone();
 
         // Issue #626: `face.asset_id` is the Immich UUID; `asset_faces.asset_id`
         // references the local `MediaId`. Translate via `external_id` lookup;
@@ -42,7 +41,6 @@ impl SyncEntityHandler for AssetFaceHandler {
                     "AssetFaceV1: parent asset not found locally; skipping face row"
                 );
                 return Ok(HandlerResult {
-                    entity_id: id,
                     audit_action: "upsert",
                     counter: CounterKind::Faces,
                 });
@@ -66,12 +64,19 @@ impl SyncEntityHandler for AssetFaceHandler {
 
         ctx.library.faces().upsert_asset_face(&row).await?;
 
+        // Issue #628: bump heartbeat so reset-cycle orphan sweeps see
+        // this face as "still alive on the server".
+        let now = chrono::Utc::now().timestamp();
+        ctx.library
+            .faces()
+            .bump_asset_face_last_seen_at(&row.id, now)
+            .await?;
+
         if let Some(ref person_id) = face.person_id {
             ctx.library.faces().update_face_count(person_id).await?;
         }
 
         Ok(HandlerResult {
-            entity_id: id,
             audit_action: "upsert",
             counter: CounterKind::Faces,
         })
@@ -97,7 +102,6 @@ impl SyncEntityHandler for AssetFaceDeleteHandler {
         let id = delete.asset_face_id.clone();
         ctx.library.faces().delete_asset_face(&id).await?;
         Ok(HandlerResult {
-            entity_id: id,
             audit_action: "delete",
             counter: CounterKind::Deletes,
         })

@@ -22,7 +22,6 @@ impl SyncEntityHandler for AssetExifHandler {
         ctx: &SyncContext,
     ) -> Result<HandlerResult, LibraryError> {
         let exif: SyncAssetExifV1 = deserialize_entity(data, "AssetExifV1", line_number)?;
-        let id = exif.asset_id.clone();
 
         // Issue #626: `exif.asset_id` is the Immich UUID; `media_metadata.media_id`
         // references the local `MediaId`. Translate via `external_id` lookup;
@@ -40,7 +39,6 @@ impl SyncEntityHandler for AssetExifHandler {
                     "AssetExifV1: parent asset not found locally; skipping metadata row"
                 );
                 return Ok(HandlerResult {
-                    entity_id: id,
                     audit_action: "upsert",
                     counter: CounterKind::Exifs,
                 });
@@ -65,7 +63,6 @@ impl SyncEntityHandler for AssetExifHandler {
         ctx.library.metadata().upsert_metadata(&record).await?;
 
         Ok(HandlerResult {
-            entity_id: id,
             audit_action: "upsert",
             counter: CounterKind::Exifs,
         })

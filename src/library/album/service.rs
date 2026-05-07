@@ -261,6 +261,29 @@ impl AlbumService {
     ) -> Result<Vec<MediaId>, LibraryError> {
         self.repo.cover_media_ids(album_id, limit).await
     }
+
+    /// Sync-only: bump `last_seen_at` for one album row. See issue
+    /// #628 — the heartbeat that the reset-cycle orphan sweep
+    /// compares against.
+    pub async fn bump_last_seen_at(&self, id: &AlbumId, now: i64) -> Result<(), LibraryError> {
+        self.repo.bump_last_seen_at(id, now).await
+    }
+
+    /// Sync-only: delete albums whose heartbeat lags `checkpoint`
+    /// and which have a non-null `external_id`. Returns the deleted
+    /// album ids. Emits [`AlbumEvent::AlbumRemoved`] for each so
+    /// client `ListStore`s drop the rows without waiting for a UI
+    /// refresh. See issue #628.
+    pub async fn delete_with_stale_heartbeat(
+        &self,
+        checkpoint: i64,
+    ) -> Result<Vec<AlbumId>, LibraryError> {
+        let removed_ids = self.repo.delete_with_stale_heartbeat(checkpoint).await?;
+        for id in &removed_ids {
+            self.emit(AlbumEvent::AlbumRemoved(id.clone()));
+        }
+        Ok(removed_ids)
+    }
 }
 
 #[cfg(test)]
@@ -323,5 +346,41 @@ mod tests {
             AlbumEvent::AlbumUpdated(id) => assert_eq!(id, local_id),
             other => panic!("expected AlbumUpdated; got {other:?}"),
         }
+    }
+
+    /// Issue #628: the orphan sweep at end-of-reset must emit
+    /// `AlbumRemoved` for each deleted album so client `ListStore`s
+    /// patch in real time instead of waiting for a UI reload.
+    #[tokio::test]
+    async fn delete_with_stale_heartbeat_emits_album_removed_per_id() {
+        let (_dir, svc) = make_service().await;
+
+        let stale = svc.create_album("Stale Synced").await.unwrap();
+        let fresh = svc.create_album("Fresh Synced").await.unwrap();
+        // Promote both to server-sourced and pin heartbeats.
+        svc.upsert_album(stale.as_str(), "Stale Synced", 0, 0, Some("immich-1"))
+            .await
+            .unwrap();
+        svc.upsert_album(fresh.as_str(), "Fresh Synced", 0, 0, Some("immich-2"))
+            .await
+            .unwrap();
+        svc.bump_last_seen_at(&stale, 100).await.unwrap();
+        svc.bump_last_seen_at(&fresh, 300).await.unwrap();
+
+        // Subscribe AFTER setup so we don't see upsert events.
+        let mut rx = svc.subscribe();
+
+        let removed = svc.delete_with_stale_heartbeat(200).await.unwrap();
+        assert_eq!(removed, vec![stale.clone()]);
+
+        let event = rx.try_recv().expect("expected one event");
+        match event {
+            AlbumEvent::AlbumRemoved(id) => assert_eq!(id, stale),
+            other => panic!("expected AlbumRemoved; got {other:?}"),
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "fresh album wasn't swept; only one event expected"
+        );
     }
 }

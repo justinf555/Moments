@@ -257,18 +257,105 @@ impl FacesRepository {
         Ok(())
     }
 
-    /// Delete all people (used during sync reset).
-    pub async fn clear_people(&self) -> Result<(), LibraryError> {
-        sqlx::query("DELETE FROM people")
+    /// Delete people whose heartbeat lags the given checkpoint.
+    ///
+    /// Issue #628: the reset-cycle orphan sweep on the `people` table.
+    /// People are always server-sourced (no local-only counterpart),
+    /// so the sweep doesn't gate on `external_id`. Returns the deleted
+    /// person ids so the caller can emit `PersonRemoved` events.
+    ///
+    /// Asset face rows that referenced any of the deleted people have
+    /// their `person_id` set to NULL via the FK's ON DELETE SET NULL
+    /// — the face stays, just unattributed.
+    pub async fn delete_people_with_stale_heartbeat(
+        &self,
+        checkpoint: i64,
+    ) -> Result<Vec<String>, LibraryError> {
+        let mut tx = self.db.pool().begin().await.map_err(LibraryError::Db)?;
+        let rows: Vec<(String,)> = sqlx::query_as("SELECT id FROM people WHERE last_seen_at < ?")
+            .bind(checkpoint)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(LibraryError::Db)?;
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids: Vec<String> = rows.into_iter().map(|(id,)| id).collect();
+        sqlx::query("DELETE FROM people WHERE last_seen_at < ?")
+            .bind(checkpoint)
+            .execute(&mut *tx)
+            .await
+            .map_err(LibraryError::Db)?;
+        tx.commit().await.map_err(LibraryError::Db)?;
+        Ok(ids)
+    }
+
+    /// Distinct non-null `person_id` values among asset_face rows
+    /// whose heartbeat lags the checkpoint.
+    ///
+    /// Issue #628: the reset-cycle face sweep needs to know which
+    /// surviving people had faces removed so their denormalised
+    /// `face_count` can be recomputed. Called by the service before
+    /// `delete_asset_faces_with_stale_heartbeat`.
+    pub async fn persons_with_stale_faces(
+        &self,
+        checkpoint: i64,
+    ) -> Result<Vec<String>, LibraryError> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT DISTINCT person_id FROM asset_faces
+             WHERE last_seen_at < ? AND person_id IS NOT NULL",
+        )
+        .bind(checkpoint)
+        .fetch_all(self.db.pool())
+        .await
+        .map_err(LibraryError::Db)?;
+        Ok(rows.into_iter().map(|(p,)| p).collect())
+    }
+
+    /// Delete asset face rows whose heartbeat lags the given checkpoint.
+    ///
+    /// Issue #628: the reset-cycle orphan sweep on the `asset_faces`
+    /// table. As with people, all rows are server-sourced.
+    pub async fn delete_asset_faces_with_stale_heartbeat(
+        &self,
+        checkpoint: i64,
+    ) -> Result<u64, LibraryError> {
+        let result = sqlx::query("DELETE FROM asset_faces WHERE last_seen_at < ?")
+            .bind(checkpoint)
+            .execute(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
+        Ok(result.rows_affected())
+    }
+
+    /// Update `last_seen_at` to the given unix timestamp for one person row.
+    ///
+    /// Issue #628: heartbeat for the reset-cycle orphan sweep on
+    /// `people`. Bumped from `PersonHandler` (pull). People are
+    /// always server-sourced (no local-only counterpart), so the
+    /// sweep deletes without an `external_id` filter.
+    pub async fn bump_person_last_seen_at(&self, id: &str, now: i64) -> Result<(), LibraryError> {
+        sqlx::query("UPDATE people SET last_seen_at = ? WHERE id = ?")
+            .bind(now)
+            .bind(id)
             .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
         Ok(())
     }
 
-    /// Delete all asset faces (used during sync reset).
-    pub async fn clear_asset_faces(&self) -> Result<(), LibraryError> {
-        sqlx::query("DELETE FROM asset_faces")
+    /// Update `last_seen_at` to the given unix timestamp for one asset face row.
+    ///
+    /// Issue #628: heartbeat for the reset-cycle orphan sweep on
+    /// `asset_faces`. Bumped from `AssetFaceHandler` (pull).
+    pub async fn bump_asset_face_last_seen_at(
+        &self,
+        id: &str,
+        now: i64,
+    ) -> Result<(), LibraryError> {
+        sqlx::query("UPDATE asset_faces SET last_seen_at = ? WHERE id = ?")
+            .bind(now)
+            .bind(id)
             .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
@@ -542,41 +629,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn clear_people_and_faces() {
-        let dir = tempdir().unwrap();
-        let (repo, media, _db) = test_repo(dir.path()).await;
-
-        repo.upsert_person("p1", "Alice", None, false, false, None, None, None)
-            .await
-            .unwrap();
-        let rec = test_record(MediaId::new("m1".to_string()));
-        media.insert(&rec).await.unwrap();
-
-        let face = AssetFaceRow {
-            id: "f1".to_string(),
-            asset_id: "m1".to_string(),
-            person_id: Some("p1".to_string()),
-            image_width: 100,
-            image_height: 100,
-            bbox_x1: 0,
-            bbox_y1: 0,
-            bbox_x2: 50,
-            bbox_y2: 50,
-            source_type: "MachineLearning".to_string(),
-        };
-        repo.upsert_asset_face(&face).await.unwrap();
-
-        repo.clear_asset_faces().await.unwrap();
-        repo.clear_people().await.unwrap();
-
-        let people = repo.list_people().await.unwrap();
-        assert!(people.is_empty());
-
-        let media = repo.list_media_for_person("p1").await.unwrap();
-        assert!(media.is_empty());
-    }
-
-    #[tokio::test]
     async fn delete_person_nullifies_face_person_id() {
         let dir = tempdir().unwrap();
         let (repo, media, _db) = test_repo(dir.path()).await;
@@ -607,5 +659,173 @@ mod tests {
         // Face still exists but with no person.
         let media = repo.list_media_for_person("p1").await.unwrap();
         assert!(media.is_empty());
+    }
+
+    #[tokio::test]
+    async fn bump_person_last_seen_at_writes_value() {
+        let dir = tempdir().unwrap();
+        let (repo, _media, db) = test_repo(dir.path()).await;
+        repo.upsert_person("p1", "Alice", None, false, false, None, None, None)
+            .await
+            .unwrap();
+
+        repo.bump_person_last_seen_at("p1", 12345).await.unwrap();
+
+        let row: (i64,) = sqlx::query_as("SELECT last_seen_at FROM people WHERE id = 'p1'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(row.0, 12345);
+    }
+
+    #[tokio::test]
+    async fn bump_person_last_seen_at_missing_id_is_noop() {
+        let dir = tempdir().unwrap();
+        let (repo, _media, _db) = test_repo(dir.path()).await;
+        repo.bump_person_last_seen_at("ghost", 12345).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn bump_asset_face_last_seen_at_writes_value() {
+        let dir = tempdir().unwrap();
+        let (repo, media, db) = test_repo(dir.path()).await;
+        media
+            .insert(&test_record(MediaId::new("m1".to_string())))
+            .await
+            .unwrap();
+        let face = AssetFaceRow {
+            id: "f1".to_string(),
+            asset_id: "m1".to_string(),
+            person_id: None,
+            image_width: 100,
+            image_height: 100,
+            bbox_x1: 0,
+            bbox_y1: 0,
+            bbox_x2: 50,
+            bbox_y2: 50,
+            source_type: "MachineLearning".to_string(),
+        };
+        repo.upsert_asset_face(&face).await.unwrap();
+
+        repo.bump_asset_face_last_seen_at("f1", 12345)
+            .await
+            .unwrap();
+
+        let row: (i64,) = sqlx::query_as("SELECT last_seen_at FROM asset_faces WHERE id = 'f1'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(row.0, 12345);
+    }
+
+    #[tokio::test]
+    async fn bump_asset_face_last_seen_at_missing_id_is_noop() {
+        let dir = tempdir().unwrap();
+        let (repo, _media, _db) = test_repo(dir.path()).await;
+        repo.bump_asset_face_last_seen_at("ghost", 12345)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn delete_people_with_stale_heartbeat_removes_only_eligible_rows() {
+        let dir = tempdir().unwrap();
+        let (repo, _media, db) = test_repo(dir.path()).await;
+        repo.upsert_person("p1", "Stale", None, false, false, None, None, None)
+            .await
+            .unwrap();
+        repo.bump_person_last_seen_at("p1", 100).await.unwrap();
+        repo.upsert_person("p2", "Fresh", None, false, false, None, None, None)
+            .await
+            .unwrap();
+        repo.bump_person_last_seen_at("p2", 300).await.unwrap();
+
+        let removed = repo.delete_people_with_stale_heartbeat(200).await.unwrap();
+        assert_eq!(removed, vec!["p1".to_string()]);
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM people")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(count.0, 1, "only the fresh person remains");
+    }
+
+    #[tokio::test]
+    async fn delete_people_with_stale_heartbeat_nullifies_referencing_face_person_id() {
+        let dir = tempdir().unwrap();
+        let (repo, media, db) = test_repo(dir.path()).await;
+
+        media
+            .insert(&test_record(MediaId::new("m1".to_string())))
+            .await
+            .unwrap();
+        repo.upsert_person("p1", "Stale", None, false, false, None, None, None)
+            .await
+            .unwrap();
+        repo.bump_person_last_seen_at("p1", 100).await.unwrap();
+
+        let face = AssetFaceRow {
+            id: "f1".to_string(),
+            asset_id: "m1".to_string(),
+            person_id: Some("p1".to_string()),
+            image_width: 100,
+            image_height: 100,
+            bbox_x1: 0,
+            bbox_y1: 0,
+            bbox_x2: 50,
+            bbox_y2: 50,
+            source_type: "MachineLearning".to_string(),
+        };
+        repo.upsert_asset_face(&face).await.unwrap();
+
+        repo.delete_people_with_stale_heartbeat(200).await.unwrap();
+
+        // Face row survives but is detached from the deleted person.
+        let person_id: (Option<String>,) =
+            sqlx::query_as("SELECT person_id FROM asset_faces WHERE id = 'f1'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(person_id.0, None);
+    }
+
+    #[tokio::test]
+    async fn delete_asset_faces_with_stale_heartbeat_removes_only_eligible_rows() {
+        let dir = tempdir().unwrap();
+        let (repo, media, db) = test_repo(dir.path()).await;
+
+        media
+            .insert(&test_record(MediaId::new("m1".to_string())))
+            .await
+            .unwrap();
+
+        for (id, beat) in [("stale", 100), ("fresh", 300)] {
+            let face = AssetFaceRow {
+                id: id.to_string(),
+                asset_id: "m1".to_string(),
+                person_id: None,
+                image_width: 100,
+                image_height: 100,
+                bbox_x1: 0,
+                bbox_y1: 0,
+                bbox_x2: 50,
+                bbox_y2: 50,
+                source_type: "MachineLearning".to_string(),
+            };
+            repo.upsert_asset_face(&face).await.unwrap();
+            repo.bump_asset_face_last_seen_at(id, beat).await.unwrap();
+        }
+
+        let removed = repo
+            .delete_asset_faces_with_stale_heartbeat(200)
+            .await
+            .unwrap();
+        assert_eq!(removed, 1);
+
+        let surviving: (String,) = sqlx::query_as("SELECT id FROM asset_faces")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(surviving.0, "fresh");
     }
 }

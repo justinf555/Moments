@@ -3,7 +3,6 @@
 //! Connects to `POST /sync/stream`, processes NDJSON entity records,
 //! and flushes acks incrementally. See `docs/design-immich-backend.md`.
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -12,7 +11,6 @@ use tokio::io::AsyncBufReadExt;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::library::error::LibraryError;
-use crate::library::media::MediaId;
 use crate::library::Library;
 use crate::sync::event::SyncEvent;
 use crate::sync::state::SyncStateRepository;
@@ -166,10 +164,24 @@ impl PullManager {
         let mut acks: Vec<String> = Vec::new();
         let mut counters = SyncCounters::default();
         let mut notified_processing = false;
-        let mut is_reset = false;
-        let mut existing_ids: Option<HashSet<String>> = None;
         let mut line_number: usize = 0;
         let sync_cycle = chrono::Utc::now().to_rfc3339();
+
+        // Issue #628: heartbeat-based reset reconciliation. The
+        // checkpoint is `Some(unix_seconds)` while a reset cycle is
+        // open; rows whose `last_seen_at` lags it (and have a non-null
+        // external_id, for media/albums) are deleted at end-of-stream.
+        //
+        // Seed from the audit log so a stream that resumes mid-reset
+        // — server picked up from last ack rather than re-sending
+        // SyncResetV1 — still finishes the reconciliation correctly.
+        let mut reset_checkpoint_at: Option<i64> = self.state.current_reset_checkpoint().await?;
+        if reset_checkpoint_at.is_some() {
+            info!(
+                checkpoint = ?reset_checkpoint_at,
+                "resuming reset reconciliation from prior cycle"
+            );
+        }
 
         let entity_handlers = handlers::all_handlers();
         let ctx = SyncContext {
@@ -203,17 +215,14 @@ impl PullManager {
             let entity_type = sync_line.entity_type.as_str();
 
             // ── Reset tracking ──────────────────────────────────────
-            // SyncResetV1 sets the reset flag and loads existing IDs.
-            // AssetV1/AssetDeleteV1 remove IDs from the tracking set.
+            // Issue #628: SyncResetV1 enters heartbeat-reconcile mode.
+            // The checkpoint is wall time at receipt — assets the
+            // stream re-emits will bump their `last_seen_at` past it,
+            // and anything left below the line at SyncCompleteV1 is
+            // an orphan. No HashSet snapshot needed.
             if entity_type == "SyncResetV1" {
                 warn!("server requested sync reset — performing full resync");
-                is_reset = true;
-                let ids = self.library.media().all_ids().await?;
-                info!(
-                    existing_count = ids.len(),
-                    "loaded existing media IDs for reset tracking"
-                );
-                existing_ids = Some(ids);
+                reset_checkpoint_at = Some(chrono::Utc::now().timestamp());
             }
 
             // ── Dispatch to handler ─────────────────────────────────
@@ -246,12 +255,9 @@ impl PullManager {
                             notified_processing = true;
                         }
 
-                        // Track asset IDs for reset orphan detection.
-                        if let Some(ref mut ids) = existing_ids {
-                            if !result.entity_id.is_empty() {
-                                ids.remove(&result.entity_id);
-                            }
-                        }
+                        // Issue #628: orphan tracking is handled by
+                        // per-row `last_seen_at` heartbeats in the
+                        // handlers themselves. Nothing per-line here.
                     }
                     Err(e) => {
                         warn!(entity_type, error = %e, "skipping sync entity");
@@ -265,22 +271,14 @@ impl PullManager {
                 if counters.assets % 500 == 0 && counters.assets > 0 {
                     info!(assets = counters.assets, "sync progress");
                 }
-            } else if entity_type == "SyncCompleteV1" {
-                // Not dispatched through handlers — breaks the loop.
-                info!(
-                    assets = counters.assets,
-                    exifs = counters.exifs,
-                    deletes = counters.deletes,
-                    albums = counters.albums,
-                    people = counters.people,
-                    faces = counters.faces,
-                    errors = counters.errors,
-                    lines = line_number,
-                    "sync stream complete"
-                );
-                acks.push(sync_line.ack);
-                break;
             } else {
+                // Includes `SyncCompleteV1` only if the handler list
+                // didn't pick it up — `SyncCompleteHandler` is
+                // registered in `all_handlers()` so the normal
+                // dispatch path handles it. The stream then ends
+                // naturally when the server closes the connection;
+                // `lines.next_line()` returns `None` and we exit the
+                // loop. This branch covers genuinely-unknown types.
                 debug!(
                     entity_type,
                     line_number, "ignoring unknown sync entity type"
@@ -298,7 +296,7 @@ impl PullManager {
             }
         }
 
-        self.finish_sync(is_reset, existing_ids, &mut acks, &counters)
+        self.finish_sync(reset_checkpoint_at, &mut acks, &counters)
             .await
     }
 
@@ -306,21 +304,69 @@ impl PullManager {
 
     async fn finish_sync(
         &self,
-        is_reset: bool,
-        existing_ids: Option<HashSet<String>>,
+        reset_checkpoint_at: Option<i64>,
         acks: &mut Vec<String>,
         counters: &SyncCounters,
     ) -> Result<(usize, usize), LibraryError> {
-        if is_reset {
-            if let Some(orphaned_ids) = existing_ids {
-                if !orphaned_ids.is_empty() {
-                    info!(
-                        count = orphaned_ids.len(),
-                        "removing orphaned assets after reset sync"
-                    );
-                    let ids: Vec<MediaId> = orphaned_ids.into_iter().map(MediaId::new).collect();
-                    self.library.delete_permanently_from_sync(&ids).await?;
-                }
+        // Issue #628: if a reset cycle was open, the stream just
+        // closed it. Sweep rows whose heartbeat didn't catch up to
+        // the cycle's checkpoint — these are entities the server has
+        // dropped since the checkpoint was taken.
+        //
+        // Media and albums gate on `external_id IS NOT NULL` so
+        // locally-imported / not-yet-pushed rows are immune. People
+        // and asset_faces have no local-only counterpart and sweep
+        // unconditionally below the checkpoint.
+        if let Some(checkpoint) = reset_checkpoint_at {
+            let media_orphans = self
+                .library
+                .media()
+                .ids_with_stale_heartbeat(checkpoint)
+                .await?;
+            if !media_orphans.is_empty() {
+                info!(
+                    count = media_orphans.len(),
+                    "removing orphaned assets after reset sync"
+                );
+                self.library
+                    .delete_permanently_from_sync(&media_orphans)
+                    .await?;
+            }
+
+            let album_orphans = self
+                .library
+                .albums()
+                .delete_with_stale_heartbeat(checkpoint)
+                .await?;
+            if !album_orphans.is_empty() {
+                info!(
+                    count = album_orphans.len(),
+                    "removing orphaned albums after reset sync"
+                );
+            }
+
+            let people_removed = self
+                .library
+                .faces()
+                .delete_people_with_stale_heartbeat(checkpoint)
+                .await?;
+            if !people_removed.is_empty() {
+                info!(
+                    count = people_removed.len(),
+                    "removing orphaned people after reset sync"
+                );
+            }
+
+            let faces_removed = self
+                .library
+                .faces()
+                .delete_asset_faces_with_stale_heartbeat(checkpoint)
+                .await?;
+            if faces_removed > 0 {
+                info!(
+                    count = faces_removed,
+                    "removing orphaned asset_faces after reset sync"
+                );
             }
         }
 

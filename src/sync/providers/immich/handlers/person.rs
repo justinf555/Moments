@@ -22,7 +22,6 @@ impl SyncEntityHandler for PersonHandler {
         ctx: &SyncContext,
     ) -> Result<HandlerResult, LibraryError> {
         let person: SyncPersonV1 = deserialize_entity(data, "PersonV1", line_number)?;
-        let id = person.id.clone();
 
         ctx.library
             .faces()
@@ -36,6 +35,14 @@ impl SyncEntityHandler for PersonHandler {
                 person.face_asset_id.as_deref(),
                 Some(&person.id),
             )
+            .await?;
+
+        // Issue #628: bump heartbeat so reset-cycle orphan sweeps see
+        // this person as "still alive on the server".
+        let now = chrono::Utc::now().timestamp();
+        ctx.library
+            .faces()
+            .bump_person_last_seen_at(&person.id, now)
             .await?;
 
         // Download person face thumbnail.
@@ -58,7 +65,6 @@ impl SyncEntityHandler for PersonHandler {
         }
 
         Ok(HandlerResult {
-            entity_id: id,
             audit_action: "upsert",
             counter: CounterKind::People,
         })
@@ -83,7 +89,6 @@ impl SyncEntityHandler for PersonDeleteHandler {
         let id = delete.person_id.clone();
         ctx.library.faces().delete_person_by_id(&id).await?;
         Ok(HandlerResult {
-            entity_id: id,
             audit_action: "delete",
             counter: CounterKind::Deletes,
         })

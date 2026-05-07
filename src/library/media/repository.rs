@@ -494,20 +494,6 @@ impl MediaRepository {
             .map_err(LibraryError::Db)
     }
 
-    /// Load every media row's id into a set.
-    ///
-    /// Used by the Immich pull engine to detect orphans during a reset
-    /// sync: the set is seeded from this query, every `AssetV1` line in
-    /// the stream removes its id, and whatever is left at the end is
-    /// deleted as having vanished from the server.
-    pub async fn all_ids(&self) -> Result<std::collections::HashSet<String>, LibraryError> {
-        let rows: Vec<(String,)> = sqlx::query_as("SELECT id FROM media")
-            .fetch_all(self.db.pool())
-            .await
-            .map_err(LibraryError::Db)?;
-        Ok(rows.into_iter().map(|(id,)| id).collect())
-    }
-
     /// Move assets to the trash (soft delete).
     pub async fn trash(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
         if ids.is_empty() {
@@ -572,6 +558,50 @@ impl MediaRepository {
             query.execute(&mut *tx).await.map_err(LibraryError::Db)?;
         }
         tx.commit().await.map_err(LibraryError::Db)?;
+        Ok(())
+    }
+
+    /// Return media ids whose heartbeat lags the given checkpoint and
+    /// have a non-null `external_id`.
+    ///
+    /// Issue #628: callers (the reset-cycle orphan sweep) pass the
+    /// returned ids to `delete_permanently_from_sync` so the removal
+    /// goes through the recorder + on-disk file cleanup.
+    /// `external_id IS NOT NULL` excludes locally-imported rows the
+    /// server never knew about.
+    pub async fn ids_with_stale_heartbeat(
+        &self,
+        checkpoint: i64,
+    ) -> Result<Vec<MediaId>, LibraryError> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT id FROM media
+             WHERE last_seen_at < ? AND external_id IS NOT NULL",
+        )
+        .bind(checkpoint)
+        .fetch_all(self.db.pool())
+        .await
+        .map_err(LibraryError::Db)?;
+        Ok(rows.into_iter().map(|(id,)| MediaId::new(id)).collect())
+    }
+
+    /// Update `last_seen_at` to the given unix timestamp for one media row.
+    ///
+    /// Issue #628: this is the heartbeat that the reset-cycle orphan
+    /// sweep compares against. Sync paths call it whenever the server
+    /// confirms an asset is still alive — pull `AssetV1` after the
+    /// upsert, push completion after stamping `external_id`, and any
+    /// server-confirmed write-through (favorite, restore). Rows whose
+    /// heartbeat lags the cycle's checkpoint and have a non-null
+    /// `external_id` are treated as deleted server-side.
+    ///
+    /// Missing row is a no-op — it was deleted under us, which is fine.
+    pub async fn bump_last_seen_at(&self, id: &MediaId, now: i64) -> Result<(), LibraryError> {
+        sqlx::query("UPDATE media SET last_seen_at = ? WHERE id = ?")
+            .bind(now)
+            .bind(id.as_str())
+            .execute(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
         Ok(())
     }
 }
@@ -838,38 +868,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn all_ids_returns_every_stored_id() {
-        let dir = tempdir().unwrap();
-        let (repo, _db) = test_repo(dir.path()).await;
-        repo.insert(&record_with_taken_at(
-            MediaId::new("id-a".to_string()),
-            "2025/01/photo_a.jpg",
-            Some(1_000),
-        ))
-        .await
-        .unwrap();
-        repo.insert(&record_with_taken_at(
-            MediaId::new("id-b".to_string()),
-            "2025/01/photo_b.jpg",
-            Some(2_000),
-        ))
-        .await
-        .unwrap();
-
-        let ids = repo.all_ids().await.unwrap();
-        assert_eq!(ids.len(), 2);
-        assert!(ids.contains("id-a"));
-        assert!(ids.contains("id-b"));
-    }
-
-    #[tokio::test]
-    async fn all_ids_empty_when_no_rows() {
-        let dir = tempdir().unwrap();
-        let (repo, _db) = test_repo(dir.path()).await;
-        assert!(repo.all_ids().await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
     async fn library_stats_counts() {
         let dir = tempdir().unwrap();
         let (repo, _db) = test_repo(dir.path()).await;
@@ -889,5 +887,65 @@ mod tests {
         .unwrap();
         let stats = repo.library_stats().await.unwrap();
         assert_eq!(stats.photo_count, 2);
+    }
+
+    #[tokio::test]
+    async fn bump_last_seen_at_writes_value() {
+        let dir = tempdir().unwrap();
+        let (repo, db) = test_repo(dir.path()).await;
+        let id = MediaId::new("a".repeat(64));
+        repo.insert(&test_record(id.clone())).await.unwrap();
+
+        repo.bump_last_seen_at(&id, 12345).await.unwrap();
+
+        let row: (i64,) = sqlx::query_as("SELECT last_seen_at FROM media WHERE id = ?")
+            .bind(id.as_str())
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(row.0, 12345);
+    }
+
+    #[tokio::test]
+    async fn bump_last_seen_at_missing_id_is_noop() {
+        let dir = tempdir().unwrap();
+        let (repo, _db) = test_repo(dir.path()).await;
+        let id = MediaId::new("z".repeat(64));
+        // No row exists; the UPDATE matches nothing. Must not error —
+        // sync handlers may bump after a row was deleted under them.
+        repo.bump_last_seen_at(&id, 12345).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ids_with_stale_heartbeat_finds_only_eligible_rows() {
+        let dir = tempdir().unwrap();
+        let (repo, _db) = test_repo(dir.path()).await;
+
+        // Server-sourced row, heartbeat older than checkpoint → orphan.
+        let stale_synced = MediaId::new("a".repeat(64));
+        let mut rec = record_with_taken_at(stale_synced.clone(), "stale.jpg", Some(1));
+        rec.external_id = Some("immich-uuid-a".to_string());
+        repo.insert(&rec).await.unwrap();
+        repo.bump_last_seen_at(&stale_synced, 100).await.unwrap();
+
+        // Server-sourced row, heartbeat newer than checkpoint → safe.
+        let fresh_synced = MediaId::new("b".repeat(64));
+        let mut rec = record_with_taken_at(fresh_synced.clone(), "fresh.jpg", Some(2));
+        rec.external_id = Some("immich-uuid-b".to_string());
+        repo.insert(&rec).await.unwrap();
+        repo.bump_last_seen_at(&fresh_synced, 300).await.unwrap();
+
+        // Local-only row (no external_id), heartbeat doesn't matter →
+        // immune via the external_id IS NOT NULL filter.
+        let local_only = MediaId::new("c".repeat(64));
+        let mut rec = record_with_taken_at(local_only.clone(), "local.jpg", Some(3));
+        rec.external_id = None;
+        repo.insert(&rec).await.unwrap();
+        // Heartbeat at 0 (insert default) is < checkpoint, but filter saves it.
+
+        let orphans = repo.ids_with_stale_heartbeat(200).await.unwrap();
+
+        assert_eq!(orphans.len(), 1, "only the stale synced row is orphaned");
+        assert_eq!(orphans[0].as_str(), stale_synced.as_str());
     }
 }

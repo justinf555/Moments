@@ -52,8 +52,6 @@ pub enum CounterKind {
 
 /// Result of a successful handler invocation.
 pub struct HandlerResult {
-    /// Entity ID for audit logging.
-    pub entity_id: String,
     /// Audit action label (e.g. "upsert", "delete").
     pub audit_action: &'static str,
     /// Which counter to increment.
