@@ -23,10 +23,8 @@ impl SyncEntityHandler for AssetHandler {
         ctx: &SyncContext,
     ) -> Result<HandlerResult, LibraryError> {
         let asset: SyncAssetV1 = deserialize_entity(data, "AssetV1", line_number)?;
-        let id = asset.id.clone();
         handle_asset(asset, ctx).await?;
         Ok(HandlerResult {
-            entity_id: id,
             audit_action: "upsert",
             counter: CounterKind::Assets,
         })
@@ -168,7 +166,6 @@ impl SyncEntityHandler for AssetDeleteHandler {
             }
         }
         Ok(HandlerResult {
-            entity_id: external_id,
             audit_action: "delete",
             counter: CounterKind::Deletes,
         })

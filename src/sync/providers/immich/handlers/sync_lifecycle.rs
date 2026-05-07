@@ -27,7 +27,6 @@ impl SyncEntityHandler for SyncResetHandler {
         ctx.library.faces().clear_people().await?;
         ctx.state.clear_checkpoints().await?;
         Ok(HandlerResult {
-            entity_id: String::new(),
             audit_action: "reset",
             counter: CounterKind::None,
         })
@@ -51,7 +50,6 @@ impl SyncEntityHandler for SyncCompleteHandler {
         _ctx: &SyncContext,
     ) -> Result<HandlerResult, LibraryError> {
         Ok(HandlerResult {
-            entity_id: String::new(),
             audit_action: "complete",
             counter: CounterKind::None,
         })

@@ -928,14 +928,14 @@ mod tests {
 
         // Server-sourced row, heartbeat older than checkpoint → orphan.
         let stale_synced = MediaId::new("a".repeat(64));
-        let mut rec = test_record(stale_synced.clone());
+        let mut rec = record_with_taken_at(stale_synced.clone(), "stale.jpg", Some(1));
         rec.external_id = Some("immich-uuid-a".to_string());
         repo.insert(&rec).await.unwrap();
         repo.bump_last_seen_at(&stale_synced, 100).await.unwrap();
 
         // Server-sourced row, heartbeat newer than checkpoint → safe.
         let fresh_synced = MediaId::new("b".repeat(64));
-        let mut rec = test_record(fresh_synced.clone());
+        let mut rec = record_with_taken_at(fresh_synced.clone(), "fresh.jpg", Some(2));
         rec.external_id = Some("immich-uuid-b".to_string());
         repo.insert(&rec).await.unwrap();
         repo.bump_last_seen_at(&fresh_synced, 300).await.unwrap();
@@ -943,7 +943,7 @@ mod tests {
         // Local-only row (no external_id), heartbeat doesn't matter →
         // immune via the external_id IS NOT NULL filter.
         let local_only = MediaId::new("c".repeat(64));
-        let mut rec = test_record(local_only.clone());
+        let mut rec = record_with_taken_at(local_only.clone(), "local.jpg", Some(3));
         rec.external_id = None;
         repo.insert(&rec).await.unwrap();
         // Heartbeat at 0 (insert default) is < checkpoint, but filter saves it.

@@ -56,7 +56,6 @@ impl SyncEntityHandler for AlbumHandler {
         ctx.library.albums().bump_last_seen_at(&local_id, now).await?;
 
         Ok(HandlerResult {
-            entity_id: external_id,
             audit_action: "upsert",
             counter: CounterKind::Albums,
         })
@@ -93,8 +92,7 @@ impl SyncEntityHandler for AlbumDeleteHandler {
                     "AlbumDeleteV1: no local row for this external_id; nothing to delete"
                 );
                 return Ok(HandlerResult {
-                    entity_id: external_id,
-                    audit_action: "delete",
+                            audit_action: "delete",
                     counter: CounterKind::Deletes,
                 });
             }
@@ -102,7 +100,6 @@ impl SyncEntityHandler for AlbumDeleteHandler {
 
         ctx.library.albums().delete_album(&local_id).await?;
         Ok(HandlerResult {
-            entity_id: external_id,
             audit_action: "delete",
             counter: CounterKind::Deletes,
         })
