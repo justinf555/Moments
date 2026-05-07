@@ -4,11 +4,19 @@ use crate::library::error::LibraryError;
 
 use super::{CounterKind, HandlerResult, SyncContext, SyncEntityHandler};
 
-/// Signals a full resync — clears faces/people and loads existing IDs.
+/// Signals a full resync — clears stream-resume state.
 ///
-/// The caller (PullManager) checks `entity_type == "SyncResetV1"` to set
-/// its reset-tracking state *before* delegating here. This handler
-/// performs the database cleanup.
+/// The caller (PullManager) inspects `entity_type == "SyncResetV1"`
+/// to set its in-memory reset checkpoint before delegating here. This
+/// handler clears the per-entity-type ack checkpoints so the next
+/// pull starts at the head of each stream.
+///
+/// Issue #628: previously this also wiped `asset_faces` and `people`
+/// to be rebuilt by the stream. The heartbeat reconciliation makes
+/// that destructive clear unnecessary — those tables now reconcile
+/// the same way as `media` and `albums` (rows whose `last_seen_at`
+/// lags the cycle's checkpoint are deleted at `SyncCompleteV1`),
+/// preserving cached data through the reset window.
 pub struct SyncResetHandler;
 
 #[async_trait]
@@ -23,8 +31,6 @@ impl SyncEntityHandler for SyncResetHandler {
         _line_number: usize,
         ctx: &SyncContext,
     ) -> Result<HandlerResult, LibraryError> {
-        ctx.library.faces().clear_asset_faces().await?;
-        ctx.library.faces().clear_people().await?;
         ctx.state.clear_checkpoints().await?;
         Ok(HandlerResult {
             audit_action: "reset",

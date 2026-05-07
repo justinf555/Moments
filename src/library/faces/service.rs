@@ -152,16 +152,6 @@ impl FacesService {
         self.repo.update_face_count(person_id).await
     }
 
-    /// Clear all people (for reset sync).
-    pub async fn clear_people(&self) -> Result<(), LibraryError> {
-        self.repo.clear_people().await
-    }
-
-    /// Clear all asset faces (for reset sync).
-    pub async fn clear_asset_faces(&self) -> Result<(), LibraryError> {
-        self.repo.clear_asset_faces().await
-    }
-
     // ── Query methods ───────────────────────────────────────────────
 
     pub async fn list_people(&self) -> Result<Vec<Person>, LibraryError> {

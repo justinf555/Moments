@@ -257,24 +257,6 @@ impl FacesRepository {
         Ok(())
     }
 
-    /// Delete all people (used during sync reset).
-    pub async fn clear_people(&self) -> Result<(), LibraryError> {
-        sqlx::query("DELETE FROM people")
-            .execute(self.db.pool())
-            .await
-            .map_err(LibraryError::Db)?;
-        Ok(())
-    }
-
-    /// Delete all asset faces (used during sync reset).
-    pub async fn clear_asset_faces(&self) -> Result<(), LibraryError> {
-        sqlx::query("DELETE FROM asset_faces")
-            .execute(self.db.pool())
-            .await
-            .map_err(LibraryError::Db)?;
-        Ok(())
-    }
-
     /// Delete people whose heartbeat lags the given checkpoint.
     ///
     /// Issue #628: the reset-cycle orphan sweep on the `people` table.
@@ -615,41 +597,6 @@ mod tests {
 
         let media = repo.list_media_for_person("p1").await.unwrap();
         assert_eq!(media, vec!["m1"]); // m2 is trashed
-    }
-
-    #[tokio::test]
-    async fn clear_people_and_faces() {
-        let dir = tempdir().unwrap();
-        let (repo, media, _db) = test_repo(dir.path()).await;
-
-        repo.upsert_person("p1", "Alice", None, false, false, None, None, None)
-            .await
-            .unwrap();
-        let rec = test_record(MediaId::new("m1".to_string()));
-        media.insert(&rec).await.unwrap();
-
-        let face = AssetFaceRow {
-            id: "f1".to_string(),
-            asset_id: "m1".to_string(),
-            person_id: Some("p1".to_string()),
-            image_width: 100,
-            image_height: 100,
-            bbox_x1: 0,
-            bbox_y1: 0,
-            bbox_x2: 50,
-            bbox_y2: 50,
-            source_type: "MachineLearning".to_string(),
-        };
-        repo.upsert_asset_face(&face).await.unwrap();
-
-        repo.clear_asset_faces().await.unwrap();
-        repo.clear_people().await.unwrap();
-
-        let people = repo.list_people().await.unwrap();
-        assert!(people.is_empty());
-
-        let media = repo.list_media_for_person("p1").await.unwrap();
-        assert!(media.is_empty());
     }
 
     #[tokio::test]
