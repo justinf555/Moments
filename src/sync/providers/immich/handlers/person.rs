@@ -38,6 +38,14 @@ impl SyncEntityHandler for PersonHandler {
             )
             .await?;
 
+        // Issue #628: bump heartbeat so reset-cycle orphan sweeps see
+        // this person as "still alive on the server".
+        let now = chrono::Utc::now().timestamp();
+        ctx.library
+            .faces()
+            .bump_person_last_seen_at(&person.id, now)
+            .await?;
+
         // Download person face thumbnail.
         let person_thumb_dir = ctx.thumbnails_dir.join("people");
         let thumb_path = person_thumb_dir.join(format!("{}.jpg", person.id));

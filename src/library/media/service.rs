@@ -295,6 +295,17 @@ impl MediaService {
     pub async fn all_ids(&self) -> Result<std::collections::HashSet<String>, LibraryError> {
         self.repo.all_ids().await
     }
+
+    /// Sync-only: bump `last_seen_at` for one media row. See issue
+    /// #628 — the heartbeat that the reset-cycle orphan sweep
+    /// compares against.
+    pub async fn bump_last_seen_at(
+        &self,
+        id: &MediaId,
+        now: i64,
+    ) -> Result<(), LibraryError> {
+        self.repo.bump_last_seen_at(id, now).await
+    }
 }
 
 #[cfg(test)]

@@ -66,6 +66,14 @@ impl SyncEntityHandler for AssetFaceHandler {
 
         ctx.library.faces().upsert_asset_face(&row).await?;
 
+        // Issue #628: bump heartbeat so reset-cycle orphan sweeps see
+        // this face as "still alive on the server".
+        let now = chrono::Utc::now().timestamp();
+        ctx.library
+            .faces()
+            .bump_asset_face_last_seen_at(&row.id, now)
+            .await?;
+
         if let Some(ref person_id) = face.person_id {
             ctx.library.faces().update_face_count(person_id).await?;
         }

@@ -274,6 +274,44 @@ impl FacesRepository {
             .map_err(LibraryError::Db)?;
         Ok(())
     }
+
+    /// Update `last_seen_at` to the given unix timestamp for one person row.
+    ///
+    /// Issue #628: heartbeat for the reset-cycle orphan sweep on
+    /// `people`. Bumped from `PersonHandler` (pull). People are
+    /// always server-sourced (no local-only counterpart), so the
+    /// sweep DELETEs without an `external_id` filter.
+    pub async fn bump_person_last_seen_at(
+        &self,
+        id: &str,
+        now: i64,
+    ) -> Result<(), LibraryError> {
+        sqlx::query("UPDATE people SET last_seen_at = ? WHERE id = ?")
+            .bind(now)
+            .bind(id)
+            .execute(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
+        Ok(())
+    }
+
+    /// Update `last_seen_at` to the given unix timestamp for one asset face row.
+    ///
+    /// Issue #628: heartbeat for the reset-cycle orphan sweep on
+    /// `asset_faces`. Bumped from `AssetFaceHandler` (pull).
+    pub async fn bump_asset_face_last_seen_at(
+        &self,
+        id: &str,
+        now: i64,
+    ) -> Result<(), LibraryError> {
+        sqlx::query("UPDATE asset_faces SET last_seen_at = ? WHERE id = ?")
+            .bind(now)
+            .bind(id)
+            .execute(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -607,5 +645,70 @@ mod tests {
         // Face still exists but with no person.
         let media = repo.list_media_for_person("p1").await.unwrap();
         assert!(media.is_empty());
+    }
+
+    #[tokio::test]
+    async fn bump_person_last_seen_at_writes_value() {
+        let dir = tempdir().unwrap();
+        let (repo, _media, db) = test_repo(dir.path()).await;
+        repo.upsert_person("p1", "Alice", None, false, false, None, None, None)
+            .await
+            .unwrap();
+
+        repo.bump_person_last_seen_at("p1", 12345).await.unwrap();
+
+        let row: (i64,) = sqlx::query_as("SELECT last_seen_at FROM people WHERE id = 'p1'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(row.0, 12345);
+    }
+
+    #[tokio::test]
+    async fn bump_person_last_seen_at_missing_id_is_noop() {
+        let dir = tempdir().unwrap();
+        let (repo, _media, _db) = test_repo(dir.path()).await;
+        repo.bump_person_last_seen_at("ghost", 12345).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn bump_asset_face_last_seen_at_writes_value() {
+        let dir = tempdir().unwrap();
+        let (repo, media, db) = test_repo(dir.path()).await;
+        media
+            .insert(&test_record(MediaId::new("m1".to_string())))
+            .await
+            .unwrap();
+        let face = AssetFaceRow {
+            id: "f1".to_string(),
+            asset_id: "m1".to_string(),
+            person_id: None,
+            image_width: 100,
+            image_height: 100,
+            bbox_x1: 0,
+            bbox_y1: 0,
+            bbox_x2: 50,
+            bbox_y2: 50,
+            source_type: "MachineLearning".to_string(),
+        };
+        repo.upsert_asset_face(&face).await.unwrap();
+
+        repo.bump_asset_face_last_seen_at("f1", 12345).await.unwrap();
+
+        let row: (i64,) =
+            sqlx::query_as("SELECT last_seen_at FROM asset_faces WHERE id = 'f1'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(row.0, 12345);
+    }
+
+    #[tokio::test]
+    async fn bump_asset_face_last_seen_at_missing_id_is_noop() {
+        let dir = tempdir().unwrap();
+        let (repo, _media, _db) = test_repo(dir.path()).await;
+        repo.bump_asset_face_last_seen_at("ghost", 12345)
+            .await
+            .unwrap();
     }
 }

@@ -50,6 +50,11 @@ impl SyncEntityHandler for AlbumHandler {
             )
             .await?;
 
+        // Issue #628: bump heartbeat so reset-cycle orphan sweeps see
+        // this album as "still alive on the server".
+        let now = chrono::Utc::now().timestamp();
+        ctx.library.albums().bump_last_seen_at(&local_id, now).await?;
+
         Ok(HandlerResult {
             entity_id: external_id,
             audit_action: "upsert",

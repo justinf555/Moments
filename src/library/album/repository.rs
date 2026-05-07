@@ -417,6 +417,25 @@ impl AlbumRepository {
 
         Ok(rows.into_iter().map(|(id,)| MediaId::new(id)).collect())
     }
+
+    /// Update `last_seen_at` to the given unix timestamp for one album row.
+    ///
+    /// Issue #628: heartbeat for the reset-cycle orphan sweep on
+    /// `albums`. Bumped from `AlbumHandler` (pull) and any
+    /// server-confirmed album mutation (push).
+    pub async fn bump_last_seen_at(
+        &self,
+        id: &AlbumId,
+        now: i64,
+    ) -> Result<(), LibraryError> {
+        sqlx::query("UPDATE albums SET last_seen_at = ? WHERE id = ?")
+            .bind(now)
+            .bind(id.as_str())
+            .execute(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
+        Ok(())
+    }
 }
 
 /// Convert an `AlbumRow` into an `Album`.
@@ -880,5 +899,29 @@ mod tests {
 
         repo.set_pinned(&id, false).await.unwrap();
         assert!(!repo.get(&id).await.unwrap().unwrap().is_pinned);
+    }
+
+    #[tokio::test]
+    async fn bump_last_seen_at_writes_value() {
+        let dir = tempdir().unwrap();
+        let (repo, _media, db) = test_repo(dir.path()).await;
+        let id = repo.create("Heartbeat").await.unwrap();
+
+        repo.bump_last_seen_at(&id, 12345).await.unwrap();
+
+        let row: (i64,) = sqlx::query_as("SELECT last_seen_at FROM albums WHERE id = ?")
+            .bind(id.as_str())
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(row.0, 12345);
+    }
+
+    #[tokio::test]
+    async fn bump_last_seen_at_missing_id_is_noop() {
+        let dir = tempdir().unwrap();
+        let (repo, _media, _db) = test_repo(dir.path()).await;
+        let id = AlbumId::from_raw("nonexistent".to_string());
+        repo.bump_last_seen_at(&id, 12345).await.unwrap();
     }
 }

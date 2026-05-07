@@ -574,6 +574,31 @@ impl MediaRepository {
         tx.commit().await.map_err(LibraryError::Db)?;
         Ok(())
     }
+
+    /// Update `last_seen_at` to the given unix timestamp for one media row.
+    ///
+    /// Issue #628: this is the heartbeat that the reset-cycle orphan
+    /// sweep compares against. Sync paths call it whenever the server
+    /// confirms an asset is still alive — pull `AssetV1` after the
+    /// upsert, push completion after stamping `external_id`, and any
+    /// server-confirmed write-through (favorite, restore). Rows whose
+    /// heartbeat lags the cycle's checkpoint and have a non-null
+    /// `external_id` are treated as deleted server-side.
+    ///
+    /// Missing row is a no-op — it was deleted under us, which is fine.
+    pub async fn bump_last_seen_at(
+        &self,
+        id: &MediaId,
+        now: i64,
+    ) -> Result<(), LibraryError> {
+        sqlx::query("UPDATE media SET last_seen_at = ? WHERE id = ?")
+            .bind(now)
+            .bind(id.as_str())
+            .execute(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -889,5 +914,32 @@ mod tests {
         .unwrap();
         let stats = repo.library_stats().await.unwrap();
         assert_eq!(stats.photo_count, 2);
+    }
+
+    #[tokio::test]
+    async fn bump_last_seen_at_writes_value() {
+        let dir = tempdir().unwrap();
+        let (repo, db) = test_repo(dir.path()).await;
+        let id = MediaId::new("a".repeat(64));
+        repo.insert(&test_record(id.clone())).await.unwrap();
+
+        repo.bump_last_seen_at(&id, 12345).await.unwrap();
+
+        let row: (i64,) = sqlx::query_as("SELECT last_seen_at FROM media WHERE id = ?")
+            .bind(id.as_str())
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(row.0, 12345);
+    }
+
+    #[tokio::test]
+    async fn bump_last_seen_at_missing_id_is_noop() {
+        let dir = tempdir().unwrap();
+        let (repo, _db) = test_repo(dir.path()).await;
+        let id = MediaId::new("z".repeat(64));
+        // No row exists; the UPDATE matches nothing. Must not error —
+        // sync handlers may bump after a row was deleted under them.
+        repo.bump_last_seen_at(&id, 12345).await.unwrap();
     }
 }

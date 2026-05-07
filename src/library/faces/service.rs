@@ -253,6 +253,27 @@ impl FacesService {
             None
         }
     }
+
+    /// Sync-only: bump `last_seen_at` for one person row. See issue
+    /// #628 — the heartbeat that the reset-cycle orphan sweep
+    /// compares against.
+    pub async fn bump_person_last_seen_at(
+        &self,
+        id: &str,
+        now: i64,
+    ) -> Result<(), LibraryError> {
+        self.repo.bump_person_last_seen_at(id, now).await
+    }
+
+    /// Sync-only: bump `last_seen_at` for one asset_face row. See
+    /// issue #628.
+    pub async fn bump_asset_face_last_seen_at(
+        &self,
+        id: &str,
+        now: i64,
+    ) -> Result<(), LibraryError> {
+        self.repo.bump_asset_face_last_seen_at(id, now).await
+    }
 }
 
 #[cfg(test)]
