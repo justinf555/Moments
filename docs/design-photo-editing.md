@@ -152,15 +152,11 @@ lands.
 
 ## 5. Immich Integration
 
-**Save**: Load original → apply edits → encode JPEG → `PUT /assets/{id}/original` → update `rendered_at` → regenerate thumbnail
+**Superseded by [`design-immich-edit-sync.md`](design-immich-edit-sync.md).**
 
-**Revert**: `DELETE /assets/{id}/original` → delete `edits` row → regenerate thumbnail from original
+The original design here proposed `PUT /assets/{id}/original` to overwrite the user's original on the server. That endpoint was removed in current Immich; empirical probing of v2.7.5 confirmed the only viable mutation surfaces are `/assets/{id}/edits` (crop/rotate/mirror only) and `POST /assets` + `POST /stacks` (for everything else).
 
-New `ImmichClient` methods:
-- `upload_edited_asset(asset_id, rendered_bytes, filename)`
-- `revert_asset(asset_id)`
-
-**Note**: Exact Immich API endpoints need verification against the server version. Fallback: upload as new asset linked to original.
+The replacement design uses a hybrid: native `/edits` API for geometric primitives, and render-upload-stack-tag with embedded XMP for pixel adjustments. Original assets are never modified. See the linked document for the full specification, schema changes, sync wiring, and phased plan.
 
 ## 6. UI: Edit Panel in Viewer Sidebar
 
