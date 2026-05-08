@@ -489,6 +489,8 @@ Edge case: corrupt or missing XMP. Surface "edit history not recoverable; revert
 
 ## 8. Grid filtering
 
+### 8.1 Generic primary-only filter (Phase A)
+
 The grid query (across All, Favorites, Recent Imports, Album views, Person views) must filter to primary-only when stacks are present:
 
 ```sql
@@ -508,6 +510,40 @@ Touch points:
 - Any direct SQL in clients (audit grep).
 
 The Recent Imports view counts edits as imports — when the user saves a pixel-adjustment edit, the rendered asset has a fresh `imported_at` and would appear in Recent Imports. That's correct behaviour.
+
+### 8.2 Phase C UX override: surface the original for Moments-edit stacks
+
+The Phase A primary-only rule is correct for Immich-native stacks (panoramas, bursts). It is **wrong** for Moments-edit stacks, where Phase C uploads a rendered JPEG as a new asset and stacks it with the original. On the server side the rendered child becomes the stack primary (Immich convention); on the user side that's the wrong artifact to surface — the rendered JPEG carries no editable state, while the original *plus* the local `edits` row is what the user thinks of as "their photo with an edit applied".
+
+The local `edits` table remains the source of truth for what edit was applied. The server-side render is a sync artifact, not a first-class user-visible asset.
+
+**Resolution (to land in Phase C):**
+
+The grid filter swaps "primary" for "non-Moments-render member" when a Moments-edit-tagged member is present in the stack. Concretely, on top of the §8.1 clause:
+
+1. Sync the `tags[]` field from `AssetV1` (Phase C work — Phase A doesn't touch tags).
+2. Hydrate `is_moments_render: bool` on `MediaItem` (true iff the asset carries the `moments-edit` tag — see §6).
+3. Extend the grid filter so a stack containing a Moments-render member surfaces the **other** sibling (the original), not the server's primary. Sketch:
+
+   ```sql
+   LEFT JOIN stacks s ON m.stack_id = s.id
+   LEFT JOIN media render ON render.stack_id = s.id AND render.is_moments_render = 1
+   WHERE (
+     s.id IS NULL                                    -- not stacked → show
+     OR (render.id IS NULL                            -- ordinary stack → use server primary
+         AND s.primary_asset_id = m.id)
+     OR (render.id IS NOT NULL                        -- Moments-edit stack → surface
+         AND m.id != render.id                        --   the non-render sibling, regardless
+         AND m.stack_id = s.id)                       --   of which one is server-primary
+   )
+   ```
+
+4. Thumbnail and viewer paths render the original through `RenderPipeline` with the local `edits` row applied — the same on-the-fly edit pipeline already used for local-only edits today. The rendered JPEG asset is never user-visible inside Moments; it's strictly a sync artifact.
+5. Re-opening the editor loads the local `edits` row, not the rendered bytes. (Phase D recovery is the only path that ever parses the rendered JPEG's XMP — to rebuild a missing local `edits` row.)
+
+**Why option (a) over option (b)**: keeping the rule "filter on a property of `MediaItem` (the tag flag)" aligns with how every other filter in the project works — in-memory `MediaFilter::matches` style. The alternative (don't bind originals to Moments-edit stacks at all locally) requires the grid query to know about a sync-internal concept, which leaks abstraction. The tag-driven override is more localised.
+
+**Does Phase A need to change to make Phase C work?** No. Phase A is generic stack plumbing; the Phase C override is additive — a tag-based filter exception layered on the existing primary-only clause.
 
 ---
 
