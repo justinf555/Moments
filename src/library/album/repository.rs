@@ -325,10 +325,12 @@ impl AlbumRepository {
             None => sqlx::query_as::<_, MediaRow>(
                 "SELECT m.id, m.taken_at, m.imported_at, m.original_filename,
                             m.width, m.height, m.orientation, m.media_type, m.is_favorite,
-                            m.is_trashed, m.trashed_at, m.duration_ms
+                            m.is_trashed, m.trashed_at, m.duration_ms, m.stack_id
                      FROM media m
                      JOIN album_media am ON m.id = am.media_id
+                     LEFT JOIN stacks s ON m.stack_id = s.id
                      WHERE am.album_id = ? AND m.is_trashed = 0
+                       AND (s.id IS NULL OR s.primary_asset_id = m.id)
                      ORDER BY COALESCE(m.taken_at, 0) DESC, m.id DESC
                      LIMIT ?",
             )
@@ -340,13 +342,15 @@ impl AlbumRepository {
             Some(cur) => sqlx::query_as::<_, MediaRow>(
                 "SELECT m.id, m.taken_at, m.imported_at, m.original_filename,
                             m.width, m.height, m.orientation, m.media_type, m.is_favorite,
-                            m.is_trashed, m.trashed_at, m.duration_ms
+                            m.is_trashed, m.trashed_at, m.duration_ms, m.stack_id
                      FROM media m
                      JOIN album_media am ON m.id = am.media_id
+                     LEFT JOIN stacks s ON m.stack_id = s.id
                      WHERE am.album_id = ?
                        AND (COALESCE(m.taken_at, 0) < ?
                             OR (COALESCE(m.taken_at, 0) = ? AND m.id < ?))
                        AND m.is_trashed = 0
+                       AND (s.id IS NULL OR s.primary_asset_id = m.id)
                      ORDER BY COALESCE(m.taken_at, 0) DESC, m.id DESC
                      LIMIT ?",
             )

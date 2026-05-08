@@ -63,6 +63,31 @@ pub struct MediaItem {
     pub trashed_at: Option<i64>,
     /// Video duration in milliseconds. `None` for images.
     pub duration_ms: Option<u64>,
+    /// Identifier of the stack this asset belongs to, if any.
+    /// `None` for un-stacked items. Set on every member of a stack
+    /// (including the primary). The grid filters non-primary members
+    /// out via a `LEFT JOIN stacks` clause; clients can use this to
+    /// surface a "stacked" badge on the primary.
+    pub stack_id: Option<String>,
+}
+
+/// A stack of related assets on the Immich server (e.g. a panorama
+/// burst, or a Moments-rendered edit alongside its original).
+///
+/// Issue #224: Immich exposes stacks via `AssetV1.stack`. Locally we
+/// cache them as a peer table so the timeline can collapse stacked
+/// siblings to the primary, and so push-side stack mutations have a
+/// stable identifier to mutate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stack {
+    /// Server-assigned UUID. Stable across pulls.
+    pub id: String,
+    /// The asset that surfaces in the timeline as the visible
+    /// representative of this stack.
+    pub primary_asset_id: MediaId,
+    /// Heartbeat timestamp (Unix seconds) for #628 reset-cycle
+    /// orphan reconciliation.
+    pub last_seen_at: i64,
 }
 
 /// Filter for [`super::service::MediaService::list_media`] queries.

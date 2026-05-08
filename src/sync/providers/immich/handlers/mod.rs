@@ -10,6 +10,7 @@ mod asset;
 mod asset_exif;
 mod asset_face;
 mod person;
+mod stack;
 mod sync_lifecycle;
 
 use std::path::PathBuf;
@@ -34,6 +35,8 @@ pub use asset_face::AssetFaceDeleteHandler;
 pub use asset_face::AssetFaceHandler;
 pub use person::PersonDeleteHandler;
 pub use person::PersonHandler;
+pub use stack::StackDeleteHandler;
+pub use stack::StackHandler;
 pub use sync_lifecycle::SyncCompleteHandler;
 pub use sync_lifecycle::SyncResetHandler;
 
@@ -98,5 +101,7 @@ pub fn all_handlers() -> Vec<Box<dyn SyncEntityHandler>> {
         Box::new(PersonDeleteHandler),
         Box::new(AssetFaceHandler),
         Box::new(AssetFaceDeleteHandler),
+        Box::new(StackHandler),
+        Box::new(StackDeleteHandler),
     ]
 }

@@ -999,6 +999,10 @@ impl MediaClientV2 {
                 obj.set_is_favorite(item.is_favorite);
                 obj.set_trashed_at(item.trashed_at.unwrap_or(0));
                 obj.set_duration_ms(item.duration_ms.unwrap_or(0));
+                // Issue #224: keep the stack badge in sync when an
+                // un-stacked primary later acquires siblings, or
+                // a stack is deleted server-side.
+                obj.set_is_stacked(item.stack_id.is_some());
             }
         });
     }

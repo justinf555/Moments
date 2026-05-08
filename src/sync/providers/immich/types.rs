@@ -54,6 +54,45 @@ pub(crate) struct SyncAssetV1 {
     /// deserialisation; when absent, sync rows still work but won't
     /// participate in cross-origin dedup.
     pub checksum: Option<String>,
+    /// Identifier of the stack this asset belongs to, or `None` when
+    /// not stacked. The matching `SyncStackV1` event carries the
+    /// primary asset id and arrives independently in the stream — we
+    /// just record the pointer here. Immich re-emits the asset
+    /// whenever the stack relationship changes. Issue #224.
+    #[serde(rename = "stackId", default)]
+    pub stack_id: Option<String>,
+    /// Whether the asset has any geometric edits applied via
+    /// `PUT /assets/{id}/edits`. Pixel-adjustment edits surface as a
+    /// separate stacked rendered child rather than via this flag.
+    /// Issue #224. Optional for forward/backward compat with servers
+    /// that pre-date the edits API.
+    ///
+    /// Consumed in Phase D (recovery): on editor open we use this in
+    /// combination with the `moments-edit` tag to detect "stack with a
+    /// Moments-rendered child but no local edits row" and rebuild the
+    /// edit state from XMP.
+    #[allow(dead_code)] // wired into Phase A for the contract; consumed in Phase D
+    #[serde(rename = "isEdited", default)]
+    pub is_edited: Option<bool>,
+}
+
+/// Stack entity emitted on the `StacksV1` sync stream. Carries the
+/// primary asset id for stacks the local library has subscribed to.
+/// Issue #224.
+#[derive(Debug, Deserialize)]
+pub(crate) struct SyncStackV1 {
+    pub id: String,
+    #[serde(rename = "primaryAssetId")]
+    pub primary_asset_id: String,
+}
+
+/// Stack-deletion entity. Emitted when a stack is removed server-side
+/// (typically because the user un-stacked the assets, or the count
+/// dropped below 2 and Immich auto-collapsed it). Issue #224.
+#[derive(Debug, Deserialize)]
+pub(crate) struct SyncStackDeleteV1 {
+    #[serde(rename = "stackId")]
+    pub stack_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -329,6 +368,95 @@ mod tests {
         });
         let asset: SyncAssetV1 = serde_json::from_value(json).unwrap();
         assert!(asset.checksum.is_none());
+    }
+
+    /// Issue #224: `AssetV1` carries flat `stackId` (not a nested
+    /// object). The matching `SyncStackV1` event carries the primary.
+    #[test]
+    fn deserialize_sync_asset_v1_with_stack_id() {
+        let json = serde_json::json!({
+            "id": "asset-uuid",
+            "originalFileName": "burst.jpg",
+            "fileCreatedAt": "2024-06-15T10:30:00.000Z",
+            "localDateTime": null,
+            "type": "IMAGE",
+            "deletedAt": null,
+            "isFavorite": false,
+            "width": null,
+            "height": null,
+            "duration": null,
+            "stackId": "stack-uuid",
+            "isEdited": true
+        });
+        let asset: SyncAssetV1 = serde_json::from_value(json).unwrap();
+        assert_eq!(asset.stack_id.as_deref(), Some("stack-uuid"));
+        assert_eq!(asset.is_edited, Some(true));
+    }
+
+    /// `stackId` is `null` when the asset is not in a stack.
+    #[test]
+    fn deserialize_sync_asset_v1_with_null_stack_id() {
+        let json = serde_json::json!({
+            "id": "asset-uuid",
+            "originalFileName": "lone.jpg",
+            "fileCreatedAt": "2024-06-15T10:30:00.000Z",
+            "localDateTime": null,
+            "type": "IMAGE",
+            "deletedAt": null,
+            "isFavorite": false,
+            "width": null,
+            "height": null,
+            "duration": null,
+            "stackId": null,
+            "isEdited": false
+        });
+        let asset: SyncAssetV1 = serde_json::from_value(json).unwrap();
+        assert!(asset.stack_id.is_none());
+        assert_eq!(asset.is_edited, Some(false));
+    }
+
+    /// Older Immich versions don't emit `stackId`/`isEdited` at all —
+    /// deserialisation must succeed and leave both fields `None`.
+    #[test]
+    fn deserialize_sync_asset_v1_without_stack_fields_is_optional() {
+        let json = serde_json::json!({
+            "id": "asset-old",
+            "originalFileName": "old.jpg",
+            "fileCreatedAt": "2024-01-01T00:00:00.000Z",
+            "localDateTime": null,
+            "type": "IMAGE",
+            "deletedAt": null,
+            "isFavorite": false,
+            "width": null,
+            "height": null,
+            "duration": null
+        });
+        let asset: SyncAssetV1 = serde_json::from_value(json).unwrap();
+        assert!(asset.stack_id.is_none());
+        assert!(asset.is_edited.is_none());
+    }
+
+    /// Issue #224: `StackV1` events carry the stack's primary asset id.
+    #[test]
+    fn deserialize_sync_stack_v1() {
+        let json = serde_json::json!({
+            "id": "stack-uuid",
+            "primaryAssetId": "primary-uuid",
+            "ownerId": "owner-uuid",
+            "createdAt": "2024-01-01T00:00:00.000Z",
+            "updatedAt": "2024-01-02T00:00:00.000Z"
+        });
+        let stack: SyncStackV1 = serde_json::from_value(json).unwrap();
+        assert_eq!(stack.id, "stack-uuid");
+        assert_eq!(stack.primary_asset_id, "primary-uuid");
+    }
+
+    /// `StackDeleteV1` carries only the stack id.
+    #[test]
+    fn deserialize_sync_stack_delete_v1() {
+        let json = serde_json::json!({ "stackId": "stack-uuid" });
+        let del: SyncStackDeleteV1 = serde_json::from_value(json).unwrap();
+        assert_eq!(del.stack_id, "stack-uuid");
     }
 
     #[test]

@@ -5,7 +5,7 @@ use tokio::sync::mpsc;
 use tracing::{instrument, warn};
 
 use super::event::MediaEvent;
-use super::model::{MediaCursor, MediaFilter, MediaId, MediaItem, MediaRecord};
+use super::model::{MediaCursor, MediaFilter, MediaId, MediaItem, MediaRecord, Stack};
 use super::repository::MediaRepository;
 use crate::event_emitter::EventEmitter;
 use crate::library::config::LocalStorageMode;
@@ -253,8 +253,20 @@ impl MediaService {
     pub async fn delete_permanently(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
         // Capture external_ids before the DB delete removes the rows.
         let ext_map = self.repo.external_ids(ids).await.unwrap_or_default();
+        // Issue #224: capture siblings whose stack_id will be SET NULL
+        // by the FK cascade so we can emit `MediaEvent::Updated` for
+        // them after the delete — otherwise the live grid stays
+        // out of sync until restart.
+        let freed_siblings = self
+            .repo
+            .siblings_freed_by_deletion(ids)
+            .await
+            .unwrap_or_default();
         self.repo.delete_permanently(ids).await?;
         self.emit(MediaEvent::Removed(ids.to_vec()));
+        if !freed_siblings.is_empty() {
+            self.emit(MediaEvent::Updated(freed_siblings));
+        }
         let items: Vec<(MediaId, Option<String>)> = ids
             .iter()
             .map(|id| {
@@ -277,8 +289,16 @@ impl MediaService {
 
     /// Permanently delete without outbox recording (used by pull sync).
     pub async fn delete_permanently_no_record(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
+        let freed_siblings = self
+            .repo
+            .siblings_freed_by_deletion(ids)
+            .await
+            .unwrap_or_default();
         self.repo.delete_permanently(ids).await?;
         self.emit(MediaEvent::Removed(ids.to_vec()));
+        if !freed_siblings.is_empty() {
+            self.emit(MediaEvent::Updated(freed_siblings));
+        }
         Ok(())
     }
 
@@ -304,6 +324,114 @@ impl MediaService {
         checkpoint: i64,
     ) -> Result<Vec<MediaId>, LibraryError> {
         self.repo.ids_with_stale_heartbeat(checkpoint).await
+    }
+
+    // ── Stacks (issue #224) ─────────────────────────────────────────
+
+    /// Sync-only: upsert a stack row from `StackV1`. Emits
+    /// `MediaEvent::Updated` for every current member of the stack
+    /// so any primary swap reflects in tracked grid models without
+    /// a restart.
+    pub async fn upsert_stack(&self, stack: &Stack) -> Result<(), LibraryError> {
+        self.repo.upsert_stack(stack).await?;
+        let members = self.repo.list_stack_members(&stack.id).await?;
+        if !members.is_empty() {
+            self.emit(MediaEvent::Updated(members));
+        }
+        Ok(())
+    }
+
+    /// Sync-only: ensure a stub `stacks` row exists for the given id,
+    /// pointing at the supplied media row as a placeholder primary.
+    /// Used by `AssetHandler` to satisfy the FK before binding when
+    /// `StackV1` hasn't streamed yet. No event is emitted — the
+    /// matching `set_media_stack_id` call that follows fires the
+    /// `Updated` event for the asset that just bound.
+    pub async fn ensure_stack_stub(
+        &self,
+        stack_id: &str,
+        primary_fallback: &MediaId,
+    ) -> Result<(), LibraryError> {
+        self.repo
+            .ensure_stack_stub(stack_id, primary_fallback)
+            .await
+    }
+
+    /// Sync-only: bind a media row to a stack. Emits
+    /// `MediaEvent::Updated` for the bound asset so the grid
+    /// reconciles (non-primary members get filtered out via
+    /// `get_many`'s primary-only clause).
+    pub async fn set_media_stack_id(
+        &self,
+        media_id: &MediaId,
+        stack_id: &str,
+    ) -> Result<(), LibraryError> {
+        self.repo.set_media_stack_id(media_id, stack_id).await?;
+        self.emit(MediaEvent::Updated(vec![media_id.clone()]));
+        Ok(())
+    }
+
+    /// Sync-only: clear a media row's stack pointer (the asset was
+    /// un-stacked server-side). Emits `MediaEvent::Updated` so the
+    /// asset reappears in the un-stacked grid.
+    pub async fn clear_media_stack_id(&self, media_id: &MediaId) -> Result<(), LibraryError> {
+        self.repo.clear_media_stack_id(media_id).await?;
+        self.emit(MediaEvent::Updated(vec![media_id.clone()]));
+        Ok(())
+    }
+
+    /// Sync-only: bump a stack's heartbeat. See issue #628.
+    pub async fn bump_stack_last_seen_at(
+        &self,
+        stack_id: &str,
+        now: i64,
+    ) -> Result<(), LibraryError> {
+        self.repo.bump_stack_last_seen_at(stack_id, now).await
+    }
+
+    /// Sync-only: delete a single stack by id (matches the
+    /// `SyncStackDeleteV1` ingress path). Emits `MediaEvent::Updated`
+    /// for every member that was bound at delete time so they
+    /// reappear in the un-stacked grid.
+    pub async fn delete_stack(&self, stack_id: &str) -> Result<(), LibraryError> {
+        let members = self.repo.list_stack_members(stack_id).await?;
+        self.repo.delete_stack(stack_id).await?;
+        if !members.is_empty() {
+            self.emit(MediaEvent::Updated(members));
+        }
+        Ok(())
+    }
+
+    /// Sync-only: stack ids whose heartbeat lags the checkpoint.
+    pub async fn ids_with_stale_stack_heartbeat(
+        &self,
+        checkpoint: i64,
+    ) -> Result<Vec<String>, LibraryError> {
+        self.repo.ids_with_stale_stack_heartbeat(checkpoint).await
+    }
+
+    /// Sync-only: delete stale stacks. Returns the removed stack ids
+    /// for logging. Members are rejoined to the un-stacked timeline
+    /// in the same transaction as the row delete. Emits
+    /// `MediaEvent::Updated` for every member that was bound at
+    /// sweep time so they reappear in the un-stacked grid.
+    pub async fn delete_stacks_with_stale_heartbeat(
+        &self,
+        checkpoint: i64,
+    ) -> Result<Vec<String>, LibraryError> {
+        let stale = self.repo.ids_with_stale_stack_heartbeat(checkpoint).await?;
+        let mut affected_members: Vec<MediaId> = Vec::new();
+        for stack_id in &stale {
+            affected_members.extend(self.repo.list_stack_members(stack_id).await?);
+        }
+        let removed = self
+            .repo
+            .delete_stacks_with_stale_heartbeat(checkpoint)
+            .await?;
+        if !affected_members.is_empty() {
+            self.emit(MediaEvent::Updated(affected_members));
+        }
+        Ok(removed)
     }
 }
 
@@ -471,6 +599,147 @@ mod tests {
             MediaEvent::Updated(ids) => assert_eq!(ids, &[local_id]),
             other => panic!("expected Updated; got {other:?}"),
         }
+    }
+
+    /// Issue #224: `upsert_stack` must emit `MediaEvent::Updated` for
+    /// every current member of the stack so a primary swap reflects
+    /// in tracked grid models without a restart.
+    #[tokio::test]
+    async fn upsert_stack_emits_updated_for_all_members() {
+        let (_dir, svc) = make_service().await;
+
+        let primary = MediaId::new("a".repeat(64));
+        let sibling = MediaId::new("b".repeat(64));
+        for (id, name) in [(&primary, "p.jpg"), (&sibling, "s.jpg")] {
+            svc.insert_media(&record_with_taken_at(id.clone(), name, None))
+                .await
+                .unwrap();
+        }
+        // Set up the stacks row first so the FK is satisfied when we
+        // bind members.
+        svc.upsert_stack(&Stack {
+            id: "stk".to_string(),
+            primary_asset_id: primary.clone(),
+            last_seen_at: 0,
+        })
+        .await
+        .unwrap();
+        svc.set_media_stack_id(&primary, "stk").await.unwrap();
+        svc.set_media_stack_id(&sibling, "stk").await.unwrap();
+
+        // Subscribe AFTER seeding so the Added/Updated noise from
+        // setup doesn't leak into the assertion.
+        let mut rx = svc.subscribe();
+        // Re-upsert with a new primary — the case we actually care
+        // about (primary swap should reflect in grid models).
+        svc.upsert_stack(&Stack {
+            id: "stk".to_string(),
+            primary_asset_id: sibling.clone(),
+            last_seen_at: 0,
+        })
+        .await
+        .unwrap();
+
+        let events = drain(&mut rx).await;
+        let updated_ids: Vec<MediaId> = events
+            .iter()
+            .flat_map(|e| match e {
+                MediaEvent::Updated(ids) => ids.clone(),
+                _ => Vec::new(),
+            })
+            .collect();
+        assert!(
+            updated_ids.contains(&primary) && updated_ids.contains(&sibling),
+            "upsert_stack must emit Updated for both members; got {updated_ids:?}"
+        );
+    }
+
+    /// Issue #224: `delete_stack` must emit `MediaEvent::Updated` for
+    /// every member so they reappear in the un-stacked grid.
+    #[tokio::test]
+    async fn delete_stack_emits_updated_for_freed_members() {
+        let (_dir, svc) = make_service().await;
+
+        let primary = MediaId::new("a".repeat(64));
+        let sibling = MediaId::new("b".repeat(64));
+        for (id, name) in [(&primary, "p.jpg"), (&sibling, "s.jpg")] {
+            svc.insert_media(&record_with_taken_at(id.clone(), name, None))
+                .await
+                .unwrap();
+        }
+        svc.upsert_stack(&Stack {
+            id: "doomed".to_string(),
+            primary_asset_id: primary.clone(),
+            last_seen_at: 0,
+        })
+        .await
+        .unwrap();
+        svc.set_media_stack_id(&primary, "doomed").await.unwrap();
+        svc.set_media_stack_id(&sibling, "doomed").await.unwrap();
+
+        let mut rx = svc.subscribe();
+        svc.delete_stack("doomed").await.unwrap();
+
+        let events = drain(&mut rx).await;
+        let updated_ids: Vec<MediaId> = events
+            .iter()
+            .flat_map(|e| match e {
+                MediaEvent::Updated(ids) => ids.clone(),
+                _ => Vec::new(),
+            })
+            .collect();
+        assert!(
+            updated_ids.contains(&primary) && updated_ids.contains(&sibling),
+            "delete_stack must emit Updated for both members; got {updated_ids:?}"
+        );
+    }
+
+    /// Issue #224: deleting a stack primary must emit `Updated` for
+    /// the surviving siblings whose `stack_id` was cleared by the FK
+    /// cascade — otherwise the live grid stays out of sync.
+    #[tokio::test]
+    async fn delete_permanently_emits_updated_for_freed_siblings() {
+        let (_dir, svc) = make_service().await;
+
+        let primary = MediaId::new("a".repeat(64));
+        let sibling = MediaId::new("b".repeat(64));
+        for (id, name) in [(&primary, "p.jpg"), (&sibling, "s.jpg")] {
+            svc.insert_media(&record_with_taken_at(id.clone(), name, None))
+                .await
+                .unwrap();
+        }
+        svc.upsert_stack(&Stack {
+            id: "stk".to_string(),
+            primary_asset_id: primary.clone(),
+            last_seen_at: 0,
+        })
+        .await
+        .unwrap();
+        svc.set_media_stack_id(&primary, "stk").await.unwrap();
+        svc.set_media_stack_id(&sibling, "stk").await.unwrap();
+
+        let mut rx = svc.subscribe();
+        svc.delete_permanently_no_record(std::slice::from_ref(&primary))
+            .await
+            .unwrap();
+
+        let events = drain(&mut rx).await;
+        let mut saw_removed = false;
+        let mut saw_updated_sibling = false;
+        for e in &events {
+            match e {
+                MediaEvent::Removed(ids) if ids.as_slice() == std::slice::from_ref(&primary) => {
+                    saw_removed = true
+                }
+                MediaEvent::Updated(ids) if ids.contains(&sibling) => saw_updated_sibling = true,
+                _ => {}
+            }
+        }
+        assert!(saw_removed, "expected Removed for primary; got {events:?}");
+        assert!(
+            saw_updated_sibling,
+            "expected Updated for sibling whose stack_id was cleared by cascade; got {events:?}"
+        );
     }
 
     /// Re-syncing an asset that already exists by id emits a single

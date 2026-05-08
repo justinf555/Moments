@@ -124,6 +124,12 @@ async fn handle_asset(asset: SyncAssetV1, ctx: &SyncContext) -> Result<(), Libra
         .bump_last_seen_at(&media_id, now)
         .await?;
 
+    // Issue #224: reflect server-side stack membership locally. The
+    // matching `SyncStackV1` (carrying the primary asset id) arrives
+    // on its own stream and is handled by `StackHandler` — here we
+    // just record the asset's `stackId` pointer.
+    apply_stack_membership(asset.stack_id.as_deref(), &media_id, ctx).await?;
+
     if let Err(e) = download_thumbnail(
         &ctx.client,
         &ctx.library,
@@ -137,6 +143,32 @@ async fn handle_asset(asset: SyncAssetV1, ctx: &SyncContext) -> Result<(), Libra
     }
 
     Ok(())
+}
+
+/// Bind or clear the asset's `media.stack_id` pointer based on
+/// `AssetV1.stackId`. The authoritative `stacks` row is upserted by
+/// `StackHandler` on the `StackV1` stream, not here — `AssetV1` and
+/// `StackV1` arrive independently and may interleave in any order.
+///
+/// FK on `media.stack_id REFERENCES stacks(id)` is enforced
+/// (`PRAGMA foreign_keys` is on by default in sqlx 0.8), so we
+/// can't bind to a non-existent stack. If the matching `StackV1`
+/// hasn't arrived, we create a stub `stacks` row pointing at the
+/// current asset as a placeholder primary; `StackV1` later
+/// overwrites the primary via `upsert_stack`'s ON CONFLICT clause.
+#[instrument(skip(ctx))]
+async fn apply_stack_membership(
+    stack_id: Option<&str>,
+    media_id: &MediaId,
+    ctx: &SyncContext,
+) -> Result<(), LibraryError> {
+    match stack_id {
+        Some(id) => {
+            ctx.library.media().ensure_stack_stub(id, media_id).await?;
+            ctx.library.media().set_media_stack_id(media_id, id).await
+        }
+        None => ctx.library.media().clear_media_stack_id(media_id).await,
+    }
 }
 
 pub struct AssetDeleteHandler;

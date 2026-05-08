@@ -24,6 +24,8 @@ The original is never replaced. Immich's "originals are sacred" architectural ru
 
 ## 2. Design summary
 
+> **Status of this document**: Phase A is implemented in `feat/224-immich-stacks-phase-a`. The "actual wire shape vs. earlier draft" callouts in §4.1 and §4.2 record corrections discovered while testing against a live Immich v2.7.5 instance and cross-checking against the upstream OpenAPI spec.
+
 **Two mechanisms, chosen by edit type:**
 
 | Edit family | Mechanism | Server-side representation |
@@ -50,16 +52,18 @@ Two new migrations, applied in order.
 
 CREATE TABLE stacks (
     id                TEXT    PRIMARY KEY NOT NULL,
-    primary_asset_id  TEXT    NOT NULL REFERENCES media(id),
+    primary_asset_id  TEXT    NOT NULL REFERENCES media(id) ON DELETE CASCADE,
     last_seen_at      INTEGER NOT NULL DEFAULT 0  -- joins #628 reconciliation
 );
 
 CREATE INDEX idx_stacks_primary_asset_id ON stacks(primary_asset_id);
 
-ALTER TABLE media ADD COLUMN stack_id TEXT REFERENCES stacks(id);
+ALTER TABLE media ADD COLUMN stack_id TEXT REFERENCES stacks(id) ON DELETE SET NULL;
 
 CREATE INDEX idx_media_stack_id ON media(stack_id) WHERE stack_id IS NOT NULL;
 ```
+
+The two cascades work together: deleting a `media` row cascade-deletes any `stacks` row whose primary it was, which in turn cascade-clears `stack_id` on the surviving siblings. Both fire automatically because sqlx 0.8 enables `PRAGMA foreign_keys` per connection.
 
 ### 3.2 Migration `024_add_edits_render_pointer.sql`
 
@@ -68,7 +72,7 @@ CREATE INDEX idx_media_stack_id ON media(stack_id) WHERE stack_id IS NOT NULL;
 -- its rendered output. Set when a pixel-adjustment edit is uploaded;
 -- null for geometric-only edits (those use the server's edits API).
 
-ALTER TABLE edits ADD COLUMN server_rendered_asset_id TEXT REFERENCES media(id);
+ALTER TABLE edits ADD COLUMN server_rendered_asset_id TEXT REFERENCES media(id) ON DELETE SET NULL;
 ALTER TABLE edits ADD COLUMN xmp_edit_version INTEGER NOT NULL DEFAULT 1;
 ```
 
@@ -80,71 +84,103 @@ Per #628, four tables already participate in the reset-cycle orphan sweep. `stac
 
 - `MediaRepository::bump_stack_last_seen_at(id, now)` — mirror of the existing pattern.
 - `MediaRepository::ids_with_stale_stack_heartbeat(checkpoint) -> Vec<String>` — orphan finder.
-- New `delete_stacks_with_stale_heartbeat` in finish_sync, runs after `delete_with_stale_heartbeat` on albums and before the people/faces sweeps. Cascades to clear `media.stack_id` on affected rows.
+- New `delete_stacks_with_stale_heartbeat` in finish_sync, runs after `delete_with_stale_heartbeat` on albums and before the people/faces sweeps. The migration's `ON DELETE SET NULL` cascade clears member `stack_id` automatically (sqlx 0.8 enables `PRAGMA foreign_keys` per connection); the explicit transactional `UPDATE` in the repo is a defensive belt-and-braces.
 
-Bumped from `AssetHandler` whenever an asset's stack relationship is touched.
+Bumped from `StackHandler` whenever a `StackV1` is processed.
+
+A second one-shot deletion path, `MediaRepository::delete_stack(id)`, mirrors the same transactional cleanup for the `SyncStackDeleteV1` ingress.
 
 ---
 
 ## 4. Sync wiring
 
-### 4.1 Pull side: `AssetV1` payload now carries stack info
+### 4.1 Pull side: `AssetV1` carries flat `stackId`; stacks stream separately
 
-The Immich sync stream's `AssetV1` payload has been observed to include:
+Empirically verified against v2.7.5 and confirmed against the OpenAPI spec on `main` — the `/sync/stream` endpoint emits stacks across **two coordinated streams**: `AssetV1` carries a flat `stackId` pointer, and `StackV1` / `StackDeleteV1` carry the stack metadata (including the primary asset id).
+
+> **Earlier draft of this section assumed a nested `stack` object on `AssetV1`** (mirroring the `/api/assets/{id}` detail endpoint). That was wrong — confirmed by inspecting the live wire payload during Phase A verification. The actual sync wire shape is what this section now describes.
+
+`SyncAssetV1` payload (relevant fields):
 
 ```json
 {
-  "stack": {
-    "id": "<stack uuid>",
-    "primaryAssetId": "<asset uuid>",
-    "assetCount": 2
-  } | null,
+  "stackId": "<stack uuid>" | null,
   "isEdited": false
 }
 ```
 
-Update `SyncAssetV1` in `src/sync/providers/immich/types.rs` to deserialise `stack` and `isEdited`. Update `AssetHandler` in `src/sync/providers/immich/handlers/asset.rs` to:
-
-1. If `stack != null`: upsert a row in `stacks` (id, primary_asset_id) and set `media.stack_id = stack.id`. Bump the stack's `last_seen_at`.
-2. If `stack == null`: clear `media.stack_id`.
-
-No new entity type to dispatch — Immich re-emits `AssetV1` whenever a stack relationship changes, so the existing handler pipeline picks it up.
-
-### 4.2 Pull side: `SyncAssetEditV1`
-
-New entity type. Payload (from OpenAPI on `main`):
+`SyncStackV1` payload:
 
 ```json
 {
-  "assetId": "<uuid>",
-  "edits": [
-    { "action": "crop",   "parameters": { "x": 0, "y": 0, "width": 100, "height": 100 } },
-    { "action": "rotate", "parameters": { "angle": 90 } },
-    { "action": "mirror", "parameters": { "axis": "horizontal" } }
-  ]
+  "id": "<stack uuid>",
+  "primaryAssetId": "<asset uuid>",
+  "ownerId": "<owner uuid>",
+  "createdAt": "...",
+  "updatedAt": "..."
 }
 ```
 
+`SyncStackDeleteV1` payload:
+
+```json
+{ "stackId": "<stack uuid>" }
+```
+
+Update `SyncAssetV1` in `src/sync/providers/immich/types.rs` to deserialise `stackId: Option<String>` (flat) and `isEdited: Option<bool>`. Add `SyncStackV1` and `SyncStackDeleteV1` types. Subscribe to `"StacksV1"` in the request `types` array.
+
+Handlers:
+
+1. **`AssetHandler`** (existing) — when handling `AssetV1`: if `stackId` is set, `set_media_stack_id`; if null, `clear_media_stack_id`. Does NOT touch the `stacks` table — that's `StackHandler`'s job.
+2. **`StackHandler`** (new, `handlers/stack.rs`) — for `StackV1`: translate `primaryAssetId` (Immich UUID) to local `MediaId` via `id_by_external_id`; upsert the `stacks` row; bump heartbeat. Warn-and-skip if the primary's local row hasn't streamed yet — the next pull cycle re-emits.
+3. **`StackDeleteHandler`** (new) — for `StackDeleteV1`: call `delete_stack(stack_id)` which clears member pointers and deletes the row in one transaction.
+
+**Order independence**: `AssetV1` and `StackV1` arrive in arbitrary order. The FK on `media.stack_id REFERENCES stacks(id)` is enforced (sqlx 0.8 enables `PRAGMA foreign_keys` by default), so an asset can't bind to a non-existent stack.
+
+Resolution: when `AssetHandler` sees an `AssetV1.stackId` for a stack that hasn't yet been upserted locally, it first creates a **stub** `stacks` row via `ensure_stack_stub(id, media_id)` — `INSERT … ON CONFLICT DO NOTHING` with the current asset itself as the placeholder `primary_asset_id`. The asset can then bind. When `StackV1` for that id arrives later, `upsert_stack` overwrites the placeholder primary with the authoritative one (and the `ON CONFLICT(id) DO UPDATE SET primary_asset_id = excluded.primary_asset_id` clause leaves `last_seen_at` untouched).
+
+Until the real `StackV1` lands, the grid may show the wrong asset as primary for that brief window — accepted as a transient. The stub's `last_seen_at = 0` means it's eligible for the heartbeat sweep, but the real `StackV1` will bump it before any sweep runs.
+
+### 4.2 Pull side: `SyncAssetEditV1` (one event per action)
+
+New entity type. The OpenAPI spec on `main` shows that edits stream **one record per action**, not as a single batched payload — each `SyncAssetEditV1` carries a single action with a `sequence` number that imposes an order across the asset's actions.
+
+`SyncAssetEditV1` payload:
+
+```json
+{
+  "id":        "<edit uuid>",
+  "assetId":   "<asset uuid>",
+  "action":    "crop" | "rotate" | "mirror",
+  "parameters": { "x": 0, "y": 0, "width": 100, "height": 100 },
+  "sequence":  0
+}
+```
+
+A complementary `SyncAssetEditDeleteV1` (with the edit `id`) cancels a single action.
+
+> **Earlier draft of this section assumed a single batched payload** with an `edits[]` array. That was wrong — Immich actually emits per-action records with sequence numbers. Each handler invocation is one row in a per-asset action list, ordered by `sequence`.
+
 New handler `AssetEditHandler` in `src/sync/providers/immich/handlers/asset_edit.rs`:
 
-1. Translate `face.asset_id` (Immich UUID) → local `MediaId` via `media().id_by_external_id()`. Warn-and-skip if parent asset isn't local yet.
-2. Convert the `edits` action list into the local `EditState` representation (see §5.3 for the mapping).
-3. `editing().upsert_edits(media_id, edit_state)` — preserves any pixel-adjustment fields already present locally.
-4. Bump the edits row's `last_seen_at`-equivalent (or just rely on `updated_at`).
+1. Translate `assetId` (Immich UUID) → local `MediaId` via `media().id_by_external_id()`. Warn-and-skip if parent asset isn't local yet.
+2. Upsert a row keyed by `(media_id, edit_id)` carrying `(action, parameters_json, sequence)` — local schema TBD as part of Phase B.
+3. Recompose the asset's edit state by pulling all rows for that asset ordered by `sequence` (translation to `EditState` per §5.3).
 
-Register in `handlers/mod.rs::all_handlers()`.
+Register in `handlers/mod.rs::all_handlers()` along with `AssetEditDeleteHandler`.
 
-Subscribe to the new entity type in `pull.rs::run_sync` request body:
+Subscribe to the new entity types in `pull.rs::run_sync` request body:
 
 ```rust
 types: vec![
     "AssetsV1".to_string(),
     "AssetExifsV1".to_string(),
-    "AssetEditsV1".to_string(),  // new
+    "AssetEditsV1".to_string(),  // new (Phase B)
     "AlbumsV1".to_string(),
     "AlbumToAssetsV1".to_string(),
     "PeopleV1".to_string(),
     "AssetFacesV1".to_string(),
+    "StacksV1".to_string(),       // added in Phase A
 ],
 ```
 
@@ -481,15 +517,18 @@ The Recent Imports view counts edits as imports — when the user saves a pixel-
 
 Independent of the editor. Lands the stack model and recovers any user who already uses Immich's stack feature in the wild (panoramas, bursts).
 
-- [ ] Migration `023_add_stacks.sql`
-- [ ] Migration `024_add_edits_render_pointer.sql`
-- [ ] `SyncAssetV1` deserialises `stack` and `isEdited`
-- [ ] `AssetHandler` upserts `stacks` rows and sets `media.stack_id`
-- [ ] `MediaRepository`: `bump_stack_last_seen_at`, `ids_with_stale_stack_heartbeat`, `delete_stacks_with_stale_heartbeat`
-- [ ] Service-layer accessors
-- [ ] Extend `finish_sync` in `pull.rs` to sweep stale stacks
-- [ ] Grid query filter (every list_filtered touch point)
-- [ ] Tests: stack upsert, stack stale-sweep, primary-only filter
+- [x] Migration `023_add_stacks.sql`
+- [x] Migration `024_add_edits_render_pointer.sql`
+- [x] `SyncAssetV1` deserialises **flat** `stackId` and `isEdited`; new `SyncStackV1` / `SyncStackDeleteV1` types
+- [x] `AssetHandler` sets/clears `media.stack_id` from `AssetV1.stackId`
+- [x] `StackHandler` upserts `stacks` rows from `StackV1`; `StackDeleteHandler` removes them on `StackDeleteV1`
+- [x] Subscribe to `"StacksV1"` in sync request types
+- [x] `MediaRepository`: `upsert_stack`, `set/clear_media_stack_id`, `bump_stack_last_seen_at`, `ids_with_stale_stack_heartbeat`, `delete_stacks_with_stale_heartbeat`, `delete_stack`
+- [x] Service-layer accessors
+- [x] Extend `finish_sync` in `pull.rs` to sweep stale stacks
+- [x] Grid query filter on `MediaRepository::list`, `AlbumRepository::list_media`, `FacesRepository::list_media_for_person`
+- [x] Stack-badge overlay on photo grid cell (`edit-copy-symbolic`, top-right)
+- [x] Tests: stack upsert idempotency, stale-sweep with member rejoin, primary-only filter, clear-membership
 
 Acceptance: pulling from a fresh Immich account that contains stacks (panoramas, bursts) results in a timeline that shows only primaries; clicking a stacked thumbnail expands to siblings; no duplicate-asset bug.
 
