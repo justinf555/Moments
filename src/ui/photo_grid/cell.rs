@@ -14,6 +14,10 @@ pub struct CellBindings {
     item: glib::WeakRef<MediaItemObject>,
     texture_handler: glib::SignalHandlerId,
     favorite_handler: glib::SignalHandlerId,
+    /// Issue #224: stack-membership changes mid-bind (e.g. an un-stacked
+    /// primary acquiring siblings during sync) need to refresh the
+    /// stack badge live.
+    is_stacked_handler: glib::SignalHandlerId,
 }
 
 mod imp {
@@ -35,6 +39,8 @@ mod imp {
         pub days_label: TemplateChild<gtk::Label>,
         #[template_child]
         pub duration_label: TemplateChild<gtk::Label>,
+        #[template_child]
+        pub stack_badge: TemplateChild<gtk::Image>,
 
         pub bindings: RefCell<Option<CellBindings>>,
         /// Whether to show the star button (false in Trash view).
@@ -43,6 +49,10 @@ mod imp {
         pub has_texture: Cell<bool>,
         /// Whether the item is currently favourited.
         pub is_favorited: Cell<bool>,
+        /// Whether the bound item is part of an asset stack. Set in
+        /// `update_stack_badge`, gating the badge's visibility from
+        /// `update_from_item` once a texture is ready.
+        pub is_stacked: Cell<bool>,
         /// Whether the grid is in selection mode (checkbox always visible).
         pub in_selection_mode: Cell<bool>,
         /// Click handler for the star button — connected in factory `bind`,
@@ -137,6 +147,7 @@ impl PhotoGridCell {
         self.update_star(item);
         self.update_days_remaining(item);
         self.update_duration(item);
+        self.update_stack_badge(item);
 
         let cell = self.clone();
         let texture_handler = item.connect_texture_notify(move |item| {
@@ -148,10 +159,16 @@ impl PhotoGridCell {
             cell.update_star(item);
         });
 
+        let cell = self.clone();
+        let is_stacked_handler = item.connect_is_stacked_notify(move |item| {
+            cell.update_stack_badge(item);
+        });
+
         *self.imp().bindings.borrow_mut() = Some(CellBindings {
             item: item.downgrade(),
             texture_handler,
             favorite_handler,
+            is_stacked_handler,
         });
     }
 
@@ -167,6 +184,7 @@ impl PhotoGridCell {
             if let Some(item) = b.item.upgrade() {
                 item.disconnect(b.texture_handler);
                 item.disconnect(b.favorite_handler);
+                item.disconnect(b.is_stacked_handler);
             }
         }
         imp.picture.set_paintable(None::<&gtk::gdk::Texture>);
@@ -177,8 +195,22 @@ impl PhotoGridCell {
         imp.checkbox.set_active(false);
         imp.days_label.set_visible(false);
         imp.duration_label.set_visible(false);
+        imp.stack_badge.set_visible(false);
         imp.has_texture.set(false);
         imp.is_favorited.set(false);
+        imp.is_stacked.set(false);
+    }
+
+    /// Toggle the "stacked" badge based on the item's `is_stacked`
+    /// property. Only shown once a texture is loaded — otherwise the
+    /// badge would float over the placeholder, which looks wrong.
+    /// Issue #224.
+    fn update_stack_badge(&self, item: &MediaItemObject) {
+        let imp = self.imp();
+        let stacked = item.is_stacked();
+        imp.is_stacked.set(stacked);
+        imp.stack_badge
+            .set_visible(stacked && imp.has_texture.get());
     }
 
     fn update_duration(&self, item: &MediaItemObject) {
@@ -290,12 +322,16 @@ impl PhotoGridCell {
             if imp.show_star.get() && imp.is_favorited.get() {
                 imp.star_btn.set_visible(true);
             }
+            if imp.is_stacked.get() {
+                imp.stack_badge.set_visible(true);
+            }
         } else {
             imp.picture.set_paintable(None::<&gtk::gdk::Texture>);
             imp.picture.set_visible(false);
             imp.placeholder.set_visible(true);
             imp.has_texture.set(false);
             imp.star_btn.set_visible(false);
+            imp.stack_badge.set_visible(false);
         }
     }
 }

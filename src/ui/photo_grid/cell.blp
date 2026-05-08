@@ -61,5 +61,17 @@ template $MomentsPhotoGridCell : Gtk.Widget {
       visible: false;
       styles ["osd", "caption", "pill"]
     }
+
+    [overlay]
+    Gtk.Image stack_badge {
+      icon-name: "edit-copy-symbolic";
+      pixel-size: 16;
+      halign: end;
+      valign: start;
+      margin-end: 6;
+      margin-top: 6;
+      visible: false;
+      styles ["osd"]
+    }
   }
 }

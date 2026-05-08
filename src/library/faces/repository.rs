@@ -90,7 +90,9 @@ impl FacesRepository {
         let rows: Vec<(String,)> = sqlx::query_as(
             "SELECT DISTINCT af.asset_id FROM asset_faces af
              INNER JOIN media m ON m.id = af.asset_id
+             LEFT JOIN stacks s ON m.stack_id = s.id
              WHERE af.person_id = ? AND m.is_trashed = 0
+               AND (s.id IS NULL OR s.primary_asset_id = m.id)
              ORDER BY COALESCE(m.taken_at, m.imported_at) DESC",
         )
         .bind(person_id)

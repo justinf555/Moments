@@ -36,6 +36,14 @@ mod imp {
         /// Video duration in milliseconds. 0 for images.
         #[property(get, set)]
         pub duration_ms: Cell<u64>,
+
+        /// Whether this item is part of an Immich asset stack. Issue
+        /// #224. Only the stack's primary surfaces in the grid (filter
+        /// applied at `MediaRepository::list`); when this property is
+        /// `true`, the cell renders a stack-badge overlay so users can
+        /// tell at a glance the photo has hidden siblings.
+        #[property(get, set)]
+        pub is_stacked: Cell<bool>,
     }
 
     #[glib::object_subclass]
@@ -58,6 +66,7 @@ impl MediaItemObject {
         obj.imp().is_favorite.set(item.is_favorite);
         obj.imp().trashed_at.set(item.trashed_at.unwrap_or(0));
         obj.imp().duration_ms.set(item.duration_ms.unwrap_or(0));
+        obj.imp().is_stacked.set(item.stack_id.is_some());
         obj.imp()
             .item
             .set(item)

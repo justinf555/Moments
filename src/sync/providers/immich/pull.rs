@@ -151,6 +151,10 @@ impl PullManager {
                 "AlbumToAssetsV1".to_string(),
                 "PeopleV1".to_string(),
                 "AssetFacesV1".to_string(),
+                // Issue #224: stacks arrive on their own stream as
+                // SyncStackV1 / SyncStackDeleteV1. AssetV1 carries
+                // only `stackId`; the primary lives on StackV1.
+                "StacksV1".to_string(),
             ],
         };
 
@@ -342,6 +346,22 @@ impl PullManager {
                 info!(
                     count = album_orphans.len(),
                     "removing orphaned albums after reset sync"
+                );
+            }
+
+            // Issue #224: stacks join the heartbeat sweep as the fifth
+            // participating table. Members rejoin the un-stacked
+            // timeline automatically via `media.stack_id`'s
+            // `ON DELETE SET NULL` FK (migration 023).
+            let stack_orphans = self
+                .library
+                .media()
+                .delete_stacks_with_stale_heartbeat(checkpoint)
+                .await?;
+            if !stack_orphans.is_empty() {
+                info!(
+                    count = stack_orphans.len(),
+                    "removing orphaned stacks after reset sync"
                 );
             }
 
