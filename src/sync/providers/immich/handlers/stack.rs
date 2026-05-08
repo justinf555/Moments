@@ -59,7 +59,6 @@ async fn handle_stack(stack: SyncStackV1, ctx: &SyncContext) -> Result<(), Libra
         .upsert_stack(&Stack {
             id: stack.id.clone(),
             primary_asset_id: primary_local,
-            last_seen_at: now,
         })
         .await?;
     ctx.library

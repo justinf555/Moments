@@ -347,36 +347,44 @@ impl MediaService {
     /// `StackV1` hasn't streamed yet. No event is emitted — the
     /// matching `set_media_stack_id` call that follows fires the
     /// `Updated` event for the asset that just bound.
+    ///
+    /// `now` seeds the stub's heartbeat so the same-cycle reset
+    /// sweep doesn't delete it before `StackV1` arrives.
     pub async fn ensure_stack_stub(
         &self,
         stack_id: &str,
         primary_fallback: &MediaId,
+        now: i64,
     ) -> Result<(), LibraryError> {
         self.repo
-            .ensure_stack_stub(stack_id, primary_fallback)
+            .ensure_stack_stub(stack_id, primary_fallback, now)
             .await
     }
 
     /// Sync-only: bind a media row to a stack. Emits
-    /// `MediaEvent::Updated` for the bound asset so the grid
-    /// reconciles (non-primary members get filtered out via
-    /// `get_many`'s primary-only clause).
+    /// `MediaEvent::Updated` only when the row actually changed —
+    /// re-syncing an unchanged membership skips the event. The grid
+    /// reconciles via `get_many`'s primary-only clause.
     pub async fn set_media_stack_id(
         &self,
         media_id: &MediaId,
         stack_id: &str,
     ) -> Result<(), LibraryError> {
-        self.repo.set_media_stack_id(media_id, stack_id).await?;
-        self.emit(MediaEvent::Updated(vec![media_id.clone()]));
+        if self.repo.set_media_stack_id(media_id, stack_id).await? {
+            self.emit(MediaEvent::Updated(vec![media_id.clone()]));
+        }
         Ok(())
     }
 
     /// Sync-only: clear a media row's stack pointer (the asset was
-    /// un-stacked server-side). Emits `MediaEvent::Updated` so the
-    /// asset reappears in the un-stacked grid.
+    /// un-stacked server-side). Emits `MediaEvent::Updated` only
+    /// when the row actually changed — re-syncing an
+    /// already-un-stacked asset (the common case for most `AssetV1`
+    /// payloads) skips the event.
     pub async fn clear_media_stack_id(&self, media_id: &MediaId) -> Result<(), LibraryError> {
-        self.repo.clear_media_stack_id(media_id).await?;
-        self.emit(MediaEvent::Updated(vec![media_id.clone()]));
+        if self.repo.clear_media_stack_id(media_id).await? {
+            self.emit(MediaEvent::Updated(vec![media_id.clone()]));
+        }
         Ok(())
     }
 
@@ -620,7 +628,6 @@ mod tests {
         svc.upsert_stack(&Stack {
             id: "stk".to_string(),
             primary_asset_id: primary.clone(),
-            last_seen_at: 0,
         })
         .await
         .unwrap();
@@ -635,7 +642,6 @@ mod tests {
         svc.upsert_stack(&Stack {
             id: "stk".to_string(),
             primary_asset_id: sibling.clone(),
-            last_seen_at: 0,
         })
         .await
         .unwrap();
@@ -670,7 +676,6 @@ mod tests {
         svc.upsert_stack(&Stack {
             id: "doomed".to_string(),
             primary_asset_id: primary.clone(),
-            last_seen_at: 0,
         })
         .await
         .unwrap();
@@ -711,7 +716,6 @@ mod tests {
         svc.upsert_stack(&Stack {
             id: "stk".to_string(),
             primary_asset_id: primary.clone(),
-            last_seen_at: 0,
         })
         .await
         .unwrap();

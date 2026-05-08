@@ -712,18 +712,29 @@ impl MediaRepository {
     /// overwrites it via `upsert_stack`'s ON CONFLICT clause.
     /// Idempotent — `ON CONFLICT DO NOTHING` preserves any stub or
     /// authoritative row already present.
+    ///
+    /// `now` seeds the stub's `last_seen_at`. Issue #628 reset-cycle
+    /// reconciliation: if we left the stub at `0`, the same cycle's
+    /// sweep at `finish_sync` would delete it before the matching
+    /// `StackV1` got a chance to bump it (or before it has a chance
+    /// to arrive at all). Seeding with the cycle's wall time keeps
+    /// the stub alive for at least one cycle; if `StackV1` never
+    /// arrives, the next reset-cycle's checkpoint will be `> now` and
+    /// the orphan sweep will clean it up.
     pub async fn ensure_stack_stub(
         &self,
         stack_id: &str,
         primary_fallback: &MediaId,
+        now: i64,
     ) -> Result<(), LibraryError> {
         sqlx::query(
             "INSERT INTO stacks (id, primary_asset_id, last_seen_at)
-             VALUES (?, ?, 0)
+             VALUES (?, ?, ?)
              ON CONFLICT(id) DO NOTHING",
         )
         .bind(stack_id)
         .bind(primary_fallback.as_str())
+        .bind(now)
         .execute(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
@@ -731,30 +742,49 @@ impl MediaRepository {
     }
 
     /// Point a media row at a stack. Used when the server announces
-    /// stack membership through `AssetV1.stack`.
+    /// stack membership through `AssetV1.stackId`.
+    ///
+    /// Returns `true` if the row's `stack_id` actually changed. The
+    /// SQL guards on `(stack_id IS NULL OR stack_id != ?)` so the
+    /// UPDATE is a no-op when the asset is already bound to the
+    /// requested stack — saves a redundant `MediaEvent::Updated` on
+    /// the steady-state re-sync of an unchanged stack membership.
     pub async fn set_media_stack_id(
         &self,
         media_id: &MediaId,
         stack_id: &str,
-    ) -> Result<(), LibraryError> {
-        sqlx::query("UPDATE media SET stack_id = ? WHERE id = ?")
-            .bind(stack_id)
-            .bind(media_id.as_str())
-            .execute(self.db.pool())
-            .await
-            .map_err(LibraryError::Db)?;
-        Ok(())
+    ) -> Result<bool, LibraryError> {
+        let result = sqlx::query(
+            "UPDATE media SET stack_id = ?
+             WHERE id = ? AND (stack_id IS NULL OR stack_id != ?)",
+        )
+        .bind(stack_id)
+        .bind(media_id.as_str())
+        .bind(stack_id)
+        .execute(self.db.pool())
+        .await
+        .map_err(LibraryError::Db)?;
+        Ok(result.rows_affected() > 0)
     }
 
     /// Clear the stack pointer on a media row. Used when an `AssetV1`
-    /// arrives with `stack: null` (the asset was un-stacked server-side).
-    pub async fn clear_media_stack_id(&self, media_id: &MediaId) -> Result<(), LibraryError> {
-        sqlx::query("UPDATE media SET stack_id = NULL WHERE id = ?")
-            .bind(media_id.as_str())
-            .execute(self.db.pool())
-            .await
-            .map_err(LibraryError::Db)?;
-        Ok(())
+    /// arrives with `stackId: null` (the asset was un-stacked
+    /// server-side).
+    ///
+    /// Returns `true` if the row's `stack_id` actually changed. The
+    /// SQL guards on `stack_id IS NOT NULL` so re-sync of an
+    /// already-un-stacked asset (the common case for the vast
+    /// majority of `AssetV1` payloads) doesn't emit a spurious event.
+    pub async fn clear_media_stack_id(&self, media_id: &MediaId) -> Result<bool, LibraryError> {
+        let result = sqlx::query(
+            "UPDATE media SET stack_id = NULL
+             WHERE id = ? AND stack_id IS NOT NULL",
+        )
+        .bind(media_id.as_str())
+        .execute(self.db.pool())
+        .await
+        .map_err(LibraryError::Db)?;
+        Ok(result.rows_affected() > 0)
     }
 
     /// Update a stack's heartbeat. Issue #628 reset-cycle reconciliation
@@ -1221,7 +1251,6 @@ mod tests {
         repo.upsert_stack(&Stack {
             id: "stk1".to_string(),
             primary_asset_id: primary_a.clone(),
-            last_seen_at: 0,
         })
         .await
         .unwrap();
@@ -1232,7 +1261,6 @@ mod tests {
         repo.upsert_stack(&Stack {
             id: "stk1".to_string(),
             primary_asset_id: primary_b.clone(),
-            last_seen_at: 0,
         })
         .await
         .unwrap();
@@ -1261,7 +1289,6 @@ mod tests {
         repo.upsert_stack(&Stack {
             id: "stale".to_string(),
             primary_asset_id: primary.clone(),
-            last_seen_at: 0,
         })
         .await
         .unwrap();
@@ -1270,7 +1297,6 @@ mod tests {
         repo.upsert_stack(&Stack {
             id: "fresh".to_string(),
             primary_asset_id: primary.clone(),
-            last_seen_at: 0,
         })
         .await
         .unwrap();
@@ -1301,7 +1327,6 @@ mod tests {
         repo.upsert_stack(&Stack {
             id: "doomed".to_string(),
             primary_asset_id: primary.clone(),
-            last_seen_at: 0,
         })
         .await
         .unwrap();
@@ -1357,7 +1382,6 @@ mod tests {
         repo.upsert_stack(&Stack {
             id: "stk".to_string(),
             primary_asset_id: primary.clone(),
-            last_seen_at: 0,
         })
         .await
         .unwrap();
@@ -1398,10 +1422,14 @@ mod tests {
             .unwrap();
 
         // Stub-then-bind, mirroring `AssetHandler::apply_stack_membership`.
-        repo.ensure_stack_stub("late-stack", &asset).await.unwrap();
+        // Pass a non-zero `now` so the stub survives a same-cycle reset
+        // sweep (issue #224 / #628).
+        repo.ensure_stack_stub("late-stack", &asset, 555)
+            .await
+            .unwrap();
         repo.set_media_stack_id(&asset, "late-stack").await.unwrap();
 
-        // Stub exists with the placeholder primary.
+        // Stub exists with the placeholder primary and a live heartbeat.
         let row: (String, i64) =
             sqlx::query_as("SELECT primary_asset_id, last_seen_at FROM stacks WHERE id = ?")
                 .bind("late-stack")
@@ -1409,7 +1437,10 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(row.0, asset.as_str(), "stub primary is the binding asset");
-        assert_eq!(row.1, 0, "stub heartbeat is 0 — overwritten by StackV1");
+        assert_eq!(
+            row.1, 555,
+            "stub heartbeat seeded from `now`, not 0 — survives same-cycle sweep"
+        );
 
         // Real StackV1 arrives later: upsert overwrites the primary.
         let real_primary = MediaId::new("b".repeat(64));
@@ -1419,7 +1450,6 @@ mod tests {
         repo.upsert_stack(&Stack {
             id: "late-stack".to_string(),
             primary_asset_id: real_primary.clone(),
-            last_seen_at: 0,
         })
         .await
         .unwrap();
@@ -1458,7 +1488,6 @@ mod tests {
         repo.upsert_stack(&Stack {
             id: "stk".to_string(),
             primary_asset_id: primary.clone(),
-            last_seen_at: 0,
         })
         .await
         .unwrap();
@@ -1521,7 +1550,6 @@ mod tests {
         repo.upsert_stack(&Stack {
             id: "stk".to_string(),
             primary_asset_id: primary.clone(),
-            last_seen_at: 0,
         })
         .await
         .unwrap();
@@ -1575,7 +1603,6 @@ mod tests {
         repo.upsert_stack(&Stack {
             id: "stk".to_string(),
             primary_asset_id: id.clone(),
-            last_seen_at: 0,
         })
         .await
         .unwrap();

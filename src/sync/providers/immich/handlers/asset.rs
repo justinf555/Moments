@@ -127,8 +127,10 @@ async fn handle_asset(asset: SyncAssetV1, ctx: &SyncContext) -> Result<(), Libra
     // Issue #224: reflect server-side stack membership locally. The
     // matching `SyncStackV1` (carrying the primary asset id) arrives
     // on its own stream and is handled by `StackHandler` — here we
-    // just record the asset's `stackId` pointer.
-    apply_stack_membership(asset.stack_id.as_deref(), &media_id, ctx).await?;
+    // just record the asset's `stackId` pointer. `now` is shared
+    // with the stub heartbeat so a same-cycle reset sweep doesn't
+    // delete a stub that hasn't yet seen its real StackV1.
+    apply_stack_membership(asset.stack_id.as_deref(), &media_id, ctx, now).await?;
 
     if let Err(e) = download_thumbnail(
         &ctx.client,
@@ -161,10 +163,14 @@ async fn apply_stack_membership(
     stack_id: Option<&str>,
     media_id: &MediaId,
     ctx: &SyncContext,
+    now: i64,
 ) -> Result<(), LibraryError> {
     match stack_id {
         Some(id) => {
-            ctx.library.media().ensure_stack_stub(id, media_id).await?;
+            ctx.library
+                .media()
+                .ensure_stack_stub(id, media_id, now)
+                .await?;
             ctx.library.media().set_media_stack_id(media_id, id).await
         }
         None => ctx.library.media().clear_media_stack_id(media_id).await,
