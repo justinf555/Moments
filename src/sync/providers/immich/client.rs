@@ -385,6 +385,30 @@ impl ImmichClient {
             .map_err(|e| LibraryError::Immich(format!("GET {path} read failed: {e}")))
     }
 
+    /// Replace the geometric edit list on an asset.
+    ///
+    /// PUT `/assets/{id}/edits` with `{ "edits": [...] }`. The server
+    /// returns 200 with the stamped edit IDs in the response body, but
+    /// we don't need them — the next pull cycle re-emits as
+    /// `SyncAssetEditV1` records.
+    pub(crate) async fn put_asset_edits<A: serde::Serialize>(
+        &self,
+        external_id: &str,
+        actions: &[A],
+    ) -> Result<(), LibraryError> {
+        self.put_no_content(
+            &format!("/assets/{external_id}/edits"),
+            &serde_json::json!({ "edits": actions }),
+        )
+        .await
+    }
+
+    /// Clear the geometric edit list on an asset (revert).
+    pub(crate) async fn delete_asset_edits(&self, external_id: &str) -> Result<(), LibraryError> {
+        self.delete_no_content(&format!("/assets/{external_id}/edits"))
+            .await
+    }
+
     /// Send a POST request and return the raw response for streaming.
     pub(crate) async fn post_stream<B: serde::Serialize>(
         &self,

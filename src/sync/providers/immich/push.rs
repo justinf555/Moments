@@ -6,11 +6,13 @@
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::library::db::Database;
+use crate::library::editing::repository::EditingRepository;
 use crate::library::error::LibraryError;
 use crate::sync::event::SyncEvent;
 use crate::sync::outbox::{OutboxMutation, OutboxStatus};
 
 use super::client::ImmichClient;
+use super::edit_action::{project, ImageDims};
 
 /// A pending outbox entry read from the database.
 #[derive(Debug)]
@@ -343,6 +345,49 @@ impl PushManager {
                     .await?;
                 self.bump_person_heartbeat(id.as_str()).await
             }
+
+            // ── Edits ───────────────────────────────────────────────
+            OutboxMutation::AssetEditsApplied { id } => {
+                let external_id = self.lookup_media_external_id(id.as_str()).await?;
+                let editing_repo = EditingRepository::new(self.db.clone());
+                let state = editing_repo.get_edit_state(&id).await?;
+
+                // None or identity → clear server-side edits. Otherwise
+                // project; `None` from `project` means the state has
+                // pixel adjustments / freeform straighten and is Phase C
+                // territory — log + skip rather than bash on the wrong
+                // endpoint.
+                let actions = match state.as_ref() {
+                    Some(s) if !s.is_identity() => {
+                        let dims = self.lookup_media_dims(id.as_str()).await?;
+                        project(s, dims)
+                    }
+                    _ => Some(Vec::new()),
+                };
+
+                match actions {
+                    Some(actions) if !actions.is_empty() => {
+                        self.client.put_asset_edits(&external_id, &actions).await?;
+                    }
+                    Some(_) => {
+                        self.client.delete_asset_edits(&external_id).await?;
+                    }
+                    None => {
+                        warn!(
+                            id = %id,
+                            "edit state not projectable to Immich /edits — Phase C territory; skipping"
+                        );
+                        return Ok(());
+                    }
+                }
+                self.bump_media_heartbeat(id.as_str()).await
+            }
+
+            OutboxMutation::AssetEditsCleared { id } => {
+                let external_id = self.lookup_media_external_id(id.as_str()).await?;
+                self.client.delete_asset_edits(&external_id).await?;
+                self.bump_media_heartbeat(id.as_str()).await
+            }
         }
     }
 
@@ -574,6 +619,34 @@ impl PushManager {
 
         match row {
             Some((eid,)) => Ok(eid),
+            None => Err(LibraryError::Immich(format!("media not found: {local_id}"))),
+        }
+    }
+
+    /// Read the stored pixel dimensions for an asset.
+    ///
+    /// Required for crop coordinate translation: EditState carries
+    /// normalised (0.0–1.0) coords but Immich's edit API takes pixels.
+    /// Errors if the row is missing dims — for an image that's a data
+    /// integrity issue worth surfacing rather than silently dropping
+    /// the edit. Videos shouldn't reach this path because the editor
+    /// doesn't expose save for them.
+    async fn lookup_media_dims(&self, local_id: &str) -> Result<ImageDims, LibraryError> {
+        let row: Option<(Option<i64>, Option<i64>)> =
+            sqlx::query_as("SELECT width, height FROM media WHERE id = ?")
+                .bind(local_id)
+                .fetch_optional(self.db.pool())
+                .await
+                .map_err(LibraryError::Db)?;
+
+        match row {
+            Some((Some(w), Some(h))) if w > 0 && h > 0 => Ok(ImageDims {
+                width: w as u32,
+                height: h as u32,
+            }),
+            Some(_) => Err(LibraryError::Immich(format!(
+                "media {local_id} missing width/height — cannot translate crop"
+            ))),
             None => Err(LibraryError::Immich(format!("media not found: {local_id}"))),
         }
     }
@@ -1457,5 +1530,48 @@ mod tests {
         let payload = serde_json::json!({});
         let ext_ids = push.resolve_media_external_ids(&payload).await.unwrap();
         assert!(ext_ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn lookup_media_dims_returns_image_dims() {
+        let (_dir, db) = setup_push_db().await;
+
+        let mut record = test_record(MediaId::new("local-1".to_string()));
+        record.width = Some(1920);
+        record.height = Some(1080);
+        MediaRepository::new(db.clone())
+            .upsert(&record)
+            .await
+            .unwrap();
+
+        let push = make_push_manager(db).await;
+        let dims = push.lookup_media_dims("local-1").await.unwrap();
+        assert_eq!(dims.width, 1920);
+        assert_eq!(dims.height, 1080);
+    }
+
+    #[tokio::test]
+    async fn lookup_media_dims_errors_when_dims_null() {
+        let (_dir, db) = setup_push_db().await;
+
+        // test_record leaves width/height as None.
+        let record = test_record(MediaId::new("local-2".to_string()));
+        assert!(record.width.is_none());
+        MediaRepository::new(db.clone())
+            .upsert(&record)
+            .await
+            .unwrap();
+
+        let push = make_push_manager(db).await;
+        let err = push.lookup_media_dims("local-2").await.unwrap_err();
+        assert!(err.to_string().contains("missing width/height"));
+    }
+
+    #[tokio::test]
+    async fn lookup_media_dims_errors_when_row_missing() {
+        let (_dir, db) = setup_push_db().await;
+        let push = make_push_manager(db).await;
+        let err = push.lookup_media_dims("nonexistent").await.unwrap_err();
+        assert!(err.to_string().contains("media not found"));
     }
 }

@@ -63,6 +63,16 @@ pub enum Mutation {
         media_ids: Vec<MediaId>,
     },
 
+    // ── Edits ────────────────────────────────────────────────────────
+    /// The local edit state for an asset was updated. Payload-free —
+    /// the push handler reads the current `EditState` at drain time
+    /// and projects to whatever wire shape the provider needs. Multiple
+    /// rapid edits naturally coalesce: only the final state is pushed.
+    AssetEditsApplied { id: MediaId },
+
+    /// The local edit state for an asset was cleared (revert).
+    AssetEditsCleared { id: MediaId },
+
     // ── People ───────────────────────────────────────────────────────
     /// A person was renamed.
     PersonRenamed { id: PersonId, name: String },
@@ -215,6 +225,20 @@ impl Mutation {
                 }]
             }
 
+            Mutation::AssetEditsApplied { id } => vec![OutboxRow {
+                entity_type: "asset".into(),
+                entity_id: id.as_str().into(),
+                action: "apply_edits".into(),
+                payload: None,
+            }],
+
+            Mutation::AssetEditsCleared { id } => vec![OutboxRow {
+                entity_type: "asset".into(),
+                entity_id: id.as_str().into(),
+                action: "clear_edits".into(),
+                payload: None,
+            }],
+
             Mutation::PersonRenamed { id, name } => {
                 let payload = serde_json::json!({ "name": name }).to_string();
                 vec![OutboxRow {
@@ -319,13 +343,43 @@ mod tests {
                 id: PersonId::from_raw("p2".to_string()),
                 hidden: true,
             },
+            Mutation::AssetEditsApplied {
+                id: MediaId::new("id6".to_string()),
+            },
+            Mutation::AssetEditsCleared {
+                id: MediaId::new("id7".to_string()),
+            },
         ];
 
-        assert_eq!(mutations.len(), 12);
+        assert_eq!(mutations.len(), 14);
         for m in &mutations {
             // Ensure Debug doesn't panic.
             let _ = format!("{m:?}");
         }
+    }
+
+    #[test]
+    fn asset_edits_applied_serialises_payload_free() {
+        let m = Mutation::AssetEditsApplied {
+            id: MediaId::new("photo-1".into()),
+        };
+        let rows = m.to_outbox_rows();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].entity_type, "asset");
+        assert_eq!(rows[0].entity_id, "photo-1");
+        assert_eq!(rows[0].action, "apply_edits");
+        assert!(rows[0].payload.is_none());
+    }
+
+    #[test]
+    fn asset_edits_cleared_serialises_payload_free() {
+        let m = Mutation::AssetEditsCleared {
+            id: MediaId::new("photo-2".into()),
+        };
+        let rows = m.to_outbox_rows();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].action, "clear_edits");
+        assert!(rows[0].payload.is_none());
     }
 
     #[test]

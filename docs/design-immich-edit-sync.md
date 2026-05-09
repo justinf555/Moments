@@ -24,7 +24,9 @@ The original is never replaced. Immich's "originals are sacred" architectural ru
 
 ## 2. Design summary
 
-> **Status of this document**: Phase A is implemented in `feat/224-immich-stacks-phase-a`. The "actual wire shape vs. earlier draft" callouts in §4.1 and §4.2 record corrections discovered while testing against a live Immich v2.7.5 instance and cross-checking against the upstream OpenAPI spec.
+> **Status of this document**: Phase A merged via #651. Phase B is implemented in `feat/224-immich-edits-phase-b` and **deviates from the §4 sketches in three deliberate ways** to simplify layering — see the "as-built" callouts in §4.2 / §4.3 / §4.4 and §7.1. Phases C and D remain as drafted. The "actual wire shape vs. earlier draft" callouts in §4.1 and §4.2 record corrections discovered while testing against a live Immich v2.7.5 instance and cross-checking against the upstream OpenAPI spec.
+>
+> **Phase B layering summary**: `Mutation::AssetEdits{Applied,Cleared}` are payload-free. `ImmichEditAction` lives in `src/sync/providers/immich/edit_action.rs` and never leaks into the library. The push handler reads the latest `EditState` from `EditingRepository::get_edit_state()` at drain time, projects to actions, and decides PUT vs. DELETE vs. skip — multiple rapid saves coalesce naturally because the outbox row carries no payload. There is no `EditState::is_geometric_only()` predicate; `project()` returns `Option<Vec<ImmichEditAction>>` and `None` is the "Phase C territory" signal.
 
 **Two mechanisms, chosen by edit type:**
 
@@ -157,17 +159,21 @@ New entity type. The OpenAPI spec on `main` shows that edits stream **one record
 }
 ```
 
-A complementary `SyncAssetEditDeleteV1` (with the edit `id`) cancels a single action.
+A complementary `SyncAssetEditDeleteV1` (with the edit id under field `editId`) cancels a single action.
+
+> **Wire-shape correction (Phase B run-time)** — initial draft assumed `id`; convention guess assumed `assetEditId`. Empirically (live v2.7.5 sync stream during dev testing), the actual payload is `{"editId": "<uuid>"}` — Immich uses the shorter form here even though every other delete entity follows `<entity>Id` (`SyncAssetDeleteV1.assetId`, `SyncStackDeleteV1.stackId`, etc.). Phase B's branch reflects the corrected shape.
 
 > **Earlier draft of this section assumed a single batched payload** with an `edits[]` array. That was wrong — Immich actually emits per-action records with sequence numbers. Each handler invocation is one row in a per-asset action list, ordered by `sequence`.
 
 New handler `AssetEditHandler` in `src/sync/providers/immich/handlers/asset_edit.rs`:
 
 1. Translate `assetId` (Immich UUID) → local `MediaId` via `media().id_by_external_id()`. Warn-and-skip if parent asset isn't local yet.
-2. Upsert a row keyed by `(media_id, edit_id)` carrying `(action, parameters_json, sequence)` — local schema TBD as part of Phase B.
-3. Recompose the asset's edit state by pulling all rows for that asset ordered by `sequence` (translation to `EditState` per §5.3).
+2. Upsert a row keyed by Immich `edit_id` (PK) carrying `(media_id, action, parameters_json, sequence, last_seen_at)` into the `immich_asset_edits` table.
+3. Recompose the asset's `EditState` by pulling all rows for that asset ordered by `sequence` and folding via `edit_action::recompose()`. Write the result back to the user-facing `edits` table via `EditingRepository` (no recorder — server-driven update).
 
-Register in `handlers/mod.rs::all_handlers()` along with `AssetEditDeleteHandler`.
+> **As-built (#224 Phase B)** — schema is `migrations/025_add_immich_asset_edits.sql`. `immich_asset_edits` is provider-scoped Immich bookkeeping, not library data; the library never reads or writes it. `media_id` has `ON DELETE CASCADE` so the orphan sweep on `media` clears the cached actions automatically (sqlx 0.8 enables `PRAGMA foreign_keys` per connection). Recompose tolerates third-party-tool shapes: rotates sum mod 360, repeated mirrors of the same axis XOR, last crop wins. Crop coordinate translation needs `media.width × media.height`; if dims are missing, the cached actions are kept but the `EditState` write is skipped (next pull retries once dims arrive).
+
+Register in `handlers/mod.rs::all_handlers()` along with `AssetEditDeleteHandler`. The handler also needs direct DB access for the bookkeeping table, so `SyncContext` gains a `db: Database` field alongside the existing `library`/`state`/`client`/`thumbnails_dir`.
 
 Subscribe to the new entity types in `pull.rs::run_sync` request body:
 
@@ -192,14 +198,12 @@ Add to `src/library/mutation.rs::Mutation`:
 pub enum Mutation {
     // ... existing ...
 
-    /// Geometric edits via PUT /assets/{id}/edits. Replaces any
-    /// existing server-side edit list for the asset.
-    AssetEditsApplied {
-        id: MediaId,
-        actions: Vec<ImmichEditAction>,  // crop/rotate/mirror with params
-    },
+    /// The local edit state for an asset was updated. Payload-free —
+    /// the push handler reads the current `EditState` at drain time
+    /// and projects to whatever wire shape the provider needs.
+    AssetEditsApplied { id: MediaId },
 
-    /// Revert geometric edits via DELETE /assets/{id}/edits.
+    /// The local edit state for an asset was cleared (revert).
     AssetEditsCleared { id: MediaId },
 
     /// A new rendered asset has been uploaded and should be stacked
@@ -232,27 +236,47 @@ pub enum Mutation {
 
 Corresponding `OutboxMutation::from_row` decoders in `src/sync/outbox/mutation.rs`.
 
+> **As-built (#224 Phase B)** — `AssetEditsApplied` and `AssetEditsCleared` are payload-free. The earlier draft had `actions: Vec<ImmichEditAction>` in the variant, which leaked the Immich wire shape into a library-level type and produced one outbox row per save. The payload-free shape coalesces multiple rapid saves into a single drain (push reads the latest state) and keeps `ImmichEditAction` in `sync/providers/immich/edit_action.rs` where it belongs. Phase C variants (`StackCreated`, `AssetTaggedMomentsEdit`, etc.) are still drafted as below; their as-built form will be revisited when Phase C lands.
+
 ### 4.4 Push side: `PushManager::push_one` arms
 
 Add match arms in `src/sync/providers/immich/push.rs`:
 
 ```rust
-OutboxMutation::AssetEditsApplied { id, actions } => {
+// As-built (#224 Phase B): the AssetEditsApplied row carries no
+// payload, so the push handler reads the latest EditState here and
+// decides PUT/DELETE/skip based on whether the state is identity,
+// projectable, or pixel-only (Phase C territory).
+OutboxMutation::AssetEditsApplied { id } => {
     let external_id = self.lookup_media_external_id(id.as_str()).await?;
-    self.client
-        .put_no_content(
-            &format!("/assets/{external_id}/edits"),
-            &serde_json::json!({ "edits": actions }),
-        )
+    let state = EditingRepository::new(self.db.clone())
+        .get_edit_state(&id)
         .await?;
+    let actions = match state.as_ref() {
+        Some(s) if !s.is_identity() => {
+            let dims = self.lookup_media_dims(id.as_str()).await?;
+            edit_action::project(s, dims)
+        }
+        _ => Some(Vec::new()),
+    };
+    match actions {
+        Some(actions) if !actions.is_empty() => {
+            self.client.put_asset_edits(&external_id, &actions).await?;
+        }
+        Some(_) => {
+            self.client.delete_asset_edits(&external_id).await?;
+        }
+        None => {
+            warn!(id = %id, "edit not projectable to /edits — Phase C; skipping");
+            return Ok(());
+        }
+    }
     self.bump_media_heartbeat(id.as_str()).await
 }
 
 OutboxMutation::AssetEditsCleared { id } => {
     let external_id = self.lookup_media_external_id(id.as_str()).await?;
-    self.client
-        .delete_no_content(&format!("/assets/{external_id}/edits"))
-        .await?;
+    self.client.delete_asset_edits(&external_id).await?;
     self.bump_media_heartbeat(id.as_str()).await
 }
 
@@ -414,16 +438,17 @@ Returns paged list of all assets carrying the tag — i.e., every Moments-render
 
 ### 7.1 Save (geometric-only edit)
 
-Triggered when `EditState::is_geometric_only()` returns true.
-
-```
-1. Persist EditState to local edits table.
-2. Convert to ImmichEditAction list (§5.3).
-3. Record outbox mutation AssetEditsApplied { id, actions }.
-4. Done. PushManager flushes; server applies; SyncAssetEditV1 echoes back on next pull.
-```
-
-No render, no upload, no stack, no tag. Single API call on push.
+> **As-built (#224 Phase B)** — there is no `EditState::is_geometric_only()` predicate and no provider-specific logic at save time. `EditingService::save_edit_state` does:
+>
+> ```
+> 1. Persist EditState to the local `edits` table.
+> 2. Record outbox mutation:
+>    - AssetEditsApplied { id }   if state is non-identity
+>    - AssetEditsCleared { id }   if state is identity (revert-via-resave)
+> 3. Done.
+> ```
+>
+> The mutation is payload-free. The push handler decides what to do at drain time (§4.4): identity or `None` from `project()` → DELETE; geometric → PUT; pixel adjustments → log + skip until Phase C lands. No render, no upload, no stack, no tag for any path that flows through `/assets/{id}/edits`.
 
 ### 7.2 Save (pixel adjustments present)
 
@@ -570,17 +595,22 @@ Acceptance: pulling from a fresh Immich account that contains stacks (panoramas,
 
 ### Phase B — geometric edits via `/assets/{id}/edits`
 
-Independent of Phase A; can land in parallel.
+Independent of Phase A; landed in parallel.
 
-- [ ] `ImmichClient` methods: `get_asset_edits`, `put_asset_edits`, `delete_asset_edits`
-- [ ] `Mutation::AssetEditsApplied` and `AssetEditsCleared` enum variants
-- [ ] `OutboxMutation::from_row` decoders
-- [ ] `PushManager::push_one` arms (§4.4)
-- [ ] `AssetEditHandler` for `SyncAssetEditV1`
-- [ ] `EditState::is_geometric_only()` predicate
-- [ ] `EditState ↔ ImmichEditAction` mapping (§5.3)
-- [ ] Editor save flow §7.1
-- [ ] Tests: probe with corrected nested-`parameters` payload (open question §11.1 to resolve first)
+- [x] §10.3 / §11.1 probe — corrected nested-`parameters` payload accepted on v2.7.5; PUT returns 200 with stamped edit IDs, DELETE returns 204
+- [x] `ImmichClient::put_asset_edits` / `delete_asset_edits` (typed wrappers)
+- [x] `Mutation::AssetEditsApplied { id }` / `AssetEditsCleared { id }` — **payload-free**, see §4.3
+- [x] `OutboxMutation::from_row` decoders + round-trip tests
+- [x] `PushManager::push_one` arms (§4.4) — read EditState at drain, project, decide PUT/DELETE/skip
+- [x] `AssetEditHandler` / `AssetEditDeleteHandler` for `SyncAssetEditV1` / `SyncAssetEditDeleteV1` (§4.2)
+- [x] `migrations/025_add_immich_asset_edits.sql` — provider-scoped per-action cache
+- [x] `edit_action::{project, recompose}` in `sync/providers/immich/` — never leaks into library
+- [x] `EditingService` records on save/revert; recorder injected via `Library::open`
+- [x] `SyncContext.db` field for handlers that maintain provider-specific tables
+- [x] Subscription to `"AssetEditsV1"` in `pull.rs` types vec
+- [x] Unit tests: mutation round-trips, projection (incl. basis-swap, off-axis rotate), recompose (rotates sum, mirrors XOR, last crop wins, FK cascade), handler SQL helpers, push `lookup_media_dims`, EditingService recording behaviour
+
+**Items dropped from earlier draft**: `get_asset_edits` (no consumer in Phase B); `EditState::is_geometric_only()` (replaced by `Option` return on `project()`).
 
 Acceptance: cropping a photo in the Moments editor + save → photo appears cropped in Immich web within a sync cycle; cropping the same photo on Immich web → Moments shows the crop after next pull; revert clears it from both sides.
 
@@ -655,7 +685,12 @@ If still 500: open an issue upstream and reduce Phase B scope to "best-effort, f
 
 ### 11.1 Does the corrected `/edits` payload work on v2.7.5?
 
-The first probe sent a flat `{action, x, y, width, height}` shape. The OpenAPI spec on `main` confirms the correct shape is `{action, parameters: {…}}`. Re-test with that before Phase B implementation begins.
+**Resolved (2026-05-08, Phase B kickoff)**. Probed against the local v2.7.5 instance:
+
+- `PUT /assets/{id}/edits` with `{"edits":[{"action":"rotate","parameters":{"angle":90}}]}` returns 200 with the stamped edit list in the response body. Crop, mirror, and combined multi-action arrays all accepted.
+- `DELETE /assets/{id}/edits` returns 204; `isEdited` flips back to false.
+- PUT replaces the full edit list (matches design wording).
+- `GET /api/assets/{id}` returns `edits: null` even when `isEdited:true` — the detail endpoint doesn't echo edits, so pulls must come via the sync stream (matches §4.2).
 
 ### 11.2 Does Immich strip XMP from uploaded JPEGs?
 

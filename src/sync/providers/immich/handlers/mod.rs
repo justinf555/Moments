@@ -7,6 +7,7 @@
 mod album;
 mod album_asset;
 mod asset;
+mod asset_edit;
 mod asset_exif;
 mod asset_face;
 mod person;
@@ -18,6 +19,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use crate::library::db::Database;
 use crate::library::error::LibraryError;
 use crate::library::Library;
 use crate::sync::state::SyncStateRepository;
@@ -30,6 +32,8 @@ pub use album_asset::AlbumAssetDeleteHandler;
 pub use album_asset::AlbumAssetHandler;
 pub use asset::AssetDeleteHandler;
 pub use asset::AssetHandler;
+pub use asset_edit::AssetEditDeleteHandler;
+pub use asset_edit::AssetEditHandler;
 pub use asset_exif::AssetExifHandler;
 pub use asset_face::AssetFaceDeleteHandler;
 pub use asset_face::AssetFaceHandler;
@@ -67,6 +71,9 @@ pub struct SyncContext {
     pub library: Arc<Library>,
     pub state: SyncStateRepository,
     pub thumbnails_dir: PathBuf,
+    /// Direct DB handle for provider-specific bookkeeping tables that
+    /// don't belong on a library service (e.g. `immich_asset_edits`).
+    pub db: Database,
 }
 
 /// A handler for one Immich sync entity type.
@@ -103,5 +110,7 @@ pub fn all_handlers() -> Vec<Box<dyn SyncEntityHandler>> {
         Box::new(AssetFaceDeleteHandler),
         Box::new(StackHandler),
         Box::new(StackDeleteHandler),
+        Box::new(AssetEditHandler),
+        Box::new(AssetEditDeleteHandler),
     ]
 }
