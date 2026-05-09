@@ -104,10 +104,16 @@ pub(crate) fn project(state: &EditState, dims: ImageDims) -> Option<Vec<ImmichEd
         } else {
             (dims.width, dims.height)
         };
-        let x = (crop.x * basis_w as f64).round().max(0.0) as i32;
-        let y = (crop.y * basis_h as f64).round().max(0.0) as i32;
-        let width = (crop.width * basis_w as f64).round().max(1.0) as i32;
-        let height = (crop.height * basis_h as f64).round().max(1.0) as i32;
+        // Defensive clamp on both ends: out-of-range normalised values
+        // (caller bug) shouldn't produce pixel crops larger than the
+        // image. CropRect should always be in [0.0, 1.0] but the schema
+        // doesn't enforce it.
+        let bw = basis_w as i32;
+        let bh = basis_h as i32;
+        let x = (crop.x * basis_w as f64).round().clamp(0.0, basis_w as f64) as i32;
+        let y = (crop.y * basis_h as f64).round().clamp(0.0, basis_h as f64) as i32;
+        let width = ((crop.width * basis_w as f64).round() as i32).clamp(1, (bw - x).max(1));
+        let height = ((crop.height * basis_h as f64).round() as i32).clamp(1, (bh - y).max(1));
         actions.push(ImmichEditAction::Crop {
             x,
             y,
@@ -134,6 +140,18 @@ pub(crate) fn project(state: &EditState, dims: ImageDims) -> Option<Vec<ImmichEd
 /// `dims` is the original image's pixel dimensions and is needed to
 /// normalise the crop. Rotates by 90°/270° swap the basis the crop
 /// is measured against — this matches `project`'s forward path.
+///
+/// **Known limitation (third-party shape):** if a `Crop` precedes a
+/// `Rotate` in the sequence (e.g. `[Crop, Rotate{90}]`), the crop is
+/// normalised against the *current* basis (rot=0 at crop time) but
+/// stored on an `EditState` whose `rotate_degrees` will be set later.
+/// Because our renderer applies rotate before crop, the recomposed
+/// `EditState` won't reproduce the same image as the action list.
+/// The cached actions on the server remain the source of truth — a
+/// later push from this device would re-project from `EditState` and
+/// emit the canonical rotate-first shape, which then differs from
+/// the original sequence. Acceptable for Phase B because Moments
+/// itself never produces this ordering; only third-party edits hit it.
 pub(crate) fn recompose(actions: &[ImmichEditAction], dims: ImageDims) -> EditState {
     let mut state = EditState::default();
     let mut rot: i32 = 0;
@@ -188,7 +206,7 @@ fn is_geometric_only(state: &EditState) -> bool {
         && state.color == ColorState::default()
         && state.detail == DetailState::default()
         && state.filter.is_none()
-        && state.transforms.straighten_degrees == 0.0
+        && state.transforms.straighten_degrees.abs() < f64::EPSILON
         && {
             // Rotate must be one of {0, 90, 180, 270} after normalisation.
             // The schema permits arbitrary i32; reject anything else so we
@@ -358,6 +376,48 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn crop_coords_clamp_to_image_bounds() {
+        // Out-of-range normalised values (caller bug) must produce a
+        // pixel crop that fits inside the image.
+        let mut state = EditState::default();
+        state.transforms.crop = Some(CropRect {
+            x: -0.1,
+            y: -0.5,
+            width: 5.0,
+            height: 10.0,
+        });
+        let actions = project(&state, dims()).unwrap();
+        let crop = actions
+            .iter()
+            .find_map(|a| match a {
+                ImmichEditAction::Crop {
+                    x,
+                    y,
+                    width,
+                    height,
+                } => Some((*x, *y, *width, *height)),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(crop.0, 0);
+        assert_eq!(crop.1, 0);
+        // dims are 1000x500 — width/height capped to (basis - origin).
+        assert!(crop.2 <= 1000);
+        assert!(crop.3 <= 500);
+        assert!(crop.2 >= 1);
+        assert!(crop.3 >= 1);
+    }
+
+    #[test]
+    fn straighten_just_below_epsilon_treated_as_zero() {
+        // Float storage can round-trip through f64 -> serde -> f64
+        // with sub-epsilon drift; the predicate must tolerate it.
+        let mut state = EditState::default();
+        state.transforms.straighten_degrees = f64::EPSILON / 2.0;
+        assert!(project(&state, dims()).is_some());
     }
 
     #[test]

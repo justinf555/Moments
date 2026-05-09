@@ -404,6 +404,10 @@ impl ImmichClient {
     }
 
     /// Clear the geometric edit list on an asset (revert).
+    ///
+    /// Verified idempotent on Immich v2.7.5 — DELETE on an asset with no
+    /// edits returns 204, so we don't need a 404-tolerance guard here.
+    /// Worth re-checking if a future Immich version changes this.
     pub(crate) async fn delete_asset_edits(&self, external_id: &str) -> Result<(), LibraryError> {
         self.delete_no_content(&format!("/assets/{external_id}/edits"))
             .await

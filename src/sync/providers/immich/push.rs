@@ -373,6 +373,12 @@ impl PushManager {
                         self.client.delete_asset_edits(&external_id).await?;
                     }
                     None => {
+                        // Intentional: returning Ok(()) marks the outbox row
+                        // Done, so this is a permanent drop — not retryable
+                        // until Phase C lands the render+stack path. The
+                        // local EditState is preserved in the `edits` table,
+                        // so no user data is lost; only the *server-side*
+                        // representation is skipped.
                         warn!(
                             id = %id,
                             "edit state not projectable to Immich /edits — Phase C territory; skipping"

@@ -30,10 +30,12 @@ impl EditingService {
     /// Persist the edit state and signal an outbox-bound mutation.
     ///
     /// The mutation is payload-free (`AssetEditsApplied { id }`) — the push
-    /// handler reads the latest `EditState` at drain time, so multiple
-    /// rapid saves naturally coalesce into one wire call. If the saved
-    /// state is the identity, we record a clear instead so any prior
-    /// server-side edit is removed.
+    /// handler reads the latest `EditState` at drain time, so every wire
+    /// call sends the current state regardless of which queued row drains
+    /// it (latest-state read; N saves still drive N round-trips, but each
+    /// is idempotent and reflects the final state). If the saved state is
+    /// the identity, we record a clear instead so any prior server-side
+    /// edit is removed.
     pub async fn save_edit_state(
         &self,
         id: &MediaId,

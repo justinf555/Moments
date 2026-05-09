@@ -66,8 +66,11 @@ pub enum Mutation {
     // ── Edits ────────────────────────────────────────────────────────
     /// The local edit state for an asset was updated. Payload-free —
     /// the push handler reads the current `EditState` at drain time
-    /// and projects to whatever wire shape the provider needs. Multiple
-    /// rapid edits naturally coalesce: only the final state is pushed.
+    /// and projects to whatever wire shape the provider needs. This
+    /// is **latest-state read**, not coalescing: N rapid saves still
+    /// produce N outbox rows and N wire calls, but every call sends
+    /// the same final state, so no intermediate edit can leak past a
+    /// later save.
     AssetEditsApplied { id: MediaId },
 
     /// The local edit state for an asset was cleared (revert).
