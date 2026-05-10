@@ -52,6 +52,9 @@ pub(crate) struct PullManager {
     pub library: Arc<Library>,
     /// Sync-engine state (ack checkpoints + per-line audit log).
     pub state: SyncStateRepository,
+    /// Direct DB handle for handlers that maintain provider-specific
+    /// bookkeeping tables (e.g. `immich_asset_edits`).
+    pub db: crate::library::db::Database,
     /// Channel for UI state updates (sync progress, errors).
     pub sync_events: tokio::sync::mpsc::UnboundedSender<SyncEvent>,
     pub shutdown_rx: tokio::sync::watch::Receiver<bool>,
@@ -155,6 +158,11 @@ impl PullManager {
                 // SyncStackV1 / SyncStackDeleteV1. AssetV1 carries
                 // only `stackId`; the primary lives on StackV1.
                 "StacksV1".to_string(),
+                // Issue #224 Phase B: per-action geometric edit records.
+                // Each SyncAssetEditV1 carries one (action, parameters,
+                // sequence) tuple; the handler caches them and recomposes
+                // a local EditState from the asset's full action list.
+                "AssetEditsV1".to_string(),
             ],
         };
 
@@ -193,6 +201,7 @@ impl PullManager {
             library: Arc::clone(&self.library),
             state: self.state.clone(),
             thumbnails_dir: self.thumbnails_dir.clone(),
+            db: self.db.clone(),
         };
 
         info!("reading sync stream");

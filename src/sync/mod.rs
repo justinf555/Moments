@@ -58,6 +58,7 @@ impl SyncHandle {
             client: client.clone(),
             library: Arc::clone(&library),
             state: state::SyncStateRepository::new(db.clone()),
+            db: db.clone(),
             sync_events: sync_events.clone(),
             shutdown_rx: shutdown_rx.clone(),
             thumbnails_dir,

@@ -67,6 +67,13 @@ pub enum OutboxMutation {
         media_ids: Vec<MediaId>,
     },
 
+    AssetEditsApplied {
+        id: MediaId,
+    },
+    AssetEditsCleared {
+        id: MediaId,
+    },
+
     PersonRenamed {
         id: PersonId,
         name: String,
@@ -173,6 +180,12 @@ impl OutboxMutation {
                     media_ids,
                 })
             }
+            ("asset", "apply_edits") => Some(Self::AssetEditsApplied {
+                id: MediaId::new(row.entity_id.clone()),
+            }),
+            ("asset", "clear_edits") => Some(Self::AssetEditsCleared {
+                id: MediaId::new(row.entity_id.clone()),
+            }),
             ("person", "rename") => {
                 let p = json();
                 let name = p["name"].as_str().unwrap_or("").to_string();
@@ -344,6 +357,12 @@ mod tests {
                 id: PersonId::from_raw("p2".into()),
                 hidden: true,
             },
+            Mutation::AssetEditsApplied {
+                id: MediaId::new("id6".into()),
+            },
+            Mutation::AssetEditsCleared {
+                id: MediaId::new("id7".into()),
+            },
         ];
 
         for mutation in &cases {
@@ -356,6 +375,30 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn asset_edits_apply_and_clear_decode_payload_free() {
+        let apply = OutboxRow {
+            entity_type: "asset".into(),
+            entity_id: "photo-1".into(),
+            action: "apply_edits".into(),
+            payload: None,
+        };
+        let clear = OutboxRow {
+            entity_type: "asset".into(),
+            entity_id: "photo-2".into(),
+            action: "clear_edits".into(),
+            payload: None,
+        };
+        assert!(matches!(
+            OutboxMutation::from_row(&apply),
+            Some(OutboxMutation::AssetEditsApplied { id }) if id.as_str() == "photo-1"
+        ));
+        assert!(matches!(
+            OutboxMutation::from_row(&clear),
+            Some(OutboxMutation::AssetEditsCleared { id }) if id.as_str() == "photo-2"
+        ));
     }
 
     #[test]

@@ -64,7 +64,7 @@ impl Library {
 
         let albums = AlbumService::new(db.clone(), Arc::clone(&recorder));
         let faces = FacesService::new(db.clone(), bundle.thumbnails.clone(), Arc::clone(&recorder));
-        let editing = EditingService::new(db.clone());
+        let editing = EditingService::new(db.clone(), Arc::clone(&recorder));
         let media = MediaService::new(
             db.clone(),
             bundle.originals.clone(),

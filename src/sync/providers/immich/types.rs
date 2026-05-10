@@ -95,6 +95,30 @@ pub(crate) struct SyncStackDeleteV1 {
     pub stack_id: String,
 }
 
+/// One geometric edit action emitted by `/sync/stream` as
+/// `SyncAssetEditV1`. The `parameters` payload is the same shape as
+/// the body of `PUT /assets/{id}/edits`, so we keep it as raw JSON
+/// here and round-trip it through `ImmichEditAction` deserialization
+/// in the handler. Issue #224 Phase B.
+#[derive(Debug, Deserialize)]
+pub(crate) struct SyncAssetEditV1 {
+    pub id: String,
+    #[serde(rename = "assetId")]
+    pub asset_id: String,
+    pub action: String,
+    pub parameters: serde_json::Value,
+    pub sequence: i64,
+}
+
+/// Single-action revert. Carries only the edit id; the local pull
+/// handler looks up the parent media before deleting so it can
+/// recompose the surviving `EditState`.
+#[derive(Debug, Deserialize)]
+pub(crate) struct SyncAssetEditDeleteV1 {
+    #[serde(rename = "editId")]
+    pub edit_id: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct SyncAssetDeleteV1 {
     #[serde(rename = "assetId")]
@@ -217,7 +241,12 @@ pub(crate) fn deserialize_entity<T: serde::de::DeserializeOwned>(
     line_number: usize,
 ) -> Result<T, LibraryError> {
     serde_json::from_value(data.clone()).map_err(|e| {
-        error!(line_number, "failed to deserialize {entity_type}: {e}");
+        let preview: String = data.to_string().chars().take(300).collect();
+        error!(
+            line_number,
+            data = %preview,
+            "failed to deserialize {entity_type}: {e}"
+        );
         LibraryError::Immich(format!("invalid {entity_type} at line {line_number}: {e}"))
     })
 }
