@@ -69,6 +69,11 @@ pub struct MediaItem {
     /// out via a `LEFT JOIN stacks` clause; clients can use this to
     /// surface a "stacked" badge on the primary.
     pub stack_id: Option<String>,
+    /// True if this asset is a Moments-produced render (the rendered
+    /// JPEG sibling of an edited original). Phase C (#224): the grid
+    /// filter swaps these out for the original sibling so the user
+    /// sees the editable artifact rather than the flat render.
+    pub is_moments_render: bool,
 }
 
 /// A stack of related assets on the Immich server (e.g. a panorama
@@ -193,6 +198,11 @@ pub struct MediaRecord {
     pub is_trashed: bool,
     /// Unix timestamp when the item was trashed. `None` if not trashed.
     pub trashed_at: Option<i64>,
+    /// True if this row was inserted by Phase C save flow as the
+    /// rendered sibling of an edited asset. Toggled on by the editor
+    /// at save time and on the pull side when an asset arrives with
+    /// the `moments-edit` tag.
+    pub is_moments_render: bool,
 }
 
 #[cfg(test)]

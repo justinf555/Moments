@@ -71,6 +71,10 @@ pub(crate) struct PushManager {
     pub sync_events: tokio::sync::mpsc::UnboundedSender<SyncEvent>,
     pub shutdown_rx: tokio::sync::watch::Receiver<bool>,
     pub interval_rx: tokio::sync::Mutex<tokio::sync::watch::Receiver<u64>>,
+    /// In-memory cache of resolved tag ids by name for the push session.
+    /// Avoids a `PUT /tags` round-trip per Phase C save/revert. Reset
+    /// to `None` on cache miss; `ensure_moments_edit_tag` re-derives.
+    pub moments_edit_tag: tokio::sync::Mutex<Option<String>>,
 }
 
 impl PushManager {
@@ -344,6 +348,75 @@ impl PushManager {
                     )
                     .await?;
                 self.bump_person_heartbeat(id.as_str()).await
+            }
+
+            // ── Stacks (Phase C) ────────────────────────────────────
+            OutboxMutation::StackCreated {
+                rendered_asset_id,
+                original_asset_id,
+            } => {
+                // Both members must already be uploaded (their
+                // `external_id` is stamped by the AssetImported push
+                // arm). If either is still null, error out — the outbox
+                // backoff retries until upload completes.
+                let rendered_ext = self
+                    .require_media_external_id(rendered_asset_id.as_str())
+                    .await?;
+                let original_ext = self
+                    .require_media_external_id(original_asset_id.as_str())
+                    .await?;
+                let resp = self
+                    .client
+                    .post_stack(&[&rendered_ext, &original_ext])
+                    .await?;
+                // Defensive check — Immich convention is "first id in
+                // assetIds becomes primary". If a future version
+                // changes that we want to know.
+                if resp.primary_asset_id != rendered_ext {
+                    warn!(
+                        expected = %rendered_ext,
+                        got = %resp.primary_asset_id,
+                        "stack primary was not the rendered asset; §8.2 grid filter may surface the wrong sibling"
+                    );
+                }
+                self.persist_stack_locally(
+                    &resp.id,
+                    &rendered_asset_id,
+                    &[&rendered_asset_id, &original_asset_id],
+                )
+                .await?;
+                self.bump_media_heartbeat(rendered_asset_id.as_str()).await
+            }
+
+            OutboxMutation::StackMemberRemoved { stack_id, asset_id } => {
+                let asset_ext = self.require_media_external_id(asset_id.as_str()).await?;
+                self.client
+                    .delete_stack_member(&stack_id, &asset_ext)
+                    .await?;
+                // Local cleanup (clearing the asset's `stack_id`)
+                // happens via the next pull cycle's heartbeat
+                // reconciliation; verified on v2.7.5 the surviving
+                // sibling's `stackId` is already null on the server.
+                Ok(())
+            }
+
+            // ── Tags (Phase C) ──────────────────────────────────────
+            OutboxMutation::AssetTaggedMomentsEdit { id } => {
+                let tag_id = self.ensure_moments_edit_tag().await?;
+                let external_id = self.require_media_external_id(id.as_str()).await?;
+                self.client
+                    .add_assets_to_tag(&tag_id, &[&external_id])
+                    .await?;
+                self.bump_media_heartbeat(id.as_str()).await
+            }
+
+            OutboxMutation::AssetUntaggedMomentsEdit { id } => {
+                let tag_id = self.ensure_moments_edit_tag().await?;
+                let external_id = self.require_media_external_id(id.as_str()).await?;
+                self.client
+                    .remove_assets_from_tag(&tag_id, &[&external_id])
+                    .await?;
+                self.bump_media_heartbeat(id.as_str()).await
             }
 
             // ── Edits ───────────────────────────────────────────────
@@ -629,6 +702,93 @@ impl PushManager {
         }
     }
 
+    /// Strict variant of [`Self::lookup_media_external_id`] that
+    /// errors if `external_id` is null (rather than falling back to
+    /// the local id). Used by Phase C push arms where targeting the
+    /// local UUID would 404 on Immich and waste a retry.
+    ///
+    /// The natural caller is the `StackCreated` / tag push paths,
+    /// which run after `AssetImported` — if upload hasn't drained
+    /// yet, this errors and the outbox backoff retries until the
+    /// upload completes.
+    async fn require_media_external_id(&self, local_id: &str) -> Result<String, LibraryError> {
+        let row: Option<(Option<String>,)> =
+            sqlx::query_as("SELECT external_id FROM media WHERE id = ?")
+                .bind(local_id)
+                .fetch_optional(self.db.pool())
+                .await
+                .map_err(LibraryError::Db)?;
+
+        match row {
+            Some((Some(eid),)) => Ok(eid),
+            Some((None,)) => Err(LibraryError::Immich(format!(
+                "media {local_id} has no external_id yet — upload still pending"
+            ))),
+            None => Err(LibraryError::Immich(format!("media not found: {local_id}"))),
+        }
+    }
+
+    /// Ensure the `moments-edit` tag exists on the server and return
+    /// its id. Cached in memory for the push session; on cache miss
+    /// we round-trip through `PUT /tags { tags: [...] }` (verified
+    /// idempotent on v2.7.5 in the §10.3 probe).
+    async fn ensure_moments_edit_tag(&self) -> Result<String, LibraryError> {
+        let mut cache = self.moments_edit_tag.lock().await;
+        if let Some(id) = cache.as_ref() {
+            return Ok(id.clone());
+        }
+        let resp = self.client.ensure_tags(&["moments-edit"]).await?;
+        let tag = resp
+            .into_iter()
+            .find(|t| t.name == "moments-edit")
+            .ok_or_else(|| {
+                LibraryError::Immich("PUT /tags response missing the moments-edit entry".into())
+            })?;
+        *cache = Some(tag.id.clone());
+        Ok(tag.id)
+    }
+
+    /// After `POST /stacks` succeeds, mirror the stack into the local
+    /// `stacks` and `media` tables so the timeline's primary-only
+    /// filter (Phase A §8.1) and the §8.2 Moments-edit override see
+    /// the relationship before the next pull cycle re-streams it.
+    ///
+    /// `members` lists the local MediaIds to set `stack_id` on. The
+    /// `primary` arg is the rendered asset's local id (becomes the
+    /// stack primary on the server side; Immich uses the first id in
+    /// the `assetIds` array, and Phase C save passes rendered first).
+    async fn persist_stack_locally(
+        &self,
+        stack_id: &str,
+        primary: &crate::library::media::MediaId,
+        members: &[&crate::library::media::MediaId],
+    ) -> Result<(), LibraryError> {
+        let now = chrono::Utc::now().timestamp();
+        sqlx::query(
+            "INSERT INTO stacks (id, primary_asset_id, last_seen_at)
+             VALUES (?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+                 primary_asset_id = excluded.primary_asset_id,
+                 last_seen_at = excluded.last_seen_at",
+        )
+        .bind(stack_id)
+        .bind(primary.as_str())
+        .bind(now)
+        .execute(self.db.pool())
+        .await
+        .map_err(LibraryError::Db)?;
+
+        for member in members {
+            sqlx::query("UPDATE media SET stack_id = ? WHERE id = ?")
+                .bind(stack_id)
+                .bind(member.as_str())
+                .execute(self.db.pool())
+                .await
+                .map_err(LibraryError::Db)?;
+        }
+        Ok(())
+    }
+
     /// Read the stored pixel dimensions for an asset.
     ///
     /// Required for crop coordinate translation: EditState carries
@@ -857,6 +1017,7 @@ mod tests {
             sync_events,
             shutdown_rx,
             interval_rx: tokio::sync::Mutex::new(interval_rx),
+            moments_edit_tag: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -1571,6 +1732,85 @@ mod tests {
         let push = make_push_manager(db).await;
         let err = push.lookup_media_dims("local-2").await.unwrap_err();
         assert!(err.to_string().contains("missing width/height"));
+    }
+
+    #[tokio::test]
+    async fn require_media_external_id_returns_set_value() {
+        let (_dir, db) = setup_push_db().await;
+        let mut record = test_record(MediaId::new("local-1".to_string()));
+        record.external_id = Some("ext-1".to_string());
+        MediaRepository::new(db.clone())
+            .upsert(&record)
+            .await
+            .unwrap();
+
+        let push = make_push_manager(db).await;
+        let ext = push.require_media_external_id("local-1").await.unwrap();
+        assert_eq!(ext, "ext-1");
+    }
+
+    #[tokio::test]
+    async fn require_media_external_id_errors_when_null() {
+        // Phase C scenario: rendered asset row exists locally but
+        // upload hasn't drained yet, so external_id is null. The
+        // strict variant errors so the outbox backoff retries the
+        // dependent stack/tag mutations.
+        let (_dir, db) = setup_push_db().await;
+        let record = test_record(MediaId::new("local-2".to_string())); // external_id = None
+        MediaRepository::new(db.clone())
+            .upsert(&record)
+            .await
+            .unwrap();
+
+        let push = make_push_manager(db).await;
+        let err = push.require_media_external_id("local-2").await.unwrap_err();
+        assert!(err.to_string().contains("upload still pending"));
+    }
+
+    #[tokio::test]
+    async fn require_media_external_id_errors_when_row_missing() {
+        let (_dir, db) = setup_push_db().await;
+        let push = make_push_manager(db).await;
+        let err = push
+            .require_media_external_id("nonexistent")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("media not found"));
+    }
+
+    #[tokio::test]
+    async fn persist_stack_locally_upserts_stack_and_member_pointers() {
+        let (_dir, db) = setup_push_db().await;
+        let media_repo = MediaRepository::new(db.clone());
+        let rendered = MediaId::new("rendered".into());
+        let original = MediaId::new("original".into());
+        let mut r = test_record(rendered.clone());
+        r.relative_path = "renders/r.jpg".into();
+        media_repo.insert(&r).await.unwrap();
+        let mut o = test_record(original.clone());
+        o.relative_path = "originals/o.jpg".into();
+        media_repo.insert(&o).await.unwrap();
+
+        let push = make_push_manager(db.clone()).await;
+        push.persist_stack_locally("stk-1", &rendered, &[&rendered, &original])
+            .await
+            .unwrap();
+
+        // Both members got the stack pointer.
+        let r = media_repo.get(&rendered).await.unwrap().unwrap();
+        let o = media_repo.get(&original).await.unwrap().unwrap();
+        assert_eq!(r.stack_id.as_deref(), Some("stk-1"));
+        assert_eq!(o.stack_id.as_deref(), Some("stk-1"));
+
+        // Stack row exists with rendered as primary.
+        let row: (String, String) =
+            sqlx::query_as("SELECT id, primary_asset_id FROM stacks WHERE id = ?")
+                .bind("stk-1")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(row.0, "stk-1");
+        assert_eq!(row.1, "rendered");
     }
 
     #[tokio::test]

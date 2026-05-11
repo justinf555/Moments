@@ -111,6 +111,7 @@ pub async fn persist(params: PersistParams<'_>) -> Result<PersistResult, ImportE
             is_favorite: false,
             is_trashed: false,
             trashed_at: None,
+            is_moments_render: false,
         })
         .await?;
 

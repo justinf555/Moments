@@ -413,6 +413,90 @@ impl ImmichClient {
             .await
     }
 
+    // ── Stacks (Phase C, #224) ───────────────────────────────────────
+
+    /// Create a stack containing the given assets. The first id in
+    /// the slice becomes the server-side primary; Phase C uploads the
+    /// rendered child first so it's the primary, and the §8.2 grid
+    /// filter swaps the original back in for display.
+    ///
+    /// Returns the new stack's server id.
+    pub(crate) async fn post_stack(
+        &self,
+        asset_ids: &[&str],
+    ) -> Result<StackResponse, LibraryError> {
+        self.post("/stacks", &serde_json::json!({ "assetIds": asset_ids }))
+            .await
+    }
+
+    /// Remove one asset from a stack. On Immich v2.7.5 the stack
+    /// record persists with a single member while the surviving
+    /// asset's `stackId` is cleared on its row — local cleanup
+    /// completes via the next pull's heartbeat reconciliation. Verified
+    /// idempotent: 204 even if the asset is no longer in the stack.
+    pub(crate) async fn delete_stack_member(
+        &self,
+        stack_id: &str,
+        asset_id: &str,
+    ) -> Result<(), LibraryError> {
+        self.delete_no_content(&format!("/stacks/{stack_id}/assets/{asset_id}"))
+            .await
+    }
+
+    // ── Tags (Phase C, #224) ─────────────────────────────────────────
+
+    /// Idempotently ensure that the tags with the given names exist
+    /// on the server, returning their resolved ids in input order.
+    ///
+    /// Uses `PUT /tags { tags: [...] }` — verified idempotent on
+    /// v2.7.5 (returns existing rows untouched, creates missing ones).
+    /// `POST /tags { name }` was rejected because it 400s on existing
+    /// tags.
+    pub(crate) async fn ensure_tags(
+        &self,
+        names: &[&str],
+    ) -> Result<Vec<TagResponse>, LibraryError> {
+        self.put_json("/tags", &serde_json::json!({ "tags": names }))
+            .await
+    }
+
+    /// Attach `tag_id` to each of the given asset ids. The response
+    /// is per-id; duplicates (already tagged) come back as
+    /// `success: false, error: "duplicate"` and are not an error.
+    pub(crate) async fn add_assets_to_tag(
+        &self,
+        tag_id: &str,
+        asset_ids: &[&str],
+    ) -> Result<(), LibraryError> {
+        self.put_no_content(
+            &format!("/tags/{tag_id}/assets"),
+            &serde_json::json!({ "ids": asset_ids }),
+        )
+        .await
+    }
+
+    /// Detach `tag_id` from each of the given asset ids.
+    pub(crate) async fn remove_assets_from_tag(
+        &self,
+        tag_id: &str,
+        asset_ids: &[&str],
+    ) -> Result<(), LibraryError> {
+        self.delete_with_body(
+            &format!("/tags/{tag_id}/assets"),
+            &serde_json::json!({ "ids": asset_ids }),
+        )
+        .await
+    }
+
+    async fn put_json<B: serde::Serialize, T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T, LibraryError> {
+        self.send_json(self.client.put(self.url(path)).json(body), "PUT", path)
+            .await
+    }
+
     /// Send a POST request and return the raw response for streaming.
     pub(crate) async fn post_stream<B: serde::Serialize>(
         &self,
@@ -448,6 +532,23 @@ pub struct UploadResponse {
     pub id: String,
     /// "created" or "duplicate".
     pub status: String,
+}
+
+/// Response from `POST /stacks` — only the `id` and `primaryAssetId`
+/// fields are needed. Immich's full response includes the assets array
+/// but we get that via the next sync stream.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct StackResponse {
+    pub id: String,
+    #[serde(rename = "primaryAssetId")]
+    pub primary_asset_id: String,
+}
+
+/// One element of the response from `PUT /tags { tags: [...] }`.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct TagResponse {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -567,6 +668,32 @@ mod tests {
         let truncated = truncate_error_body(&emoji_str, 10);
         // 10 emoji characters
         assert_eq!(truncated.chars().count(), 10);
+    }
+
+    #[test]
+    fn stack_response_deserialises() {
+        // Shape captured from the live v2.7.5 probe — we only consume
+        // `id` and `primaryAssetId`; the `assets` array is ignored.
+        let json = serde_json::json!({
+            "id": "stk-uuid",
+            "primaryAssetId": "rendered-uuid",
+            "assets": [{"id":"rendered-uuid"},{"id":"orig-uuid"}]
+        });
+        let resp: StackResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(resp.id, "stk-uuid");
+        assert_eq!(resp.primary_asset_id, "rendered-uuid");
+    }
+
+    #[test]
+    fn tag_response_deserialises() {
+        let json = serde_json::json!([
+            {"id":"tag-1","name":"moments-edit","value":"moments-edit","createdAt":"…","updatedAt":"…"},
+            {"id":"tag-2","name":"other","value":"other","createdAt":"…","updatedAt":"…"}
+        ]);
+        let resp: Vec<TagResponse> = serde_json::from_value(json).unwrap();
+        assert_eq!(resp.len(), 2);
+        assert_eq!(resp[0].id, "tag-1");
+        assert_eq!(resp[0].name, "moments-edit");
     }
 
     #[test]

@@ -18,11 +18,38 @@ pub trait MutationRecorder: Send + Sync {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::library::media::MediaId;
     use crate::sync::outbox::NoOpRecorder;
-    use std::sync::Arc;
+    use async_trait::async_trait;
+    use std::sync::{Arc, Mutex};
+
+    /// Test fixture: records every mutation passed to `record` so
+    /// assertions can inspect the outbox-bound sequence emitted by
+    /// services and cross-service orchestrators.
+    #[derive(Default)]
+    pub(crate) struct CapturingRecorder {
+        recorded: Mutex<Vec<Mutation>>,
+    }
+
+    impl CapturingRecorder {
+        pub(crate) fn snapshot(&self) -> Vec<Mutation> {
+            self.recorded.lock().unwrap().clone()
+        }
+
+        pub(crate) fn clear(&self) {
+            self.recorded.lock().unwrap().clear();
+        }
+    }
+
+    #[async_trait]
+    impl MutationRecorder for CapturingRecorder {
+        async fn record(&self, mutation: &Mutation) -> Result<(), LibraryError> {
+            self.recorded.lock().unwrap().push(mutation.clone());
+            Ok(())
+        }
+    }
 
     #[tokio::test]
     async fn trait_is_object_safe() {

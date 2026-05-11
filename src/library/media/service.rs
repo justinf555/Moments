@@ -64,6 +64,13 @@ impl MediaService {
         self.events.emit(event);
     }
 
+    /// Filesystem directory holding originals for the local library
+    /// (under `Managed` mode). Phase C uses this to write newly-rendered
+    /// edits at their sharded UUID path before inserting the media row.
+    pub fn originals_dir(&self) -> &PathBuf {
+        &self.originals_dir
+    }
+
     // ── Path resolution ─────────────────────────────────────────────
 
     /// Resolve the original file path for `id`.
@@ -163,6 +170,18 @@ impl MediaService {
     /// Check if an asset with this content hash already exists (dedup).
     pub async fn exists_by_content_hash(&self, hash: &str) -> Result<bool, LibraryError> {
         self.repo.exists_by_content_hash(hash).await
+    }
+
+    /// Fetch the full DB row (including `content_hash` and
+    /// `external_id`) for an asset. Phase C uses this in
+    /// [`crate::library::Library::save_pixel_edit`] to populate the
+    /// embedded XMP block; the column subset returned by
+    /// [`Self::get_media_item`] omits those fields.
+    pub async fn get_media_record(
+        &self,
+        id: &MediaId,
+    ) -> Result<Option<MediaRecord>, LibraryError> {
+        self.repo.get_record(id).await
     }
 
     pub async fn get_media_item(&self, id: &MediaId) -> Result<Option<MediaItem>, LibraryError> {

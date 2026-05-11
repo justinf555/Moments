@@ -110,6 +110,22 @@ impl EditState {
             && self.filter.is_none()
     }
 
+    /// Returns `true` if this edit state contains anything that can't be
+    /// expressed as a discrete geometric action — exposure, colour,
+    /// detail, a filter preset, or freeform straighten. Used by the save
+    /// flow to choose between "push as a `/edits` action list" (Phase B)
+    /// and "render → upload → stack → tag" (Phase C).
+    ///
+    /// 90°-step rotates and crop/flip do *not* count as pixel
+    /// adjustments — those are expressible without rendering.
+    pub fn has_pixel_adjustments(&self) -> bool {
+        self.exposure != ExposureState::default()
+            || self.color != ColorState::default()
+            || self.detail != DetailState::default()
+            || self.filter.is_some()
+            || self.transforms.straighten_degrees.abs() >= f64::EPSILON
+    }
+
     /// Apply a filter preset's exposure/color/detail values scaled by strength.
     ///
     /// Sets this state's exposure, color, and detail fields to the preset
@@ -214,6 +230,65 @@ mod tests {
         let mut state = EditState::default();
         state.apply_filter_at_strength(&preset, 0.5);
         assert!((state.detail.vignette - 0.3).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn identity_state_has_no_pixel_adjustments() {
+        assert!(!EditState::default().has_pixel_adjustments());
+    }
+
+    #[test]
+    fn rotate_and_crop_are_not_pixel_adjustments() {
+        // 90°-step rotate + crop + flip are geometric — push goes
+        // through the /edits API, no render needed.
+        let state = EditState {
+            transforms: TransformState {
+                crop: Some(CropRect {
+                    x: 0.1,
+                    y: 0.1,
+                    width: 0.8,
+                    height: 0.8,
+                }),
+                rotate_degrees: 90,
+                straighten_degrees: 0.0,
+                flip_horizontal: true,
+                flip_vertical: false,
+            },
+            ..Default::default()
+        };
+        assert!(!state.has_pixel_adjustments());
+    }
+
+    #[test]
+    fn exposure_is_pixel_adjustment() {
+        let mut state = EditState::default();
+        state.exposure.brightness = 0.3;
+        assert!(state.has_pixel_adjustments());
+    }
+
+    #[test]
+    fn filter_is_pixel_adjustment() {
+        let state = EditState {
+            filter: Some("vintage".into()),
+            ..Default::default()
+        };
+        assert!(state.has_pixel_adjustments());
+    }
+
+    #[test]
+    fn straighten_is_pixel_adjustment() {
+        // Freeform straighten requires rendering — Immich's `/edits`
+        // API only knows 90° increments.
+        let mut state = EditState::default();
+        state.transforms.straighten_degrees = 2.5;
+        assert!(state.has_pixel_adjustments());
+    }
+
+    #[test]
+    fn detail_vignette_is_pixel_adjustment() {
+        let mut state = EditState::default();
+        state.detail.vignette = 0.4;
+        assert!(state.has_pixel_adjustments());
     }
 
     #[test]

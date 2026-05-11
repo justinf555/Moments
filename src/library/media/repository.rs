@@ -21,6 +21,7 @@ pub(crate) struct MediaRow {
     trashed_at: Option<i64>,
     duration_ms: Option<i64>,
     stack_id: Option<String>,
+    is_moments_render: i64,
 }
 
 impl MediaRow {
@@ -43,6 +44,7 @@ impl MediaRow {
             trashed_at: self.trashed_at,
             duration_ms: self.duration_ms.map(|v| v as u64),
             stack_id: self.stack_id,
+            is_moments_render: self.is_moments_render != 0,
         }
     }
 }
@@ -83,12 +85,75 @@ impl MediaRepository {
         Ok(row.is_some())
     }
 
+    /// Fetch the full media row by ID, including columns omitted from
+    /// [`MediaItem`] (content_hash, external_id, relative_path,
+    /// file_size). Used by Phase C save to populate the embedded XMP
+    /// block and by other paths that need the full row.
+    pub async fn get_record(&self, id: &MediaId) -> Result<Option<MediaRecord>, LibraryError> {
+        #[derive(sqlx::FromRow)]
+        struct Row {
+            id: String,
+            content_hash: Option<String>,
+            external_id: Option<String>,
+            relative_path: String,
+            original_filename: String,
+            file_size: i64,
+            imported_at: i64,
+            media_type: i64,
+            taken_at: Option<i64>,
+            width: Option<i64>,
+            height: Option<i64>,
+            orientation: i64,
+            duration_ms: Option<i64>,
+            is_favorite: i64,
+            is_trashed: i64,
+            trashed_at: Option<i64>,
+            is_moments_render: i64,
+        }
+
+        let row: Option<Row> = sqlx::query_as(
+            "SELECT id, content_hash, external_id, relative_path, original_filename,
+                    file_size, imported_at, media_type, taken_at, width, height,
+                    orientation, duration_ms, is_favorite, is_trashed, trashed_at,
+                    is_moments_render
+             FROM media WHERE id = ?",
+        )
+        .bind(id.as_str())
+        .fetch_optional(self.db.pool())
+        .await
+        .map_err(LibraryError::Db)?;
+
+        Ok(row.map(|r| MediaRecord {
+            id: MediaId::new(r.id),
+            content_hash: r.content_hash,
+            external_id: r.external_id,
+            relative_path: r.relative_path,
+            original_filename: r.original_filename,
+            file_size: r.file_size,
+            imported_at: r.imported_at,
+            media_type: if r.media_type == 1 {
+                MediaType::Video
+            } else {
+                MediaType::Image
+            },
+            taken_at: r.taken_at,
+            width: r.width,
+            height: r.height,
+            orientation: r.orientation as u8,
+            duration_ms: r.duration_ms.map(|v| v as u64),
+            is_favorite: r.is_favorite != 0,
+            is_trashed: r.is_trashed != 0,
+            trashed_at: r.trashed_at,
+            is_moments_render: r.is_moments_render != 0,
+        }))
+    }
+
     /// Fetch a single media item by ID.
     pub async fn get(&self, id: &MediaId) -> Result<Option<MediaItem>, LibraryError> {
         let row: Option<MediaRow> = sqlx::query_as(
             "SELECT id, taken_at, imported_at, original_filename,
                     width, height, orientation, media_type, is_favorite,
-                    is_trashed, trashed_at, duration_ms, stack_id
+                    is_trashed, trashed_at, duration_ms, stack_id, is_moments_render
              FROM media WHERE id = ?",
         )
         .bind(id.as_str())
@@ -118,11 +183,14 @@ impl MediaRepository {
         let sql = format!(
             "SELECT m.id, m.taken_at, m.imported_at, m.original_filename,
                     m.width, m.height, m.orientation, m.media_type, m.is_favorite,
-                    m.is_trashed, m.trashed_at, m.duration_ms, m.stack_id
+                    m.is_trashed, m.trashed_at, m.duration_ms, m.stack_id, m.is_moments_render
              FROM media m
              LEFT JOIN stacks s ON m.stack_id = s.id
+             LEFT JOIN media render ON render.stack_id = s.id AND render.is_moments_render = 1
              WHERE m.id IN ({placeholders})
-               AND (s.id IS NULL OR s.primary_asset_id = m.id)"
+               AND (s.id IS NULL AND m.is_moments_render = 0
+                    OR (render.id IS NULL AND s.primary_asset_id = m.id)
+                    OR (render.id IS NOT NULL AND m.is_moments_render = 0))"
         );
         let mut query = sqlx::query_as::<_, MediaRow>(&sql);
         for id in ids {
@@ -234,11 +302,20 @@ impl MediaRepository {
         limit: u32,
     ) -> Result<Vec<MediaItem>, LibraryError> {
         // Issue #224: stacked-but-not-primary members are hidden from
-        // every grid view. The `LEFT JOIN stacks` + `(s.id IS NULL OR
-        // s.primary_asset_id = m.id)` clause keeps un-stacked rows
-        // visible while collapsing each stack to its primary. Bare
-        // column references are now qualified with `m.` to disambiguate
-        // from `stacks.id` / `stacks.primary_asset_id`.
+        // every grid view. The `LEFT JOIN stacks` keeps un-stacked rows
+        // visible while collapsing each stack to its visible representative.
+        //
+        // Phase A's filter was a plain primary-only check. Phase C §8.2
+        // adds the override for Moments-edit stacks: when the stack
+        // contains a Moments-render member (the rendered JPEG sibling
+        // we uploaded for a pixel-adjustment edit), surface the
+        // *other* sibling — the original — so the timeline shows the
+        // artifact the user can still edit. The extra `LEFT JOIN media
+        // render … is_moments_render = 1` is the existence test for
+        // that override branch.
+        //
+        // Bare column references are qualified with `m.` to disambiguate
+        // from `stacks.id` / `stacks.primary_asset_id` (and now `render.*`).
         let (filter_clause, sort_expr) = match &filter {
             MediaFilter::All => (" AND m.is_trashed = 0", "COALESCE(m.taken_at, 0)"),
             MediaFilter::Favorites => (
@@ -269,7 +346,7 @@ impl MediaRepository {
 
         let columns = "m.id, m.taken_at, m.imported_at, m.original_filename,
                         m.width, m.height, m.orientation, m.media_type, m.is_favorite,
-                        m.is_trashed, m.trashed_at, m.duration_ms, m.stack_id";
+                        m.is_trashed, m.trashed_at, m.duration_ms, m.stack_id, m.is_moments_render";
 
         let rows = match cursor {
             None => {
@@ -277,7 +354,10 @@ impl MediaRepository {
                     "SELECT {columns}
                      FROM media m
                      LEFT JOIN stacks s ON m.stack_id = s.id
-                     WHERE (s.id IS NULL OR s.primary_asset_id = m.id){filter_clause}
+                     LEFT JOIN media render ON render.stack_id = s.id AND render.is_moments_render = 1
+                     WHERE (s.id IS NULL AND m.is_moments_render = 0
+                            OR (render.id IS NULL AND s.primary_asset_id = m.id)
+                            OR (render.id IS NOT NULL AND m.is_moments_render = 0)){filter_clause}
                      ORDER BY {sort_expr} DESC, m.id DESC
                      LIMIT ?"
                 );
@@ -295,7 +375,10 @@ impl MediaRepository {
                     "SELECT {columns}
                      FROM media m
                      LEFT JOIN stacks s ON m.stack_id = s.id
-                     WHERE (s.id IS NULL OR s.primary_asset_id = m.id)
+                     LEFT JOIN media render ON render.stack_id = s.id AND render.is_moments_render = 1
+                     WHERE (s.id IS NULL AND m.is_moments_render = 0
+                            OR (render.id IS NULL AND s.primary_asset_id = m.id)
+                            OR (render.id IS NOT NULL AND m.is_moments_render = 0))
                        AND ({sort_expr} < ?
                             OR ({sort_expr} = ? AND m.id < ?)){filter_clause}
                      ORDER BY {sort_expr} DESC, m.id DESC
@@ -375,8 +458,8 @@ impl MediaRepository {
             "INSERT INTO media (id, content_hash, external_id, relative_path,
                                 original_filename, file_size, imported_at, media_type,
                                 taken_at, width, height, orientation, duration_ms,
-                                is_favorite, is_trashed, trashed_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                is_favorite, is_trashed, trashed_at, is_moments_render)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(record.id.as_str())
         .bind(&record.content_hash)
@@ -394,6 +477,7 @@ impl MediaRepository {
         .bind(record.is_favorite as i64)
         .bind(record.is_trashed as i64)
         .bind(record.trashed_at)
+        .bind(record.is_moments_render as i64)
         .execute(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
@@ -422,19 +506,34 @@ impl MediaRepository {
     /// the server's `file_created_at` (the photo's capture time), which
     /// would silently move assets out of the Recent Imports view (issue #614).
     pub async fn upsert(&self, record: &MediaRecord) -> Result<Option<MediaId>, LibraryError> {
-        // Capture the existing row's imported_at so we can preserve it —
-        // see #614. Post-#626 the upserting handler always passes the
-        // locally-owned `MediaId` (resolved via `id_by_external_id` /
+        // Capture the existing row's locally-only fields so we can
+        // preserve them across the INSERT OR REPLACE:
+        //
+        // * `imported_at` — see #614. The server's `file_created_at`
+        //   is the photo's capture time, not when it entered this
+        //   library; overwriting moves assets out of Recent Imports.
+        // * `is_moments_render` — Phase C (#224). The Phase C save
+        //   sets this to 1 on the rendered child it produces; sync's
+        //   `AssetHandler` always passes `false` (pull-side tag-based
+        //   derivation is Phase D scope). Without preserving the
+        //   column, the §8.2 grid filter would flip the wrong
+        //   sibling visible after the next pull.
+        //
+        // Post-#626 the upserting handler always passes the locally-owned
+        // `MediaId` (resolved via `id_by_external_id` /
         // `id_by_content_hash_pending_push`), so a plain `id = ?` lookup
         // is sufficient; the older `OR external_id = ?` arm was for the
         // local→server UUID swap that no longer happens.
-        let existing_imported_at: Option<i64> =
-            sqlx::query_scalar("SELECT imported_at FROM media WHERE id = ?")
+        let existing: Option<(i64, i64)> =
+            sqlx::query_as("SELECT imported_at, is_moments_render FROM media WHERE id = ?")
                 .bind(record.id.as_str())
                 .fetch_optional(self.db.pool())
                 .await
                 .map_err(LibraryError::Db)?;
-        let imported_at = existing_imported_at.unwrap_or(record.imported_at);
+        let imported_at = existing.map(|(t, _)| t).unwrap_or(record.imported_at);
+        let is_moments_render = existing
+            .map(|(_, r)| r != 0)
+            .unwrap_or(record.is_moments_render);
 
         // Atomic delete-and-return so the replaced-id observation can
         // never disagree with the row that was actually removed. SQLite
@@ -452,8 +551,8 @@ impl MediaRepository {
                                            original_filename, file_size, imported_at,
                                            media_type, taken_at, width, height,
                                            orientation, duration_ms, is_favorite,
-                                           is_trashed, trashed_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                           is_trashed, trashed_at, is_moments_render)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(record.id.as_str())
         .bind(&record.content_hash)
@@ -471,6 +570,7 @@ impl MediaRepository {
         .bind(record.is_favorite as i64)
         .bind(record.is_trashed as i64)
         .bind(record.trashed_at)
+        .bind(is_moments_render as i64)
         .execute(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
@@ -925,6 +1025,65 @@ mod tests {
         let item = repo.get(&id).await.unwrap().unwrap();
         assert_eq!(item.id, id);
         assert_eq!(item.taken_at, Some(5000));
+    }
+
+    /// Phase C: `is_moments_render` must round-trip through INSERT
+    /// and SELECT correctly. Silent column drift here would surface as
+    /// the §8.2 grid filter flipping the wrong sibling visible.
+    #[tokio::test]
+    async fn is_moments_render_round_trips_insert_and_get() {
+        let dir = tempdir().unwrap();
+        let (repo, _db) = test_repo(dir.path()).await;
+
+        // is_moments_render = false (the default for ordinary imports)
+        let unset_id = MediaId::new("a".repeat(64));
+        let mut unset_rec = test_record(unset_id.clone());
+        unset_rec.relative_path = "unset.jpg".into();
+        repo.insert(&unset_rec).await.unwrap();
+        let item = repo.get(&unset_id).await.unwrap().unwrap();
+        assert!(!item.is_moments_render);
+
+        // is_moments_render = true (Phase C save sets this)
+        let render_id = MediaId::new("b".repeat(64));
+        let mut rec = test_record(render_id.clone());
+        rec.relative_path = "render.jpg".into();
+        rec.is_moments_render = true;
+        repo.insert(&rec).await.unwrap();
+        let item = repo.get(&render_id).await.unwrap().unwrap();
+        assert!(item.is_moments_render);
+
+        // get_record reflects the same value.
+        let full = repo.get_record(&render_id).await.unwrap().unwrap();
+        assert!(full.is_moments_render);
+    }
+
+    /// Phase C blocker #2: `upsert` is used by the pull-side
+    /// `AssetHandler`, which constructs the record with
+    /// `is_moments_render: false` (Phase D will derive it from tags).
+    /// Without preservation, every pull would clobber the Phase-C-set
+    /// `true` and break §8.2.
+    #[tokio::test]
+    async fn upsert_preserves_existing_is_moments_render() {
+        let dir = tempdir().unwrap();
+        let (repo, _db) = test_repo(dir.path()).await;
+        let id = MediaId::new("c".repeat(64));
+
+        // Insert with the Phase C save flag set.
+        let mut rec = test_record(id.clone());
+        rec.is_moments_render = true;
+        repo.insert(&rec).await.unwrap();
+
+        // Upsert with the column false (simulating pull from Immich).
+        let mut sync_rec = test_record(id.clone());
+        sync_rec.is_moments_render = false;
+        repo.upsert(&sync_rec).await.unwrap();
+
+        // The locally-set flag survives the pull.
+        let item = repo.get(&id).await.unwrap().unwrap();
+        assert!(
+            item.is_moments_render,
+            "upsert must preserve the local is_moments_render flag"
+        );
     }
 
     #[tokio::test]
@@ -1405,6 +1564,119 @@ mod tests {
         let unstacked_item = items.iter().find(|i| i.id == unstacked).unwrap();
         assert_eq!(primary_item.stack_id.as_deref(), Some("stk"));
         assert!(unstacked_item.stack_id.is_none());
+    }
+
+    /// Phase C §8.2: when a stack contains a Moments-render member
+    /// (the rendered sibling we upload for a pixel-adjustment edit),
+    /// the grid filter surfaces the *other* sibling — the original.
+    /// The rendered child is still the stack primary on Immich, but
+    /// users edit the original.
+    #[tokio::test]
+    async fn list_surfaces_original_for_moments_edit_stack() {
+        let dir = tempdir().unwrap();
+        let (repo, _db) = test_repo(dir.path()).await;
+
+        let original = MediaId::new("a".repeat(64));
+        let rendered = MediaId::new("b".repeat(64));
+        repo.insert(&record_with_taken_at(original.clone(), "o.jpg", Some(1000)))
+            .await
+            .unwrap();
+        let mut rendered_rec = record_with_taken_at(rendered.clone(), "r.jpg", Some(1000));
+        rendered_rec.is_moments_render = true;
+        repo.insert(&rendered_rec).await.unwrap();
+
+        // The rendered child is the stack primary on Immich.
+        repo.upsert_stack(&Stack {
+            id: "stk".to_string(),
+            primary_asset_id: rendered.clone(),
+        })
+        .await
+        .unwrap();
+        repo.set_media_stack_id(&rendered, "stk").await.unwrap();
+        repo.set_media_stack_id(&original, "stk").await.unwrap();
+
+        let items = repo.list(MediaFilter::All, None, 50).await.unwrap();
+        let ids: Vec<&str> = items.iter().map(|i| i.id.as_str()).collect();
+        // Expect the original visible, the rendered child hidden.
+        assert!(
+            ids.contains(&original.as_str()),
+            "original must be visible: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&rendered.as_str()),
+            "rendered sibling must be hidden: {ids:?}"
+        );
+    }
+
+    /// Phase C review fix #3: an unstacked row with
+    /// `is_moments_render = 1` must not appear in the grid — this is
+    /// the transient state between `save_pixel_edit` inserting the
+    /// rendered media row and the push manager's `StackCreated`
+    /// draining. Without the extra clause, the rendered child would
+    /// briefly appear as a duplicate of the original.
+    #[tokio::test]
+    async fn list_hides_unstacked_moments_render_rows() {
+        let dir = tempdir().unwrap();
+        let (repo, _db) = test_repo(dir.path()).await;
+
+        let original = MediaId::new("a".repeat(64));
+        let rendered = MediaId::new("b".repeat(64));
+        repo.insert(&record_with_taken_at(original.clone(), "o.jpg", Some(1000)))
+            .await
+            .unwrap();
+        let mut rendered_rec = record_with_taken_at(rendered.clone(), "r.jpg", Some(1000));
+        rendered_rec.is_moments_render = true;
+        repo.insert(&rendered_rec).await.unwrap();
+
+        // Note: no stack created yet — simulating the window between
+        // save_pixel_edit's media insert and the push manager's
+        // StackCreated draining.
+
+        let items = repo.list(MediaFilter::All, None, 50).await.unwrap();
+        let ids: Vec<&str> = items.iter().map(|i| i.id.as_str()).collect();
+        assert!(
+            ids.contains(&original.as_str()),
+            "original visible: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&rendered.as_str()),
+            "unstacked rendered child must be hidden: {ids:?}"
+        );
+    }
+
+    /// Sanity: the §8.2 override only kicks in for Moments-edit
+    /// stacks. Ordinary stacks (e.g. a panorama burst with no
+    /// `is_moments_render` member) still collapse to the server's
+    /// primary.
+    #[tokio::test]
+    async fn list_keeps_primary_when_no_moments_render_member() {
+        let dir = tempdir().unwrap();
+        let (repo, _db) = test_repo(dir.path()).await;
+
+        let primary = MediaId::new("a".repeat(64));
+        let sibling = MediaId::new("b".repeat(64));
+        repo.insert(&record_with_taken_at(primary.clone(), "p.jpg", Some(1000)))
+            .await
+            .unwrap();
+        repo.insert(&record_with_taken_at(sibling.clone(), "s.jpg", Some(1000)))
+            .await
+            .unwrap();
+        repo.upsert_stack(&Stack {
+            id: "stk".to_string(),
+            primary_asset_id: primary.clone(),
+        })
+        .await
+        .unwrap();
+        repo.set_media_stack_id(&primary, "stk").await.unwrap();
+        repo.set_media_stack_id(&sibling, "stk").await.unwrap();
+
+        let items = repo.list(MediaFilter::All, None, 50).await.unwrap();
+        let ids: Vec<&str> = items.iter().map(|i| i.id.as_str()).collect();
+        assert!(ids.contains(&primary.as_str()), "primary visible: {ids:?}");
+        assert!(
+            !ids.contains(&sibling.as_str()),
+            "non-primary sibling hidden"
+        );
     }
 
     /// Issue #224: `AssetV1` may arrive before its matching `StackV1`,

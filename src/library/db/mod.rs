@@ -155,6 +155,7 @@ pub(crate) mod test_helpers {
             is_favorite: false,
             is_trashed: false,
             trashed_at: None,
+            is_moments_render: false,
         }
     }
 
@@ -180,6 +181,7 @@ pub(crate) mod test_helpers {
             is_favorite: false,
             is_trashed: false,
             trashed_at: None,
+            is_moments_render: false,
         }
     }
 }

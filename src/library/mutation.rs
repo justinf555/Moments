@@ -76,6 +76,35 @@ pub enum Mutation {
     /// The local edit state for an asset was cleared (revert).
     AssetEditsCleared { id: MediaId },
 
+    // ── Stacks (Phase C, #224) ───────────────────────────────────────
+    /// A pixel-adjustment edit was saved: a new rendered asset was
+    /// imported and should be stacked with the original on the server.
+    /// The push handler waits for both members' `external_id`s to be
+    /// stamped before calling `POST /stacks`.
+    StackCreated {
+        /// Local id of the rendered asset (becomes the stack primary
+        /// on Immich; §8.2 swaps this back to the original in the
+        /// timeline grid).
+        rendered_asset_id: MediaId,
+        /// Local id of the original asset.
+        original_asset_id: MediaId,
+    },
+
+    /// A stack member should be removed on the server (revert flow).
+    /// Immich auto-deletes the stack when fewer than 2 members remain;
+    /// the surviving sibling's `stackId` clears on the next pull
+    /// cycle, so no explicit local cleanup is recorded here.
+    StackMemberRemoved { stack_id: String, asset_id: MediaId },
+
+    // ── Tags ──────────────────────────────────────────────────────────
+    /// Apply the well-known `moments-edit` tag to a rendered asset.
+    /// The push handler creates the tag lazily via PUT /tags on first
+    /// use and caches the resolved tag id in memory for the session.
+    AssetTaggedMomentsEdit { id: MediaId },
+
+    /// Detach the `moments-edit` tag from an asset (revert flow).
+    AssetUntaggedMomentsEdit { id: MediaId },
+
     // ── People ───────────────────────────────────────────────────────
     /// A person was renamed.
     PersonRenamed { id: PersonId, name: String },
@@ -242,6 +271,45 @@ impl Mutation {
                 payload: None,
             }],
 
+            Mutation::StackCreated {
+                rendered_asset_id,
+                original_asset_id,
+            } => {
+                let payload =
+                    serde_json::json!({ "original_asset_id": original_asset_id.as_str() })
+                        .to_string();
+                vec![OutboxRow {
+                    entity_type: "stack".into(),
+                    entity_id: rendered_asset_id.as_str().into(),
+                    action: "create".into(),
+                    payload: Some(payload),
+                }]
+            }
+
+            Mutation::StackMemberRemoved { stack_id, asset_id } => {
+                let payload = serde_json::json!({ "asset_id": asset_id.as_str() }).to_string();
+                vec![OutboxRow {
+                    entity_type: "stack".into(),
+                    entity_id: stack_id.clone(),
+                    action: "remove_member".into(),
+                    payload: Some(payload),
+                }]
+            }
+
+            Mutation::AssetTaggedMomentsEdit { id } => vec![OutboxRow {
+                entity_type: "asset".into(),
+                entity_id: id.as_str().into(),
+                action: "tag_moments_edit".into(),
+                payload: None,
+            }],
+
+            Mutation::AssetUntaggedMomentsEdit { id } => vec![OutboxRow {
+                entity_type: "asset".into(),
+                entity_id: id.as_str().into(),
+                action: "untag_moments_edit".into(),
+                payload: None,
+            }],
+
             Mutation::PersonRenamed { id, name } => {
                 let payload = serde_json::json!({ "name": name }).to_string();
                 vec![OutboxRow {
@@ -352,9 +420,23 @@ mod tests {
             Mutation::AssetEditsCleared {
                 id: MediaId::new("id7".to_string()),
             },
+            Mutation::StackCreated {
+                rendered_asset_id: MediaId::new("rendered-1".to_string()),
+                original_asset_id: MediaId::new("orig-1".to_string()),
+            },
+            Mutation::StackMemberRemoved {
+                stack_id: "stk-1".to_string(),
+                asset_id: MediaId::new("rendered-1".to_string()),
+            },
+            Mutation::AssetTaggedMomentsEdit {
+                id: MediaId::new("rendered-2".to_string()),
+            },
+            Mutation::AssetUntaggedMomentsEdit {
+                id: MediaId::new("rendered-3".to_string()),
+            },
         ];
 
-        assert_eq!(mutations.len(), 14);
+        assert_eq!(mutations.len(), 18);
         for m in &mutations {
             // Ensure Debug doesn't panic.
             let _ = format!("{m:?}");
@@ -383,6 +465,49 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].action, "clear_edits");
         assert!(rows[0].payload.is_none());
+    }
+
+    #[test]
+    fn stack_created_carries_original_id_in_payload() {
+        let m = Mutation::StackCreated {
+            rendered_asset_id: MediaId::new("rendered".into()),
+            original_asset_id: MediaId::new("orig".into()),
+        };
+        let rows = m.to_outbox_rows();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].entity_type, "stack");
+        assert_eq!(rows[0].entity_id, "rendered");
+        assert_eq!(rows[0].action, "create");
+        assert!(rows[0].payload.as_deref().unwrap().contains("orig"));
+    }
+
+    #[test]
+    fn stack_member_removed_keys_by_stack_id() {
+        let m = Mutation::StackMemberRemoved {
+            stack_id: "stk-uuid".into(),
+            asset_id: MediaId::new("rendered".into()),
+        };
+        let rows = m.to_outbox_rows();
+        assert_eq!(rows[0].entity_type, "stack");
+        assert_eq!(rows[0].entity_id, "stk-uuid");
+        assert_eq!(rows[0].action, "remove_member");
+        assert!(rows[0].payload.as_deref().unwrap().contains("\"rendered\""));
+    }
+
+    #[test]
+    fn tag_actions_are_payload_free() {
+        let tag = Mutation::AssetTaggedMomentsEdit {
+            id: MediaId::new("rendered".into()),
+        };
+        let untag = Mutation::AssetUntaggedMomentsEdit {
+            id: MediaId::new("rendered".into()),
+        };
+        let tag_rows = tag.to_outbox_rows();
+        let untag_rows = untag.to_outbox_rows();
+        assert_eq!(tag_rows[0].action, "tag_moments_edit");
+        assert!(tag_rows[0].payload.is_none());
+        assert_eq!(untag_rows[0].action, "untag_moments_edit");
+        assert!(untag_rows[0].payload.is_none());
     }
 
     #[test]
