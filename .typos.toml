@@ -1,2 +1,2 @@
-[default.extend-words]
-appn = "appn"
+[default.extend-identifiers]
+APPn = "APPn"
