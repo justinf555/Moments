@@ -64,6 +64,18 @@
   </screenshots>
 
   <releases>
+    <release version="0.4.0" date="2026-05-13">
+      <description translate="no">
+        <p>Non-destructive editing and bidirectional sync for edits.</p>
+        <ul>
+          <li>Rotate and flip photos non-destructively — edits round-trip with your Immich server</li>
+          <li>Edited photos appear as a single entry in the timeline via the new stacks model</li>
+          <li>Before/after comparison toggle in the editor</li>
+          <li>Pixel adjustments (exposure, contrast, saturation, vignette) and filter presets ship as experimental features — see the README to opt in</li>
+          <li>Reliability fixes for asset sync, content-hash dedup, and trash restore</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.3.0" date="2026-04-13">
       <description translate="no">
         <p>Referenced storage mode and Flatpak sandbox improvements.</p>
