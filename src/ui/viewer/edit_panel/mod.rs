@@ -124,6 +124,25 @@ impl Default for EditPanel {
     }
 }
 
+/// Read the editing-section feature flags from GSettings.
+///
+/// Returns `(enable_adjustments, enable_filters)`. Falls back to
+/// `(true, true)` when the schema isn't installed (e.g. `cargo test`
+/// outside the Flatpak sandbox), preserving pre-flag behaviour.
+fn read_experimental_flags() -> (bool, bool) {
+    use gtk::gio;
+    gio::SettingsSchemaSource::default()
+        .and_then(|src| src.lookup(crate::config::APP_ID, true))
+        .map(|_| {
+            let settings = gio::Settings::new(crate::config::APP_ID);
+            (
+                settings.boolean("enable-adjustments"),
+                settings.boolean("enable-filters"),
+            )
+        })
+        .unwrap_or((true, true))
+}
+
 impl EditPanel {
     pub fn new() -> Self {
         glib::Object::new()
@@ -154,6 +173,16 @@ impl EditPanel {
         imp.filter_section
             .setup(Rc::clone(&session), changed.clone());
         imp.adjust_section.setup(Rc::clone(&session), changed);
+
+        // Apply experimental-feature gating from GSettings. Read once at
+        // setup — restart required to apply changes.
+        let (show_adjustments, show_filters) = read_experimental_flags();
+        if !show_adjustments {
+            imp.adjust_section.set_visible(false);
+        }
+        if !show_filters {
+            imp.filter_section.set_visible(false);
+        }
 
         self.wire_revert_button();
         self.wire_compare_button();
