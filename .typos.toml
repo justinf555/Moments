@@ -1,7 +1,0 @@
-[default.extend-words]
-# JPEG marker convention: APPn means APP0/APP1/.../APP15.
-# typos splits `APPn` into `AP` + `Pn` and flags `Pn` as a typo of `On`.
-pn = "pn"
-
-[default.extend-identifiers]
-APPn = "APPn"

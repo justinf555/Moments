@@ -26,7 +26,7 @@
 //! Adobe XMP lives in an APP1 (`FF E1`) marker segment whose payload
 //! starts with the marker `http://ns.adobe.com/xap/1.0/\0`. Cameras
 //! commonly already use APP1 for EXIF; we walk past EXIF (and any
-//! other APPn segments) and insert ours right before the first non-app
+//! other APP segments) and insert ours right before the first non-app
 //! segment, so EXIF stays intact.
 //!
 //! See [XMP Specification Part 3 §1.1.3](https://www.adobe.com/content/dam/acom/en/devnet/xmp/pdfs/XMP%20SDK%20Release%20cc-2016-08/XMPSpecificationPart3.pdf).
@@ -282,7 +282,7 @@ pub fn decode(xml: &str) -> Result<EmbeddedEdit, XmpError> {
 
 /// Append an Adobe XMP APP1 segment to an in-memory JPEG.
 ///
-/// The segment is inserted **after** any existing APPn segments (so an
+/// The segment is inserted **after** any existing APP segments (so an
 /// EXIF APP1 stays intact) and before the first non-app segment.
 /// Returns `XmpError::Jpeg` if the input doesn't start with SOI or
 /// runs out of segments before SOS.
@@ -313,7 +313,7 @@ pub fn inject_xmp(jpeg: &[u8], xmp: &str) -> Result<Vec<u8>, XmpError> {
 
 /// Walk the JPEG header marker chain and return the byte offset of
 /// the first non-app segment (DQT, SOF, etc.) — i.e. the right
-/// insertion point for a new APPn marker.
+/// insertion point for a new APP marker.
 ///
 /// JPEG layout:
 ///   * `FF D8`       — SOI (no length)
@@ -342,14 +342,14 @@ fn find_post_app_offset(jpeg: &[u8]) -> Result<usize, XmpError> {
         }
         let marker = jpeg[i];
         i += 1;
-        // APPn = 0xE0..=0xEF — keep walking past these
+        // APP markers (0xE0..=0xEF) — keep walking past these
         if (0xE0..=0xEF).contains(&marker) {
             if i + 2 > jpeg.len() {
-                return Err(XmpError::Jpeg("truncated APPn length"));
+                return Err(XmpError::Jpeg("truncated APP segment length"));
             }
             let seg_len = u16::from_be_bytes([jpeg[i], jpeg[i + 1]]) as usize;
             if seg_len < 2 || i + seg_len > jpeg.len() {
-                return Err(XmpError::Jpeg("APPn segment length out of bounds"));
+                return Err(XmpError::Jpeg("APP segment length out of bounds"));
             }
             i += seg_len;
             continue;
