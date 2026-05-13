@@ -24,7 +24,7 @@ The original is never replaced. Immich's "originals are sacred" architectural ru
 
 ## 2. Design summary
 
-> **Status of this document**: Phase A merged via #651. Phase B is implemented in `feat/224-immich-edits-phase-b` and **deviates from the §4 sketches in three deliberate ways** to simplify layering — see the "as-built" callouts in §4.2 / §4.3 / §4.4 and §7.1. Phases C and D remain as drafted. The "actual wire shape vs. earlier draft" callouts in §4.1 and §4.2 record corrections discovered while testing against a live Immich v2.7.5 instance and cross-checking against the upstream OpenAPI spec.
+> **Status of this document**: Phase A merged via #651. Phase B merged via #652 — deviates from the §4 sketches in three deliberate ways (see Phase B as-built callouts in §4.2 / §4.3 / §4.4 / §7.1). Phase C is implemented in `feat/224-immich-edits-phase-c` and lands the full pixel-adjustment path: render → upload → stack → tag → embed XMP, with the §8.2 grid override flipped on so the timeline surfaces the original. See Phase C as-built callouts in §4.3 / §4.4 / §7.2 / §7.3 / §8.2 for as-built notes (orchestration lives on `Library::save_pixel_edit` / `Library::revert_edit`; the UI client branches on `EditState::has_pixel_adjustments()`). Phase D (XMP-based recovery) remains as drafted. The "actual wire shape vs. earlier draft" callouts in §4.1 / §4.2 record corrections discovered while testing against a live Immich v2.7.5 instance and cross-checking against the upstream OpenAPI spec.
 >
 > **Phase B layering summary**: `Mutation::AssetEdits{Applied,Cleared}` are payload-free. `ImmichEditAction` lives in `src/sync/providers/immich/edit_action.rs` and never leaks into the library. The push handler reads the latest `EditState` from `EditingRepository::get_edit_state()` at drain time, projects to actions, and decides PUT vs. DELETE vs. skip — this is **latest-state read** (every wire call sends the final state, so no intermediate edit can leak past a later save), not coalescing (N saves still drive N round-trips; insert-side dedup would be a future enhancement). There is no `EditState::is_geometric_only()` predicate; `project()` returns `Option<Vec<ImmichEditAction>>` and `None` is the "Phase C territory" signal.
 
@@ -326,6 +326,8 @@ OutboxMutation::AssetUntaggedMomentsEdit { id } => {
 
 `ensure_moments_edit_tag` calls `PUT /tags { tags: ["moments-edit"] }` (idempotent), caches the tag id in memory for the push session, and re-derives on cache miss.
 
+> **As-built (#224 Phase C)** — implemented largely as drafted; `ensure_moments_edit_tag` lives on `PushManager` with a `Mutex<Option<String>>` cache. Two notable wire-shape findings from the §10.3 probe pass: `POST /tags { name }` returns **400** on existing tags (rejected), so we use `PUT /tags { tags: [...] }` exclusively. `delete_stack_member` returns **204** and leaves the stack record with a single member; the surviving sibling's `stackId` is cleared on the asset row, and local cleanup completes via the next pull cycle's heartbeat reconciliation. The stack-create response is `{ id, primaryAssetId, assets: [...] }`; we use `id` for `persist_stack_locally` and defensively check `primary_asset_id` matches what we expected (Immich convention: first id in `assetIds` becomes primary). `require_media_external_id` is a strict variant of `lookup_media_external_id` that errors when `external_id` is null — Phase C push arms use it so `StackCreated` / `AssetTaggedMomentsEdit` automatically retry via outbox backoff until `AssetImported` drains.
+
 ---
 
 ## 5. XMP specification
@@ -474,6 +476,8 @@ Triggered when `EditState::has_pixel_adjustments()` returns true.
 
 The "delete old render, upload new render" sequence ensures at most one rendered sibling per photo. Step 6 is skipped on the first edit.
 
+> **As-built (#224 Phase C)** — implemented as `Library::save_pixel_edit(original_id, state, rendered_bytes)`. The UI layer (`MediaClientV2::save_edit_state`) branches on `EditState::has_pixel_adjustments()` and runs the render + JPEG encode on a Tokio blocking thread before calling into Library. Library owns XMP encode + inject (so the original's `external_id` / `content_hash` never have to leak into the UI), generates the rendered `MediaId`, writes the bytes to the standard sharded originals layout, and inserts the rendered `media` row (which records `AssetImported` via the existing media-service path). All four mutations (`AssetImported`, `StackCreated`, `AssetTaggedMomentsEdit`, plus the prior-render cleanup tuple) are enqueued at save time — the push manager's existing outbox retry handles the `AssetImported → external_id → StackCreated` dependency (the strict `require_media_external_id` errors and the backoff cycles the entry until the upload completes; ordering by outbox row id keeps the steps in sequence on the happy path). **Erroring case**: if the original isn't yet on the server (no `external_id`), `save_pixel_edit` returns an error — Phase D recovery depends on a stable `originalAssetId` in the XMP, so silently saving without it would break recoverability.
+
 ### 7.3 Revert
 
 ```
@@ -485,6 +489,8 @@ The "delete old render, upload new render" sequence ensures at most one rendered
 3. Delete local edits row.
 4. UI: navigate back to original (it surfaces in the timeline as the stack auto-collapses).
 ```
+
+> **As-built (#224 Phase C)** — implemented as `Library::revert_edit(original_id)`. The flow is: look up the rendered sibling via `editing.server_rendered_asset_id`; if non-null, enqueue `StackMemberRemoved` (skipped when `media.stack_id` is null — `StackCreated` hadn't drained yet) + `AssetUntaggedMomentsEdit`, then call `Library::delete_permanently` for the rendered asset (which records `AssetDeleted` and cleans up the local file). Finally records `AssetEditsCleared` for the original as belt-and-braces against any geometric-only state that was previously pushed via the Phase B path (idempotent: Immich `DELETE /assets/{id}/edits` returns 204 even when no edits exist). UI navigation (step 4) is handled by the existing client signal flow when the original surfaces in the grid as the stack collapses.
 
 ### 7.4 Recovery (Phase D)
 
@@ -542,33 +548,31 @@ The Phase A primary-only rule is correct for Immich-native stacks (panoramas, bu
 
 The local `edits` table remains the source of truth for what edit was applied. The server-side render is a sync artifact, not a first-class user-visible asset.
 
-**Resolution (to land in Phase C):**
+**Resolution (Phase C, as-built #224):**
 
-The grid filter swaps "primary" for "non-Moments-render member" when a Moments-edit-tagged member is present in the stack. Concretely, on top of the §8.1 clause:
+Migration `026_add_media_is_moments_render.sql` adds an `is_moments_render INTEGER NOT NULL DEFAULT 0` column on `media`. Phase C save sets it to `1` when inserting the rendered media row; a future pull-side change will toggle it based on the asset's `tags[]` (when tag sync lands as part of Phase D).
 
-1. Sync the `tags[]` field from `AssetV1` (Phase C work — Phase A doesn't touch tags).
-2. Hydrate `is_moments_render: bool` on `MediaItem` (true iff the asset carries the `moments-edit` tag — see §6).
-3. Extend the grid filter so a stack containing a Moments-render member surfaces the **other** sibling (the original), not the server's primary. Sketch:
+The grid filter in `MediaRepository::list`, `get_many`, and the per-album / per-person queries got the §8.2 extension:
 
-   ```sql
-   LEFT JOIN stacks s ON m.stack_id = s.id
-   LEFT JOIN media render ON render.stack_id = s.id AND render.is_moments_render = 1
-   WHERE (
-     s.id IS NULL                                    -- not stacked → show
-     OR (render.id IS NULL                            -- ordinary stack → use server primary
-         AND s.primary_asset_id = m.id)
-     OR (render.id IS NOT NULL                        -- Moments-edit stack → surface
-         AND m.id != render.id                        --   the non-render sibling, regardless
-         AND m.stack_id = s.id)                       --   of which one is server-primary
-   )
-   ```
+```sql
+LEFT JOIN stacks s ON m.stack_id = s.id
+LEFT JOIN media render ON render.stack_id = s.id AND render.is_moments_render = 1
+WHERE (
+  s.id IS NULL                                    -- not stacked → show
+  OR (render.id IS NULL                            -- ordinary stack → use server primary
+      AND s.primary_asset_id = m.id)
+  OR (render.id IS NOT NULL                        -- Moments-edit stack → surface the
+      AND m.is_moments_render = 0)                 --   non-render sibling
+)
+```
 
-4. Thumbnail and viewer paths render the original through `RenderPipeline` with the local `edits` row applied — the same on-the-fly edit pipeline already used for local-only edits today. The rendered JPEG asset is never user-visible inside Moments; it's strictly a sync artifact.
-5. Re-opening the editor loads the local `edits` row, not the rendered bytes. (Phase D recovery is the only path that ever parses the rendered JPEG's XMP — to rebuild a missing local `edits` row.)
+The final form is slightly tighter than the draft sketch: instead of `m.id != render.id AND m.stack_id = s.id`, we use `m.is_moments_render = 0`. Because the `render` join only matches rows with `is_moments_render = 1`, the WHERE clause's third branch implicitly excludes the rendered child via the column on `m` itself, with no second equality check needed.
 
-**Why option (a) over option (b)**: keeping the rule "filter on a property of `MediaItem` (the tag flag)" aligns with how every other filter in the project works — in-memory `MediaFilter::matches` style. The alternative (don't bind originals to Moments-edit stacks at all locally) requires the grid query to know about a sync-internal concept, which leaks abstraction. The tag-driven override is more localised.
+Thumbnail and viewer paths render the original through `RenderPipeline` with the local `edits` row applied — the same on-the-fly edit pipeline already used for local-only edits today. The rendered JPEG asset is never user-visible inside Moments; it's strictly a sync artifact.
 
-**Does Phase A need to change to make Phase C work?** No. Phase A is generic stack plumbing; the Phase C override is additive — a tag-based filter exception layered on the existing primary-only clause.
+Re-opening the editor loads the local `edits` row, not the rendered bytes. (Phase D recovery is the only path that ever parses the rendered JPEG's XMP — to rebuild a missing local `edits` row.)
+
+**Does Phase A need to change to make Phase C work?** No. Phase A's primary-only rule is preserved as the second WHERE branch; Phase C just adds the third branch on top.
 
 ---
 
@@ -616,19 +620,25 @@ Acceptance: cropping a photo in the Moments editor + save → photo appears crop
 
 ### Phase C — pixel-adjustment edits via render+stack+tag+XMP
 
-Depends on Phase A (stacks model).
+Depends on Phase A (stacks model). Independent of Phase B.
 
-- [ ] `src/renderer/xmp.rs` encoder/decoder
-- [ ] JPEG APP1 segment injection in render pipeline output
-- [ ] `Mutation::StackCreated`, `StackMemberRemoved`, `AssetTaggedMomentsEdit`, `AssetUntaggedMomentsEdit` variants
-- [ ] `OutboxMutation::from_row` decoders
-- [ ] `PushManager::push_one` arms (§4.4) and `ensure_moments_edit_tag` helper
-- [ ] `EditState::has_pixel_adjustments()` predicate
-- [ ] Editor save flow §7.2 (two-step delete-then-upload)
-- [ ] Editor revert flow §7.3
-- [ ] Tests: XMP roundtrip, save → render → upload → stack → tag end-to-end (mocked HTTP), revert
+- [x] §10.3 probes resolved — `PUT /tags { tags: [...] }` idempotent, `POST /tags { name }` 400s on existing tags (use PUT exclusively); `POST /stacks { assetIds }` returns `{id, primaryAssetId, assets}`; `DELETE /stacks/{id}/assets/{aid}` returns 204; **§11.2 XMP-strip question resolved: XMP block survives upload+download bit-exactly on v2.7.5** — Phase D recovery is viable.
+- [x] `src/renderer/xmp.rs` encoder/decoder + JPEG APP1 walker (skips past existing EXIF segment); 13 tests including bit-exact roundtrip
+- [x] `Mutation::StackCreated`, `StackMemberRemoved`, `AssetTaggedMomentsEdit`, `AssetUntaggedMomentsEdit` variants + outbox round-trips
+- [x] `OutboxMutation::from_row` decoders + tests
+- [x] `ImmichClient` typed wrappers: `post_stack`, `delete_stack_member`, `ensure_tags`, `add_assets_to_tag`, `remove_assets_from_tag`
+- [x] `PushManager::push_one` arms (§4.4) + `ensure_moments_edit_tag` helper with `Mutex<Option<String>>` session cache + `persist_stack_locally` + strict `require_media_external_id`
+- [x] `EditState::has_pixel_adjustments()` predicate (domain method; routes UI between Phase B and Phase C save paths) + tests
+- [x] `migrations/026_add_media_is_moments_render.sql` + column on `media` row / `MediaItem` / `MediaRecord`
+- [x] `Library::save_pixel_edit` orchestrator (§7.2) — UI client renders + JPEG-encodes; Library handles XMP encode/inject + sharded write + media-row insert + mutation sequence
+- [x] `Library::revert_edit` orchestrator (§7.3) — stack/tag/delete cleanup + AssetEditsCleared as belt-and-braces
+- [x] `MediaClientV2::save_edit_state` / `revert_edits` branch on `has_pixel_adjustments`
+- [x] §8.2 grid filter override (`is_moments_render` exception) applied to `MediaRepository::list`, `get_many`, the album per-album queries, and the faces `list_media_for_person`
+- [x] Unit tests: XMP roundtrip + APP1 walker, push helpers (`require_media_external_id`, `persist_stack_locally`), library orchestrators (`save_pixel_edit_*`, `revert_edit_*`), grid filter (Moments-edit and ordinary stack cases)
 
-Acceptance: applying a vignette in the Moments editor + save → original photo gets stacked with a new rendered asset on Immich; the rendered asset is primary, has `moments-edit` tag, and contains the XMP block; revert removes the rendered asset and the stack auto-collapses.
+**Items deferred to Phase D**: pull-side toggling of `is_moments_render` based on `AssetV1.tags[]` (requires tag sync, currently a no-op on insert from sync), eager tag-based discovery (`GET /search/metadata?tagIds=…`).
+
+Acceptance: applying a vignette in the Moments editor + save → original photo gets stacked with a new rendered asset on Immich; the rendered asset is the stack primary on the server, has the `moments-edit` tag, and contains the XMP block; locally the grid surfaces the original (§8.2 override). Revert removes the rendered asset and the stack auto-collapses.
 
 ### Phase D — recovery
 
@@ -694,7 +704,7 @@ If still 500: open an issue upstream and reduce Phase B scope to "best-effort, f
 
 ### 11.2 Does Immich strip XMP from uploaded JPEGs?
 
-The probe established that originals aren't transcoded. The render is uploaded *as a new asset* via `POST /assets`. Verify: upload a JPEG with embedded custom XMP, fetch it back via `GET /assets/{id}/original`, confirm bytes are identical. If Immich rewrites EXIF/XMP at ingestion time, the embedded `editJson` would be lost.
+**Resolved (2026-05-10, Phase C kickoff)**. Probed against the local v2.7.5 instance: built a minimal JPEG with a custom XMP APP1 segment carrying a `MOMENTS_PROBE_2026_05_10` marker, uploaded via `POST /assets`, fetched the bytes back via `GET /assets/{id}/original`. `cmp` reports the downloaded bytes are identical to the uploaded bytes. The MOMENTS marker survives unchanged. Phase D recovery via the embedded XMP is viable on v2.7.5; worth re-checking if a future Immich version changes ingestion behaviour.
 
 ### 11.3 SHA-1 dedup interaction
 

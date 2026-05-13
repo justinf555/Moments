@@ -18,3 +18,4 @@ pub mod output;
 pub mod pipeline;
 pub mod resize;
 pub mod target;
+pub mod xmp;

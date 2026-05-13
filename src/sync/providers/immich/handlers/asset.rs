@@ -109,6 +109,10 @@ async fn handle_asset(asset: SyncAssetV1, ctx: &SyncContext) -> Result<(), Libra
         is_favorite: asset.is_favorite,
         is_trashed,
         trashed_at,
+        // Phase C (#224): set on the pull side from `tags[]` once tag
+        // sync lands. Default-false here covers the bootstrap before
+        // the tag stream is wired (Phase D scope).
+        is_moments_render: false,
     };
 
     let server_id = record.external_id.clone().expect("external_id set above");

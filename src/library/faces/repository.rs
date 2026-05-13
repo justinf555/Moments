@@ -91,8 +91,11 @@ impl FacesRepository {
             "SELECT DISTINCT af.asset_id FROM asset_faces af
              INNER JOIN media m ON m.id = af.asset_id
              LEFT JOIN stacks s ON m.stack_id = s.id
+             LEFT JOIN media render ON render.stack_id = s.id AND render.is_moments_render = 1
              WHERE af.person_id = ? AND m.is_trashed = 0
-               AND (s.id IS NULL OR s.primary_asset_id = m.id)
+               AND (s.id IS NULL AND m.is_moments_render = 0
+                    OR (render.id IS NULL AND s.primary_asset_id = m.id)
+                    OR (render.id IS NOT NULL AND m.is_moments_render = 0))
              ORDER BY COALESCE(m.taken_at, m.imported_at) DESC",
         )
         .bind(person_id)

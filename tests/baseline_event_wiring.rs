@@ -33,6 +33,7 @@ fn test_item(id: &str) -> MediaItem {
         trashed_at: None,
         duration_ms: None,
         stack_id: None,
+        is_moments_render: false,
     }
 }
 

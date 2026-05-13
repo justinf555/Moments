@@ -27,6 +27,27 @@ pub fn to_webp(img: &DynamicImage) -> Result<Vec<u8>, RenderError> {
     Ok(buf.into_inner())
 }
 
+/// Encode as JPEG bytes at the given quality (1–100).
+///
+/// Phase C uses this to produce the rendered output that gets stacked
+/// alongside the original on Immich. The caller is expected to inject
+/// the Moments XMP APP1 segment afterwards via
+/// [`super::xmp::inject_xmp`].
+///
+/// Blocking — call from `spawn_blocking`. JPEG compression can take
+/// 50–500 ms for a large photo.
+pub fn to_jpeg(img: &DynamicImage, quality: u8) -> Result<Vec<u8>, RenderError> {
+    use image::codecs::jpeg::JpegEncoder;
+    let rgb = img.to_rgb8();
+    let (w, h) = rgb.dimensions();
+    let mut buf = Vec::with_capacity((w * h) as usize);
+    let mut encoder = JpegEncoder::new_with_quality(&mut buf, quality);
+    encoder
+        .encode(&rgb, w, h, image::ExtendedColorType::Rgb8)
+        .map_err(|e| RenderError::EncodeFailed(e.to_string()))?;
+    Ok(buf)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -58,6 +79,17 @@ mod tests {
         assert_eq!(bytes[1], 100);
         assert_eq!(bytes[2], 50);
         assert_eq!(bytes[3], 255);
+    }
+
+    #[test]
+    fn to_jpeg_produces_valid_jpeg() {
+        let img = test_image();
+        let bytes = to_jpeg(&img, 85).unwrap();
+        // JPEG magic: FF D8 FF.
+        assert!(bytes.len() > 4);
+        assert_eq!(&bytes[..3], &[0xFF, 0xD8, 0xFF]);
+        // Ends with EOI marker FF D9.
+        assert_eq!(&bytes[bytes.len() - 2..], &[0xFF, 0xD9]);
     }
 
     #[test]

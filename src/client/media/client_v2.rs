@@ -323,6 +323,13 @@ impl MediaClientV2 {
     }
 
     /// Persist the non-destructive edit state for a media item.
+    ///
+    /// Phase C: when `state.has_pixel_adjustments()` returns true the
+    /// edit can't be expressed as an Immich `/edits` action list, so
+    /// we render a full-resolution JPEG locally and forward to
+    /// [`Library::save_pixel_edit`] which embeds an XMP block,
+    /// inserts a rendered media row, and enqueues the upload/stack/tag
+    /// mutations. Geometric-only edits stay on the simpler Phase B path.
     pub fn save_edit_state(
         &self,
         id: &MediaId,
@@ -335,23 +342,29 @@ impl MediaClientV2 {
 
         glib::MainContext::default().spawn_local(async move {
             let result = crate::client::spawn_on(&tokio, async move {
-                library.editing().save_edit_state(&id, &state).await
+                if state.has_pixel_adjustments() {
+                    render_and_save_pixel_edit(&library, &id, &state).await
+                } else {
+                    library.editing().save_edit_state(&id, &state).await
+                }
             })
             .await;
             cb(result);
         });
     }
 
-    /// Revert edits for a media item (delete edit state from DB).
+    /// Revert edits for a media item: delete the local edit state,
+    /// clean up the rendered sibling on Immich if any (Phase C §7.3),
+    /// and clear any server-side `/edits` action list (Phase B path,
+    /// idempotent).
     pub fn revert_edits(&self, id: &MediaId, cb: impl FnOnce(Result<(), LibraryError>) + 'static) {
         let (library, tokio) = self.deps();
         let id = id.clone();
 
         glib::MainContext::default().spawn_local(async move {
-            let result = crate::client::spawn_on(&tokio, async move {
-                library.editing().revert_edits(&id).await
-            })
-            .await;
+            let result =
+                crate::client::spawn_on(&tokio, async move { library.revert_edit(&id).await })
+                    .await;
             cb(result);
         });
     }
@@ -1034,6 +1047,47 @@ fn remove_item_from_tracked(tracked: &TrackedMediaModel, store: &gio::ListStore,
         tracked.id_index.borrow_mut().remove(id);
         store.remove(pos);
     }
+}
+
+/// Phase C save path: render the original at full resolution with
+/// `state` applied, JPEG-encode the result, and hand it to
+/// [`crate::library::Library::save_pixel_edit`] which embeds the XMP
+/// block, inserts the rendered media row, and enqueues the upload +
+/// stack + tag mutations.
+///
+/// Runs the decode + edit pipeline on a Tokio blocking thread.
+async fn render_and_save_pixel_edit(
+    library: &std::sync::Arc<crate::library::Library>,
+    id: &MediaId,
+    state: &EditState,
+) -> Result<(), LibraryError> {
+    let original_path = library
+        .media()
+        .original_path(id)
+        .await?
+        .ok_or_else(|| LibraryError::Runtime(format!("original file for {id} not found")))?;
+
+    let pipeline = crate::application::MomentsApplication::default()
+        .render_pipeline()
+        .ok_or_else(|| LibraryError::Runtime("render pipeline not initialised".into()))?;
+
+    let state_for_render = state.clone();
+    let jpeg = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, LibraryError> {
+        let options = crate::renderer::pipeline::RenderOptions {
+            size: crate::renderer::pipeline::RenderSize::FullRes,
+            edits: Some(&state_for_render),
+            target: crate::renderer::target::RenderTarget::Final,
+        };
+        let img = pipeline
+            .render(&original_path, &options)
+            .map_err(|e| LibraryError::Runtime(format!("render failed: {e}")))?;
+        crate::renderer::output::to_jpeg(&img, 90)
+            .map_err(|e| LibraryError::Runtime(format!("JPEG encode failed: {e}")))
+    })
+    .await
+    .map_err(|e| LibraryError::Runtime(format!("render task join: {e}")))??;
+
+    library.save_pixel_edit(id, state, jpeg).await
 }
 
 /// Load a thumbnail from disk and decode it into a `gdk::Texture`.

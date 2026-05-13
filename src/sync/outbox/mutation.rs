@@ -74,6 +74,21 @@ pub enum OutboxMutation {
         id: MediaId,
     },
 
+    StackCreated {
+        rendered_asset_id: MediaId,
+        original_asset_id: MediaId,
+    },
+    StackMemberRemoved {
+        stack_id: String,
+        asset_id: MediaId,
+    },
+    AssetTaggedMomentsEdit {
+        id: MediaId,
+    },
+    AssetUntaggedMomentsEdit {
+        id: MediaId,
+    },
+
     PersonRenamed {
         id: PersonId,
         name: String,
@@ -184,6 +199,28 @@ impl OutboxMutation {
                 id: MediaId::new(row.entity_id.clone()),
             }),
             ("asset", "clear_edits") => Some(Self::AssetEditsCleared {
+                id: MediaId::new(row.entity_id.clone()),
+            }),
+            ("stack", "create") => {
+                let p = json();
+                let original_asset_id = p["original_asset_id"].as_str()?.to_string();
+                Some(Self::StackCreated {
+                    rendered_asset_id: MediaId::new(row.entity_id.clone()),
+                    original_asset_id: MediaId::new(original_asset_id),
+                })
+            }
+            ("stack", "remove_member") => {
+                let p = json();
+                let asset_id = p["asset_id"].as_str()?.to_string();
+                Some(Self::StackMemberRemoved {
+                    stack_id: row.entity_id.clone(),
+                    asset_id: MediaId::new(asset_id),
+                })
+            }
+            ("asset", "tag_moments_edit") => Some(Self::AssetTaggedMomentsEdit {
+                id: MediaId::new(row.entity_id.clone()),
+            }),
+            ("asset", "untag_moments_edit") => Some(Self::AssetUntaggedMomentsEdit {
                 id: MediaId::new(row.entity_id.clone()),
             }),
             ("person", "rename") => {
@@ -363,6 +400,20 @@ mod tests {
             Mutation::AssetEditsCleared {
                 id: MediaId::new("id7".into()),
             },
+            Mutation::StackCreated {
+                rendered_asset_id: MediaId::new("rendered".into()),
+                original_asset_id: MediaId::new("orig".into()),
+            },
+            Mutation::StackMemberRemoved {
+                stack_id: "stk-1".into(),
+                asset_id: MediaId::new("rendered".into()),
+            },
+            Mutation::AssetTaggedMomentsEdit {
+                id: MediaId::new("rendered".into()),
+            },
+            Mutation::AssetUntaggedMomentsEdit {
+                id: MediaId::new("rendered".into()),
+            },
         ];
 
         for mutation in &cases {
@@ -398,6 +449,69 @@ mod tests {
         assert!(matches!(
             OutboxMutation::from_row(&clear),
             Some(OutboxMutation::AssetEditsCleared { id }) if id.as_str() == "photo-2"
+        ));
+    }
+
+    #[test]
+    fn stack_created_decodes_with_original_id() {
+        let row = OutboxRow {
+            entity_type: "stack".into(),
+            entity_id: "rendered-uuid".into(),
+            action: "create".into(),
+            payload: Some(r#"{"original_asset_id":"orig-uuid"}"#.into()),
+        };
+        let m = OutboxMutation::from_row(&row).unwrap();
+        match m {
+            OutboxMutation::StackCreated {
+                rendered_asset_id,
+                original_asset_id,
+            } => {
+                assert_eq!(rendered_asset_id.as_str(), "rendered-uuid");
+                assert_eq!(original_asset_id.as_str(), "orig-uuid");
+            }
+            _ => panic!("expected StackCreated"),
+        }
+    }
+
+    #[test]
+    fn stack_member_removed_decodes_stack_and_asset() {
+        let row = OutboxRow {
+            entity_type: "stack".into(),
+            entity_id: "stk-uuid".into(),
+            action: "remove_member".into(),
+            payload: Some(r#"{"asset_id":"rendered-uuid"}"#.into()),
+        };
+        let m = OutboxMutation::from_row(&row).unwrap();
+        match m {
+            OutboxMutation::StackMemberRemoved { stack_id, asset_id } => {
+                assert_eq!(stack_id, "stk-uuid");
+                assert_eq!(asset_id.as_str(), "rendered-uuid");
+            }
+            _ => panic!("expected StackMemberRemoved"),
+        }
+    }
+
+    #[test]
+    fn tag_actions_decode_payload_free() {
+        let tag_row = OutboxRow {
+            entity_type: "asset".into(),
+            entity_id: "rendered".into(),
+            action: "tag_moments_edit".into(),
+            payload: None,
+        };
+        let untag_row = OutboxRow {
+            entity_type: "asset".into(),
+            entity_id: "rendered".into(),
+            action: "untag_moments_edit".into(),
+            payload: None,
+        };
+        assert!(matches!(
+            OutboxMutation::from_row(&tag_row),
+            Some(OutboxMutation::AssetTaggedMomentsEdit { id }) if id.as_str() == "rendered"
+        ));
+        assert!(matches!(
+            OutboxMutation::from_row(&untag_row),
+            Some(OutboxMutation::AssetUntaggedMomentsEdit { id }) if id.as_str() == "rendered"
         ));
     }
 

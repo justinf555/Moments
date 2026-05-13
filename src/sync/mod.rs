@@ -77,6 +77,7 @@ impl SyncHandle {
             sync_events,
             shutdown_rx,
             interval_rx: tokio::sync::Mutex::new(interval_rx),
+            moments_edit_tag: tokio::sync::Mutex::new(None),
         };
         tokio.spawn(async move {
             if let Err(e) = push_mgr.run().await {
