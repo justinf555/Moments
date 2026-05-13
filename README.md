@@ -74,6 +74,34 @@ Then run:
 cargo test
 ```
 
+## Experimental features
+
+Moments ships with non-destructive **rotate**, **flip**, and **crop**
+enabled by default. The pixel-adjustment and filter editing sections
+ship in the binary but are hidden by default while they get more
+real-world testing miles. You can opt in per-feature via GSettings.
+
+Because Moments is a sandboxed Flatpak with no dconf hole, run
+`gsettings` *inside* the sandbox with `flatpak run --command=gsettings`:
+
+```bash
+# Enable the Adjustments section (exposure, contrast, saturation,
+# temperature, tint, vignette).
+flatpak run --command=gsettings io.github.justinf555.Moments \
+    set io.github.justinf555.Moments enable-adjustments true
+
+# Enable the Filters section (Noir, Sepia, B&W).
+flatpak run --command=gsettings io.github.justinf555.Moments \
+    set io.github.justinf555.Moments enable-filters true
+```
+
+Restart Moments after changing either key. To revert, replace `set`
+with `reset` and drop the trailing value.
+
+For development builds (`make run-dev`, app id
+`io.github.justinf555.Moments.Devel`), substitute that app id in both
+positions (the `flatpak run` target *and* the schema id).
+
 ## Contributing
 
 Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on reporting bugs, suggesting features, and submitting pull requests.

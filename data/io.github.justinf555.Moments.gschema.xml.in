@@ -95,5 +95,28 @@
 				Whether the main window was maximized when last closed.
 			</description>
 		</key>
+		<key name="enable-adjustments" type="b">
+			<default>false</default>
+			<summary>Show the Adjustments section in the photo editor</summary>
+			<description>
+				Experimental. When true, the photo editor exposes the
+				Adjustments section (exposure, contrast, saturation,
+				temperature, tint, vignette, and future clarity, HSL,
+				sharpness, and noise reduction sliders). Off by default;
+				opt in with `gsettings set @APP_ID@ enable-adjustments
+				true` and restart Moments.
+			</description>
+		</key>
+		<key name="enable-filters" type="b">
+			<default>false</default>
+			<summary>Show the Filters section in the photo editor</summary>
+			<description>
+				Experimental. When true, the photo editor exposes the
+				Filters section (preset looks such as Noir, Sepia, and
+				B&amp;W, plus future LUT-based film looks). Off by
+				default; opt in with `gsettings set @APP_ID@
+				enable-filters true` and restart Moments.
+			</description>
+		</key>
 	</schema>
 </schemalist>
