@@ -296,43 +296,33 @@ impl VideoViewer {
         // `load_gen` so an in-flight `original_path` callback that resolves
         // after the pop doesn't call `set_file` on a pipeline we just tore
         // down.
-        {
-            let weak = self.downgrade();
-            self.connect_hidden(move |_| {
-                let Some(viewer) = weak.upgrade() else {
-                    return;
-                };
+        self.connect_hidden(glib::clone!(
+            #[weak(rename_to = viewer)]
+            self,
+            move |_| {
                 let imp = viewer.imp();
                 imp.load_gen.set(imp.load_gen.get() + 1);
                 imp.video.set_file(None::<&gio::File>);
-            });
-        }
+            }
+        ));
 
-        // Prev button
-        {
-            let weak = self.downgrade();
-            imp.prev_btn.connect_clicked(move |_| {
-                if let Some(viewer) = weak.upgrade() {
-                    viewer.navigate_prev();
-                }
-            });
-        }
+        imp.prev_btn.connect_clicked(glib::clone!(
+            #[weak(rename_to = viewer)]
+            self,
+            move |_| viewer.navigate_prev()
+        ));
 
-        // Next button
-        {
-            let weak = self.downgrade();
-            imp.next_btn.connect_clicked(move |_| {
-                if let Some(viewer) = weak.upgrade() {
-                    viewer.navigate_next();
-                }
-            });
-        }
+        imp.next_btn.connect_clicked(glib::clone!(
+            #[weak(rename_to = viewer)]
+            self,
+            move |_| viewer.navigate_next()
+        ));
 
         // Star (favourite) button — optimistic toggle with rollback on failure.
-        {
-            let weak = self.downgrade();
-            imp.star_btn.connect_clicked(move |btn| {
-                let Some(viewer) = weak.upgrade() else { return };
+        imp.star_btn.connect_clicked(glib::clone!(
+            #[weak(rename_to = viewer)]
+            self,
+            move |btn| {
                 let imp = viewer.imp();
                 let items = imp.items.borrow();
                 let idx = imp.current_index.get();
@@ -348,14 +338,14 @@ impl VideoViewer {
                 {
                     mc.set_favorite(vec![id], new_fav);
                 }
-            });
-        }
+            }
+        ));
 
         // Info toggle → split view
-        {
-            let weak = self.downgrade();
-            imp.info_toggle.connect_toggled(move |btn| {
-                let Some(viewer) = weak.upgrade() else { return };
+        imp.info_toggle.connect_toggled(glib::clone!(
+            #[weak(rename_to = viewer)]
+            self,
+            move |btn| {
                 let imp = viewer.imp();
                 imp.info_split.set_show_sidebar(btn.is_active());
 
@@ -371,28 +361,27 @@ impl VideoViewer {
                         drop(meta);
                     }
                 }
-            });
-        }
+            }
+        ));
 
         // Split view sidebar closed externally → sync toggle
-        {
-            let weak = self.downgrade();
-            imp.info_split.connect_show_sidebar_notify(move |split| {
-                if let Some(viewer) = weak.upgrade() {
-                    viewer.imp().info_toggle.set_active(split.shows_sidebar());
-                }
-            });
-        }
+        imp.info_split.connect_show_sidebar_notify(glib::clone!(
+            #[weak(rename_to = viewer)]
+            self,
+            move |split| {
+                viewer.imp().info_toggle.set_active(split.shows_sidebar());
+            }
+        ));
 
         // Keyboard navigation (← → F9 Escape)
-        {
-            let key_ctrl = gtk::EventControllerKey::new();
-            imp.toolbar_view.add_controller(key_ctrl.clone());
-            let weak = self.downgrade();
-            key_ctrl.connect_key_pressed(move |_, keyval, _, _| {
-                let Some(viewer) = weak.upgrade() else {
-                    return glib::Propagation::Proceed;
-                };
+        let key_ctrl = gtk::EventControllerKey::new();
+        imp.toolbar_view.add_controller(key_ctrl.clone());
+        key_ctrl.connect_key_pressed(glib::clone!(
+            #[weak(rename_to = viewer)]
+            self,
+            #[upgrade_or]
+            glib::Propagation::Proceed,
+            move |_, keyval, _, _| {
                 match keyval {
                     gdk::Key::Left | gdk::Key::KP_Left => {
                         viewer.navigate_prev();
@@ -420,8 +409,8 @@ impl VideoViewer {
                     }
                     _ => glib::Propagation::Proceed,
                 }
-            });
-        }
+            }
+        ));
 
         // ── Wire overflow menu buttons ──────────────────────────────────────
         wire_overflow_menu(menu_popover, menu_buttons, self);
@@ -435,14 +424,13 @@ fn wire_overflow_menu(
     viewer: &VideoViewer,
 ) {
     // Add to album
-    {
-        let weak = viewer.downgrade();
-        let pop = popover.downgrade();
-        buttons.add_to_album.connect_clicked(move |_| {
-            if let Some(p) = pop.upgrade() {
-                p.popdown();
-            }
-            let Some(viewer) = weak.upgrade() else { return };
+    buttons.add_to_album.connect_clicked(glib::clone!(
+        #[weak]
+        popover,
+        #[weak]
+        viewer,
+        move |_| {
+            popover.popdown();
             let imp = viewer.imp();
             let id = {
                 let items = imp.items.borrow();
@@ -454,8 +442,8 @@ fn wire_overflow_menu(
                 viewer.upcast_ref::<gtk::Widget>(),
                 vec![id],
             );
-        });
-    }
+        }
+    ));
 
     // Stub items — just close the popover on click.
     for btn in [
@@ -463,23 +451,21 @@ fn wire_overflow_menu(
         &buttons.export_original,
         &buttons.show_in_files,
     ] {
-        let pop = popover.downgrade();
-        btn.connect_clicked(move |_| {
-            if let Some(p) = pop.upgrade() {
-                p.popdown();
-            }
-        });
+        btn.connect_clicked(glib::clone!(
+            #[weak]
+            popover,
+            move |_| popover.popdown()
+        ));
     }
 
     // Delete video — trash + pop back to grid.
-    {
-        let weak = viewer.downgrade();
-        let pop = popover.downgrade();
-        buttons.delete.connect_clicked(move |_| {
-            if let Some(p) = pop.upgrade() {
-                p.popdown();
-            }
-            let Some(viewer) = weak.upgrade() else { return };
+    buttons.delete.connect_clicked(glib::clone!(
+        #[weak]
+        popover,
+        #[weak]
+        viewer,
+        move |_| {
+            popover.popdown();
             let imp = viewer.imp();
             let id = {
                 let items = imp.items.borrow();
@@ -496,6 +482,6 @@ fn wire_overflow_menu(
             {
                 nav_view.pop();
             }
-        });
-    }
+        }
+    ));
 }

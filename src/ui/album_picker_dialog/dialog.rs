@@ -234,65 +234,78 @@ fn connect_signals(
     let new_album_stack = &new_album.stack;
     let new_album_entry = &new_album.entry;
     let create_add_btn = &new_album.create_button;
-    {
-        let d = dialog.clone();
-        cancel_btn.connect_clicked(move |_| {
-            d.close();
-        });
-    }
 
-    {
-        let i = Rc::clone(inner);
-        let stack = new_album_stack.clone();
-        let entry = new_album_entry.clone();
-        inner.list_box.connect_row_activated(move |_, row| {
+    cancel_btn.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        move |_| {
+            dialog.close();
+        }
+    ));
+
+    inner.list_box.connect_row_activated(glib::clone!(
+        #[strong]
+        inner,
+        #[weak]
+        new_album_stack,
+        #[weak]
+        new_album_entry,
+        move |_, row| {
             if row.widget_name() == "new-album" {
-                stack.set_visible_child_name("entry");
-                entry.grab_focus();
+                new_album_stack.set_visible_child_name("entry");
+                new_album_entry.grab_focus();
                 return;
             }
 
             let album_id_str = row.widget_name().to_string();
             debug!(album_id = %album_id_str, "album row activated");
 
-            for r in &i.rows {
+            for r in &inner.rows {
                 r.set_selected(false);
             }
 
-            if let Some(r) = i.rows.iter().find(|r| r.album_id.as_str() == album_id_str) {
+            if let Some(r) = inner
+                .rows
+                .iter()
+                .find(|r| r.album_id.as_str() == album_id_str)
+            {
                 r.set_selected(true);
-                *i.selected_album_id.borrow_mut() = Some(r.album_id.clone());
-                i.add_button.set_visible(true);
+                *inner.selected_album_id.borrow_mut() = Some(r.album_id.clone());
+                inner.add_button.set_visible(true);
             }
-        });
-    }
+        }
+    ));
 
-    {
-        let i = Rc::clone(inner);
-        add_button.connect_clicked(move |_| {
-            let album_id = i.selected_album_id.borrow().clone();
+    add_button.connect_clicked(glib::clone!(
+        #[strong]
+        inner,
+        move |_| {
+            let album_id = inner.selected_album_id.borrow().clone();
             if let Some(album_id) = album_id {
-                debug!(%album_id, count = i.media_ids.len(), "adding to album");
-                i.album_client.add_to_album(album_id, i.media_ids.clone());
-                i.dialog.close();
+                debug!(%album_id, count = inner.media_ids.len(), "adding to album");
+                inner
+                    .album_client
+                    .add_to_album(album_id, inner.media_ids.clone());
+                inner.dialog.close();
             }
-        });
-    }
+        }
+    ));
 
-    {
-        let i = Rc::clone(inner);
-        search_entry.connect_search_changed(move |entry| {
+    search_entry.connect_search_changed(glib::clone!(
+        #[strong]
+        inner,
+        move |entry| {
             let query = entry.text().to_string();
             let lower_query = query.to_lowercase();
 
-            for r in &i.rows {
+            for r in &inner.rows {
                 r.update_search_highlight(&query);
                 let matches =
                     lower_query.is_empty() || r.album_name.to_lowercase().contains(&lower_query);
                 r.row.set_visible(matches);
             }
-        });
-    }
+        }
+    ));
 
     {
         let i = Rc::clone(inner);
@@ -320,31 +333,37 @@ fn connect_signals(
         }
     }
 
-    {
-        let btn = create_add_btn.clone();
-        new_album_entry.connect_changed(move |entry| {
-            btn.set_sensitive(!entry.text().is_empty());
-        });
-    }
+    new_album_entry.connect_changed(glib::clone!(
+        #[weak]
+        create_add_btn,
+        move |entry| {
+            create_add_btn.set_sensitive(!entry.text().is_empty());
+        }
+    ));
 
-    {
-        let stack = new_album_stack.clone();
-        let key_ctrl = gtk::EventControllerKey::new();
-        new_album_entry.add_controller(key_ctrl.clone());
-        key_ctrl.connect_key_pressed(move |_, keyval, _, _| {
+    let key_ctrl = gtk::EventControllerKey::new();
+    new_album_entry.add_controller(key_ctrl.clone());
+    key_ctrl.connect_key_pressed(glib::clone!(
+        #[weak]
+        new_album_stack,
+        #[upgrade_or]
+        glib::Propagation::Proceed,
+        move |_, keyval, _, _| {
             if keyval == gtk::gdk::Key::Escape {
-                stack.set_visible_child_name("label");
+                new_album_stack.set_visible_child_name("label");
                 glib::Propagation::Stop
             } else {
                 glib::Propagation::Proceed
             }
-        });
-    }
+        }
+    ));
 
-    {
-        let d = dialog.clone();
-        let i = Rc::clone(inner);
-        empty_create_btn.connect_clicked(move |_| {
+    empty_create_btn.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        #[strong]
+        inner,
+        move |_| {
             let alert = adw::AlertDialog::builder().heading("New Album").build();
             alert.add_response("cancel", "Cancel");
             alert.add_response("create", "Create & add");
@@ -357,22 +376,28 @@ fn connect_signals(
             entry.set_activates_default(true);
             alert.set_extra_child(Some(&entry));
 
-            let ids = i.media_ids.clone();
-            let ac = i.album_client.clone();
-            let d2 = d.clone();
-            alert.connect_response(None, move |_, response| {
-                if response != "create" {
-                    return;
-                }
-                let name = entry.text().to_string();
-                if name.is_empty() {
-                    return;
-                }
-                ac.create_album(name, ids.clone());
-                d2.close();
-            });
+            let ids = inner.media_ids.clone();
+            let ac = inner.album_client.clone();
+            alert.connect_response(
+                None,
+                glib::clone!(
+                    #[weak]
+                    dialog,
+                    move |_, response| {
+                        if response != "create" {
+                            return;
+                        }
+                        let name = entry.text().to_string();
+                        if name.is_empty() {
+                            return;
+                        }
+                        ac.create_album(name, ids.clone());
+                        dialog.close();
+                    }
+                ),
+            );
 
-            alert.present(Some(&d));
-        });
-    }
+            alert.present(Some(&dialog));
+        }
+    ));
 }

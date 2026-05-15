@@ -257,12 +257,10 @@ impl PhotoViewer {
 
         // Start deferred full-res load after the slide-in animation completes,
         // and grab focus so the key controller (← → F9 Escape) works immediately.
-        {
-            let viewer = self.downgrade();
-            self.connect_shown(move |_| {
-                let Some(viewer) = viewer.upgrade() else {
-                    return;
-                };
+        self.connect_shown(glib::clone!(
+            #[weak(rename_to = viewer)]
+            self,
+            move |_| {
                 let imp = viewer.imp();
                 imp.toolbar_view.grab_focus();
                 let pending = imp.pending_load.borrow_mut().take();
@@ -271,8 +269,8 @@ impl PhotoViewer {
                     viewer.start_full_res_load(gen, id.clone());
                     viewer.load_metadata_async(gen, id);
                 }
-            });
-        }
+            }
+        ));
 
         // The viewer is a NavigationView page, so popping it doesn't drop the
         // widget — `imp.picture` keeps its `GdkMemoryTexture`, which holds
@@ -285,48 +283,36 @@ impl PhotoViewer {
         // cleared. Toggling `edit_toggle` off (if still active) routes the
         // `EditSession` teardown through the existing toggled handler so
         // the toggle's visual state stays in sync.
-        {
-            let viewer = self.downgrade();
-            self.connect_hidden(move |_| {
-                let Some(viewer) = viewer.upgrade() else {
-                    return;
-                };
+        self.connect_hidden(glib::clone!(
+            #[weak(rename_to = viewer)]
+            self,
+            move |_| {
                 let imp = viewer.imp();
                 imp.load_gen.set(imp.load_gen.get() + 1);
                 imp.picture.set_paintable(gdk::Paintable::NONE);
                 if imp.edit_toggle.is_active() {
                     imp.edit_toggle.set_active(false);
                 }
-            });
-        }
+            }
+        ));
 
-        // Prev button
-        {
-            let viewer = self.downgrade();
-            imp.prev_btn.connect_clicked(move |_| {
-                if let Some(viewer) = viewer.upgrade() {
-                    viewer.navigate_prev();
-                }
-            });
-        }
+        imp.prev_btn.connect_clicked(glib::clone!(
+            #[weak(rename_to = viewer)]
+            self,
+            move |_| viewer.navigate_prev()
+        ));
 
-        // Next button
-        {
-            let viewer = self.downgrade();
-            imp.next_btn.connect_clicked(move |_| {
-                if let Some(viewer) = viewer.upgrade() {
-                    viewer.navigate_next();
-                }
-            });
-        }
+        imp.next_btn.connect_clicked(glib::clone!(
+            #[weak(rename_to = viewer)]
+            self,
+            move |_| viewer.navigate_next()
+        ));
 
         // Star (favourite) button — optimistic toggle with rollback on failure.
-        {
-            let viewer = self.downgrade();
-            imp.star_btn.connect_clicked(move |btn| {
-                let Some(viewer) = viewer.upgrade() else {
-                    return;
-                };
+        imp.star_btn.connect_clicked(glib::clone!(
+            #[weak(rename_to = viewer)]
+            self,
+            move |btn| {
                 let imp = viewer.imp();
                 let items = imp.items.borrow();
                 let idx = imp.current_index.get();
@@ -344,16 +330,14 @@ impl PhotoViewer {
                 {
                     mc.set_favorite(vec![id], new_fav);
                 }
-            });
-        }
+            }
+        ));
 
         // Info toggle → show info sidebar
-        {
-            let viewer = self.downgrade();
-            imp.info_toggle.connect_toggled(move |btn| {
-                let Some(viewer) = viewer.upgrade() else {
-                    return;
-                };
+        imp.info_toggle.connect_toggled(glib::clone!(
+            #[weak(rename_to = viewer)]
+            self,
+            move |btn| {
                 let imp = viewer.imp();
                 if btn.is_active() {
                     // Deactivate edit toggle (mutually exclusive).
@@ -374,16 +358,14 @@ impl PhotoViewer {
                 } else if !imp.edit_toggle.is_active() {
                     imp.info_split.set_show_sidebar(false);
                 }
-            });
-        }
+            }
+        ));
 
         // Edit toggle → show edit sidebar and start edit session
-        {
-            let viewer = self.downgrade();
-            imp.edit_toggle.connect_toggled(move |btn| {
-                let Some(viewer) = viewer.upgrade() else {
-                    return;
-                };
+        imp.edit_toggle.connect_toggled(glib::clone!(
+            #[weak(rename_to = viewer)]
+            self,
+            move |btn| {
                 let imp = viewer.imp();
                 if btn.is_active() {
                     // Deactivate info toggle (mutually exclusive).
@@ -401,17 +383,15 @@ impl PhotoViewer {
                         panel.end_session();
                     }
                 }
-            });
-        }
+            }
+        ));
 
         // Split view sidebar closed externally → sync toggles
-        {
-            let viewer = self.downgrade();
-            imp.info_split.connect_show_sidebar_notify(move |split| {
+        imp.info_split.connect_show_sidebar_notify(glib::clone!(
+            #[weak(rename_to = viewer)]
+            self,
+            move |split| {
                 if !split.shows_sidebar() {
-                    let Some(viewer) = viewer.upgrade() else {
-                        return;
-                    };
                     let imp = viewer.imp();
                     imp.info_toggle.set_active(false);
                     if imp.edit_toggle.is_active() {
@@ -421,18 +401,18 @@ impl PhotoViewer {
                         }
                     }
                 }
-            });
-        }
+            }
+        ));
 
         // Keyboard navigation (← → F9 Escape)
-        {
-            let key_ctrl = gtk::EventControllerKey::new();
-            imp.toolbar_view.add_controller(key_ctrl.clone());
-            let viewer = self.downgrade();
-            key_ctrl.connect_key_pressed(move |_, keyval, _, _| {
-                let Some(viewer) = viewer.upgrade() else {
-                    return glib::Propagation::Proceed;
-                };
+        let key_ctrl = gtk::EventControllerKey::new();
+        imp.toolbar_view.add_controller(key_ctrl.clone());
+        key_ctrl.connect_key_pressed(glib::clone!(
+            #[weak(rename_to = viewer)]
+            self,
+            #[upgrade_or]
+            glib::Propagation::Proceed,
+            move |_, keyval, _, _| {
                 match keyval {
                     gdk::Key::Left | gdk::Key::KP_Left => {
                         viewer.navigate_prev();
@@ -461,8 +441,8 @@ impl PhotoViewer {
                     }
                     _ => glib::Propagation::Proceed,
                 }
-            });
-        }
+            }
+        ));
 
         // Wire overflow menu buttons.
         menu::wire_overflow_menu(menu_popover, menu_buttons, self);
