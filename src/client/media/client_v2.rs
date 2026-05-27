@@ -1067,6 +1067,10 @@ async fn render_and_save_pixel_edit(
         .await?
         .ok_or_else(|| LibraryError::Runtime(format!("original file for {id} not found")))?;
 
+    // TODO(library-context refactor, Step 2): take the render pipeline
+    // as a constructor argument on the owning Client instead of
+    // reaching into the global Application singleton.
+    #[allow(deprecated)]
     let pipeline = crate::application::MomentsApplication::default()
         .render_pipeline()
         .ok_or_else(|| LibraryError::Runtime("render pipeline not initialised".into()))?;

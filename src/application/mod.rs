@@ -20,6 +20,8 @@
 
 pub mod keyring;
 
+mod context;
+
 use std::cell::{Cell, OnceCell, RefCell};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -30,6 +32,7 @@ use gettextrs::gettext;
 use gtk::{gio, glib};
 use tracing::{debug, error, info, instrument, warn};
 
+use crate::application::context::LibraryContext;
 use crate::config::{APP_ID, PROFILE, VERSION};
 use crate::library::bundle::Bundle;
 use crate::library::config::LibraryConfig;
@@ -44,6 +47,17 @@ mod imp {
     pub struct MomentsApplication {
         pub settings: OnceCell<gio::Settings>,
         pub tokio: OnceCell<tokio::runtime::Handle>,
+        /// Domain + infrastructure container. Populated alongside the
+        /// existing per-field `RefCell<Option<T>>` slots during
+        /// `load_library_async`. See `docs/design-library-context.md`.
+        ///
+        /// Stored in a `RefCell<Option<...>>` rather than the
+        /// `OnceCell<Arc<...>>` sketched in the design doc so the
+        /// shutdown path can clear it (alongside the existing legacy
+        /// slots) and drop `Arc<Library>` before `main()` drops the
+        /// Tokio runtime. Step 4 of the migration removes the legacy
+        /// slots and can revisit this storage shape.
+        pub(in crate::application) library_context: RefCell<Option<Arc<LibraryContext>>>,
         pub library: RefCell<Option<Arc<Library>>>,
         pub import_client: RefCell<Option<crate::client::ImportClient>>,
         pub album_client_v2: RefCell<Option<crate::client::AlbumClientV2>>,
@@ -53,8 +67,10 @@ mod imp {
         pub render_pipeline: RefCell<Option<Arc<crate::renderer::pipeline::RenderPipeline>>>,
         pub is_immich: Cell<bool>,
         pub immich_server_url: RefCell<Option<String>>,
-        /// Background task handle for periodic trash purge.
-        pub purge_handle: RefCell<Option<tokio::task::JoinHandle<()>>>,
+        // Note: the periodic trash-purge `JoinHandle` lives on
+        // `LibraryContext::purge_handle`, not here. `JoinHandle` is not
+        // `Clone`, so the context is the single canonical owner per
+        // `docs/design-library-context.md`.
         /// Sync engine handle (Immich only).
         pub sync_handle: RefCell<Option<crate::sync::SyncHandle>>,
     }
@@ -131,6 +147,16 @@ mod imp {
             self.media_client_v2.borrow_mut().take();
             self.sync_handle.borrow_mut().take();
             self.library.borrow_mut().take();
+            // Drop the LibraryContext last among domain state — it
+            // owns `Arc<Library>` and the purge-task `JoinHandle`.
+            // Aborting the purge task before dropping the runtime
+            // avoids the (unlikely but possible) race where it wakes
+            // and touches the DB after the pool has been freed.
+            if let Some(ctx) = self.library_context.borrow_mut().take() {
+                if let Some(handle) = ctx.purge_handle() {
+                    handle.abort();
+                }
+            }
 
             self.parent_shutdown();
         }
@@ -209,8 +235,29 @@ impl MomentsApplication {
     /// Access the shared Tokio runtime handle.
     ///
     /// Available from anywhere via `MomentsApplication::default().tokio_handle()`.
+    ///
+    /// Note: the `tokio` handle is set on the application at construction
+    /// — long before `LibraryContext` exists — so this accessor reads
+    /// the original `OnceCell<tokio::runtime::Handle>` field. The context
+    /// only sees the same handle once it has been built; it is not the
+    /// canonical source for this value in Step 1.
     pub fn tokio_handle(&self) -> tokio::runtime::Handle {
         self.imp().tokio.get().expect("tokio handle set").clone()
+    }
+
+    /// Access the domain + infrastructure container.
+    ///
+    /// Visible only inside the `application/` module tree. UI code must
+    /// go through a Client; other backend wiring code may call this.
+    /// Returns `None` if no library has been opened yet.
+    ///
+    /// Step 1 of the refactor adds this accessor with no in-tree
+    /// callers — `#[allow(dead_code)]` will be lifted in Step 2 once
+    /// client construction starts pulling sub-services from the
+    /// context. See `docs/design-library-context.md`.
+    #[allow(dead_code)]
+    pub(in crate::application) fn library_context(&self) -> Option<Arc<LibraryContext>> {
+        self.imp().library_context.borrow().clone()
     }
 
     /// Access the import client singleton.
@@ -225,7 +272,24 @@ impl MomentsApplication {
     ///
     /// Available from anywhere via `MomentsApplication::default().render_pipeline()`.
     /// Returns `None` if no library is open yet.
+    ///
+    /// Deprecated in Step 1 of the LibraryContext refactor — the render
+    /// pipeline now lives on the `LibraryContext`. Callers in `ui/` will
+    /// migrate to acquiring it via their owning Client (which will hold
+    /// any sub-services it needs). See `docs/design-library-context.md`.
+    #[deprecated(
+        note = "Use library_context() (application-internal) or accept the pipeline via the owning Client; will be removed when migration completes"
+    )]
     pub fn render_pipeline(&self) -> Option<Arc<crate::renderer::pipeline::RenderPipeline>> {
+        // Read from the context first when populated — keeps the context
+        // as the source of truth even while the legacy `RefCell` field
+        // is still being written. Falls back to the legacy field only
+        // for the brief window during startup where the legacy field
+        // could conceivably be populated before the context (it isn't
+        // today, but defending against future reordering is cheap).
+        if let Some(ctx) = self.imp().library_context.borrow().as_ref() {
+            return Some(Arc::clone(ctx.render_pipeline()));
+        }
         self.imp().render_pipeline.borrow().clone()
     }
 
@@ -692,18 +756,41 @@ impl MomentsApplication {
                         let library = Arc::new(library);
                         info!("library ready");
 
-                        // Store library on the application.
+                        // Construct the LibraryContext first, then mirror
+                        // the same `Arc` references into the legacy
+                        // `RefCell<Option<T>>` slots. Both shapes co-exist
+                        // during Step 1 of the LibraryContext refactor;
+                        // subsequent steps will remove the legacy fields
+                        // and migrate all readers to the context.
+                        // See `docs/design-library-context.md`.
+                        let render_pipeline = std::sync::Arc::new(
+                            crate::renderer::pipeline::RenderPipeline::new(),
+                        );
+                        let library_context = LibraryContext::build(
+                            Arc::clone(&library),
+                            Arc::clone(&render_pipeline),
+                            tokio.clone(),
+                        );
+                        if app
+                            .imp()
+                            .library_context
+                            .borrow()
+                            .is_some()
+                        {
+                            warn!("library_context was already initialised — overwriting");
+                        }
+                        *app.imp().library_context.borrow_mut() =
+                            Some(Arc::clone(&library_context));
+
+                        // Store library on the application (legacy slot).
                         *app.imp().library.borrow_mut() = Some(Arc::clone(&library));
+                        // Mirror render pipeline into the legacy slot too.
+                        *app.imp().render_pipeline.borrow_mut() =
+                            Some(Arc::clone(&render_pipeline));
 
                         // Create the import client (GObject singleton).
                         let sync_thumbnails_dir = thumbnails_dir.clone();
                         {
-                            let render_pipeline = std::sync::Arc::new(
-                                crate::renderer::pipeline::RenderPipeline::new(),
-                            );
-                            *app.imp().render_pipeline.borrow_mut() =
-                                Some(Arc::clone(&render_pipeline));
-
                             let import_client = crate::client::ImportClient::new();
                             import_client.configure(
                                 Arc::clone(&library),
@@ -775,7 +862,28 @@ impl MomentsApplication {
                                 retention_days,
                                 tokio.clone(),
                             );
-                            *app.imp().purge_handle.borrow_mut() = Some(handle);
+                            // The context is the single canonical owner
+                            // of the purge `JoinHandle` — `JoinHandle`
+                            // is not `Clone`, so there can be only one
+                            // home. The legacy `RefCell<Option<...>>`
+                            // slot on `MomentsApplication::imp` has
+                            // been removed (no reader: `shutdown`
+                            // never aborted the purge task, the
+                            // runtime is dropped shortly after).
+                            if let Err(unused) =
+                                library_context.set_purge_handle(handle)
+                            {
+                                // Defensive: a duplicate populate could
+                                // only happen if `load_library_async`
+                                // ran twice on the same Application,
+                                // which the rest of the code prevents.
+                                // Abort the orphan task so it doesn't
+                                // outlive its (now-redundant) state.
+                                warn!(
+                                    "purge_handle already recorded on LibraryContext — aborting duplicate task"
+                                );
+                                unused.abort();
+                            }
                         }
 
                         // Start Immich sync engine and sync client.

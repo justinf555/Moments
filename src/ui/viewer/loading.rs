@@ -22,6 +22,10 @@ impl PhotoViewer {
             .media_client_v2()
             .expect("media client available");
 
+        // TODO(library-context refactor, Step 2): take the render
+        // pipeline from the owning Client (or pass it in here)
+        // rather than reaching into the global Application singleton.
+        #[allow(deprecated)]
         let pipeline = match crate::application::MomentsApplication::default().render_pipeline() {
             Some(p) => p,
             None => {
@@ -144,6 +148,10 @@ impl PhotoViewer {
             .media_client_v2()
             .expect("media client available");
 
+        // TODO(library-context refactor, Step 2): take the render
+        // pipeline from the owning Client rather than reaching into
+        // the global Application singleton.
+        #[allow(deprecated)]
         let pipeline = match crate::application::MomentsApplication::default().render_pipeline() {
             Some(p) => p,
             None => {
