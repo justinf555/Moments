@@ -38,10 +38,11 @@ struct TrackedMediaModel {
     id_index: RefCell<HashMap<MediaId, glib::WeakRef<MediaItemObject>>>,
 }
 
-/// Non-GObject dependencies set once by [`MediaClientV2::configure`].
+/// Non-GObject dependencies set once by [`MediaClientV2::build`].
 struct MediaDeps {
     library: Arc<Library>,
     tokio: tokio::runtime::Handle,
+    render_pipeline: Arc<crate::renderer::pipeline::RenderPipeline>,
 }
 
 mod imp {
@@ -106,37 +107,45 @@ glib::wrapper! {
     pub struct MediaClientV2(ObjectSubclass<imp::MediaClientV2>);
 }
 
-impl Default for MediaClientV2 {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl MediaClientV2 {
+    /// Construct an unconfigured client.
+    ///
+    /// Intended only for unit tests that exercise pure model-patching
+    /// helpers without needing a real `Library`. Production code calls
+    /// [`MediaClientV2::build`].
+    #[cfg(test)]
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         glib::Object::builder().build()
     }
 
-    /// Store dependencies and start listening for service events. Must be
-    /// called once after construction, before any other method.
+    /// Construct a fully-wired media client.
     ///
-    /// Subscribes to four service channels:
+    /// Stores dependencies and spawns the four service-event listeners
+    /// on the supplied Tokio runtime:
+    ///
     /// - `MediaEvent` — media-row changes (Added/Updated/Removed).
     /// - `ThumbnailEvent` — thumbnails ready on disk.
     /// - `AlbumEvent` — filtered down to `AlbumMediaChanged` for
     ///   album-filtered model refresh.
     /// - `FacesEvent` — filtered down to `PersonMediaChanged` for
     ///   person-filtered model refresh (never fires on local backends).
-    pub fn configure(&self, library: Arc<Library>, tokio: tokio::runtime::Handle) {
+    pub fn build(
+        library: Arc<Library>,
+        tokio: tokio::runtime::Handle,
+        render_pipeline: Arc<crate::renderer::pipeline::RenderPipeline>,
+    ) -> Self {
+        let client: Self = glib::Object::builder().build();
         let media_rx = library.media().subscribe();
         let thumb_rx = library.thumbnails().subscribe();
         let album_rx = library.albums().subscribe();
         let faces_rx = library.faces().subscribe();
-        *self.imp().deps.borrow_mut() = Some(MediaDeps {
+        *client.imp().deps.borrow_mut() = Some(MediaDeps {
             library: Arc::clone(&library),
             tokio: tokio.clone(),
+            render_pipeline,
         });
-        let client_weak: glib::SendWeakRef<MediaClientV2> = self.downgrade().into();
+        let client_weak: glib::SendWeakRef<MediaClientV2> = client.downgrade().into();
         tokio.spawn(Self::listen_media(
             media_rx,
             Arc::clone(&library),
@@ -145,14 +154,19 @@ impl MediaClientV2 {
         tokio.spawn(Self::listen_thumbnail(thumb_rx, client_weak.clone()));
         tokio.spawn(Self::listen_album(album_rx, client_weak.clone()));
         tokio.spawn(Self::listen_faces(faces_rx, client_weak));
+        client
     }
 
     fn deps(&self) -> (Arc<Library>, tokio::runtime::Handle) {
         let deps = self.imp().deps.borrow();
-        let deps = deps
-            .as_ref()
-            .expect("MediaClientV2::configure() not called");
+        let deps = deps.as_ref().expect("MediaClientV2::build() not called");
         (Arc::clone(&deps.library), deps.tokio.clone())
+    }
+
+    fn render_pipeline(&self) -> Arc<crate::renderer::pipeline::RenderPipeline> {
+        let deps = self.imp().deps.borrow();
+        let deps = deps.as_ref().expect("MediaClientV2::build() not called");
+        Arc::clone(&deps.render_pipeline)
     }
 
     // ── Factory ────────────────────────────────────────────────────────
@@ -337,13 +351,14 @@ impl MediaClientV2 {
         cb: impl FnOnce(Result<(), LibraryError>) + 'static,
     ) {
         let (library, tokio) = self.deps();
+        let pipeline = self.render_pipeline();
         let id = id.clone();
         let state = state.clone();
 
         glib::MainContext::default().spawn_local(async move {
             let result = crate::client::spawn_on(&tokio, async move {
                 if state.has_pixel_adjustments() {
-                    render_and_save_pixel_edit(&library, &id, &state).await
+                    render_and_save_pixel_edit(&library, &pipeline, &id, &state).await
                 } else {
                     library.editing().save_edit_state(&id, &state).await
                 }
@@ -1058,6 +1073,7 @@ fn remove_item_from_tracked(tracked: &TrackedMediaModel, store: &gio::ListStore,
 /// Runs the decode + edit pipeline on a Tokio blocking thread.
 async fn render_and_save_pixel_edit(
     library: &std::sync::Arc<crate::library::Library>,
+    pipeline: &std::sync::Arc<crate::renderer::pipeline::RenderPipeline>,
     id: &MediaId,
     state: &EditState,
 ) -> Result<(), LibraryError> {
@@ -1067,14 +1083,7 @@ async fn render_and_save_pixel_edit(
         .await?
         .ok_or_else(|| LibraryError::Runtime(format!("original file for {id} not found")))?;
 
-    // TODO(library-context refactor, Step 2): take the render pipeline
-    // as a constructor argument on the owning Client instead of
-    // reaching into the global Application singleton.
-    #[allow(deprecated)]
-    let pipeline = crate::application::MomentsApplication::default()
-        .render_pipeline()
-        .ok_or_else(|| LibraryError::Runtime("render pipeline not initialised".into()))?;
-
+    let pipeline = std::sync::Arc::clone(pipeline);
     let state_for_render = state.clone();
     let jpeg = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, LibraryError> {
         let options = crate::renderer::pipeline::RenderOptions {

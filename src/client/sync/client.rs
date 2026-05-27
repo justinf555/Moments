@@ -105,29 +105,31 @@ glib::wrapper! {
     pub struct SyncClient(ObjectSubclass<imp::SyncClient>);
 }
 
-impl Default for SyncClient {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl SyncClient {
+    /// Construct an unconfigured client.
+    ///
+    /// Intended only for unit tests that exercise pure property
+    /// setters without needing a sync event channel. Production code
+    /// calls [`SyncClient::build`].
+    #[cfg(test)]
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         glib::Object::builder().build()
     }
 
-    /// Start listening for sync events.
+    /// Construct a fully-wired sync client.
     ///
-    /// Must be called once after construction. Spawns a background task
-    /// on the Tokio runtime that receives `SyncEvent`s and updates
-    /// GObject properties on the GTK main thread.
-    pub fn configure(
-        &self,
+    /// Spawns a background task on the Tokio runtime that receives
+    /// `SyncEvent`s and updates GObject properties on the GTK main
+    /// thread.
+    pub fn build(
         events_rx: mpsc::UnboundedReceiver<SyncEvent>,
         tokio: tokio::runtime::Handle,
-    ) {
-        let client_weak: glib::SendWeakRef<SyncClient> = self.downgrade().into();
+    ) -> Self {
+        let client: Self = glib::Object::builder().build();
+        let client_weak: glib::SendWeakRef<SyncClient> = client.downgrade().into();
         tokio.spawn(Self::listen(events_rx, client_weak));
+        client
     }
 
     // ── Property accessors ───────────────────────────────────────────

@@ -41,11 +41,13 @@ use crate::renderer::pipeline::RenderPipeline;
 /// hold the context as `Arc<LibraryContext>` and the Tokio executor may
 /// transport that `Arc` between threads.
 ///
-/// Step 1 of the refactor exposes accessors for every owned field; the
-/// `library` and `tokio` accessors have no callers yet. They are
-/// `#[allow(dead_code)]`-tolerated until Step 2, when client
-/// construction begins pulling sub-services from the context.
-#[allow(dead_code)]
+/// Step 2 of the refactor switches client construction over to use
+/// these accessors — `load_library_async` calls `Client::build(...)`
+/// with sub-services pulled from the context. The
+/// `MomentsApplication::library_context()` accessor remains unused
+/// at the end of Step 2 (`load_library_async` works with the local
+/// `library_context: Arc<LibraryContext>` it constructs directly);
+/// Step 5 introduces phase functions that need the accessor.
 pub(in crate::application) struct LibraryContext {
     library: Arc<Library>,
     render_pipeline: Arc<RenderPipeline>,
@@ -53,7 +55,6 @@ pub(in crate::application) struct LibraryContext {
     purge_handle: OnceLock<tokio::task::JoinHandle<()>>,
 }
 
-#[allow(dead_code)]
 impl LibraryContext {
     /// Wrap already-constructed domain + infrastructure values in a
     /// `LibraryContext`.
@@ -104,9 +105,8 @@ impl LibraryContext {
 
     /// Borrow the recorded purge-task handle, if one has been set.
     ///
-    /// Currently unused by other modules — exposed for completeness and
-    /// for forthcoming shutdown-ordering work. The struct-level
-    /// `#[allow(dead_code)]` covers Step 1's unused accessors.
+    /// Called from `MomentsApplication::shutdown` to abort the task
+    /// before the runtime is dropped.
     pub(in crate::application) fn purge_handle(&self) -> Option<&tokio::task::JoinHandle<()>> {
         self.purge_handle.get()
     }

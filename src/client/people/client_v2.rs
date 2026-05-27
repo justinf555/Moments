@@ -59,41 +59,42 @@ glib::wrapper! {
     pub struct PeopleClientV2(ObjectSubclass<imp::PeopleClientV2>);
 }
 
-impl Default for PeopleClientV2 {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl PeopleClientV2 {
+    /// Construct an unconfigured client.
+    ///
+    /// Intended only for unit tests that exercise pure model-patching
+    /// helpers without needing a real `Library`. Production code calls
+    /// [`PeopleClientV2::build`].
+    #[cfg(test)]
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         glib::Object::builder().build()
     }
 
-    /// Set the dependencies required for people operations and start
-    /// listening for service events.
+    /// Construct a fully-wired people client.
     ///
-    /// Must be called once after construction, before any other method.
-    pub fn configure(
-        &self,
+    /// Stores dependencies and spawns the `FacesEvent` listener on the
+    /// supplied Tokio runtime so model reconciliation begins
+    /// immediately.
+    pub fn build(
         library: Arc<Library>,
         tokio: tokio::runtime::Handle,
         events_rx: mpsc::UnboundedReceiver<FacesEvent>,
-    ) {
-        *self.imp().deps.borrow_mut() = Some(PeopleDeps {
+    ) -> Self {
+        let client: Self = glib::Object::builder().build();
+        *client.imp().deps.borrow_mut() = Some(PeopleDeps {
             library: Arc::clone(&library),
             tokio: tokio.clone(),
         });
 
-        let client_weak: glib::SendWeakRef<PeopleClientV2> = self.downgrade().into();
+        let client_weak: glib::SendWeakRef<PeopleClientV2> = client.downgrade().into();
         tokio.spawn(Self::listen(events_rx, library, client_weak));
+        client
     }
 
     fn deps(&self) -> (Arc<Library>, tokio::runtime::Handle) {
         let deps = self.imp().deps.borrow();
-        let deps = deps
-            .as_ref()
-            .expect("PeopleClientV2::configure() not called");
+        let deps = deps.as_ref().expect("PeopleClientV2::build() not called");
         (deps.library.clone(), deps.tokio.clone())
     }
 

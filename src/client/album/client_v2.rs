@@ -83,41 +83,42 @@ glib::wrapper! {
     pub struct AlbumClientV2(ObjectSubclass<imp::AlbumClientV2>);
 }
 
-impl Default for AlbumClientV2 {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl AlbumClientV2 {
+    /// Construct an unconfigured client.
+    ///
+    /// Intended only for unit tests that exercise pure model-patching
+    /// helpers without needing a real `Library`. Production code calls
+    /// [`AlbumClientV2::build`].
+    #[cfg(test)]
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         glib::Object::builder().build()
     }
 
-    /// Set the dependencies required for album operations and start
-    /// listening for service events.
+    /// Construct a fully-wired album client.
     ///
-    /// Must be called once after construction, before any other method.
-    pub fn configure(
-        &self,
+    /// Stores dependencies and spawns the `AlbumEvent` listener on the
+    /// supplied Tokio runtime so model reconciliation begins
+    /// immediately.
+    pub fn build(
         library: Arc<Library>,
         tokio: tokio::runtime::Handle,
         events_rx: mpsc::UnboundedReceiver<AlbumEvent>,
-    ) {
-        *self.imp().deps.borrow_mut() = Some(AlbumDeps {
+    ) -> Self {
+        let client: Self = glib::Object::builder().build();
+        *client.imp().deps.borrow_mut() = Some(AlbumDeps {
             library: Arc::clone(&library),
             tokio: tokio.clone(),
         });
 
-        let client_weak: glib::SendWeakRef<AlbumClientV2> = self.downgrade().into();
+        let client_weak: glib::SendWeakRef<AlbumClientV2> = client.downgrade().into();
         tokio.spawn(Self::listen(events_rx, library, client_weak));
+        client
     }
 
     fn deps(&self) -> (Arc<Library>, tokio::runtime::Handle) {
         let deps = self.imp().deps.borrow();
-        let deps = deps
-            .as_ref()
-            .expect("AlbumClientV2::configure() not called");
+        let deps = deps.as_ref().expect("AlbumClientV2::build() not called");
         (deps.library.clone(), deps.tokio.clone())
     }
 

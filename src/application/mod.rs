@@ -791,14 +791,13 @@ impl MomentsApplication {
                         // Create the import client (GObject singleton).
                         let sync_thumbnails_dir = thumbnails_dir.clone();
                         {
-                            let import_client = crate::client::ImportClient::new();
-                            import_client.configure(
-                                Arc::clone(&library),
+                            let import_client = crate::client::ImportClient::build(
+                                Arc::clone(library_context.library()),
                                 originals_dir,
                                 thumbnails_dir,
-                                Arc::clone(&render_pipeline),
+                                Arc::clone(library_context.render_pipeline()),
                                 storage_mode,
-                                tokio.clone(),
+                                library_context.tokio().clone(),
                             );
                             app.set_import_client(import_client);
                         }
@@ -806,11 +805,10 @@ impl MomentsApplication {
                         // Create the album client (GObject singleton).
                         // Subscribe to AlbumEvent for reactive model updates.
                         {
-                            let albums_rx = library.albums().subscribe();
-                            let album_client_v2 = crate::client::AlbumClientV2::new();
-                            album_client_v2.configure(
-                                Arc::clone(&library),
-                                tokio.clone(),
+                            let albums_rx = library_context.library().albums().subscribe();
+                            let album_client_v2 = crate::client::AlbumClientV2::build(
+                                Arc::clone(library_context.library()),
+                                library_context.tokio().clone(),
                                 albums_rx,
                             );
                             *app.imp().album_client_v2.borrow_mut() = Some(album_client_v2);
@@ -819,9 +817,12 @@ impl MomentsApplication {
                         // Create the people client (GObject singleton).
                         // Subscribe to FacesEvent for reactive model updates.
                         {
-                            let faces_rx = library.faces().subscribe();
-                            let people_client = crate::client::PeopleClientV2::new();
-                            people_client.configure(Arc::clone(&library), tokio.clone(), faces_rx);
+                            let faces_rx = library_context.library().faces().subscribe();
+                            let people_client = crate::client::PeopleClientV2::build(
+                                Arc::clone(library_context.library()),
+                                library_context.tokio().clone(),
+                                faces_rx,
+                            );
                             *app.imp().people_client.borrow_mut() = Some(people_client);
                         }
 
@@ -829,8 +830,11 @@ impl MomentsApplication {
                         // Subscribes to MediaEvent via the service's fan-out
                         // channel for reactive model updates.
                         {
-                            let media_client_v2 = crate::client::MediaClientV2::new();
-                            media_client_v2.configure(Arc::clone(&library), tokio.clone());
+                            let media_client_v2 = crate::client::MediaClientV2::build(
+                                Arc::clone(library_context.library()),
+                                library_context.tokio().clone(),
+                                Arc::clone(library_context.render_pipeline()),
+                            );
                             *app.imp().media_client_v2.borrow_mut() = Some(media_client_v2);
                         }
 
@@ -913,8 +917,10 @@ impl MomentsApplication {
                             );
                             *app.imp().sync_handle.borrow_mut() = Some(handle);
 
-                            let sync_client = crate::client::SyncClient::new();
-                            sync_client.configure(sync_events_rx, tokio.clone());
+                            let sync_client = crate::client::SyncClient::build(
+                                sync_events_rx,
+                                library_context.tokio().clone(),
+                            );
                             sync_client.set_outbox_repository(
                                 crate::sync::outbox::OutboxRepository::new(db_for_sync),
                             );
