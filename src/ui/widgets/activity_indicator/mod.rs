@@ -110,10 +110,9 @@ mod imp {
                     sc.disconnect(id);
                 }
             }
-            if let Some(ic) = app.import_client() {
-                for id in self.import_handlers.borrow_mut().drain(..) {
-                    ic.disconnect(id);
-                }
+            let ic = app.import_client();
+            for id in self.import_handlers.borrow_mut().drain(..) {
+                ic.disconnect(id);
             }
             self.parent_unrealize();
         }
@@ -142,13 +141,17 @@ impl ActivityIndicator {
 
         // Bind any clients that already exist.
         if let Some(sc) = app.sync_client() {
-            self.bind_sync_client(&sc);
+            self.bind_sync_client(sc);
         }
-        if let Some(ic) = app.import_client() {
-            self.bind_import_client(&ic);
-        }
+        self.bind_import_client(app.import_client());
 
-        // Subscribe for late-arriving clients.
+        // Subscribe for late-arriving clients. `sync-client` is the
+        // only one that may still be unset at bind time (Local backend
+        // never installs a sync client; an Immich session installs it
+        // partway through `load_library_async` after the main window
+        // has already been built). `import-client` is set before any
+        // sidebar widget realizes, so its `notify` subscription is
+        // unnecessary — the bind above is always sufficient.
         let mut app_handlers = self.imp().app_handlers.borrow_mut();
 
         let weak = self.downgrade();
@@ -156,17 +159,7 @@ impl ActivityIndicator {
             app.connect_notify_local(Some("sync-client"), move |app, _| {
                 let Some(this) = weak.upgrade() else { return };
                 if let Some(sc) = app.sync_client() {
-                    this.bind_sync_client(&sc);
-                }
-            }),
-        );
-
-        let weak = self.downgrade();
-        app_handlers.push(
-            app.connect_notify_local(Some("import-client"), move |app, _| {
-                let Some(this) = weak.upgrade() else { return };
-                if let Some(ic) = app.import_client() {
-                    this.bind_import_client(&ic);
+                    this.bind_sync_client(sc);
                 }
             }),
         );
@@ -468,9 +461,7 @@ impl ActivityIndicator {
         let sync_active = app
             .sync_client()
             .is_some_and(|c| c.state() == SyncState::Syncing);
-        let import_active = app
-            .import_client()
-            .is_some_and(|c| c.state() == ImportState::Running);
+        let import_active = app.import_client().state() == ImportState::Running;
         sync_active || import_active
     }
 

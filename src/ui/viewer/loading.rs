@@ -20,7 +20,7 @@ impl PhotoViewer {
 
         let media_client = crate::application::MomentsApplication::default()
             .media_client_v2()
-            .expect("media client available");
+            .clone();
 
         // TODO(library-context refactor, Step 2): take the render
         // pipeline from the owning Client (or pass it in here)
@@ -146,7 +146,7 @@ impl PhotoViewer {
 
         let media_client = crate::application::MomentsApplication::default()
             .media_client_v2()
-            .expect("media client available");
+            .clone();
 
         // TODO(library-context refactor, Step 2): take the render
         // pipeline from the owning Client rather than reaching into
@@ -264,7 +264,7 @@ impl PhotoViewer {
     pub(super) fn load_metadata_async(&self, gen: u64, id: crate::library::media::MediaId) {
         let media_client = crate::application::MomentsApplication::default()
             .media_client_v2()
-            .expect("media client available");
+            .clone();
 
         let weak = self.downgrade();
         media_client.media_metadata(&id, move |metadata| {

@@ -17,9 +17,7 @@ pub(crate) fn open_album_drilldown(
     album_name: &str,
 ) {
     let filter = MediaFilter::Album { album_id };
-    let media_client = MomentsApplication::default()
-        .media_client_v2()
-        .expect("media client available");
+    let media_client = MomentsApplication::default().media_client_v2().clone();
     let store = media_client.create_model(filter.clone());
     let view = PhotoGridView::new();
     view.setup(settings.clone(), Rc::clone(texture_cache));

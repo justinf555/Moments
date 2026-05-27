@@ -161,9 +161,9 @@ fn wire_favourite(btn: &gtk::Button, state: &SelectionState, store: &gio::ListSt
         });
         let new_state = !all_fav;
 
-        if let Some(mc) = crate::application::MomentsApplication::default().media_client_v2() {
-            mc.set_favorite(ids, new_state);
-        }
+        crate::application::MomentsApplication::default()
+            .media_client_v2()
+            .set_favorite(ids, new_state);
         actions::update_fav_button(&btn_ref, new_state);
     });
 }
@@ -175,9 +175,9 @@ fn wire_trash(btn: &gtk::Button, state: &SelectionState) {
         if ids.is_empty() {
             return;
         }
-        if let Some(mc) = crate::application::MomentsApplication::default().media_client_v2() {
-            mc.trash(ids);
-        }
+        crate::application::MomentsApplication::default()
+            .media_client_v2()
+            .trash(ids);
     });
 }
 
@@ -188,9 +188,9 @@ fn wire_restore(btn: &gtk::Button, state: &SelectionState) {
         if ids.is_empty() {
             return;
         }
-        if let Some(mc) = crate::application::MomentsApplication::default().media_client_v2() {
-            mc.restore(ids);
-        }
+        crate::application::MomentsApplication::default()
+            .media_client_v2()
+            .restore(ids);
     });
 }
 
@@ -225,11 +225,9 @@ fn wire_delete_permanently(btn: &gtk::Button, state: &SelectionState) {
             gtk::gio::Cancellable::NONE,
             move |response| {
                 if response == "delete" {
-                    if let Some(mc) =
-                        crate::application::MomentsApplication::default().media_client_v2()
-                    {
-                        mc.delete(ids);
-                    }
+                    crate::application::MomentsApplication::default()
+                        .media_client_v2()
+                        .delete(ids);
                 }
             },
         );
@@ -244,8 +242,8 @@ fn wire_remove_from_album(btn: &gtk::Button, state: &SelectionState, album_id: &
         if ids.is_empty() {
             return;
         }
-        if let Some(ac) = crate::application::MomentsApplication::default().album_client_v2() {
-            ac.remove_from_album(aid.clone(), ids);
-        }
+        crate::application::MomentsApplication::default()
+            .album_client_v2()
+            .remove_from_album(aid.clone(), ids);
     });
 }

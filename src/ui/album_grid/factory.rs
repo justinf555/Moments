@@ -127,9 +127,7 @@ fn setup_context_menu(
     let album_name = item.name();
     let is_pinned = item.pinned();
 
-    let album_client = MomentsApplication::default()
-        .album_client_v2()
-        .expect("album client v2 available");
+    let album_client = MomentsApplication::default().album_client_v2().clone();
 
     let action_group = gio::SimpleActionGroup::new();
 

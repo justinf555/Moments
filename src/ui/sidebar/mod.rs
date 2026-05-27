@@ -174,10 +174,8 @@ mod imp {
                         .item(index)
                         .and_then(|o| o.downcast::<crate::client::AlbumItemObject>().ok())
                     {
-                        let album_client = crate::application::MomentsApplication::default()
+                        crate::application::MomentsApplication::default()
                             .album_client_v2()
-                            .expect("album client v2 available");
-                        album_client
                             .unpin_album(crate::library::album::AlbumId::from_raw(obj.id()));
                     }
                 });
@@ -194,10 +192,8 @@ mod imp {
         fn realize(&self) {
             self.parent_realize();
 
-            let Some(mc) = crate::application::MomentsApplication::default().media_client_v2()
-            else {
-                return;
-            };
+            let app = crate::application::MomentsApplication::default();
+            let mc = app.media_client_v2();
             let mc_obj: glib::Object = mc.clone().upcast();
 
             let weak1 = self.obj().downgrade();
@@ -339,7 +335,7 @@ impl MomentsSidebar {
 
         let album_client = crate::application::MomentsApplication::default()
             .album_client_v2()
-            .expect("album client v2 available");
+            .clone();
 
         let store = album_client.create_model();
         album_client.list_albums(&store);

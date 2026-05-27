@@ -16,9 +16,7 @@ pub mod dialog;
 /// Uses `AlbumClientV2` for the membership query and album commands.
 /// Album list comes from a shared model; thumbnails are handled by the client.
 pub fn show_album_picker_dialog(parent: &impl IsA<gtk::Widget>, ids: Vec<MediaId>) {
-    let album_client = MomentsApplication::default()
-        .album_client_v2()
-        .expect("album client v2 available");
+    let album_client = MomentsApplication::default().album_client_v2().clone();
 
     let parent_weak: glib::WeakRef<gtk::Widget> = parent.as_ref().downgrade();
 

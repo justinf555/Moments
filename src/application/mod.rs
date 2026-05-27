@@ -59,11 +59,17 @@ mod imp {
         /// slots and can revisit this storage shape.
         pub(in crate::application) library_context: RefCell<Option<Arc<LibraryContext>>>,
         pub library: RefCell<Option<Arc<Library>>>,
-        pub import_client: RefCell<Option<crate::client::ImportClient>>,
-        pub album_client_v2: RefCell<Option<crate::client::AlbumClientV2>>,
-        pub people_client: RefCell<Option<crate::client::PeopleClientV2>>,
-        pub media_client_v2: RefCell<Option<crate::client::MediaClientV2>>,
-        pub sync_client: RefCell<Option<crate::client::SyncClient>>,
+        // Client GObject singletons. Set once per `load_library_async`
+        // via `OnceCell::set` and read for the rest of the application
+        // lifetime. `sync_client` is left optional (no `.set()` call on
+        // the Local backend); the other clients are always populated
+        // before the main window is wired up, so accessors panic if
+        // read pre-init. See `docs/design-library-context.md` Step 3.
+        pub import_client: OnceCell<crate::client::ImportClient>,
+        pub album_client_v2: OnceCell<crate::client::AlbumClientV2>,
+        pub people_client: OnceCell<crate::client::PeopleClientV2>,
+        pub media_client_v2: OnceCell<crate::client::MediaClientV2>,
+        pub sync_client: OnceCell<crate::client::SyncClient>,
         pub render_pipeline: RefCell<Option<Arc<crate::renderer::pipeline::RenderPipeline>>>,
         pub is_immich: Cell<bool>,
         pub immich_server_url: RefCell<Option<String>>,
@@ -104,8 +110,8 @@ mod imp {
 
         fn property(&self, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
             match pspec.name() {
-                "sync-client" => self.sync_client.borrow().to_value(),
-                "import-client" => self.import_client.borrow().to_value(),
+                "sync-client" => self.sync_client.get().to_value(),
+                "import-client" => self.import_client.get().to_value(),
                 _ => unimplemented!(),
             }
         }
@@ -140,11 +146,13 @@ mod imp {
                 handle.shutdown();
             }
 
-            self.sync_client.borrow_mut().take();
-            self.import_client.borrow_mut().take();
-            self.album_client_v2.borrow_mut().take();
-            self.people_client.borrow_mut().take();
-            self.media_client_v2.borrow_mut().take();
+            // Client GObject singletons are stored in `OnceCell<T>` and
+            // cannot be cleared from `&self` — they release their
+            // `Arc<Library>` clones when the `MomentsApplication` itself
+            // drops. The canonical `Arc<Library>` is dropped here via
+            // the legacy `self.library` slot and the
+            // `self.library_context` clear below, which releases the
+            // `SqlitePool` before `main()` shuts down the Tokio runtime.
             self.sync_handle.borrow_mut().take();
             self.library.borrow_mut().take();
             // Drop the LibraryContext last among domain state — it
@@ -263,9 +271,12 @@ impl MomentsApplication {
     /// Access the import client singleton.
     ///
     /// Available from anywhere via `MomentsApplication::default().import_client()`.
-    /// Returns `None` if no library is open yet.
-    pub fn import_client(&self) -> Option<crate::client::ImportClient> {
-        self.imp().import_client.borrow().clone()
+    /// Panics if called before `load_library_async` has populated the client.
+    pub fn import_client(&self) -> &crate::client::ImportClient {
+        self.imp()
+            .import_client
+            .get()
+            .expect("import_client accessed before library was opened")
     }
 
     /// Access the shared render pipeline.
@@ -296,43 +307,58 @@ impl MomentsApplication {
     /// Access the album client singleton.
     ///
     /// Available from anywhere via `MomentsApplication::default().album_client_v2()`.
-    /// Returns `None` if no library is open yet.
-    pub fn album_client_v2(&self) -> Option<crate::client::AlbumClientV2> {
-        self.imp().album_client_v2.borrow().clone()
+    /// Panics if called before `load_library_async` has populated the client.
+    pub fn album_client_v2(&self) -> &crate::client::AlbumClientV2 {
+        self.imp()
+            .album_client_v2
+            .get()
+            .expect("album_client_v2 accessed before library was opened")
     }
 
     /// Access the people client singleton.
     ///
     /// Available from anywhere via `MomentsApplication::default().people_client()`.
-    /// Returns `None` if no library is open yet.
-    pub fn people_client(&self) -> Option<crate::client::PeopleClientV2> {
-        self.imp().people_client.borrow().clone()
+    /// Panics if called before `load_library_async` has populated the client.
+    pub fn people_client(&self) -> &crate::client::PeopleClientV2 {
+        self.imp()
+            .people_client
+            .get()
+            .expect("people_client accessed before library was opened")
     }
 
     /// Access the media client singleton.
     ///
     /// Available from anywhere via `MomentsApplication::default().media_client_v2()`.
-    /// Returns `None` if no library is open yet.
-    pub fn media_client_v2(&self) -> Option<crate::client::MediaClientV2> {
-        self.imp().media_client_v2.borrow().clone()
+    /// Panics if called before `load_library_async` has populated the client.
+    pub fn media_client_v2(&self) -> &crate::client::MediaClientV2 {
+        self.imp()
+            .media_client_v2
+            .get()
+            .expect("media_client_v2 accessed before library was opened")
     }
 
     /// Access the sync client singleton (Immich only).
     ///
     /// Returns `None` for local libraries or if no library is open yet.
-    pub fn sync_client(&self) -> Option<crate::client::SyncClient> {
-        self.imp().sync_client.borrow().clone()
+    pub fn sync_client(&self) -> Option<&crate::client::SyncClient> {
+        self.imp().sync_client.get()
     }
 
     /// Store the sync client and notify listeners.
     pub fn set_sync_client(&self, client: crate::client::SyncClient) {
-        *self.imp().sync_client.borrow_mut() = Some(client);
+        self.imp()
+            .sync_client
+            .set(client)
+            .expect("sync_client set at most once per application lifetime");
         self.notify("sync-client");
     }
 
     /// Store the import client and notify listeners.
     pub fn set_import_client(&self, client: crate::client::ImportClient) {
-        *self.imp().import_client.borrow_mut() = Some(client);
+        self.imp()
+            .import_client
+            .set(client)
+            .expect("import_client set at most once per application lifetime");
         self.notify("import-client");
     }
 
@@ -649,12 +675,9 @@ impl MomentsApplication {
     /// returns. Using `gio::File::enumerate_children` on the original object
     /// respects the portal grant.
     fn run_import(&self, folder: gio::File) {
-        let import_client = match self.imp().import_client.borrow().clone() {
-            Some(c) => c,
-            None => {
-                error!("import requested but no library is open");
-                return;
-            }
+        let Some(import_client) = self.imp().import_client.get() else {
+            error!("import requested but no library is open");
+            return;
         };
 
         let display_path = folder
@@ -811,7 +834,10 @@ impl MomentsApplication {
                                 library_context.tokio().clone(),
                                 albums_rx,
                             );
-                            *app.imp().album_client_v2.borrow_mut() = Some(album_client_v2);
+                            app.imp()
+                                .album_client_v2
+                                .set(album_client_v2)
+                                .expect("album_client_v2 set once per load_library_async");
                         }
 
                         // Create the people client (GObject singleton).
@@ -823,7 +849,10 @@ impl MomentsApplication {
                                 library_context.tokio().clone(),
                                 faces_rx,
                             );
-                            *app.imp().people_client.borrow_mut() = Some(people_client);
+                            app.imp()
+                                .people_client
+                                .set(people_client)
+                                .expect("people_client set once per load_library_async");
                         }
 
                         // Create the MediaClient (GObject singleton).
@@ -835,7 +864,10 @@ impl MomentsApplication {
                                 library_context.tokio().clone(),
                                 Arc::clone(library_context.render_pipeline()),
                             );
-                            *app.imp().media_client_v2.borrow_mut() = Some(media_client_v2);
+                            app.imp()
+                                .media_client_v2
+                                .set(media_client_v2)
+                                .expect("media_client_v2 set once per load_library_async");
                         }
 
                         // Wire the shell: builds sidebar, registers views,

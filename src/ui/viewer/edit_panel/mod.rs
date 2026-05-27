@@ -282,7 +282,7 @@ impl EditPanel {
                 let id_log = id.clone();
                 let mc = crate::application::MomentsApplication::default()
                     .media_client_v2()
-                    .expect("media client available");
+                    .clone();
                 let weak = self.downgrade();
                 mc.revert_edits(&id, move |result| {
                     if let Some(panel) = weak.upgrade() {
@@ -313,7 +313,7 @@ impl EditPanel {
         let id_log = id.clone();
         let mc = crate::application::MomentsApplication::default()
             .media_client_v2()
-            .expect("media client available");
+            .clone();
 
         let weak = self.downgrade();
         mc.save_edit_state(&id, &state, move |result| {
@@ -466,7 +466,7 @@ impl EditPanel {
                 let id_log = id.clone();
                 let mc = crate::application::MomentsApplication::default()
                     .media_client_v2()
-                    .expect("media client available");
+                    .clone();
                 mc.revert_edits(&id, move |result| match result {
                     Ok(()) => debug!(media_id = %id_log, "revert edits"),
                     Err(e) => {

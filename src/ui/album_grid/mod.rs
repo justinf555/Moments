@@ -125,7 +125,7 @@ impl AlbumGridView {
 
         let album_client = crate::application::MomentsApplication::default()
             .album_client_v2()
-            .expect("album client v2 available after library load");
+            .clone();
         assert!(
             imp.album_client.set(album_client.clone()).is_ok(),
             "setup called twice"
