@@ -163,7 +163,13 @@ impl MediaClientV2 {
         (Arc::clone(&deps.library), deps.tokio.clone())
     }
 
-    fn render_pipeline(&self) -> Arc<crate::renderer::pipeline::RenderPipeline> {
+    /// Borrow the shared render pipeline.
+    ///
+    /// Exposed so widgets that already use this client (the viewer's
+    /// full-res loader, the editing entry point) can decode through the
+    /// same pipeline instance the client uses internally, without
+    /// reaching for a global accessor on `MomentsApplication`.
+    pub fn render_pipeline(&self) -> Arc<crate::renderer::pipeline::RenderPipeline> {
         let deps = self.imp().deps.borrow();
         let deps = deps.as_ref().expect("MediaClientV2::build() not called");
         Arc::clone(&deps.render_pipeline)

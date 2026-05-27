@@ -47,18 +47,15 @@ mod imp {
     pub struct MomentsApplication {
         pub settings: OnceCell<gio::Settings>,
         pub tokio: OnceCell<tokio::runtime::Handle>,
-        /// Domain + infrastructure container. Populated alongside the
-        /// existing per-field `RefCell<Option<T>>` slots during
-        /// `load_library_async`. See `docs/design-library-context.md`.
+        /// Domain + infrastructure container.
         ///
         /// Stored in a `RefCell<Option<...>>` rather than the
         /// `OnceCell<Arc<...>>` sketched in the design doc so the
-        /// shutdown path can clear it (alongside the existing legacy
-        /// slots) and drop `Arc<Library>` before `main()` drops the
-        /// Tokio runtime. Step 4 of the migration removes the legacy
-        /// slots and can revisit this storage shape.
+        /// shutdown path can clear it and drop `Arc<Library>` (and the
+        /// `SqlitePool` it wraps) before `main()` drops the Tokio
+        /// runtime. The `OnceCell` shape can be revisited after Step 6
+        /// reshapes `sync_handle`. See `docs/design-library-context.md`.
         pub(in crate::application) library_context: RefCell<Option<Arc<LibraryContext>>>,
-        pub library: RefCell<Option<Arc<Library>>>,
         // Client GObject singletons. Set once per `load_library_async`
         // via `OnceCell::set` and read for the rest of the application
         // lifetime. `sync_client` is left optional (no `.set()` call on
@@ -70,7 +67,6 @@ mod imp {
         pub people_client: OnceCell<crate::client::PeopleClientV2>,
         pub media_client_v2: OnceCell<crate::client::MediaClientV2>,
         pub sync_client: OnceCell<crate::client::SyncClient>,
-        pub render_pipeline: RefCell<Option<Arc<crate::renderer::pipeline::RenderPipeline>>>,
         pub is_immich: Cell<bool>,
         pub immich_server_url: RefCell<Option<String>>,
         // Note: the periodic trash-purge `JoinHandle` lives on
@@ -145,21 +141,24 @@ mod imp {
             if let Some(ref handle) = *self.sync_handle.borrow() {
                 handle.shutdown();
             }
-
-            // Client GObject singletons are stored in `OnceCell<T>` and
-            // cannot be cleared from `&self` — they release their
-            // `Arc<Library>` clones when the `MomentsApplication` itself
-            // drops. The canonical `Arc<Library>` is dropped here via
-            // the legacy `self.library` slot and the
-            // `self.library_context` clear below, which releases the
-            // `SqlitePool` before `main()` shuts down the Tokio runtime.
             self.sync_handle.borrow_mut().take();
-            self.library.borrow_mut().take();
-            // Drop the LibraryContext last among domain state — it
-            // owns `Arc<Library>` and the purge-task `JoinHandle`.
-            // Aborting the purge task before dropping the runtime
-            // avoids the (unlikely but possible) race where it wakes
-            // and touches the DB after the pool has been freed.
+
+            // Drop the LibraryContext — it owns the canonical
+            // `Arc<Library>` (and the `Arc<RenderPipeline>`) and the
+            // purge-task `JoinHandle`. Aborting the purge task before
+            // dropping the runtime avoids the (unlikely but possible)
+            // race where it wakes and touches the DB after the pool
+            // has been freed.
+            //
+            // Client GObject singletons are stored in `OnceCell<T>` on
+            // `imp` and cannot be cleared from `&self`; they still
+            // hold their own `Arc<Library>` clones until the
+            // `MomentsApplication` itself drops. That is acceptable:
+            // the `SqlitePool` is reference-counted and only the
+            // *runtime* needs to outlive the *last* `Arc<Library>`
+            // drop, which happens during `MomentsApplication` drop —
+            // after `shutdown` returns but before `main()` drops the
+            // runtime.
             if let Some(ctx) = self.library_context.borrow_mut().take() {
                 if let Some(handle) = ctx.purge_handle() {
                     handle.abort();
@@ -259,10 +258,11 @@ impl MomentsApplication {
     /// go through a Client; other backend wiring code may call this.
     /// Returns `None` if no library has been opened yet.
     ///
-    /// Step 1 of the refactor adds this accessor with no in-tree
-    /// callers — `#[allow(dead_code)]` will be lifted in Step 2 once
-    /// client construction starts pulling sub-services from the
-    /// context. See `docs/design-library-context.md`.
+    /// Step 4 has no in-tree callers — `load_library_async` works with
+    /// the local `Arc<LibraryContext>` it just constructed. Step 5
+    /// introduces phase functions that re-acquire the context from the
+    /// application, at which point this accessor becomes live.
+    /// See `docs/design-library-context.md`.
     #[allow(dead_code)]
     pub(in crate::application) fn library_context(&self) -> Option<Arc<LibraryContext>> {
         self.imp().library_context.borrow().clone()
@@ -277,31 +277,6 @@ impl MomentsApplication {
             .import_client
             .get()
             .expect("import_client accessed before library was opened")
-    }
-
-    /// Access the shared render pipeline.
-    ///
-    /// Available from anywhere via `MomentsApplication::default().render_pipeline()`.
-    /// Returns `None` if no library is open yet.
-    ///
-    /// Deprecated in Step 1 of the LibraryContext refactor — the render
-    /// pipeline now lives on the `LibraryContext`. Callers in `ui/` will
-    /// migrate to acquiring it via their owning Client (which will hold
-    /// any sub-services it needs). See `docs/design-library-context.md`.
-    #[deprecated(
-        note = "Use library_context() (application-internal) or accept the pipeline via the owning Client; will be removed when migration completes"
-    )]
-    pub fn render_pipeline(&self) -> Option<Arc<crate::renderer::pipeline::RenderPipeline>> {
-        // Read from the context first when populated — keeps the context
-        // as the source of truth even while the legacy `RefCell` field
-        // is still being written. Falls back to the legacy field only
-        // for the brief window during startup where the legacy field
-        // could conceivably be populated before the context (it isn't
-        // today, but defending against future reordering is cheap).
-        if let Some(ctx) = self.imp().library_context.borrow().as_ref() {
-            return Some(Arc::clone(ctx.render_pipeline()));
-        }
-        self.imp().render_pipeline.borrow().clone()
     }
 
     /// Access the album client singleton.
@@ -779,19 +754,18 @@ impl MomentsApplication {
                         let library = Arc::new(library);
                         info!("library ready");
 
-                        // Construct the LibraryContext first, then mirror
-                        // the same `Arc` references into the legacy
-                        // `RefCell<Option<T>>` slots. Both shapes co-exist
-                        // during Step 1 of the LibraryContext refactor;
-                        // subsequent steps will remove the legacy fields
-                        // and migrate all readers to the context.
+                        // Construct the LibraryContext — the single
+                        // canonical home for the `Arc<Library>`, the
+                        // `Arc<RenderPipeline>`, and the periodic
+                        // trash-purge `JoinHandle`. All downstream
+                        // wiring pulls sub-services from this context.
                         // See `docs/design-library-context.md`.
                         let render_pipeline = std::sync::Arc::new(
                             crate::renderer::pipeline::RenderPipeline::new(),
                         );
                         let library_context = LibraryContext::build(
                             Arc::clone(&library),
-                            Arc::clone(&render_pipeline),
+                            render_pipeline,
                             tokio.clone(),
                         );
                         if app
@@ -804,12 +778,6 @@ impl MomentsApplication {
                         }
                         *app.imp().library_context.borrow_mut() =
                             Some(Arc::clone(&library_context));
-
-                        // Store library on the application (legacy slot).
-                        *app.imp().library.borrow_mut() = Some(Arc::clone(&library));
-                        // Mirror render pipeline into the legacy slot too.
-                        *app.imp().render_pipeline.borrow_mut() =
-                            Some(Arc::clone(&render_pipeline));
 
                         // Create the import client (GObject singleton).
                         let sync_thumbnails_dir = thumbnails_dir.clone();
@@ -884,9 +852,7 @@ impl MomentsApplication {
 
                         // Start periodic trash purge task.
                         {
-                            let lib = Arc::clone(
-                                app.imp().library.borrow().as_ref().expect("library set"),
-                            );
+                            let lib = Arc::clone(library_context.library());
                             let retention_days = app
                                 .imp()
                                 .settings
@@ -901,11 +867,7 @@ impl MomentsApplication {
                             // The context is the single canonical owner
                             // of the purge `JoinHandle` — `JoinHandle`
                             // is not `Clone`, so there can be only one
-                            // home. The legacy `RefCell<Option<...>>`
-                            // slot on `MomentsApplication::imp` has
-                            // been removed (no reader: `shutdown`
-                            // never aborted the purge task, the
-                            // runtime is dropped shortly after).
+                            // home.
                             if let Err(unused) =
                                 library_context.set_purge_handle(handle)
                             {
@@ -924,9 +886,7 @@ impl MomentsApplication {
 
                         // Start Immich sync engine and sync client.
                         if let Some(client) = immich_client {
-                            let lib = Arc::clone(
-                                app.imp().library.borrow().as_ref().expect("library set"),
-                            );
+                            let lib = Arc::clone(library_context.library());
                             let sync_interval = app
                                 .imp()
                                 .settings

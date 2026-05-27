@@ -22,19 +22,11 @@ impl PhotoViewer {
             .media_client_v2()
             .clone();
 
-        // TODO(library-context refactor, Step 2): take the render
-        // pipeline from the owning Client (or pass it in here)
-        // rather than reaching into the global Application singleton.
-        #[allow(deprecated)]
-        let pipeline = match crate::application::MomentsApplication::default().render_pipeline() {
-            Some(p) => p,
-            None => {
-                error!("render pipeline not available");
-                imp.spinner.set_spinning(false);
-                imp.spinner.set_visible(false);
-                return;
-            }
-        };
+        // Decode through the same `RenderPipeline` instance the media
+        // client uses internally — the client owns it as part of its
+        // build-time dependencies, so widgets that already use the
+        // client never need a separate path to the pipeline.
+        let pipeline = media_client.render_pipeline();
 
         let weak = self.downgrade();
         media_client.original_path(&id, move |path| {
@@ -148,17 +140,9 @@ impl PhotoViewer {
             .media_client_v2()
             .clone();
 
-        // TODO(library-context refactor, Step 2): take the render
-        // pipeline from the owning Client rather than reaching into
-        // the global Application singleton.
-        #[allow(deprecated)]
-        let pipeline = match crate::application::MomentsApplication::default().render_pipeline() {
-            Some(p) => p,
-            None => {
-                error!("render pipeline not available for edit session");
-                return;
-            }
-        };
+        // Decode through the same `RenderPipeline` instance the media
+        // client uses internally — see `start_full_res_load` above.
+        let pipeline = media_client.render_pipeline();
 
         // Fetch edit state and original path in parallel via two client calls.
         let weak = self.downgrade();
