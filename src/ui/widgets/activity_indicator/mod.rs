@@ -148,7 +148,7 @@ impl ActivityIndicator {
         // Subscribe for late-arriving clients. `sync-client` is the
         // only one that may still be unset at bind time (Local backend
         // never installs a sync client; an Immich session installs it
-        // partway through `load_library_async` after the main window
+        // partway through `startup::start` after the main window
         // has already been built). `import-client` is set before any
         // sidebar widget realizes, so its `notify` subscription is
         // unnecessary — the bind above is always sufficient.

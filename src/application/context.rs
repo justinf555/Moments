@@ -31,23 +31,15 @@ use crate::renderer::pipeline::RenderPipeline;
 ///   populated after the task is spawned at the tail of startup.
 ///
 /// Construction is performed by [`LibraryContext::build`] from inside
-/// `MomentsApplication::load_library_async` once the `Library` and
-/// `RenderPipeline` are ready. The context is then wrapped in an `Arc`
-/// and stored in the `library_context: OnceCell<Arc<LibraryContext>>`
-/// field on the application's `imp` struct.
+/// [`crate::application::startup::phase1_domain`] once the `Library`
+/// and `RenderPipeline` are ready. The context is then wrapped in an
+/// `Arc` and stored in the `library_context` field on the
+/// application's `imp` struct by phase 4.
 ///
 /// `purge_handle` uses `std::sync::OnceLock` (not `std::cell::OnceCell`)
 /// so the whole struct is `Send + Sync` — necessary because consumers
 /// hold the context as `Arc<LibraryContext>` and the Tokio executor may
 /// transport that `Arc` between threads.
-///
-/// Step 2 of the refactor switches client construction over to use
-/// these accessors — `load_library_async` calls `Client::build(...)`
-/// with sub-services pulled from the context. The
-/// `MomentsApplication::library_context()` accessor remains unused
-/// at the end of Step 2 (`load_library_async` works with the local
-/// `library_context: Arc<LibraryContext>` it constructs directly);
-/// Step 5 introduces phase functions that need the accessor.
 pub(in crate::application) struct LibraryContext {
     library: Arc<Library>,
     render_pipeline: Arc<RenderPipeline>,
@@ -59,11 +51,12 @@ impl LibraryContext {
     /// Wrap already-constructed domain + infrastructure values in a
     /// `LibraryContext`.
     ///
-    /// Step 1 intentionally keeps this synchronous and minimal — it does
-    /// not open the `Library` or build the `RenderPipeline` itself.
-    /// Those are still constructed by `load_library_async`. Later steps
-    /// will move that construction into an async `build` taking a
-    /// `Bundle` + config.
+    /// Step 1 intentionally keeps this synchronous and minimal — it
+    /// does not open the `Library` or build the `RenderPipeline`
+    /// itself. Those are still constructed by
+    /// [`crate::application::startup::phase1_domain`]. Later steps will
+    /// move that construction into an async `build` taking a `Bundle`
+    /// + config.
     pub(in crate::application) fn build(
         library: Arc<Library>,
         render_pipeline: Arc<RenderPipeline>,

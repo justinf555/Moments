@@ -21,6 +21,7 @@
 pub mod keyring;
 
 mod context;
+mod startup;
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::path::PathBuf;
@@ -36,7 +37,6 @@ use crate::application::context::LibraryContext;
 use crate::config::{APP_ID, PROFILE, VERSION};
 use crate::library::bundle::Bundle;
 use crate::library::config::LibraryConfig;
-use crate::library::Library;
 use crate::ui::MomentsSetupWindow;
 use crate::ui::MomentsWindow;
 
@@ -56,12 +56,13 @@ mod imp {
         /// runtime. The `OnceCell` shape can be revisited after Step 6
         /// reshapes `sync_handle`. See `docs/design-library-context.md`.
         pub(in crate::application) library_context: RefCell<Option<Arc<LibraryContext>>>,
-        // Client GObject singletons. Set once per `load_library_async`
-        // via `OnceCell::set` and read for the rest of the application
-        // lifetime. `sync_client` is left optional (no `.set()` call on
-        // the Local backend); the other clients are always populated
-        // before the main window is wired up, so accessors panic if
-        // read pre-init. See `docs/design-library-context.md` Step 3.
+        // Client GObject singletons. Set once during
+        // `startup::phase4_install` via `OnceCell::set` and read for
+        // the rest of the application lifetime. `sync_client` is left
+        // optional (no `.set()` call on the Local backend); the other
+        // clients are always populated before the main window is
+        // wired up, so accessors panic if read pre-init. See
+        // `docs/design-library-context.md` Step 3.
         pub import_client: OnceCell<crate::client::ImportClient>,
         pub album_client_v2: OnceCell<crate::client::AlbumClientV2>,
         pub people_client: OnceCell<crate::client::PeopleClientV2>,
@@ -258,11 +259,10 @@ impl MomentsApplication {
     /// go through a Client; other backend wiring code may call this.
     /// Returns `None` if no library has been opened yet.
     ///
-    /// Step 4 has no in-tree callers — `load_library_async` works with
-    /// the local `Arc<LibraryContext>` it just constructed. Step 5
-    /// introduces phase functions that re-acquire the context from the
-    /// application, at which point this accessor becomes live.
-    /// See `docs/design-library-context.md`.
+    /// Today `startup::phase4_install` works with the local
+    /// `Arc<LibraryContext>` it received from phase 1, so the only
+    /// in-tree caller of this accessor is `shutdown`. See
+    /// `docs/design-library-context.md`.
     #[allow(dead_code)]
     pub(in crate::application) fn library_context(&self) -> Option<Arc<LibraryContext>> {
         self.imp().library_context.borrow().clone()
@@ -271,7 +271,7 @@ impl MomentsApplication {
     /// Access the import client singleton.
     ///
     /// Available from anywhere via `MomentsApplication::default().import_client()`.
-    /// Panics if called before `load_library_async` has populated the client.
+    /// Panics if called before `startup::start` has populated the client.
     pub fn import_client(&self) -> &crate::client::ImportClient {
         self.imp()
             .import_client
@@ -282,7 +282,7 @@ impl MomentsApplication {
     /// Access the album client singleton.
     ///
     /// Available from anywhere via `MomentsApplication::default().album_client_v2()`.
-    /// Panics if called before `load_library_async` has populated the client.
+    /// Panics if called before `startup::start` has populated the client.
     pub fn album_client_v2(&self) -> &crate::client::AlbumClientV2 {
         self.imp()
             .album_client_v2
@@ -293,7 +293,7 @@ impl MomentsApplication {
     /// Access the people client singleton.
     ///
     /// Available from anywhere via `MomentsApplication::default().people_client()`.
-    /// Panics if called before `load_library_async` has populated the client.
+    /// Panics if called before `startup::start` has populated the client.
     pub fn people_client(&self) -> &crate::client::PeopleClientV2 {
         self.imp()
             .people_client
@@ -304,7 +304,7 @@ impl MomentsApplication {
     /// Access the media client singleton.
     ///
     /// Available from anywhere via `MomentsApplication::default().media_client_v2()`.
-    /// Panics if called before `load_library_async` has populated the client.
+    /// Panics if called before `startup::start` has populated the client.
     pub fn media_client_v2(&self) -> &crate::client::MediaClientV2 {
         self.imp()
             .media_client_v2
@@ -522,7 +522,7 @@ impl MomentsApplication {
         window.present();
         setup_win.close();
 
-        self.load_library_async(bundle, config, window);
+        startup::start(self, bundle, config, window);
     }
 
     /// Open an existing library from a saved path.
@@ -613,7 +613,7 @@ impl MomentsApplication {
         let window = MomentsWindow::new(self, settings);
         window.present();
 
-        self.load_library_async(bundle, config, window);
+        startup::start(self, bundle, config, window);
     }
 
     /// Open a folder picker and start importing the selected folder.
@@ -670,291 +670,6 @@ impl MomentsApplication {
         debug!(count = sources.len(), "resolved import sources via GIO");
 
         import_client.import(sources);
-    }
-
-    /// Spawn the async factory call on the glib main context.
-    ///
-    /// On success:
-    ///  1. Creates the event bus and opens the library backend.
-    ///  2. Wires the shell (sidebar, views, command dispatcher).
-    ///  3. Switches the window to its content page.
-    fn load_library_async(&self, bundle: Bundle, config: LibraryConfig, window: MomentsWindow) {
-        // Extract Immich connection info before the config is consumed.
-        let immich_info = match &config {
-            LibraryConfig::Immich {
-                server_url,
-                access_token,
-            } => Some((server_url.clone(), access_token.clone())),
-            _ => None,
-        };
-
-        // Store backend type for preferences dialog.
-        if let Some((ref server_url, _)) = immich_info {
-            self.imp().is_immich.set(true);
-            *self.imp().immich_server_url.borrow_mut() = Some(server_url.clone());
-        }
-
-        // Extract paths and mode for the ImportClient before the factory
-        // consumes the bundle and config.
-        let originals_dir = bundle.originals.clone();
-        let thumbnails_dir = bundle.thumbnails.clone();
-        let storage_mode = match &config {
-            LibraryConfig::Local { mode } => mode.clone(),
-            LibraryConfig::Immich { .. } => crate::library::config::LocalStorageMode::Managed,
-        };
-
-        glib::MainContext::default().spawn_local(glib::clone!(
-            #[weak(rename_to = app)]
-            self,
-            #[weak]
-            window,
-            async move {
-                let tokio = app.imp().tokio.get().expect("tokio handle set").clone();
-
-                let import_mode = storage_mode.clone();
-                let db = crate::library::db::Database::new();
-
-                // Build Immich client + recorder + resolver based on config.
-                let immich_client = immich_info.as_ref().and_then(|(url, token)| {
-                    crate::sync::providers::immich::client::ImmichClient::new(url, token).ok()
-                });
-
-                let recorder: std::sync::Arc<dyn crate::library::recorder::MutationRecorder> =
-                    if immich_client.is_some() {
-                        std::sync::Arc::new(crate::sync::outbox::QueueWriterOutbox::new(db.clone()))
-                    } else {
-                        std::sync::Arc::new(crate::sync::outbox::NoOpRecorder)
-                    };
-
-                let resolver: std::sync::Arc<dyn crate::library::resolver::OriginalResolver> =
-                    if let Some(ref client) = immich_client {
-                        std::sync::Arc::new(
-                            crate::sync::providers::immich::resolver::CachedResolver::new(
-                                std::sync::Arc::new(client.clone()),
-                                originals_dir.clone(),
-                            ),
-                        )
-                    } else {
-                        std::sync::Arc::new(crate::library::resolver::LocalResolver::new(
-                            originals_dir.clone(),
-                            import_mode.clone(),
-                        ))
-                    };
-
-                let db_for_sync = db.clone();
-                let open_result = tokio
-                    .spawn(async move {
-                        Library::open(bundle, storage_mode, db, recorder, resolver).await
-                    })
-                    .await
-                    .map_err(|e| crate::library::error::LibraryError::Runtime(e.to_string()));
-                let storage_mode = import_mode;
-                match open_result.and_then(|r| r) {
-                    Ok(library) => {
-                        let library = Arc::new(library);
-                        info!("library ready");
-
-                        // Construct the LibraryContext — the single
-                        // canonical home for the `Arc<Library>`, the
-                        // `Arc<RenderPipeline>`, and the periodic
-                        // trash-purge `JoinHandle`. All downstream
-                        // wiring pulls sub-services from this context.
-                        // See `docs/design-library-context.md`.
-                        let render_pipeline = std::sync::Arc::new(
-                            crate::renderer::pipeline::RenderPipeline::new(),
-                        );
-                        let library_context = LibraryContext::build(
-                            Arc::clone(&library),
-                            render_pipeline,
-                            tokio.clone(),
-                        );
-                        if app
-                            .imp()
-                            .library_context
-                            .borrow()
-                            .is_some()
-                        {
-                            warn!("library_context was already initialised — overwriting");
-                        }
-                        *app.imp().library_context.borrow_mut() =
-                            Some(Arc::clone(&library_context));
-
-                        // Create the import client (GObject singleton).
-                        let sync_thumbnails_dir = thumbnails_dir.clone();
-                        {
-                            let import_client = crate::client::ImportClient::build(
-                                Arc::clone(library_context.library()),
-                                originals_dir,
-                                thumbnails_dir,
-                                Arc::clone(library_context.render_pipeline()),
-                                storage_mode,
-                                library_context.tokio().clone(),
-                            );
-                            app.set_import_client(import_client);
-                        }
-
-                        // Create the album client (GObject singleton).
-                        // Subscribe to AlbumEvent for reactive model updates.
-                        {
-                            let albums_rx = library_context.library().albums().subscribe();
-                            let album_client_v2 = crate::client::AlbumClientV2::build(
-                                Arc::clone(library_context.library()),
-                                library_context.tokio().clone(),
-                                albums_rx,
-                            );
-                            app.imp()
-                                .album_client_v2
-                                .set(album_client_v2)
-                                .expect("album_client_v2 set once per load_library_async");
-                        }
-
-                        // Create the people client (GObject singleton).
-                        // Subscribe to FacesEvent for reactive model updates.
-                        {
-                            let faces_rx = library_context.library().faces().subscribe();
-                            let people_client = crate::client::PeopleClientV2::build(
-                                Arc::clone(library_context.library()),
-                                library_context.tokio().clone(),
-                                faces_rx,
-                            );
-                            app.imp()
-                                .people_client
-                                .set(people_client)
-                                .expect("people_client set once per load_library_async");
-                        }
-
-                        // Create the MediaClient (GObject singleton).
-                        // Subscribes to MediaEvent via the service's fan-out
-                        // channel for reactive model updates.
-                        {
-                            let media_client_v2 = crate::client::MediaClientV2::build(
-                                Arc::clone(library_context.library()),
-                                library_context.tokio().clone(),
-                                Arc::clone(library_context.render_pipeline()),
-                            );
-                            app.imp()
-                                .media_client_v2
-                                .set(media_client_v2)
-                                .expect("media_client_v2 set once per load_library_async");
-                        }
-
-                        // Wire the shell: builds sidebar, registers views,
-                        // and switches to the content page. Components react
-                        // to mutations via per-service event channels and
-                        // GObject signals on the client singletons.
-                        let settings = app
-                            .imp()
-                            .settings
-                            .get()
-                            .expect("settings initialised")
-                            .clone();
-                        window.setup(settings);
-
-                        // Start periodic trash purge task.
-                        {
-                            let lib = Arc::clone(library_context.library());
-                            let retention_days = app
-                                .imp()
-                                .settings
-                                .get()
-                                .expect("settings initialised")
-                                .uint("trash-retention-days");
-                            let handle = crate::tasks::purge_trash::start(
-                                lib,
-                                retention_days,
-                                tokio.clone(),
-                            );
-                            // The context is the single canonical owner
-                            // of the purge `JoinHandle` — `JoinHandle`
-                            // is not `Clone`, so there can be only one
-                            // home.
-                            if let Err(unused) =
-                                library_context.set_purge_handle(handle)
-                            {
-                                // Defensive: a duplicate populate could
-                                // only happen if `load_library_async`
-                                // ran twice on the same Application,
-                                // which the rest of the code prevents.
-                                // Abort the orphan task so it doesn't
-                                // outlive its (now-redundant) state.
-                                warn!(
-                                    "purge_handle already recorded on LibraryContext — aborting duplicate task"
-                                );
-                                unused.abort();
-                            }
-                        }
-
-                        // Start Immich sync engine and sync client.
-                        if let Some(client) = immich_client {
-                            let lib = Arc::clone(library_context.library());
-                            let sync_interval = app
-                                .imp()
-                                .settings
-                                .get()
-                                .expect("settings initialised")
-                                .uint("sync-interval-seconds")
-                                as u64;
-
-                            let (sync_events_tx, sync_events_rx) =
-                                tokio::sync::mpsc::unbounded_channel();
-
-                            let handle = crate::sync::SyncHandle::start(
-                                client,
-                                lib,
-                                db_for_sync.clone(),
-                                sync_events_tx,
-                                sync_thumbnails_dir,
-                                sync_interval,
-                                tokio.clone(),
-                            );
-                            *app.imp().sync_handle.borrow_mut() = Some(handle);
-
-                            let sync_client = crate::client::SyncClient::build(
-                                sync_events_rx,
-                                library_context.tokio().clone(),
-                            );
-                            sync_client.set_outbox_repository(
-                                crate::sync::outbox::OutboxRepository::new(db_for_sync),
-                            );
-                            app.set_sync_client(sync_client);
-                        }
-                    }
-                    Err(e) => {
-                        error!("failed to open library: {e}");
-
-                        let dialog = adw::AlertDialog::builder()
-                            .heading("Could not open library")
-                            .body(format!(
-                                "An error occurred while opening the library.\n\nDetails: {e}"
-                            ))
-                            .build();
-                        dialog.add_response("setup", "Set Up Library");
-                        dialog.add_response("quit", "Quit");
-                        dialog
-                            .set_response_appearance("quit", adw::ResponseAppearance::Destructive);
-                        dialog.set_default_response(Some("setup"));
-                        dialog.set_close_response("setup");
-
-                        let app_weak = app.downgrade();
-                        let win_weak = window.downgrade();
-                        dialog.connect_response(None, move |_, response| {
-                            if response == "setup" {
-                                if let Some(app) = app_weak.upgrade() {
-                                    if let Some(win) = win_weak.upgrade() {
-                                        win.close();
-                                    }
-                                    app.show_setup_window();
-                                }
-                            } else if let Some(app) = app_weak.upgrade() {
-                                app.quit();
-                            }
-                        });
-
-                        dialog.present(Some(&window));
-                    }
-                }
-            }
-        ));
     }
 }
 
