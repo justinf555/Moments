@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::sync::Arc;
 
 use gtk::glib;
 use gtk::prelude::*;
@@ -9,6 +10,7 @@ use tracing::debug;
 use crate::library::error::LibraryError;
 use crate::sync::event::SyncEvent;
 use crate::sync::outbox::{OutboxCounts, OutboxRepository};
+use crate::sync::SyncEngine;
 
 /// Sync lifecycle state exposed as a GObject property.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, glib::Enum)]
@@ -37,6 +39,12 @@ mod imp {
         // Set by Application during Immich bootstrap; absent for the
         // local backend.
         pub(super) outbox_repo: RefCell<Option<OutboxRepository>>,
+        // ── Sync engine reference ───────────────────────────────────
+        // `Arc<SyncEngine>` lets the client drive engine commands
+        // (interval changes, future "Sync Now" actions) without
+        // routing through the Application singleton. Set once in
+        // `build`; the test-only `new()` constructor leaves it absent.
+        pub(super) engine: RefCell<Option<Arc<SyncEngine>>>,
     }
 
     impl Default for SyncClient {
@@ -48,6 +56,7 @@ mod imp {
                 last_synced_at: Cell::new(0),
                 error_message: RefCell::new(String::new()),
                 outbox_repo: RefCell::new(None),
+                engine: RefCell::new(None),
             }
         }
     }
@@ -119,17 +128,31 @@ impl SyncClient {
 
     /// Construct a fully-wired sync client.
     ///
-    /// Spawns a background task on the Tokio runtime that receives
+    /// Holds an `Arc<SyncEngine>` reference for UI-driven control
+    /// (interval changes, future "Sync Now" actions) and spawns a
+    /// background task on the Tokio runtime that receives
     /// `SyncEvent`s and updates GObject properties on the GTK main
     /// thread.
     pub fn build(
+        engine: Arc<SyncEngine>,
         events_rx: mpsc::UnboundedReceiver<SyncEvent>,
         tokio: tokio::runtime::Handle,
     ) -> Self {
         let client: Self = glib::Object::builder().build();
+        *client.imp().engine.borrow_mut() = Some(engine);
         let client_weak: glib::SendWeakRef<SyncClient> = client.downgrade().into();
         tokio.spawn(Self::listen(events_rx, client_weak));
         client
+    }
+
+    /// Forward a new polling interval (seconds) to the running engine.
+    ///
+    /// No-op when the client was constructed via the test-only
+    /// `new()` helper without an engine.
+    pub fn set_interval(&self, secs: u64) {
+        if let Some(engine) = self.imp().engine.borrow().as_ref() {
+            engine.set_interval(secs);
+        }
     }
 
     // ── Property accessors ───────────────────────────────────────────

@@ -37,6 +37,7 @@ use crate::application::context::LibraryContext;
 use crate::config::{APP_ID, PROFILE, VERSION};
 use crate::library::bundle::Bundle;
 use crate::library::config::LibraryConfig;
+use crate::sync::SyncEngine;
 use crate::ui::MomentsSetupWindow;
 use crate::ui::MomentsWindow;
 
@@ -74,8 +75,13 @@ mod imp {
         // `LibraryContext::purge_handle`, not here. `JoinHandle` is not
         // `Clone`, so the context is the single canonical owner per
         // `docs/design-library-context.md`.
-        /// Sync engine handle (Immich only).
-        pub sync_handle: RefCell<Option<crate::sync::SyncHandle>>,
+        /// Long-running Immich sync service. Populated by
+        /// `startup::phase4_install` only for Immich-backed libraries;
+        /// never set on the Local backend. `SyncClient` holds its own
+        /// `Arc<SyncEngine>` so widgets that need engine control go
+        /// through the client rather than this field. See
+        /// `docs/design-library-context.md` Step 6.
+        pub(in crate::application) sync_engine: OnceCell<Arc<SyncEngine>>,
     }
 
     #[glib::object_subclass]
@@ -139,10 +145,17 @@ mod imp {
             // (and the SqlitePool it wraps) is freed before drop(tokio)
             // in main() tries to shut down the runtime.
             // Shut down sync engine explicitly before dropping clients.
-            if let Some(ref handle) = *self.sync_handle.borrow() {
-                handle.shutdown();
+            //
+            // `sync_engine` is a `OnceCell<Arc<SyncEngine>>`, so we
+            // cannot remove the Arc — but the engine's spawned tasks
+            // observe the shutdown flag at their next polling
+            // boundary and exit. The remaining `Arc<SyncEngine>`
+            // clones (this one and the one held by `SyncClient`) are
+            // dropped when the `MomentsApplication` itself is dropped,
+            // after `shutdown` returns.
+            if let Some(engine) = self.sync_engine.get() {
+                engine.shutdown();
             }
-            self.sync_handle.borrow_mut().take();
 
             // Drop the LibraryContext — it owns the canonical
             // `Arc<Library>` (and the `Arc<RenderPipeline>`) and the
@@ -337,10 +350,13 @@ impl MomentsApplication {
         self.notify("import-client");
     }
 
-    /// Update the sync polling interval. No-op if no sync engine is running.
+    /// Update the sync polling interval. No-op if no sync engine is
+    /// running. Routes through the `SyncClient`'s `Arc<SyncEngine>`
+    /// reference so the preferences dialog never sees the engine
+    /// directly.
     pub fn set_sync_interval(&self, secs: u64) {
-        if let Some(ref handle) = *self.imp().sync_handle.borrow() {
-            handle.set_interval(secs);
+        if let Some(client) = self.imp().sync_client.get() {
+            client.set_interval(secs);
         }
     }
 

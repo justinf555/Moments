@@ -20,10 +20,11 @@
 //
 // 1. [`phase1_domain`] — open the `Library`, build the
 //    `RenderPipeline`, wrap them in a [`LibraryContext`].
-// 2. [`phase2_background_services`] — conditionally start the Immich
-//    sync engine. Step 6 will reshape `SyncHandle` into a dedicated
-//    `SyncEngine` top-level service; today the existing `SyncHandle`
-//    shape is preserved unchanged.
+// 2. [`phase2_background_services`] — conditionally build the Immich
+//    [`SyncEngine`] as a dedicated top-level service. The returned
+//    `Arc<SyncEngine>` is shared between phase 4 (installed on the
+//    application) and phase 3 (handed to `SyncClient::build` so the
+//    client can drive engine commands directly).
 // 3. [`phase3_clients`] — build the UI-facing client GObjects with
 //    minimal concrete dependencies from the context.
 // 4. [`phase4_install`] — install the context, sync handle, and
@@ -56,7 +57,7 @@ use crate::library::error::LibraryError;
 use crate::library::Library;
 use crate::renderer::pipeline::RenderPipeline;
 use crate::sync::providers::immich::client::ImmichClient;
-use crate::sync::SyncHandle;
+use crate::sync::SyncEngine;
 use crate::ui::MomentsWindow;
 
 /// Connection details for an Immich backend pulled out of the
@@ -91,10 +92,15 @@ struct DomainArtifacts {
 }
 
 /// Output of [`phase2_background_services`]. When Immich is configured
-/// the sync engine is started and the receiving end of its event
+/// the [`SyncEngine`] is built and the receiving end of its event
 /// channel is handed to phase 3 so [`SyncClient`] can subscribe.
+///
+/// The `Arc<SyncEngine>` is shared between phase 3 (handed to
+/// `SyncClient::build` so the client can drive engine commands) and
+/// phase 4 (installed on `MomentsApplication` as the engine's
+/// canonical owned identity).
 struct BackgroundServices {
-    sync_handle: Option<SyncHandle>,
+    sync_engine: Option<Arc<SyncEngine>>,
     sync_events_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::sync::event::SyncEvent>>,
     db: Database,
 }
@@ -183,9 +189,14 @@ pub(in crate::application) fn start(
 
             let background = phase2_background_services(&app, &domain);
 
-            let clients = phase3_clients(&domain, background.sync_events_rx, background.db.clone());
+            let clients = phase3_clients(
+                &domain,
+                background.sync_engine.clone(),
+                background.sync_events_rx,
+                background.db.clone(),
+            );
 
-            phase4_install(&app, &window, domain, background.sync_handle, clients);
+            phase4_install(&app, &window, domain, background.sync_engine, clients);
         }
     ));
 }
@@ -263,11 +274,13 @@ async fn phase1_domain(
 
 /// Phase 2 — start long-running background services.
 ///
-/// Today the only long-running service in scope is the Immich
-/// [`SyncHandle`]. Step 6 of the refactor reshapes this into a
-/// dedicated `SyncEngine` top-level service with a paired
-/// [`SyncClient`]; until then the existing handle structure is kept
-/// unchanged and threaded through to phase 4.
+/// The only long-running service in scope today is the Immich
+/// [`SyncEngine`], built as `Arc<SyncEngine>` so phase 3
+/// ([`SyncClient::build`]) and phase 4 (installed on
+/// `MomentsApplication`) share ownership. The engine spawns its
+/// pull / push managers immediately on the Tokio runtime; the
+/// returned `Arc` is the canonical handle for shutdown and live
+/// interval updates.
 ///
 /// The periodic trash-purge task is *not* started here — it is
 /// recorded on the [`LibraryContext`] itself and started in phase 4
@@ -280,7 +293,7 @@ fn phase2_background_services(
 ) -> BackgroundServices {
     let Some(client) = domain.immich_client.clone() else {
         return BackgroundServices {
-            sync_handle: None,
+            sync_engine: None,
             sync_events_rx: None,
             db: domain.db.clone(),
         };
@@ -294,7 +307,7 @@ fn phase2_background_services(
         .uint("sync-interval-seconds") as u64;
 
     let (sync_events_tx, sync_events_rx) = tokio::sync::mpsc::unbounded_channel();
-    let handle = SyncHandle::start(
+    let engine = SyncEngine::build(
         client,
         Arc::clone(domain.ctx.library()),
         domain.db.clone(),
@@ -305,7 +318,7 @@ fn phase2_background_services(
     );
 
     BackgroundServices {
-        sync_handle: Some(handle),
+        sync_engine: Some(engine),
         sync_events_rx: Some(sync_events_rx),
         db: domain.db.clone(),
     }
@@ -316,10 +329,14 @@ fn phase2_background_services(
 /// Each client is given the exact concrete sub-services it needs —
 /// per [`docs/design-library-context.md`](../../docs/design-library-context.md),
 /// clients do not see the whole [`LibraryContext`]. The `sync_client`
-/// is only built when phase 2 produced a sync handle.
+/// is only built when phase 2 produced a [`SyncEngine`]; it holds an
+/// `Arc<SyncEngine>` clone so the preferences dialog can drive
+/// engine commands through the client surface instead of touching
+/// the engine directly.
 #[instrument(skip_all)]
 fn phase3_clients(
     domain: &DomainArtifacts,
+    sync_engine: Option<Arc<SyncEngine>>,
     sync_events_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::sync::event::SyncEvent>>,
     db: Database,
 ) -> BuiltClients {
@@ -348,8 +365,13 @@ fn phase3_clients(
         Arc::clone(ctx.render_pipeline()),
     );
 
-    let sync_client = sync_events_rx.map(|rx| {
-        let client = SyncClient::build(rx, ctx.tokio().clone());
+    // Build `SyncClient` only when phase 2 produced both an engine
+    // and the receiver end of the event channel — the two are
+    // populated together so a mismatch can only come from a future
+    // refactor bug. `expect` documents the invariant.
+    let sync_client = sync_engine.map(|engine| {
+        let rx = sync_events_rx.expect("sync_engine implies sync_events_rx");
+        let client = SyncClient::build(engine, rx, ctx.tokio().clone());
         client.set_outbox_repository(crate::sync::outbox::OutboxRepository::new(db));
         client
     });
@@ -376,7 +398,7 @@ fn phase4_install(
     app: &MomentsApplication,
     window: &MomentsWindow,
     domain: DomainArtifacts,
-    sync_handle: Option<SyncHandle>,
+    sync_engine: Option<Arc<SyncEngine>>,
     clients: BuiltClients,
 ) {
     let DomainArtifacts { ctx, .. } = domain;
@@ -400,8 +422,11 @@ fn phase4_install(
         .set(clients.media_client)
         .expect("media_client_v2 set once per startup");
 
-    if let Some(handle) = sync_handle {
-        *app.imp().sync_handle.borrow_mut() = Some(handle);
+    if let Some(engine) = sync_engine {
+        app.imp()
+            .sync_engine
+            .set(engine)
+            .expect("sync_engine set once per application lifetime");
     }
     if let Some(client) = clients.sync_client {
         app.set_sync_client(client);
