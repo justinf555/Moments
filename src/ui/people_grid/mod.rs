@@ -100,7 +100,7 @@ impl PeopleGridView {
 
         let people_client = crate::application::MomentsApplication::default()
             .people_client()
-            .expect("people client available after library load");
+            .clone();
         assert!(
             imp.people_client.set(people_client.clone()).is_ok(),
             "setup called twice"

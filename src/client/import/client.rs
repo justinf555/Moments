@@ -122,33 +122,35 @@ glib::wrapper! {
     pub struct ImportClient(ObjectSubclass<imp::ImportClient>);
 }
 
-impl Default for ImportClient {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl ImportClient {
+    /// Construct an unconfigured client.
+    ///
+    /// Intended only for unit tests that exercise pure property
+    /// setters without needing a real `Library`. Production code calls
+    /// [`ImportClient::build`].
+    #[cfg(test)]
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         glib::Object::builder().build()
     }
 
-    /// Set the dependencies required for building import pipelines
-    /// and start the event listener.
+    /// Construct a fully-wired import client.
     ///
-    /// Must be called once after construction, before the first `import()` call.
-    pub fn configure(
-        &self,
+    /// Stores dependencies and spawns the import-event listener on the
+    /// supplied Tokio runtime so progress updates are marshalled to the
+    /// GTK main thread for property updates.
+    pub fn build(
         library: Arc<Library>,
         originals_dir: PathBuf,
         thumbnails_dir: PathBuf,
         render_pipeline: Arc<RenderPipeline>,
         mode: LocalStorageMode,
         tokio: tokio::runtime::Handle,
-    ) {
+    ) -> Self {
+        let client: Self = glib::Object::builder().build();
         let (events_tx, events_rx) = mpsc::unbounded_channel();
 
-        *self.imp().deps.borrow_mut() = Some(ImportDeps {
+        *client.imp().deps.borrow_mut() = Some(ImportDeps {
             library,
             originals_dir,
             thumbnails_dir,
@@ -158,8 +160,9 @@ impl ImportClient {
             events_tx,
         });
 
-        let client_weak: glib::SendWeakRef<ImportClient> = self.downgrade().into();
+        let client_weak: glib::SendWeakRef<ImportClient> = client.downgrade().into();
         tokio.spawn(Self::listen(events_rx, client_weak));
+        client
     }
 
     // ── Property accessors ───────────────────────────────────────────
@@ -284,7 +287,7 @@ impl ImportClient {
             let deps = match deps.as_ref() {
                 Some(d) => d,
                 None => {
-                    error!("import called before configure()");
+                    error!("import called before build()");
                     return;
                 }
             };

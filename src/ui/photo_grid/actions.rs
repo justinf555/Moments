@@ -210,9 +210,9 @@ fn build_standard_menu(
             if ids_for_remove.is_empty() {
                 return;
             }
-            if let Some(ac) = crate::application::MomentsApplication::default().album_client_v2() {
-                ac.remove_from_album(aid.clone(), ids_for_remove.clone());
-            }
+            crate::application::MomentsApplication::default()
+                .album_client_v2()
+                .remove_from_album(aid.clone(), ids_for_remove.clone());
         });
     }
 
@@ -234,9 +234,9 @@ fn wire_restore_button(
         if ids.is_empty() {
             return;
         }
-        if let Some(mc) = crate::application::MomentsApplication::default().media_client_v2() {
-            mc.restore(ids.clone());
-        }
+        crate::application::MomentsApplication::default()
+            .media_client_v2()
+            .restore(ids.clone());
     });
 }
 
@@ -279,11 +279,9 @@ fn wire_permanent_delete_button(
             gtk::gio::Cancellable::NONE,
             move |response| {
                 if response == "delete" {
-                    if let Some(mc) =
-                        crate::application::MomentsApplication::default().media_client_v2()
-                    {
-                        mc.delete(ids_for_dialog);
-                    }
+                    crate::application::MomentsApplication::default()
+                        .media_client_v2()
+                        .delete(ids_for_dialog);
                 }
             },
         );
@@ -305,9 +303,9 @@ fn wire_favourite_button(
         if ids.is_empty() {
             return;
         }
-        if let Some(mc) = crate::application::MomentsApplication::default().media_client_v2() {
-            mc.set_favorite(ids.clone(), new_fav);
-        }
+        crate::application::MomentsApplication::default()
+            .media_client_v2()
+            .set_favorite(ids.clone(), new_fav);
     });
 }
 
@@ -321,9 +319,9 @@ fn wire_trash_button(btn: &gtk::Button, pop_ref: &glib::WeakRef<gtk::Popover>, i
         if ids.is_empty() {
             return;
         }
-        if let Some(mc) = crate::application::MomentsApplication::default().media_client_v2() {
-            mc.trash(ids.clone());
-        }
+        crate::application::MomentsApplication::default()
+            .media_client_v2()
+            .trash(ids.clone());
     });
 }
 

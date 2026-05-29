@@ -178,7 +178,7 @@ impl VideoViewer {
 
         let mc = crate::application::MomentsApplication::default()
             .media_client_v2()
-            .expect("media client available");
+            .clone();
 
         let weak = self.downgrade();
         mc.original_path(&id, move |path| {
@@ -215,7 +215,7 @@ impl VideoViewer {
     fn load_metadata_async(&self, gen: u64, id: MediaId) {
         let mc = crate::application::MomentsApplication::default()
             .media_client_v2()
-            .expect("media client available");
+            .clone();
 
         let weak = self.downgrade();
         mc.media_metadata(&id, move |metadata| {
@@ -333,11 +333,9 @@ impl VideoViewer {
                 obj.set_is_favorite(new_fav);
 
                 let id = obj.item().id.clone();
-                if let Some(mc) =
-                    crate::application::MomentsApplication::default().media_client_v2()
-                {
-                    mc.set_favorite(vec![id], new_fav);
-                }
+                crate::application::MomentsApplication::default()
+                    .media_client_v2()
+                    .set_favorite(vec![id], new_fav);
             }
         ));
 
@@ -473,9 +471,9 @@ fn wire_overflow_menu(
                 items.get(idx).map(|obj| obj.item().id.clone())
             };
             let Some(id) = id else { return };
-            if let Some(mc) = crate::application::MomentsApplication::default().media_client_v2() {
-                mc.trash(vec![id]);
-            }
+            crate::application::MomentsApplication::default()
+                .media_client_v2()
+                .trash(vec![id]);
             if let Some(nav_view) = viewer
                 .parent()
                 .and_then(|p| p.downcast::<adw::NavigationView>().ok())

@@ -179,10 +179,9 @@ fn wire_batch_delete(
             if response != "delete" {
                 return;
             }
-            let album_client = MomentsApplication::default()
+            MomentsApplication::default()
                 .album_client_v2()
-                .expect("album client v2 available");
-            album_client.delete_album(ids.clone());
+                .delete_album(ids.clone());
             exit.activate(None);
         });
 

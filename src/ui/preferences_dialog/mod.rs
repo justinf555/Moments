@@ -221,10 +221,9 @@ fn build_storage_group(
 }
 
 fn spawn_library_stats(rows: LibraryStatsRows) {
-    let Some(media_client) = crate::application::MomentsApplication::default().media_client_v2()
-    else {
-        return;
-    };
+    let media_client = crate::application::MomentsApplication::default()
+        .media_client_v2()
+        .clone();
     let photos_weak = rows.photos.downgrade();
     let videos_weak = rows.videos.downgrade();
     let albums_weak = rows.albums.downgrade();
@@ -372,10 +371,9 @@ fn build_server_stats_group() -> (adw::PreferencesGroup, ServerStatsRows) {
 }
 
 fn spawn_server_stats(rows: ServerStatsRows) {
-    let Some(media_client) = crate::application::MomentsApplication::default().media_client_v2()
-    else {
-        return;
-    };
+    let media_client = crate::application::MomentsApplication::default()
+        .media_client_v2()
+        .clone();
     let sp_weak = rows.photos.downgrade();
     let sv_weak = rows.videos.downgrade();
     let sd_weak = rows.disk.downgrade();
@@ -459,7 +457,10 @@ fn build_outbox_group() -> (adw::PreferencesGroup, OutboxRows) {
 }
 
 fn spawn_outbox_status(rows: OutboxRows) {
-    let Some(sync_client) = crate::application::MomentsApplication::default().sync_client() else {
+    let Some(sync_client) = crate::application::MomentsApplication::default()
+        .sync_client()
+        .cloned()
+    else {
         return;
     };
     if !sync_client.has_outbox() {

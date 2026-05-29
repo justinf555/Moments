@@ -205,41 +205,39 @@ impl MomentsWindow {
         // Navigate to Recent Imports when an import completes.
         // Deferred via idle_add_local_once because navigate() can materialise
         // a lazy view, which triggers realize → subscribe() on the new widget.
-        if let Some(import_client) = app.import_client() {
-            let weak = self.downgrade();
-            import_client.connect_notify_local(Some("state"), move |client, _| {
-                if client.state() == crate::client::ImportState::Complete {
-                    let weak = weak.clone();
-                    glib::idle_add_local_once(move || {
-                        if let Some(win) = weak.upgrade() {
-                            win.navigate("recent");
-                        }
-                    });
-                }
-            });
-        }
+        let import_client = app.import_client();
+        let weak = self.downgrade();
+        import_client.connect_notify_local(Some("state"), move |client, _| {
+            if client.state() == crate::client::ImportState::Complete {
+                let weak = weak.clone();
+                glib::idle_add_local_once(move || {
+                    if let Some(win) = weak.upgrade() {
+                        win.navigate("recent");
+                    }
+                });
+            }
+        });
 
         // Unregister deleted album routes from the coordinator before
         // AlbumGridView processes the event (avoids a navigation race).
-        if let Some(ac) = app.album_client_v2() {
-            let weak = self.downgrade();
-            let h = ac.connect_closure(
-                "album-deleted",
-                false,
-                glib::closure_local!(move |_: crate::client::AlbumClientV2, id: String| {
-                    if let Some(win) = weak.upgrade() {
-                        if let Some(coord) = win.imp().coordinator.get() {
-                            let route = format!("album:{}", id);
-                            coord.borrow_mut().unregister(&route);
-                        }
+        let ac = app.album_client_v2();
+        let weak = self.downgrade();
+        let h = ac.connect_closure(
+            "album-deleted",
+            false,
+            glib::closure_local!(move |_: crate::client::AlbumClientV2, id: String| {
+                if let Some(win) = weak.upgrade() {
+                    if let Some(coord) = win.imp().coordinator.get() {
+                        let route = format!("album:{}", id);
+                        coord.borrow_mut().unregister(&route);
                     }
-                }),
-            );
-            self.imp()
-                ._signal_handlers
-                .borrow_mut()
-                .push((ac.upcast(), h));
-        }
+                }
+            }),
+        );
+        self.imp()
+            ._signal_handlers
+            .borrow_mut()
+            .push((ac.clone().upcast(), h));
     }
 
     fn setup_sidebar(&self) -> MomentsSidebar {
@@ -260,14 +258,13 @@ impl MomentsWindow {
 
         {
             let sb = sidebar.clone();
-            let media_client = crate::application::MomentsApplication::default()
+            crate::application::MomentsApplication::default()
                 .media_client_v2()
-                .expect("media client available");
-            media_client.library_stats(move |result| {
-                if let Ok(stats) = result {
-                    sb.set_trash_count(stats.trashed_count as u32);
-                }
-            });
+                .library_stats(move |result| {
+                    if let Ok(stats) = result {
+                        sb.set_trash_count(stats.trashed_count as u32);
+                    }
+                });
         }
 
         sidebar.setup_pinned_albums();
@@ -285,7 +282,7 @@ impl MomentsWindow {
 
         let media_client = crate::application::MomentsApplication::default()
             .media_client_v2()
-            .expect("media client available");
+            .clone();
 
         let content_stack = gtk::Stack::new();
         content_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
@@ -321,7 +318,7 @@ impl MomentsWindow {
             coordinator.register_lazy("favorites", move || {
                 let mc = crate::application::MomentsApplication::default()
                     .media_client_v2()
-                    .expect("media client available");
+                    .clone();
                 let store = mc.create_model(MediaFilter::Favorites);
                 let view = PhotoGridView::new();
                 view.setup(s, tc);
@@ -339,7 +336,7 @@ impl MomentsWindow {
                 let filter = MediaFilter::RecentImports { since };
                 let mc = crate::application::MomentsApplication::default()
                     .media_client_v2()
-                    .expect("media client available");
+                    .clone();
                 let store = mc.create_model(filter.clone());
                 let view = PhotoGridView::new();
                 view.setup(s, tc);
@@ -354,7 +351,7 @@ impl MomentsWindow {
             coordinator.register_lazy("trash", move || {
                 let mc = crate::application::MomentsApplication::default()
                     .media_client_v2()
-                    .expect("media client available");
+                    .clone();
                 let store = mc.create_model(MediaFilter::Trashed);
                 let view = PhotoGridView::new();
                 view.setup(s, tc);
@@ -430,7 +427,7 @@ impl MomentsWindow {
                     let filter = MediaFilter::Album { album_id };
                     let mc = crate::application::MomentsApplication::default()
                         .media_client_v2()
-                        .expect("media client available");
+                        .clone();
                     let store = mc.create_model(filter.clone());
                     let view = PhotoGridView::new();
                     view.setup(s.clone(), Rc::clone(&tc));

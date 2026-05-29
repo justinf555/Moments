@@ -20,22 +20,25 @@
 
 pub mod keyring;
 
+mod actions;
+mod context;
+mod import;
+mod library_loader;
+mod lifecycle;
+mod startup;
+
 use std::cell::{Cell, OnceCell, RefCell};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
-use gettextrs::gettext;
 use gtk::{gio, glib};
-use tracing::{debug, error, info, instrument, warn};
+use tracing::info;
 
-use crate::config::{APP_ID, PROFILE, VERSION};
-use crate::library::bundle::Bundle;
-use crate::library::config::LibraryConfig;
-use crate::library::Library;
-use crate::ui::MomentsSetupWindow;
-use crate::ui::MomentsWindow;
+use crate::application::context::LibraryContext;
+use crate::config::APP_ID;
+use crate::sync::SyncEngine;
 
 mod imp {
     use super::*;
@@ -44,19 +47,40 @@ mod imp {
     pub struct MomentsApplication {
         pub settings: OnceCell<gio::Settings>,
         pub tokio: OnceCell<tokio::runtime::Handle>,
-        pub library: RefCell<Option<Arc<Library>>>,
-        pub import_client: RefCell<Option<crate::client::ImportClient>>,
-        pub album_client_v2: RefCell<Option<crate::client::AlbumClientV2>>,
-        pub people_client: RefCell<Option<crate::client::PeopleClientV2>>,
-        pub media_client_v2: RefCell<Option<crate::client::MediaClientV2>>,
-        pub sync_client: RefCell<Option<crate::client::SyncClient>>,
-        pub render_pipeline: RefCell<Option<Arc<crate::renderer::pipeline::RenderPipeline>>>,
+        /// Domain + infrastructure container.
+        ///
+        /// Stored in a `RefCell<Option<...>>` rather than the
+        /// `OnceCell<Arc<...>>` sketched in the design doc so the
+        /// shutdown path can clear it and drop `Arc<Library>` (and the
+        /// `SqlitePool` it wraps) before `main()` drops the Tokio
+        /// runtime. The `OnceCell` shape can be revisited after Step 6
+        /// reshapes `sync_handle`. See `docs/design-library-context.md`.
+        pub(in crate::application) library_context: RefCell<Option<Arc<LibraryContext>>>,
+        // Client GObject singletons. Set once during
+        // `startup::phase4_install` via `OnceCell::set` and read for
+        // the rest of the application lifetime. `sync_client` is left
+        // optional (no `.set()` call on the Local backend); the other
+        // clients are always populated before the main window is
+        // wired up, so accessors panic if read pre-init. See
+        // `docs/design-library-context.md` Step 3.
+        pub import_client: OnceCell<crate::client::ImportClient>,
+        pub album_client_v2: OnceCell<crate::client::AlbumClientV2>,
+        pub people_client: OnceCell<crate::client::PeopleClientV2>,
+        pub media_client_v2: OnceCell<crate::client::MediaClientV2>,
+        pub sync_client: OnceCell<crate::client::SyncClient>,
         pub is_immich: Cell<bool>,
         pub immich_server_url: RefCell<Option<String>>,
-        /// Background task handle for periodic trash purge.
-        pub purge_handle: RefCell<Option<tokio::task::JoinHandle<()>>>,
-        /// Sync engine handle (Immich only).
-        pub sync_handle: RefCell<Option<crate::sync::SyncHandle>>,
+        // Note: the periodic trash-purge `JoinHandle` lives on
+        // `LibraryContext::purge_handle`, not here. `JoinHandle` is not
+        // `Clone`, so the context is the single canonical owner per
+        // `docs/design-library-context.md`.
+        /// Long-running Immich sync service. Populated by
+        /// `startup::phase4_install` only for Immich-backed libraries;
+        /// never set on the Local backend. `SyncClient` holds its own
+        /// `Arc<SyncEngine>` so widgets that need engine control go
+        /// through the client rather than this field. See
+        /// `docs/design-library-context.md` Step 6.
+        pub(in crate::application) sync_engine: OnceCell<Arc<SyncEngine>>,
     }
 
     #[glib::object_subclass]
@@ -88,8 +112,8 @@ mod imp {
 
         fn property(&self, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
             match pspec.name() {
-                "sync-client" => self.sync_client.borrow().to_value(),
-                "import-client" => self.import_client.borrow().to_value(),
+                "sync-client" => self.sync_client.get().to_value(),
+                "import-client" => self.import_client.get().to_value(),
                 _ => unimplemented!(),
             }
         }
@@ -120,17 +144,39 @@ mod imp {
             // (and the SqlitePool it wraps) is freed before drop(tokio)
             // in main() tries to shut down the runtime.
             // Shut down sync engine explicitly before dropping clients.
-            if let Some(ref handle) = *self.sync_handle.borrow() {
-                handle.shutdown();
+            //
+            // `sync_engine` is a `OnceCell<Arc<SyncEngine>>`, so we
+            // cannot remove the Arc — but the engine's spawned tasks
+            // observe the shutdown flag at their next polling
+            // boundary and exit. The remaining `Arc<SyncEngine>`
+            // clones (this one and the one held by `SyncClient`) are
+            // dropped when the `MomentsApplication` itself is dropped,
+            // after `shutdown` returns.
+            if let Some(engine) = self.sync_engine.get() {
+                engine.shutdown();
             }
 
-            self.sync_client.borrow_mut().take();
-            self.import_client.borrow_mut().take();
-            self.album_client_v2.borrow_mut().take();
-            self.people_client.borrow_mut().take();
-            self.media_client_v2.borrow_mut().take();
-            self.sync_handle.borrow_mut().take();
-            self.library.borrow_mut().take();
+            // Drop the LibraryContext — it owns the canonical
+            // `Arc<Library>` (and the `Arc<RenderPipeline>`) and the
+            // purge-task `JoinHandle`. Aborting the purge task before
+            // dropping the runtime avoids the (unlikely but possible)
+            // race where it wakes and touches the DB after the pool
+            // has been freed.
+            //
+            // Client GObject singletons are stored in `OnceCell<T>` on
+            // `imp` and cannot be cleared from `&self`; they still
+            // hold their own `Arc<Library>` clones until the
+            // `MomentsApplication` itself drops. That is acceptable:
+            // the `SqlitePool` is reference-counted and only the
+            // *runtime* needs to outlive the *last* `Arc<Library>`
+            // drop, which happens during `MomentsApplication` drop —
+            // after `shutdown` returns but before `main()` drops the
+            // runtime.
+            if let Some(ctx) = self.library_context.borrow_mut().take() {
+                if let Some(handle) = ctx.purge_handle() {
+                    handle.abort();
+                }
+            }
 
             self.parent_shutdown();
         }
@@ -209,6 +255,12 @@ impl MomentsApplication {
     /// Access the shared Tokio runtime handle.
     ///
     /// Available from anywhere via `MomentsApplication::default().tokio_handle()`.
+    ///
+    /// Note: the `tokio` handle is set on the application at construction
+    /// — long before `LibraryContext` exists — so this accessor reads
+    /// the original `OnceCell<tokio::runtime::Handle>` field. The context
+    /// only sees the same handle once it has been built; it is not the
+    /// canonical source for this value in Step 1.
     pub fn tokio_handle(&self) -> tokio::runtime::Handle {
         self.imp().tokio.get().expect("tokio handle set").clone()
     }
@@ -216,66 +268,79 @@ impl MomentsApplication {
     /// Access the import client singleton.
     ///
     /// Available from anywhere via `MomentsApplication::default().import_client()`.
-    /// Returns `None` if no library is open yet.
-    pub fn import_client(&self) -> Option<crate::client::ImportClient> {
-        self.imp().import_client.borrow().clone()
-    }
-
-    /// Access the shared render pipeline.
-    ///
-    /// Available from anywhere via `MomentsApplication::default().render_pipeline()`.
-    /// Returns `None` if no library is open yet.
-    pub fn render_pipeline(&self) -> Option<Arc<crate::renderer::pipeline::RenderPipeline>> {
-        self.imp().render_pipeline.borrow().clone()
+    /// Panics if called before `startup::start` has populated the client.
+    pub fn import_client(&self) -> &crate::client::ImportClient {
+        self.imp()
+            .import_client
+            .get()
+            .expect("import_client accessed before library was opened")
     }
 
     /// Access the album client singleton.
     ///
     /// Available from anywhere via `MomentsApplication::default().album_client_v2()`.
-    /// Returns `None` if no library is open yet.
-    pub fn album_client_v2(&self) -> Option<crate::client::AlbumClientV2> {
-        self.imp().album_client_v2.borrow().clone()
+    /// Panics if called before `startup::start` has populated the client.
+    pub fn album_client_v2(&self) -> &crate::client::AlbumClientV2 {
+        self.imp()
+            .album_client_v2
+            .get()
+            .expect("album_client_v2 accessed before library was opened")
     }
 
     /// Access the people client singleton.
     ///
     /// Available from anywhere via `MomentsApplication::default().people_client()`.
-    /// Returns `None` if no library is open yet.
-    pub fn people_client(&self) -> Option<crate::client::PeopleClientV2> {
-        self.imp().people_client.borrow().clone()
+    /// Panics if called before `startup::start` has populated the client.
+    pub fn people_client(&self) -> &crate::client::PeopleClientV2 {
+        self.imp()
+            .people_client
+            .get()
+            .expect("people_client accessed before library was opened")
     }
 
     /// Access the media client singleton.
     ///
     /// Available from anywhere via `MomentsApplication::default().media_client_v2()`.
-    /// Returns `None` if no library is open yet.
-    pub fn media_client_v2(&self) -> Option<crate::client::MediaClientV2> {
-        self.imp().media_client_v2.borrow().clone()
+    /// Panics if called before `startup::start` has populated the client.
+    pub fn media_client_v2(&self) -> &crate::client::MediaClientV2 {
+        self.imp()
+            .media_client_v2
+            .get()
+            .expect("media_client_v2 accessed before library was opened")
     }
 
     /// Access the sync client singleton (Immich only).
     ///
     /// Returns `None` for local libraries or if no library is open yet.
-    pub fn sync_client(&self) -> Option<crate::client::SyncClient> {
-        self.imp().sync_client.borrow().clone()
+    pub fn sync_client(&self) -> Option<&crate::client::SyncClient> {
+        self.imp().sync_client.get()
     }
 
     /// Store the sync client and notify listeners.
     pub fn set_sync_client(&self, client: crate::client::SyncClient) {
-        *self.imp().sync_client.borrow_mut() = Some(client);
+        self.imp()
+            .sync_client
+            .set(client)
+            .expect("sync_client set at most once per application lifetime");
         self.notify("sync-client");
     }
 
     /// Store the import client and notify listeners.
     pub fn set_import_client(&self, client: crate::client::ImportClient) {
-        *self.imp().import_client.borrow_mut() = Some(client);
+        self.imp()
+            .import_client
+            .set(client)
+            .expect("import_client set at most once per application lifetime");
         self.notify("import-client");
     }
 
-    /// Update the sync polling interval. No-op if no sync engine is running.
+    /// Update the sync polling interval. No-op if no sync engine is
+    /// running. Routes through the `SyncClient`'s `Arc<SyncEngine>`
+    /// reference so the preferences dialog never sees the engine
+    /// directly.
     pub fn set_sync_interval(&self, secs: u64) {
-        if let Some(ref handle) = *self.imp().sync_handle.borrow() {
-            handle.set_interval(secs);
+        if let Some(client) = self.imp().sync_client.get() {
+            client.set_interval(secs);
         }
     }
 
@@ -285,614 +350,5 @@ impl MomentsApplication {
         gio::Application::default()
             .and_downcast::<Self>()
             .expect("application is MomentsApplication")
-    }
-
-    fn setup_gactions(&self) {
-        let quit_action = gio::ActionEntry::builder("quit")
-            .activate(move |app: &Self, _, _| app.quit())
-            .build();
-        let about_action = gio::ActionEntry::builder("about")
-            .activate(move |app: &Self, _, _| app.show_about())
-            .build();
-        let import_action = gio::ActionEntry::builder("import")
-            .activate(move |app: &Self, _, _| app.show_import_dialog())
-            .build();
-        let preferences_action = gio::ActionEntry::builder("preferences")
-            .activate(move |app: &Self, _, _| app.show_preferences())
-            .build();
-        let shortcuts_action = gio::ActionEntry::builder("shortcuts")
-            .activate(move |app: &Self, _, _| app.show_shortcuts())
-            .build();
-        self.add_action_entries([
-            quit_action,
-            about_action,
-            import_action,
-            preferences_action,
-            shortcuts_action,
-        ]);
-    }
-
-    fn show_shortcuts(&self) {
-        let Some(window) = self.active_window() else {
-            return;
-        };
-        let builder =
-            gtk::Builder::from_resource("/io/github/justinf555/Moments/shortcuts-dialog.ui");
-        let dialog = builder
-            .object::<adw::ShortcutsDialog>("shortcuts_dialog")
-            .expect("shortcuts_dialog in resource");
-        dialog.present(Some(&window));
-    }
-
-    fn show_about(&self) {
-        let Some(window) = self.active_window() else {
-            return;
-        };
-        let app_name = if PROFILE == "development" {
-            "Moments (Development)"
-        } else {
-            "Moments"
-        };
-        let about = adw::AboutDialog::builder()
-            .application_name(app_name)
-            .application_icon(APP_ID)
-            .developer_name("Unknown")
-            .version(VERSION)
-            .developers(vec!["Unknown"])
-            .translator_credits(gettext("translator-credits"))
-            .copyright("© 2026 Unknown")
-            .build();
-
-        about.present(Some(&window));
-    }
-
-    fn show_preferences(&self) {
-        let window = match self.active_window() {
-            Some(w) => w,
-            None => return,
-        };
-        let settings = self
-            .imp()
-            .settings
-            .get()
-            .expect("settings initialised")
-            .clone();
-        let is_immich = self.imp().is_immich.get();
-        let immich_url = self.imp().immich_server_url.borrow().clone();
-
-        crate::ui::preferences_dialog::show_preferences(&window, &settings, is_immich, immich_url);
-    }
-
-    /// Show the first-run setup window.
-    fn show_setup_window(&self) -> MomentsSetupWindow {
-        let setup = MomentsSetupWindow::new(self);
-        setup.connect_setup_complete(glib::clone!(
-            #[weak(rename_to = app)]
-            self,
-            move |win, path| {
-                app.on_setup_complete(win, path);
-            }
-        ));
-        setup.present();
-        setup
-    }
-
-    /// Called when the user completes the setup wizard.
-    ///
-    /// Creates the bundle, persists the path to GSettings, presents the main
-    /// window, closes the setup window, then loads the library asynchronously.
-    /// The main window is created before the setup window closes so there is
-    /// never a windowless state.
-    #[instrument(skip(self, setup_win), fields(path = %path))]
-    fn on_setup_complete(&self, setup_win: &MomentsSetupWindow, path: String) {
-        let bundle_path = PathBuf::from(&path);
-
-        // All setup pages (Local and Immich) create the bundle before emitting
-        // setup-complete. We just open it here.
-        let (bundle, config) = match Bundle::open(&bundle_path) {
-            Ok(result) => result,
-            Err(e) => {
-                error!("failed to open bundle: {e}");
-                show_library_error_dialog(
-                    setup_win,
-                    "Could not open library",
-                    &format!(
-                        "The library at {} could not be opened.\n\nDetails: {e}",
-                        bundle_path.display()
-                    ),
-                );
-                return;
-            }
-        };
-
-        // For Immich configs, inject the session token from the keyring.
-        // The setup wizard stores the token before emitting setup-complete,
-        // so a failure here means the keyring became unavailable between
-        // store and lookup — surface it rather than booting the user into a
-        // library that can never authenticate.
-        let config = match config {
-            LibraryConfig::Immich { server_url, .. } => {
-                match keyring::resolve_immich_token(&server_url) {
-                    Ok(access_token) => LibraryConfig::Immich {
-                        server_url,
-                        access_token,
-                    },
-                    Err(err) => {
-                        let (heading, body) = match err {
-                            keyring::TokenError::Missing => (
-                                gettext("Sign in required"),
-                                gettext(
-                                    "The session token saved during setup could not be read back. Please try signing in again.",
-                                ),
-                            ),
-                            keyring::TokenError::KeyringFailed(e) => {
-                                error!(
-                                    "keyring lookup failed immediately after setup: {e}"
-                                );
-                                (
-                                    gettext("Could not access the system keyring"),
-                                    format!(
-                                        "{}\n\nDetails: {e}",
-                                        gettext("Moments stored your session in the keyring but could not read it back. Please check your keyring service and try again.")
-                                    ),
-                                )
-                            }
-                        };
-                        show_library_error_dialog(setup_win, &heading, &body);
-                        return;
-                    }
-                }
-            }
-            other => other,
-        };
-
-        let settings = self.imp().settings.get().expect("settings initialised");
-        if let Err(e) = settings.set_string("library-path", &path) {
-            error!("failed to save library path to GSettings: {e}");
-        }
-
-        // Present the main window first, then close setup — ensures there is
-        // always at least one window alive during the transition.
-        let window = MomentsWindow::new(self, settings);
-        window.present();
-        setup_win.close();
-
-        self.load_library_async(bundle, config, window);
-    }
-
-    /// Open an existing library from a saved path.
-    ///
-    /// Creates and presents the main window immediately (loading page) so
-    /// there is no windowless gap while the async factory runs.
-    ///
-    /// If the bundle cannot be opened (e.g. the directory was deleted while
-    /// the GSettings path entry still exists) the stale path is cleared and
-    /// the setup window is shown so the user can reconfigure.
-    fn open_library(&self, path: PathBuf) {
-        let (bundle, config) = match Bundle::open(&path) {
-            Ok(result) => result,
-            Err(e) => {
-                error!("failed to open library bundle: {e}");
-                let settings = self.imp().settings.get().expect("settings initialised");
-                if let Err(e) = settings.set_string("library-path", "") {
-                    error!("failed to clear stale library path: {e}");
-                }
-                // Show setup window with an error dialog explaining what happened.
-                let setup_win = self.show_setup_window();
-                show_library_error_dialog(
-                    &setup_win,
-                    "Could not open library",
-                    &format!(
-                        "The library at {} could not be opened. Please set up a new library.\n\nDetails: {e}",
-                        path.display()
-                    ),
-                );
-                return;
-            }
-        };
-
-        // For Immich configs, inject the session token from the keyring.
-        // If the token cannot be resolved, refuse to load the library — passing
-        // an empty string downstream produces opaque 401 toasts and keeps the
-        // outbox spinning. Bounce the user back to the setup window with an
-        // explanation instead.
-        let config = match config {
-            LibraryConfig::Immich { server_url, .. } => {
-                match keyring::resolve_immich_token(&server_url) {
-                    Ok(access_token) => LibraryConfig::Immich {
-                        server_url,
-                        access_token,
-                    },
-                    Err(err) => {
-                        // Only `Missing` warrants clearing `library-path`: the
-                        // user has no credential for this server and must
-                        // re-run setup. `KeyringFailed` is typically transient
-                        // (D-Bus race during session start, locked collection
-                        // prompt timeout) — leave the saved path intact so a
-                        // simple relaunch recovers once the keyring is healthy.
-                        let setup_win = self.show_setup_window();
-                        let (heading, body) = match err {
-                            keyring::TokenError::Missing => {
-                                let settings =
-                                    self.imp().settings.get().expect("settings initialised");
-                                if let Err(e) = settings.set_string("library-path", "") {
-                                    error!("failed to clear stale library path: {e}");
-                                }
-                                (
-                                    gettext("Sign in required"),
-                                    gettext(
-                                        "Your saved Immich session was not found in the system keyring. Please sign in again to continue.",
-                                    ),
-                                )
-                            }
-                            keyring::TokenError::KeyringFailed(e) => {
-                                error!("keyring lookup failed during open_library: {e}");
-                                (
-                                    gettext("Could not access the system keyring"),
-                                    format!(
-                                        "{}\n\nDetails: {e}",
-                                        gettext("Moments could not read your saved Immich session. Try restarting the app once your keyring service is available, or sign in again to continue.")
-                                    ),
-                                )
-                            }
-                        };
-                        show_library_error_dialog(&setup_win, &heading, &body);
-                        return;
-                    }
-                }
-            }
-            other => other,
-        };
-
-        let settings = self.imp().settings.get().expect("settings initialised");
-        let window = MomentsWindow::new(self, settings);
-        window.present();
-
-        self.load_library_async(bundle, config, window);
-    }
-
-    /// Open a folder picker and start importing the selected folder.
-    fn show_import_dialog(&self) {
-        let window = match self.active_window() {
-            Some(w) => w,
-            None => return,
-        };
-
-        let file_dialog = gtk::FileDialog::builder()
-            .title("Select Folder to Import")
-            .modal(true)
-            .build();
-
-        file_dialog.select_folder(
-            Some(&window),
-            gio::Cancellable::NONE,
-            glib::clone!(
-                #[weak(rename_to = app)]
-                self,
-                move |result| if let Ok(folder) = result {
-                    app.run_import(folder);
-                }
-            ),
-        );
-    }
-
-    /// Create the import progress dialog and kick off the import pipeline.
-    ///
-    /// Accepts the `gio::File` directly from the file dialog rather than
-    /// extracting a path. This is critical for Flatpak: the document portal
-    /// grants access to the `gio::File` object, but the underlying path
-    /// (`/run/user/…/doc/…`) becomes inaccessible once the dialog callback
-    /// returns. Using `gio::File::enumerate_children` on the original object
-    /// respects the portal grant.
-    fn run_import(&self, folder: gio::File) {
-        let import_client = match self.imp().import_client.borrow().clone() {
-            Some(c) => c,
-            None => {
-                error!("import requested but no library is open");
-                return;
-            }
-        };
-
-        let display_path = folder
-            .path()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| folder.uri().to_string());
-        info!(path = %display_path, "starting import");
-
-        // Resolve folder contents via GIO to handle Flatpak portal paths.
-        let sources = resolve_folder_via_gio(&folder);
-        if sources.is_empty() {
-            warn!(path = %display_path, "no files found in folder");
-            return;
-        }
-        debug!(count = sources.len(), "resolved import sources via GIO");
-
-        import_client.import(sources);
-    }
-
-    /// Spawn the async factory call on the glib main context.
-    ///
-    /// On success:
-    ///  1. Creates the event bus and opens the library backend.
-    ///  2. Wires the shell (sidebar, views, command dispatcher).
-    ///  3. Switches the window to its content page.
-    fn load_library_async(&self, bundle: Bundle, config: LibraryConfig, window: MomentsWindow) {
-        // Extract Immich connection info before the config is consumed.
-        let immich_info = match &config {
-            LibraryConfig::Immich {
-                server_url,
-                access_token,
-            } => Some((server_url.clone(), access_token.clone())),
-            _ => None,
-        };
-
-        // Store backend type for preferences dialog.
-        if let Some((ref server_url, _)) = immich_info {
-            self.imp().is_immich.set(true);
-            *self.imp().immich_server_url.borrow_mut() = Some(server_url.clone());
-        }
-
-        // Extract paths and mode for the ImportClient before the factory
-        // consumes the bundle and config.
-        let originals_dir = bundle.originals.clone();
-        let thumbnails_dir = bundle.thumbnails.clone();
-        let storage_mode = match &config {
-            LibraryConfig::Local { mode } => mode.clone(),
-            LibraryConfig::Immich { .. } => crate::library::config::LocalStorageMode::Managed,
-        };
-
-        glib::MainContext::default().spawn_local(glib::clone!(
-            #[weak(rename_to = app)]
-            self,
-            #[weak]
-            window,
-            async move {
-                let tokio = app.imp().tokio.get().expect("tokio handle set").clone();
-
-                let import_mode = storage_mode.clone();
-                let db = crate::library::db::Database::new();
-
-                // Build Immich client + recorder + resolver based on config.
-                let immich_client = immich_info.as_ref().and_then(|(url, token)| {
-                    crate::sync::providers::immich::client::ImmichClient::new(url, token).ok()
-                });
-
-                let recorder: std::sync::Arc<dyn crate::library::recorder::MutationRecorder> =
-                    if immich_client.is_some() {
-                        std::sync::Arc::new(crate::sync::outbox::QueueWriterOutbox::new(db.clone()))
-                    } else {
-                        std::sync::Arc::new(crate::sync::outbox::NoOpRecorder)
-                    };
-
-                let resolver: std::sync::Arc<dyn crate::library::resolver::OriginalResolver> =
-                    if let Some(ref client) = immich_client {
-                        std::sync::Arc::new(
-                            crate::sync::providers::immich::resolver::CachedResolver::new(
-                                std::sync::Arc::new(client.clone()),
-                                originals_dir.clone(),
-                            ),
-                        )
-                    } else {
-                        std::sync::Arc::new(crate::library::resolver::LocalResolver::new(
-                            originals_dir.clone(),
-                            import_mode.clone(),
-                        ))
-                    };
-
-                let db_for_sync = db.clone();
-                let open_result = tokio
-                    .spawn(async move {
-                        Library::open(bundle, storage_mode, db, recorder, resolver).await
-                    })
-                    .await
-                    .map_err(|e| crate::library::error::LibraryError::Runtime(e.to_string()));
-                let storage_mode = import_mode;
-                match open_result.and_then(|r| r) {
-                    Ok(library) => {
-                        let library = Arc::new(library);
-                        info!("library ready");
-
-                        // Store library on the application.
-                        *app.imp().library.borrow_mut() = Some(Arc::clone(&library));
-
-                        // Create the import client (GObject singleton).
-                        let sync_thumbnails_dir = thumbnails_dir.clone();
-                        {
-                            let render_pipeline = std::sync::Arc::new(
-                                crate::renderer::pipeline::RenderPipeline::new(),
-                            );
-                            *app.imp().render_pipeline.borrow_mut() =
-                                Some(Arc::clone(&render_pipeline));
-
-                            let import_client = crate::client::ImportClient::new();
-                            import_client.configure(
-                                Arc::clone(&library),
-                                originals_dir,
-                                thumbnails_dir,
-                                Arc::clone(&render_pipeline),
-                                storage_mode,
-                                tokio.clone(),
-                            );
-                            app.set_import_client(import_client);
-                        }
-
-                        // Create the album client (GObject singleton).
-                        // Subscribe to AlbumEvent for reactive model updates.
-                        {
-                            let albums_rx = library.albums().subscribe();
-                            let album_client_v2 = crate::client::AlbumClientV2::new();
-                            album_client_v2.configure(
-                                Arc::clone(&library),
-                                tokio.clone(),
-                                albums_rx,
-                            );
-                            *app.imp().album_client_v2.borrow_mut() = Some(album_client_v2);
-                        }
-
-                        // Create the people client (GObject singleton).
-                        // Subscribe to FacesEvent for reactive model updates.
-                        {
-                            let faces_rx = library.faces().subscribe();
-                            let people_client = crate::client::PeopleClientV2::new();
-                            people_client.configure(Arc::clone(&library), tokio.clone(), faces_rx);
-                            *app.imp().people_client.borrow_mut() = Some(people_client);
-                        }
-
-                        // Create the MediaClient (GObject singleton).
-                        // Subscribes to MediaEvent via the service's fan-out
-                        // channel for reactive model updates.
-                        {
-                            let media_client_v2 = crate::client::MediaClientV2::new();
-                            media_client_v2.configure(Arc::clone(&library), tokio.clone());
-                            *app.imp().media_client_v2.borrow_mut() = Some(media_client_v2);
-                        }
-
-                        // Wire the shell: builds sidebar, registers views,
-                        // and switches to the content page. Components react
-                        // to mutations via per-service event channels and
-                        // GObject signals on the client singletons.
-                        let settings = app
-                            .imp()
-                            .settings
-                            .get()
-                            .expect("settings initialised")
-                            .clone();
-                        window.setup(settings);
-
-                        // Start periodic trash purge task.
-                        {
-                            let lib = Arc::clone(
-                                app.imp().library.borrow().as_ref().expect("library set"),
-                            );
-                            let retention_days = app
-                                .imp()
-                                .settings
-                                .get()
-                                .expect("settings initialised")
-                                .uint("trash-retention-days");
-                            let handle = crate::tasks::purge_trash::start(
-                                lib,
-                                retention_days,
-                                tokio.clone(),
-                            );
-                            *app.imp().purge_handle.borrow_mut() = Some(handle);
-                        }
-
-                        // Start Immich sync engine and sync client.
-                        if let Some(client) = immich_client {
-                            let lib = Arc::clone(
-                                app.imp().library.borrow().as_ref().expect("library set"),
-                            );
-                            let sync_interval = app
-                                .imp()
-                                .settings
-                                .get()
-                                .expect("settings initialised")
-                                .uint("sync-interval-seconds")
-                                as u64;
-
-                            let (sync_events_tx, sync_events_rx) =
-                                tokio::sync::mpsc::unbounded_channel();
-
-                            let handle = crate::sync::SyncHandle::start(
-                                client,
-                                lib,
-                                db_for_sync.clone(),
-                                sync_events_tx,
-                                sync_thumbnails_dir,
-                                sync_interval,
-                                tokio.clone(),
-                            );
-                            *app.imp().sync_handle.borrow_mut() = Some(handle);
-
-                            let sync_client = crate::client::SyncClient::new();
-                            sync_client.configure(sync_events_rx, tokio.clone());
-                            sync_client.set_outbox_repository(
-                                crate::sync::outbox::OutboxRepository::new(db_for_sync),
-                            );
-                            app.set_sync_client(sync_client);
-                        }
-                    }
-                    Err(e) => {
-                        error!("failed to open library: {e}");
-
-                        let dialog = adw::AlertDialog::builder()
-                            .heading("Could not open library")
-                            .body(format!(
-                                "An error occurred while opening the library.\n\nDetails: {e}"
-                            ))
-                            .build();
-                        dialog.add_response("setup", "Set Up Library");
-                        dialog.add_response("quit", "Quit");
-                        dialog
-                            .set_response_appearance("quit", adw::ResponseAppearance::Destructive);
-                        dialog.set_default_response(Some("setup"));
-                        dialog.set_close_response("setup");
-
-                        let app_weak = app.downgrade();
-                        let win_weak = window.downgrade();
-                        dialog.connect_response(None, move |_, response| {
-                            if response == "setup" {
-                                if let Some(app) = app_weak.upgrade() {
-                                    if let Some(win) = win_weak.upgrade() {
-                                        win.close();
-                                    }
-                                    app.show_setup_window();
-                                }
-                            } else if let Some(app) = app_weak.upgrade() {
-                                app.quit();
-                            }
-                        });
-
-                        dialog.present(Some(&window));
-                    }
-                }
-            }
-        ));
-    }
-}
-
-/// Show a blocking error dialog for library open/create failures.
-fn show_library_error_dialog(parent: &impl IsA<gtk::Widget>, heading: &str, body: &str) {
-    let dialog = adw::AlertDialog::builder()
-        .heading(heading)
-        .body(body)
-        .build();
-    dialog.add_response("ok", "OK");
-    dialog.set_default_response(Some("ok"));
-    dialog.present(Some(parent));
-}
-
-/// Recursively enumerate a folder's contents using GIO.
-///
-/// Accepts the `gio::File` directly from the file dialog so that
-/// Flatpak document portal grants are preserved. Creating a new
-/// `gio::File::for_path` from the extracted path would lose the grant.
-fn resolve_folder_via_gio(folder: &gio::File) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    gio_walk(folder, &mut files);
-    files
-}
-
-fn gio_walk(dir: &gio::File, out: &mut Vec<PathBuf>) {
-    let enumerator = match dir.enumerate_children(
-        "standard::name,standard::type",
-        gio::FileQueryInfoFlags::NONE,
-        gio::Cancellable::NONE,
-    ) {
-        Ok(e) => e,
-        Err(e) => {
-            warn!(path = ?dir.path(), error = %e, "could not enumerate directory via GIO");
-            return;
-        }
-    };
-
-    while let Some(info) = enumerator.next_file(gio::Cancellable::NONE).ok().flatten() {
-        let child = enumerator.child(&info);
-        if info.file_type() == gio::FileType::Directory {
-            gio_walk(&child, out);
-        } else if let Some(path) = child.path() {
-            out.push(path);
-        }
     }
 }

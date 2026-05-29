@@ -450,7 +450,8 @@ mod view_imp {
                 let app = crate::application::MomentsApplication::default();
                 let mut handlers: Vec<(glib::Object, glib::SignalHandlerId)> = Vec::new();
 
-                if let Some(mc) = app.media_client_v2() {
+                {
+                    let mc = app.media_client_v2();
                     let mc_obj: glib::Object = mc.clone().upcast();
                     for sig in ["items-trashed", "items-restored", "items-deleted"] {
                         let exit = exit.clone();
@@ -476,7 +477,8 @@ mod view_imp {
                     handlers.push((mc_obj, h));
                 }
 
-                if let Some(ac) = app.album_client_v2() {
+                {
+                    let ac = app.album_client_v2();
                     let ac_obj: glib::Object = ac.clone().upcast();
                     let exit = exit.clone();
                     let h = ac.connect_closure(
@@ -725,7 +727,7 @@ impl PhotoGridView {
 
         let media_client = crate::application::MomentsApplication::default()
             .media_client_v2()
-            .expect("media client available");
+            .clone();
         let texture_cache = Rc::clone(imp.texture_cache());
 
         imp.photo_grid.set_store(
@@ -831,11 +833,9 @@ impl PhotoGridView {
                 dialog.set_close_response("cancel");
                 dialog.connect_response(None, move |_, response| {
                     if response == "restore" {
-                        if let Some(mc) =
-                            crate::application::MomentsApplication::default().media_client_v2()
-                        {
-                            mc.restore_all_trash();
-                        }
+                        crate::application::MomentsApplication::default()
+                            .media_client_v2()
+                            .restore_all_trash();
                     }
                 });
                 dialog.present(win.as_ref());
@@ -856,11 +856,9 @@ impl PhotoGridView {
                 dialog.set_close_response("cancel");
                 dialog.connect_response(None, move |_, response| {
                     if response == "delete" {
-                        if let Some(mc) =
-                            crate::application::MomentsApplication::default().media_client_v2()
-                        {
-                            mc.empty_trash();
-                        }
+                        crate::application::MomentsApplication::default()
+                            .media_client_v2()
+                            .empty_trash();
                     }
                 });
                 dialog.present(win.as_ref());

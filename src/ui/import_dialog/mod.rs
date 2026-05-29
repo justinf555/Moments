@@ -59,52 +59,46 @@ mod imp {
         fn realize(&self) {
             self.parent_realize();
 
-            if let Some(import_client) =
-                crate::application::MomentsApplication::default().import_client()
-            {
-                let mut handlers = self._import_handlers.borrow_mut();
-                let obj = self.obj().clone();
+            let app = crate::application::MomentsApplication::default();
+            let import_client = app.import_client();
+            let mut handlers = self._import_handlers.borrow_mut();
+            let obj = self.obj().clone();
 
-                // Progress updates.
-                let weak = obj.downgrade();
-                handlers.push(import_client.connect_notify_local(
-                    Some("current"),
-                    move |client, _| {
-                        if let Some(dialog) = weak.upgrade() {
-                            dialog.set_progress(client.current() as usize, client.total() as usize);
-                        }
-                    },
-                ));
+            // Progress updates.
+            let weak = obj.downgrade();
+            handlers.push(
+                import_client.connect_notify_local(Some("current"), move |client, _| {
+                    if let Some(dialog) = weak.upgrade() {
+                        dialog.set_progress(client.current() as usize, client.total() as usize);
+                    }
+                }),
+            );
 
-                // State changes (completion).
-                let weak = obj.downgrade();
-                handlers.push(import_client.connect_notify_local(
-                    Some("state"),
-                    move |client, _| {
-                        if let Some(dialog) = weak.upgrade() {
-                            if client.state() == crate::client::ImportState::Complete {
-                                let summary = crate::importer::ImportSummary {
-                                    imported: client.imported() as usize,
-                                    skipped_duplicates: client.skipped() as usize,
-                                    skipped_unsupported: 0,
-                                    failed: client.failed() as usize,
-                                    elapsed_secs: client.elapsed_secs(),
-                                };
-                                dialog.set_complete(&summary);
-                            }
+            // State changes (completion).
+            let weak = obj.downgrade();
+            handlers.push(
+                import_client.connect_notify_local(Some("state"), move |client, _| {
+                    if let Some(dialog) = weak.upgrade() {
+                        if client.state() == crate::client::ImportState::Complete {
+                            let summary = crate::importer::ImportSummary {
+                                imported: client.imported() as usize,
+                                skipped_duplicates: client.skipped() as usize,
+                                skipped_unsupported: 0,
+                                failed: client.failed() as usize,
+                                elapsed_secs: client.elapsed_secs(),
+                            };
+                            dialog.set_complete(&summary);
                         }
-                    },
-                ));
-            }
+                    }
+                }),
+            );
         }
 
         fn unrealize(&self) {
-            if let Some(import_client) =
-                crate::application::MomentsApplication::default().import_client()
-            {
-                for handler_id in self._import_handlers.borrow_mut().drain(..) {
-                    import_client.disconnect(handler_id);
-                }
+            let app = crate::application::MomentsApplication::default();
+            let import_client = app.import_client();
+            for handler_id in self._import_handlers.borrow_mut().drain(..) {
+                import_client.disconnect(handler_id);
             }
             self.parent_unrealize();
         }

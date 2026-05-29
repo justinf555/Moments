@@ -20,17 +20,13 @@ impl PhotoViewer {
 
         let media_client = crate::application::MomentsApplication::default()
             .media_client_v2()
-            .expect("media client available");
+            .clone();
 
-        let pipeline = match crate::application::MomentsApplication::default().render_pipeline() {
-            Some(p) => p,
-            None => {
-                error!("render pipeline not available");
-                imp.spinner.set_spinning(false);
-                imp.spinner.set_visible(false);
-                return;
-            }
-        };
+        // Decode through the same `RenderPipeline` instance the media
+        // client uses internally — the client owns it as part of its
+        // build-time dependencies, so widgets that already use the
+        // client never need a separate path to the pipeline.
+        let pipeline = media_client.render_pipeline();
 
         let weak = self.downgrade();
         media_client.original_path(&id, move |path| {
@@ -142,15 +138,11 @@ impl PhotoViewer {
 
         let media_client = crate::application::MomentsApplication::default()
             .media_client_v2()
-            .expect("media client available");
+            .clone();
 
-        let pipeline = match crate::application::MomentsApplication::default().render_pipeline() {
-            Some(p) => p,
-            None => {
-                error!("render pipeline not available for edit session");
-                return;
-            }
-        };
+        // Decode through the same `RenderPipeline` instance the media
+        // client uses internally — see `start_full_res_load` above.
+        let pipeline = media_client.render_pipeline();
 
         // Fetch edit state and original path in parallel via two client calls.
         let weak = self.downgrade();
@@ -256,7 +248,7 @@ impl PhotoViewer {
     pub(super) fn load_metadata_async(&self, gen: u64, id: crate::library::media::MediaId) {
         let media_client = crate::application::MomentsApplication::default()
             .media_client_v2()
-            .expect("media client available");
+            .clone();
 
         let weak = self.downgrade();
         media_client.media_metadata(&id, move |metadata| {
