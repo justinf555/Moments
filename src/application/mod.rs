@@ -21,10 +21,11 @@
 pub mod keyring;
 
 mod context;
+mod library_loader;
 mod startup;
 
 use std::cell::{Cell, OnceCell, RefCell};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use adw::prelude::*;
@@ -34,9 +35,8 @@ use gtk::{gio, glib};
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::application::context::LibraryContext;
+use crate::application::library_loader::{LibraryLoader, LoadFailure, LoadOutcome};
 use crate::config::{APP_ID, PROFILE, VERSION};
-use crate::library::bundle::Bundle;
-use crate::library::config::LibraryConfig;
 use crate::sync::SyncEngine;
 use crate::ui::MomentsSetupWindow;
 use crate::ui::MomentsWindow;
@@ -466,65 +466,18 @@ impl MomentsApplication {
     /// never a windowless state.
     #[instrument(skip(self, setup_win), fields(path = %path))]
     fn on_setup_complete(&self, setup_win: &MomentsSetupWindow, path: String) {
-        let bundle_path = PathBuf::from(&path);
-
-        // All setup pages (Local and Immich) create the bundle before emitting
-        // setup-complete. We just open it here.
-        let (bundle, config) = match Bundle::open(&bundle_path) {
-            Ok(result) => result,
-            Err(e) => {
-                error!("failed to open bundle: {e}");
-                show_library_error_dialog(
-                    setup_win,
-                    "Could not open library",
-                    &format!(
-                        "The library at {} could not be opened.\n\nDetails: {e}",
-                        bundle_path.display()
-                    ),
-                );
+        // All setup pages (Local and Immich) create the bundle before
+        // emitting setup-complete. The loader opens it and resolves any
+        // Immich token from the keyring (the wizard stored it just before
+        // emitting setup-complete, so a failure here means the keyring became
+        // unavailable between store and lookup).
+        let (bundle, config) = match LibraryLoader.load(Path::new(&path)) {
+            LoadOutcome::Ready { bundle, config } => (bundle, config),
+            LoadOutcome::Failed(failure) => {
+                let (heading, body) = setup_failure_dialog(&failure, Path::new(&path));
+                show_library_error_dialog(setup_win, &heading, &body);
                 return;
             }
-        };
-
-        // For Immich configs, inject the session token from the keyring.
-        // The setup wizard stores the token before emitting setup-complete,
-        // so a failure here means the keyring became unavailable between
-        // store and lookup — surface it rather than booting the user into a
-        // library that can never authenticate.
-        let config = match config {
-            LibraryConfig::Immich { server_url, .. } => {
-                match keyring::resolve_immich_token(&server_url) {
-                    Ok(access_token) => LibraryConfig::Immich {
-                        server_url,
-                        access_token,
-                    },
-                    Err(err) => {
-                        let (heading, body) = match err {
-                            keyring::TokenError::Missing => (
-                                gettext("Sign in required"),
-                                gettext(
-                                    "The session token saved during setup could not be read back. Please try signing in again.",
-                                ),
-                            ),
-                            keyring::TokenError::KeyringFailed(e) => {
-                                error!(
-                                    "keyring lookup failed immediately after setup: {e}"
-                                );
-                                (
-                                    gettext("Could not access the system keyring"),
-                                    format!(
-                                        "{}\n\nDetails: {e}",
-                                        gettext("Moments stored your session in the keyring but could not read it back. Please check your keyring service and try again.")
-                                    ),
-                                )
-                            }
-                        };
-                        show_library_error_dialog(setup_win, &heading, &body);
-                        return;
-                    }
-                }
-            }
-            other => other,
         };
 
         let settings = self.imp().settings.get().expect("settings initialised");
@@ -550,79 +503,26 @@ impl MomentsApplication {
     /// the GSettings path entry still exists) the stale path is cleared and
     /// the setup window is shown so the user can reconfigure.
     fn open_library(&self, path: PathBuf) {
-        let (bundle, config) = match Bundle::open(&path) {
-            Ok(result) => result,
-            Err(e) => {
-                error!("failed to open library bundle: {e}");
-                let settings = self.imp().settings.get().expect("settings initialised");
-                if let Err(e) = settings.set_string("library-path", "") {
-                    error!("failed to clear stale library path: {e}");
-                }
-                // Show setup window with an error dialog explaining what happened.
-                let setup_win = self.show_setup_window();
-                show_library_error_dialog(
-                    &setup_win,
-                    "Could not open library",
-                    &format!(
-                        "The library at {} could not be opened. Please set up a new library.\n\nDetails: {e}",
-                        path.display()
-                    ),
-                );
-                return;
-            }
-        };
-
-        // For Immich configs, inject the session token from the keyring.
-        // If the token cannot be resolved, refuse to load the library — passing
-        // an empty string downstream produces opaque 401 toasts and keeps the
-        // outbox spinning. Bounce the user back to the setup window with an
-        // explanation instead.
-        let config = match config {
-            LibraryConfig::Immich { server_url, .. } => {
-                match keyring::resolve_immich_token(&server_url) {
-                    Ok(access_token) => LibraryConfig::Immich {
-                        server_url,
-                        access_token,
-                    },
-                    Err(err) => {
-                        // Only `Missing` warrants clearing `library-path`: the
-                        // user has no credential for this server and must
-                        // re-run setup. `KeyringFailed` is typically transient
-                        // (D-Bus race during session start, locked collection
-                        // prompt timeout) — leave the saved path intact so a
-                        // simple relaunch recovers once the keyring is healthy.
-                        let setup_win = self.show_setup_window();
-                        let (heading, body) = match err {
-                            keyring::TokenError::Missing => {
-                                let settings =
-                                    self.imp().settings.get().expect("settings initialised");
-                                if let Err(e) = settings.set_string("library-path", "") {
-                                    error!("failed to clear stale library path: {e}");
-                                }
-                                (
-                                    gettext("Sign in required"),
-                                    gettext(
-                                        "Your saved Immich session was not found in the system keyring. Please sign in again to continue.",
-                                    ),
-                                )
-                            }
-                            keyring::TokenError::KeyringFailed(e) => {
-                                error!("keyring lookup failed during open_library: {e}");
-                                (
-                                    gettext("Could not access the system keyring"),
-                                    format!(
-                                        "{}\n\nDetails: {e}",
-                                        gettext("Moments could not read your saved Immich session. Try restarting the app once your keyring service is available, or sign in again to continue.")
-                                    ),
-                                )
-                            }
-                        };
-                        show_library_error_dialog(&setup_win, &heading, &body);
-                        return;
+        let (bundle, config) = match LibraryLoader.load(&path) {
+            LoadOutcome::Ready { bundle, config } => (bundle, config),
+            LoadOutcome::Failed(failure) => {
+                // Clear the stale path *before* showing the setup window so a
+                // missing bundle / missing token does not re-trigger an open
+                // on the next launch. Transient keyring failures leave it
+                // intact so a relaunch recovers once the keyring is healthy.
+                if failure.clear_path() {
+                    let settings = self.imp().settings.get().expect("settings initialised");
+                    if let Err(e) = settings.set_string("library-path", "") {
+                        error!("failed to clear stale library path: {e}");
                     }
                 }
+                // No window exists yet on this path — show the setup window and
+                // parent the explanation dialog to it.
+                let setup_win = self.show_setup_window();
+                let (heading, body) = open_failure_dialog(&failure, &path);
+                show_library_error_dialog(&setup_win, &heading, &body);
+                return;
             }
-            other => other,
         };
 
         let settings = self.imp().settings.get().expect("settings initialised");
@@ -686,6 +586,65 @@ impl MomentsApplication {
         debug!(count = sources.len(), "resolved import sources via GIO");
 
         import_client.import(sources);
+    }
+}
+
+/// Dialog heading/body for a load failure in the *setup wizard* path.
+///
+/// Phrased for "the user just finished setup": the bundle was created moments
+/// ago, and an Immich token was stored just before this. See
+/// `library_loader::LoadFailure`.
+fn setup_failure_dialog(failure: &LoadFailure, path: &Path) -> (String, String) {
+    match failure {
+        LoadFailure::BundleOpen { details } => (
+            "Could not open library".to_string(),
+            format!(
+                "The library at {} could not be opened.\n\nDetails: {details}",
+                path.display()
+            ),
+        ),
+        LoadFailure::TokenMissing => (
+            gettext("Sign in required"),
+            gettext(
+                "The session token saved during setup could not be read back. Please try signing in again.",
+            ),
+        ),
+        LoadFailure::KeyringFailed { details } => (
+            gettext("Could not access the system keyring"),
+            format!(
+                "{}\n\nDetails: {details}",
+                gettext("Moments stored your session in the keyring but could not read it back. Please check your keyring service and try again.")
+            ),
+        ),
+    }
+}
+
+/// Dialog heading/body for a load failure in the *open-on-launch* path.
+///
+/// Phrased for "a previously-saved library could not be reopened" and
+/// includes the offending `path`. See `library_loader::LoadFailure`.
+fn open_failure_dialog(failure: &LoadFailure, path: &Path) -> (String, String) {
+    match failure {
+        LoadFailure::BundleOpen { details } => (
+            "Could not open library".to_string(),
+            format!(
+                "The library at {} could not be opened. Please set up a new library.\n\nDetails: {details}",
+                path.display()
+            ),
+        ),
+        LoadFailure::TokenMissing => (
+            gettext("Sign in required"),
+            gettext(
+                "Your saved Immich session was not found in the system keyring. Please sign in again to continue.",
+            ),
+        ),
+        LoadFailure::KeyringFailed { details } => (
+            gettext("Could not access the system keyring"),
+            format!(
+                "{}\n\nDetails: {details}",
+                gettext("Moments could not read your saved Immich session. Try restarting the app once your keyring service is available, or sign in again to continue.")
+            ),
+        ),
     }
 }
 

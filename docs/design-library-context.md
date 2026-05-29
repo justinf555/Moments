@@ -293,6 +293,16 @@ Incremental, not big-bang. Each step is one PR, each compiles and passes tests o
 - Reshape today's `SyncHandle` ownership: `SyncEngine` is the owned identity on `Application`; `SyncClient` holds a reference for UI binding.
 - Conditional on backend config.
 
+### Step 7 — Extract `LibraryLoader` from the duplicated wizard/open paths
+
+After Step 5, `MomentsApplication::on_setup_complete` and `MomentsApplication::open_library` are each ~84 lines and share ~60 lines of nearly-identical "library loading pipeline" code: parse the bundle (`Bundle::open`), resolve the Immich session token from the keyring, present the appropriate error dialog on failure, persist (or clear) the GSettings library path, then construct the window and call `startup::start`.
+
+- Extract a `LibraryLoader` helper (`src/application/library_loader.rs`, pure Rust, `pub(in crate::application)`) that takes a path and returns a typed `LoadOutcome` (`Ready { bundle, config }` / `NeedsSetup` / `Cancelled`), presenting error dialogs as a side effect.
+- Both entry points reduce to ~10–15 lines: call the loader, match the outcome, present the window, call `startup::start`.
+- The setup *wizard* (`MomentsSetupWindow`) keeps its UI responsibilities; the loader owns the input → ready-library pipeline; `Application` orchestrates the transition.
+
+This step is architecturally adjacent cleanup surfaced during implementation, not part of the original analysis. It is bundled into the same PR because it lives in `application/` and the duplication is severe.
+
 ## Open Questions
 
 1. **Where does `MutationRecorder` / `OriginalResolver` injection live?** Today they are constructed in `application/` and passed into `Library::open`. They stay there — they're construction-time arguments to `LibraryContext::build`, not fields.
