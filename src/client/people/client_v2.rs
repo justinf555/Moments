@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::sync::Arc;
 
 use gtk::gio;
 use gtk::glib;
@@ -9,12 +8,15 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, instrument, warn};
 
 use super::model::PersonItemObject;
-use crate::library::faces::{FacesEvent, Person, PersonId};
-use crate::library::Library;
+use crate::library::faces::{FacesEvent, FacesService, Person, PersonId};
 
 /// Non-GObject dependencies for people operations.
+///
+/// Holds only the concrete faces sub-service this client uses, not the
+/// whole `Library` — the dependency surface is the constructor contract
+/// (see `docs/design-library-context.md`).
 struct PeopleDeps {
-    library: Arc<Library>,
+    faces: FacesService,
     tokio: tokio::runtime::Handle,
 }
 
@@ -77,25 +79,28 @@ impl PeopleClientV2 {
     /// supplied Tokio runtime so model reconciliation begins
     /// immediately.
     pub fn build(
-        library: Arc<Library>,
+        faces: FacesService,
         tokio: tokio::runtime::Handle,
         events_rx: mpsc::UnboundedReceiver<FacesEvent>,
     ) -> Self {
         let client: Self = glib::Object::builder().build();
         *client.imp().deps.borrow_mut() = Some(PeopleDeps {
-            library: Arc::clone(&library),
+            faces: faces.clone(),
             tokio: tokio.clone(),
         });
 
         let client_weak: glib::SendWeakRef<PeopleClientV2> = client.downgrade().into();
-        tokio.spawn(Self::listen(events_rx, library, client_weak));
+        tokio.spawn(Self::listen(events_rx, faces, client_weak));
         client
     }
 
-    fn deps(&self) -> (Arc<Library>, tokio::runtime::Handle) {
+    /// Snapshot the stored dependencies. `FacesService` is a cheap
+    /// `Clone` handle, so each command/query clones it and moves the
+    /// clone into its async block.
+    fn deps(&self) -> (FacesService, tokio::runtime::Handle) {
         let deps = self.imp().deps.borrow();
         let deps = deps.as_ref().expect("PeopleClientV2::build() not called");
-        (deps.library.clone(), deps.tokio.clone())
+        (deps.faces.clone(), deps.tokio.clone())
     }
 
     // ── Event listener ─────────────────────────────────────────────────
@@ -104,14 +109,14 @@ impl PeopleClientV2 {
     /// dispatches model patches on the GTK thread.
     async fn listen(
         mut rx: mpsc::UnboundedReceiver<FacesEvent>,
-        library: Arc<Library>,
+        faces: FacesService,
         client_weak: glib::SendWeakRef<PeopleClientV2>,
     ) {
         while let Some(event) = rx.recv().await {
             match event {
                 FacesEvent::PersonAdded(id) => {
-                    let person = library.faces().get_person(&id).await;
-                    let thumb = library.faces().person_thumbnail_path(&id);
+                    let person = faces.get_person(&id).await;
+                    let thumb = faces.person_thumbnail_path(&id);
                     let weak = client_weak.clone();
                     glib::idle_add_once(move || {
                         if let Some(client) = weak.upgrade() {
@@ -129,7 +134,7 @@ impl PeopleClientV2 {
                     });
                 }
                 FacesEvent::PersonUpdated(id) => {
-                    let person = library.faces().get_person(&id).await;
+                    let person = faces.get_person(&id).await;
                     let weak = client_weak.clone();
                     glib::idle_add_once(move || {
                         if let Some(client) = weak.upgrade() {
@@ -190,21 +195,20 @@ impl PeopleClientV2 {
     /// contents. Views apply their own filtering via `FilterListModel`.
     #[instrument(skip(self, model))]
     pub fn list_people(&self, model: &gio::ListStore) {
-        let (library, tokio) = self.deps();
+        let (faces, tokio) = self.deps();
         let store = model.clone();
 
         glib::MainContext::default().spawn_local(async move {
-            let lib = library.clone();
+            let svc = faces.clone();
             let result =
-                crate::client::spawn_on(&tokio, async move { lib.faces().list_people().await })
-                    .await;
+                crate::client::spawn_on(&tokio, async move { svc.list_people().await }).await;
 
             match result {
                 Ok(people) => {
                     let objects: Vec<glib::Object> = people
                         .iter()
                         .map(|person| {
-                            let thumb = library.faces().person_thumbnail_path(&person.id);
+                            let thumb = faces.person_thumbnail_path(&person.id);
                             PersonItemObject::new(person, thumb).upcast()
                         })
                         .collect();
@@ -224,14 +228,14 @@ impl PeopleClientV2 {
     /// Rename a person. On success, patches the name in all tracked models.
     #[instrument(skip(self))]
     pub fn rename_person(&self, id: PersonId, name: String) {
-        let (library, tokio) = self.deps();
+        let (faces, tokio) = self.deps();
         let client_weak: glib::SendWeakRef<PeopleClientV2> = self.downgrade().into();
 
         glib::MainContext::default().spawn_local(async move {
             let rename_id = id.clone();
             let n = name.clone();
             let result = crate::client::spawn_on(&tokio, async move {
-                library.faces().rename_person(&rename_id, &n).await
+                faces.rename_person(&rename_id, &n).await
             })
             .await;
 
@@ -257,13 +261,13 @@ impl PeopleClientV2 {
     /// visibility automatically.
     #[instrument(skip(self))]
     pub fn set_person_hidden(&self, id: PersonId, hidden: bool) {
-        let (library, tokio) = self.deps();
+        let (faces, tokio) = self.deps();
         let client_weak: glib::SendWeakRef<PeopleClientV2> = self.downgrade().into();
 
         glib::MainContext::default().spawn_local(async move {
             let hide_id = id.clone();
             let result = crate::client::spawn_on(&tokio, async move {
-                library.faces().set_person_hidden(&hide_id, hidden).await
+                faces.set_person_hidden(&hide_id, hidden).await
             })
             .await;
 

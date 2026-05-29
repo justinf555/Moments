@@ -1,6 +1,5 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use gtk::gio;
 use gtk::glib;
@@ -10,14 +9,19 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, instrument, warn};
 
 use super::model::AlbumItemObject;
-use crate::library::album::{Album, AlbumEvent, AlbumId};
+use crate::library::album::{Album, AlbumEvent, AlbumId, AlbumService};
 use crate::library::error::LibraryError;
 use crate::library::media::MediaId;
-use crate::library::Library;
+use crate::library::thumbnail::ThumbnailService;
 
 /// Non-GObject dependencies for album operations.
+///
+/// Holds only the concrete sub-services this client uses, not the whole
+/// `Library` — the dependency surface is the constructor contract (see
+/// `docs/design-library-context.md`).
 struct AlbumDeps {
-    library: Arc<Library>,
+    albums: AlbumService,
+    thumbnails: ThumbnailService,
     tokio: tokio::runtime::Handle,
 }
 
@@ -101,25 +105,34 @@ impl AlbumClientV2 {
     /// supplied Tokio runtime so model reconciliation begins
     /// immediately.
     pub fn build(
-        library: Arc<Library>,
+        albums: AlbumService,
+        thumbnails: ThumbnailService,
         tokio: tokio::runtime::Handle,
         events_rx: mpsc::UnboundedReceiver<AlbumEvent>,
     ) -> Self {
         let client: Self = glib::Object::builder().build();
         *client.imp().deps.borrow_mut() = Some(AlbumDeps {
-            library: Arc::clone(&library),
+            albums: albums.clone(),
+            thumbnails,
             tokio: tokio.clone(),
         });
 
         let client_weak: glib::SendWeakRef<AlbumClientV2> = client.downgrade().into();
-        tokio.spawn(Self::listen(events_rx, library, client_weak));
+        tokio.spawn(Self::listen(events_rx, albums, client_weak));
         client
     }
 
-    fn deps(&self) -> (Arc<Library>, tokio::runtime::Handle) {
+    /// Snapshot the stored dependencies. The album and thumbnail
+    /// services are cheap `Clone` handles, so each command/query clones
+    /// the pair it needs and moves them into its async block.
+    fn deps(&self) -> (AlbumService, ThumbnailService, tokio::runtime::Handle) {
         let deps = self.imp().deps.borrow();
         let deps = deps.as_ref().expect("AlbumClientV2::build() not called");
-        (deps.library.clone(), deps.tokio.clone())
+        (
+            deps.albums.clone(),
+            deps.thumbnails.clone(),
+            deps.tokio.clone(),
+        )
     }
 
     // ── Event listener ─────────────────────────────────────────────────
@@ -128,13 +141,13 @@ impl AlbumClientV2 {
     /// dispatches model patches on the GTK thread.
     async fn listen(
         mut rx: mpsc::UnboundedReceiver<AlbumEvent>,
-        library: Arc<Library>,
+        albums: AlbumService,
         client_weak: glib::SendWeakRef<AlbumClientV2>,
     ) {
         while let Some(event) = rx.recv().await {
             match event {
                 AlbumEvent::AlbumAdded(id) => {
-                    let album = library.albums().get_album(&id).await;
+                    let album = albums.get_album(&id).await;
                     let weak = client_weak.clone();
                     glib::idle_add_once(move || {
                         if let Some(client) = weak.upgrade() {
@@ -156,7 +169,7 @@ impl AlbumClientV2 {
                     });
                 }
                 AlbumEvent::AlbumUpdated(id) => {
-                    let album = library.albums().get_album(&id).await;
+                    let album = albums.get_album(&id).await;
                     let weak = client_weak.clone();
                     glib::idle_add_once(move || {
                         if let Some(client) = weak.upgrade() {
@@ -200,16 +213,16 @@ impl AlbumClientV2 {
     /// cover thumbnails.
     #[instrument(skip(self, media_ids))]
     pub fn create_album(&self, name: String, media_ids: Vec<MediaId>) {
-        let (library, tokio) = self.deps();
+        let (albums, _thumbnails, tokio) = self.deps();
         let client_weak: glib::SendWeakRef<AlbumClientV2> = self.downgrade().into();
 
         glib::MainContext::default().spawn_local(async move {
             let result = crate::client::spawn_on(&tokio, async move {
-                let id = library.albums().create_album(&name).await?;
+                let id = albums.create_album(&name).await?;
                 if !media_ids.is_empty() {
-                    library.albums().add_to_album(&id, &media_ids).await?;
+                    albums.add_to_album(&id, &media_ids).await?;
                 }
-                library.albums().get_album(&id).await?.ok_or_else(|| {
+                albums.get_album(&id).await?.ok_or_else(|| {
                     LibraryError::Runtime(format!("album {id} not found after create"))
                 })
             })
@@ -245,17 +258,16 @@ impl AlbumClientV2 {
     /// `album-deleted` for each ID.
     #[instrument(skip(self, ids))]
     pub fn delete_album(&self, ids: Vec<AlbumId>) {
-        let (library, tokio) = self.deps();
+        let (albums, _thumbnails, tokio) = self.deps();
         let client_weak: glib::SendWeakRef<AlbumClientV2> = self.downgrade().into();
 
         glib::MainContext::default().spawn_local(async move {
             for id in ids {
-                let lib = Arc::clone(&library);
+                let svc = albums.clone();
                 let aid = id.clone();
-                let result = crate::client::spawn_on(&tokio, async move {
-                    lib.albums().delete_album(&aid).await
-                })
-                .await;
+                let result =
+                    crate::client::spawn_on(&tokio, async move { svc.delete_album(&aid).await })
+                        .await;
 
                 match result {
                     Ok(()) => {
@@ -279,15 +291,14 @@ impl AlbumClientV2 {
     /// On success, refreshes the album metadata in all tracked models.
     #[instrument(skip(self, media_ids), fields(album_id = %album_id))]
     pub fn add_to_album(&self, album_id: AlbumId, media_ids: Vec<MediaId>) {
-        let (library, tokio) = self.deps();
+        let (albums, _thumbnails, tokio) = self.deps();
         let client_weak: glib::SendWeakRef<AlbumClientV2> = self.downgrade().into();
 
         glib::MainContext::default().spawn_local(async move {
             let aid = album_id.clone();
             let result = crate::client::spawn_on(&tokio, async move {
-                library.albums().add_to_album(&aid, &media_ids).await?;
-                library
-                    .albums()
+                albums.add_to_album(&aid, &media_ids).await?;
+                albums
                     .get_album(&aid)
                     .await?
                     .ok_or_else(|| LibraryError::Runtime(format!("album {aid} not found")))
@@ -318,15 +329,14 @@ impl AlbumClientV2 {
     /// On success, refreshes the album metadata in all tracked models.
     #[instrument(skip(self, media_ids), fields(album_id = %album_id))]
     pub fn remove_from_album(&self, album_id: AlbumId, media_ids: Vec<MediaId>) {
-        let (library, tokio) = self.deps();
+        let (albums, _thumbnails, tokio) = self.deps();
         let client_weak: glib::SendWeakRef<AlbumClientV2> = self.downgrade().into();
 
         glib::MainContext::default().spawn_local(async move {
             let aid = album_id.clone();
             let result = crate::client::spawn_on(&tokio, async move {
-                library.albums().remove_from_album(&aid, &media_ids).await?;
-                library
-                    .albums()
+                albums.remove_from_album(&aid, &media_ids).await?;
+                albums
                     .get_album(&aid)
                     .await?
                     .ok_or_else(|| LibraryError::Runtime(format!("album {aid} not found")))
@@ -357,14 +367,14 @@ impl AlbumClientV2 {
     /// On success, patches the name in all tracked models.
     #[instrument(skip(self), fields(album_id = %id))]
     pub fn rename_album(&self, id: AlbumId, name: String) {
-        let (library, tokio) = self.deps();
+        let (albums, _thumbnails, tokio) = self.deps();
         let client_weak: glib::SendWeakRef<AlbumClientV2> = self.downgrade().into();
 
         glib::MainContext::default().spawn_local(async move {
             let rename_id = id.clone();
             let n = name.clone();
             let result = crate::client::spawn_on(&tokio, async move {
-                library.albums().rename_album(&rename_id, &n).await
+                albums.rename_album(&rename_id, &n).await
             })
             .await;
 
@@ -399,15 +409,17 @@ impl AlbumClientV2 {
 
     #[instrument(skip(self), fields(album_id = %id))]
     fn set_pinned(&self, id: AlbumId, pinned: bool) {
-        let (library, tokio) = self.deps();
+        let (albums, _thumbnails, tokio) = self.deps();
         let client_weak: glib::SendWeakRef<AlbumClientV2> = self.downgrade().into();
 
         glib::MainContext::default().spawn_local(async move {
             let pin_id = id.clone();
-            let result = crate::client::spawn_on(&tokio, async move {
-                library.albums().set_pinned(&pin_id, pinned).await
-            })
-            .await;
+            let result =
+                crate::client::spawn_on(
+                    &tokio,
+                    async move { albums.set_pinned(&pin_id, pinned).await },
+                )
+                .await;
 
             match result {
                 Ok(()) => {
@@ -442,17 +454,13 @@ impl AlbumClientV2 {
     /// the GTK thread. Views should call this on realize.
     #[instrument(skip(self, model))]
     pub fn list_albums(&self, model: &gio::ListStore) {
-        let (library, tokio) = self.deps();
+        let (albums, _thumbnails, tokio) = self.deps();
         let store = model.clone();
         let client_weak: glib::SendWeakRef<AlbumClientV2> = self.downgrade().into();
 
         glib::MainContext::default().spawn_local(async move {
             let result =
-                crate::client::spawn_on(
-                    &tokio,
-                    async move { library.albums().list_albums().await },
-                )
-                .await;
+                crate::client::spawn_on(&tokio, async move { albums.list_albums().await }).await;
 
             match result {
                 Ok(albums) => {
@@ -515,9 +523,9 @@ impl AlbumClientV2 {
         &self,
         media_ids: Vec<MediaId>,
     ) -> Result<HashMap<AlbumId, usize>, LibraryError> {
-        let (library, tokio) = self.deps();
+        let (albums, _thumbnails, tokio) = self.deps();
         crate::client::spawn_on(&tokio, async move {
-            library.albums().albums_containing_media(&media_ids).await
+            albums.albums_containing_media(&media_ids).await
         })
         .await
     }
@@ -547,7 +555,7 @@ impl AlbumClientV2 {
     /// Load cover thumbnails for an album and apply to the item in all models.
     #[instrument(skip(self), fields(album_id = %album_id))]
     fn load_cover_thumbnails(&self, album_id: &AlbumId) {
-        let (library, tokio) = self.deps();
+        let (albums, thumbnails, tokio) = self.deps();
         let aid = album_id.clone();
         let client_weak: glib::SendWeakRef<AlbumClientV2> = self.downgrade().into();
 
@@ -555,17 +563,14 @@ impl AlbumClientV2 {
             // Single spawn: fetch cover IDs + decode thumbnails.
             let aid_query = aid.clone();
             let decoded = crate::client::spawn_on(&tokio, async move {
-                let cover_ids = library
-                    .albums()
-                    .album_cover_media_ids(&aid_query, 4)
-                    .await?;
+                let cover_ids = albums.album_cover_media_ids(&aid_query, 4).await?;
                 if cover_ids.is_empty() {
                     return Ok(Vec::new());
                 }
 
                 let paths: Vec<_> = cover_ids
                     .iter()
-                    .map(|mid| library.thumbnails().thumbnail_path(mid))
+                    .map(|mid| thumbnails.thumbnail_path(mid))
                     .collect();
 
                 // File I/O + image decode are blocking — run on the

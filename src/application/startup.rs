@@ -352,12 +352,15 @@ fn phase3_clients(
     );
 
     let albums_rx = ctx.library().albums().subscribe();
-    let album_client =
-        AlbumClientV2::build(Arc::clone(ctx.library()), ctx.tokio().clone(), albums_rx);
+    let album_client = AlbumClientV2::build(
+        ctx.album_service(),
+        ctx.thumbnail_service(),
+        ctx.tokio().clone(),
+        albums_rx,
+    );
 
     let faces_rx = ctx.library().faces().subscribe();
-    let people_client =
-        PeopleClientV2::build(Arc::clone(ctx.library()), ctx.tokio().clone(), faces_rx);
+    let people_client = PeopleClientV2::build(ctx.faces_service(), ctx.tokio().clone(), faces_rx);
 
     let media_client = MediaClientV2::build(
         Arc::clone(ctx.library()),

@@ -17,6 +17,9 @@
 
 use std::sync::{Arc, OnceLock};
 
+use crate::library::album::AlbumService;
+use crate::library::faces::FacesService;
+use crate::library::thumbnail::ThumbnailService;
 use crate::library::Library;
 use crate::renderer::pipeline::RenderPipeline;
 
@@ -78,6 +81,29 @@ impl LibraryContext {
     /// The stateless render pipeline.
     pub(in crate::application) fn render_pipeline(&self) -> &Arc<RenderPipeline> {
         &self.render_pipeline
+    }
+
+    /// A handle to the album sub-service.
+    ///
+    /// Returns an owned clone — `AlbumService` is a cheap `Clone` handle
+    /// over the DB pool plus its event emitter. Clients that only need
+    /// album operations take this instead of the whole `Arc<Library>`,
+    /// so their constructor signature declares their minimal dependency
+    /// surface (see `docs/design-library-context.md`).
+    pub(in crate::application) fn album_service(&self) -> AlbumService {
+        self.library.albums().clone()
+    }
+
+    /// A handle to the thumbnail sub-service. Owned clone; see
+    /// [`LibraryContext::album_service`] for the rationale.
+    pub(in crate::application) fn thumbnail_service(&self) -> ThumbnailService {
+        self.library.thumbnails().clone()
+    }
+
+    /// A handle to the faces sub-service. Owned clone; see
+    /// [`LibraryContext::album_service`] for the rationale.
+    pub(in crate::application) fn faces_service(&self) -> FacesService {
+        self.library.faces().clone()
     }
 
     /// Handle to the shared Tokio runtime.
