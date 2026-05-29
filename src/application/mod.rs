@@ -20,7 +20,9 @@
 
 pub mod keyring;
 
+mod actions;
 mod context;
+mod import;
 mod library_loader;
 mod startup;
 
@@ -32,11 +34,11 @@ use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gettextrs::gettext;
 use gtk::{gio, glib};
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{error, info, instrument};
 
 use crate::application::context::LibraryContext;
 use crate::application::library_loader::{LibraryLoader, LoadFailure, LoadOutcome};
-use crate::config::{APP_ID, PROFILE, VERSION};
+use crate::config::APP_ID;
 use crate::sync::SyncEngine;
 use crate::ui::MomentsSetupWindow;
 use crate::ui::MomentsWindow;
@@ -368,82 +370,6 @@ impl MomentsApplication {
             .expect("application is MomentsApplication")
     }
 
-    fn setup_gactions(&self) {
-        let quit_action = gio::ActionEntry::builder("quit")
-            .activate(move |app: &Self, _, _| app.quit())
-            .build();
-        let about_action = gio::ActionEntry::builder("about")
-            .activate(move |app: &Self, _, _| app.show_about())
-            .build();
-        let import_action = gio::ActionEntry::builder("import")
-            .activate(move |app: &Self, _, _| app.show_import_dialog())
-            .build();
-        let preferences_action = gio::ActionEntry::builder("preferences")
-            .activate(move |app: &Self, _, _| app.show_preferences())
-            .build();
-        let shortcuts_action = gio::ActionEntry::builder("shortcuts")
-            .activate(move |app: &Self, _, _| app.show_shortcuts())
-            .build();
-        self.add_action_entries([
-            quit_action,
-            about_action,
-            import_action,
-            preferences_action,
-            shortcuts_action,
-        ]);
-    }
-
-    fn show_shortcuts(&self) {
-        let Some(window) = self.active_window() else {
-            return;
-        };
-        let builder =
-            gtk::Builder::from_resource("/io/github/justinf555/Moments/shortcuts-dialog.ui");
-        let dialog = builder
-            .object::<adw::ShortcutsDialog>("shortcuts_dialog")
-            .expect("shortcuts_dialog in resource");
-        dialog.present(Some(&window));
-    }
-
-    fn show_about(&self) {
-        let Some(window) = self.active_window() else {
-            return;
-        };
-        let app_name = if PROFILE == "development" {
-            "Moments (Development)"
-        } else {
-            "Moments"
-        };
-        let about = adw::AboutDialog::builder()
-            .application_name(app_name)
-            .application_icon(APP_ID)
-            .developer_name("Unknown")
-            .version(VERSION)
-            .developers(vec!["Unknown"])
-            .translator_credits(gettext("translator-credits"))
-            .copyright("© 2026 Unknown")
-            .build();
-
-        about.present(Some(&window));
-    }
-
-    fn show_preferences(&self) {
-        let window = match self.active_window() {
-            Some(w) => w,
-            None => return,
-        };
-        let settings = self
-            .imp()
-            .settings
-            .get()
-            .expect("settings initialised")
-            .clone();
-        let is_immich = self.imp().is_immich.get();
-        let immich_url = self.imp().immich_server_url.borrow().clone();
-
-        crate::ui::preferences_dialog::show_preferences(&window, &settings, is_immich, immich_url);
-    }
-
     /// Show the first-run setup window.
     fn show_setup_window(&self) -> MomentsSetupWindow {
         let setup = MomentsSetupWindow::new(self);
@@ -531,62 +457,6 @@ impl MomentsApplication {
 
         startup::start(self, bundle, config, window);
     }
-
-    /// Open a folder picker and start importing the selected folder.
-    fn show_import_dialog(&self) {
-        let window = match self.active_window() {
-            Some(w) => w,
-            None => return,
-        };
-
-        let file_dialog = gtk::FileDialog::builder()
-            .title("Select Folder to Import")
-            .modal(true)
-            .build();
-
-        file_dialog.select_folder(
-            Some(&window),
-            gio::Cancellable::NONE,
-            glib::clone!(
-                #[weak(rename_to = app)]
-                self,
-                move |result| if let Ok(folder) = result {
-                    app.run_import(folder);
-                }
-            ),
-        );
-    }
-
-    /// Create the import progress dialog and kick off the import pipeline.
-    ///
-    /// Accepts the `gio::File` directly from the file dialog rather than
-    /// extracting a path. This is critical for Flatpak: the document portal
-    /// grants access to the `gio::File` object, but the underlying path
-    /// (`/run/user/…/doc/…`) becomes inaccessible once the dialog callback
-    /// returns. Using `gio::File::enumerate_children` on the original object
-    /// respects the portal grant.
-    fn run_import(&self, folder: gio::File) {
-        let Some(import_client) = self.imp().import_client.get() else {
-            error!("import requested but no library is open");
-            return;
-        };
-
-        let display_path = folder
-            .path()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| folder.uri().to_string());
-        info!(path = %display_path, "starting import");
-
-        // Resolve folder contents via GIO to handle Flatpak portal paths.
-        let sources = resolve_folder_via_gio(&folder);
-        if sources.is_empty() {
-            warn!(path = %display_path, "no files found in folder");
-            return;
-        }
-        debug!(count = sources.len(), "resolved import sources via GIO");
-
-        import_client.import(sources);
-    }
 }
 
 /// Dialog heading/body for a load failure in the *setup wizard* path.
@@ -657,38 +527,4 @@ fn show_library_error_dialog(parent: &impl IsA<gtk::Widget>, heading: &str, body
     dialog.add_response("ok", "OK");
     dialog.set_default_response(Some("ok"));
     dialog.present(Some(parent));
-}
-
-/// Recursively enumerate a folder's contents using GIO.
-///
-/// Accepts the `gio::File` directly from the file dialog so that
-/// Flatpak document portal grants are preserved. Creating a new
-/// `gio::File::for_path` from the extracted path would lose the grant.
-fn resolve_folder_via_gio(folder: &gio::File) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    gio_walk(folder, &mut files);
-    files
-}
-
-fn gio_walk(dir: &gio::File, out: &mut Vec<PathBuf>) {
-    let enumerator = match dir.enumerate_children(
-        "standard::name,standard::type",
-        gio::FileQueryInfoFlags::NONE,
-        gio::Cancellable::NONE,
-    ) {
-        Ok(e) => e,
-        Err(e) => {
-            warn!(path = ?dir.path(), error = %e, "could not enumerate directory via GIO");
-            return;
-        }
-    };
-
-    while let Some(info) = enumerator.next_file(gio::Cancellable::NONE).ok().flatten() {
-        let child = enumerator.child(&info);
-        if info.file_type() == gio::FileType::Directory {
-            gio_walk(&child, out);
-        } else if let Some(path) = child.path() {
-            out.push(path);
-        }
-    }
 }
