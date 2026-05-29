@@ -265,21 +265,6 @@ impl MomentsApplication {
         self.imp().tokio.get().expect("tokio handle set").clone()
     }
 
-    /// Access the domain + infrastructure container.
-    ///
-    /// Visible only inside the `application/` module tree. UI code must
-    /// go through a Client; other backend wiring code may call this.
-    /// Returns `None` if no library has been opened yet.
-    ///
-    /// Today `startup::phase4_install` works with the local
-    /// `Arc<LibraryContext>` it received from phase 1, so the only
-    /// in-tree caller of this accessor is `shutdown`. See
-    /// `docs/design-library-context.md`.
-    #[allow(dead_code)]
-    pub(in crate::application) fn library_context(&self) -> Option<Arc<LibraryContext>> {
-        self.imp().library_context.borrow().clone()
-    }
-
     /// Access the import client singleton.
     ///
     /// Available from anywhere via `MomentsApplication::default().import_client()`.

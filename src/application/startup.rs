@@ -88,7 +88,6 @@ struct DomainArtifacts {
     db: Database,
     paths: ImportPaths,
     immich_client: Option<ImmichClient>,
-    thumbnails_dir_for_sync: PathBuf,
 }
 
 /// Output of [`phase2_background_services`]. When Immich is configured
@@ -161,7 +160,6 @@ pub(in crate::application) fn start(
             LibraryConfig::Immich { .. } => LocalStorageMode::Managed,
         },
     };
-    let thumbnails_dir_for_sync = bundle.thumbnails.clone();
     let tokio = app.tokio_handle();
 
     glib::MainContext::default().spawn_local(glib::clone!(
@@ -170,16 +168,7 @@ pub(in crate::application) fn start(
         #[weak]
         window,
         async move {
-            let domain = match phase1_domain(
-                bundle,
-                config,
-                paths,
-                immich_info,
-                thumbnails_dir_for_sync,
-                tokio,
-            )
-            .await
-            {
+            let domain = match phase1_domain(bundle, config, paths, immich_info, tokio).await {
                 Ok(d) => d,
                 Err(e) => {
                     present_open_error(&app, &window, e);
@@ -214,14 +203,19 @@ async fn phase1_domain(
     config: LibraryConfig,
     paths: ImportPaths,
     immich_info: Option<ImmichInfo>,
-    thumbnails_dir_for_sync: PathBuf,
     tokio: tokio::runtime::Handle,
 ) -> Result<DomainArtifacts, LibraryError> {
     let db = Database::new();
 
-    let immich_client = immich_info
-        .as_ref()
-        .and_then(|info| ImmichClient::new(&info.server_url, &info.access_token).ok());
+    let immich_client = immich_info.as_ref().and_then(|info| {
+        match ImmichClient::new(&info.server_url, &info.access_token) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                warn!("failed to build Immich HTTP client: {e}; continuing without sync");
+                None
+            }
+        }
+    });
 
     let recorder: Arc<dyn crate::library::recorder::MutationRecorder> = if immich_client.is_some() {
         Arc::new(crate::sync::outbox::QueueWriterOutbox::new(db.clone()))
@@ -268,7 +262,6 @@ async fn phase1_domain(
         db,
         paths,
         immich_client,
-        thumbnails_dir_for_sync,
     })
 }
 
@@ -312,7 +305,7 @@ fn phase2_background_services(
         Arc::clone(domain.ctx.library()),
         domain.db.clone(),
         sync_events_tx,
-        domain.thumbnails_dir_for_sync.clone(),
+        domain.paths.thumbnails_dir.clone(),
         sync_interval,
         domain.ctx.tokio().clone(),
     );
