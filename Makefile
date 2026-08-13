@@ -299,9 +299,21 @@ fmt-check: $(CONFIG_RS)
 typos:
 	typos
 
+# cargo-audit and cargo-deny aren't part of the SDK, and assuming a host
+# install means `make audit` dies with "no such command" on a fresh machine.
+# Install them into a persistent root under target/ (the SDK's /tmp is
+# per-sandbox, so anything installed there is gone next invocation) and
+# reuse them on later runs.
+AUDIT_TOOLS = $(CURDIR)/target/audit-tools
+
 audit:
-	cargo audit --ignore RUSTSEC-2023-0071
-	cargo deny check
+	$(FLATPAK_RUN) -c '$(SDK_INIT) && \
+		export CARGO_INSTALL_ROOT=$(AUDIT_TOOLS) && \
+		export PATH=$(AUDIT_TOOLS)/bin:$$PATH && \
+		{ command -v cargo-audit >/dev/null || cargo install cargo-audit --locked; } && \
+		{ command -v cargo-deny  >/dev/null || cargo install cargo-deny  --locked; } && \
+		cargo audit && \
+		cargo deny check'
 
 coverage: $(CONFIG_RS)
 	$(FLATPAK_RUN) -c '$(SDK_INIT) && \

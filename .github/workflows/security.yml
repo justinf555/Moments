@@ -27,7 +27,8 @@ jobs:
       - name: Run audit
         id: audit
         run: |
-          OUTPUT=$(cargo audit --ignore RUSTSEC-2023-0071 2>&1) || true
+          # Ignores live in .cargo/audit.toml, with the reasoning for each.
+          OUTPUT=$(cargo audit 2>&1) || true
           echo "$OUTPUT"
 
           if echo "$OUTPUT" | grep -q "vulnerability found"; then
@@ -41,7 +42,7 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
           # Fail if real vulnerabilities (not just warnings).
-          cargo audit --ignore RUSTSEC-2023-0071
+          cargo audit
 
   deny:
     name: Cargo deny

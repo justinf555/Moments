@@ -1,0 +1,31 @@
+# cargo-audit configuration.
+#
+# Why this file exists: cargo-audit reads Cargo.lock, and Cargo resolves the
+# lockfile *feature-agnostically* — it lists every optional dependency of every
+# crate in the graph, whether or not an enabled feature activates it. So
+# cargo-audit can fire on crates that are never compiled into the binary.
+# cargo-deny does not have this problem: its graph comes from `cargo metadata`
+# and honours the real feature set.
+#
+# Keeping the ignore list here rather than as a `--ignore` flag means it lives
+# in one place (local `make audit` and CI both pick it up) and each entry can
+# carry the reasoning for why it is safe to ignore.
+#
+# Every entry must say either why the code is unreachable, or why no fix exists.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 — "Marvin attack": timing side-channel in `rsa`
+    # allowing potential key recovery. No fixed version exists upstream.
+    #
+    # Not exposed. `rsa` only reaches Cargo.lock through sqlx-macros-core's
+    # *optional* sqlx-mysql dependency; we enable only the sqlite driver, so
+    # neither sqlx-mysql nor rsa is ever compiled or linked. Verified with:
+    #
+    #     cargo tree -i rsa --target all -e all   → "nothing to print"
+    #
+    # cargo-deny agrees and does not flag it; only cargo-audit does, because
+    # it reads the lockfile directly. Revisit if a sqlx driver change ever
+    # puts rsa into the built graph.
+    "RUSTSEC-2023-0071",
+]
