@@ -1695,9 +1695,9 @@ dependencies = [
 
 [[package]]
 name = "jxl-modular"
-version = "0.11.2"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da758b2f989aafd9eeb39489fe43d7be5a3a0d2ad61cf1bad705eb6990a6053c"
+checksum = "2a2f045b24c738dd91d482be385512b512721ae08a671bd4b27bf1c47f215235"
 dependencies = [
  "jxl-bitstream",
  "jxl-coding",
