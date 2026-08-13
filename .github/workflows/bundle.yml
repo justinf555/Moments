@@ -1,0 +1,105 @@
+name: Flatpak bundle
+
+# Builds the redistributable single-file Flatpak bundle (`make bundle`) and
+# uploads it as a workflow artifact.
+#
+# Called by release.yml to produce the artifacts attached to a GitHub Release,
+# and runnable on its own from the Actions tab to smoke-test a bundle build
+# without cutting a release.
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to build. Defaults to the triggering ref.
+        type: string
+        required: false
+        default: ''
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to build (branch, tag or SHA). Blank = this branch.
+        type: string
+        required: false
+        default: ''
+
+jobs:
+  bundle:
+    name: Build bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
+      options: --privileged
+    # Secrets aren't available in step `if:` conditions, so surface them as
+    # job-level env vars the conditions can test.
+    env:
+      GPG_PRIVATE_KEY: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY }}
+      GPG_KEY_ID: ${{ secrets.FLATPAK_GPG_KEY_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      # The flathub image is Fedora-based and does the real build inside the
+      # flatpak sandbox, so host `make` isn't guaranteed to be present.
+      - name: Ensure make is available
+        run: command -v make >/dev/null || dnf install -y make
+
+      - name: Cache flatpak-builder state
+        uses: actions/cache@v4
+        with:
+          path: .flatpak-builder
+          key: flatpak-bundle-${{ hashFiles('build-aux/io.github.justinf555.Moments.release.json', 'Cargo.lock') }}
+          restore-keys: flatpak-bundle-
+
+      # Signing is optional: with no FLATPAK_GPG_PRIVATE_KEY secret the bundle
+      # is still built and published, just unsigned. To enable it, generate a
+      # passphrase-less key (ostree signs non-interactively, so a passphrase
+      # would stall the build):
+      #
+      #   gpg --quick-generate-key "Moments Releases <you@example.com>" \
+      #       default default never
+      #   gpg --armor --export-secret-keys <fingerprint>
+      #
+      # Store that armoured private key as the FLATPAK_GPG_PRIVATE_KEY secret
+      # and the fingerprint as FLATPAK_GPG_KEY_ID.
+      - name: Import GPG signing key
+        id: gpg
+        if: env.GPG_PRIVATE_KEY != ''
+        run: |
+          set -euo pipefail
+          if [ -z "$GPG_KEY_ID" ]; then
+            echo "FLATPAK_GPG_PRIVATE_KEY is set but FLATPAK_GPG_KEY_ID is not" >&2
+            exit 1
+          fi
+          GNUPGHOME="$(mktemp -d)"
+          chmod 700 "$GNUPGHOME"
+          printf '%s' "$GPG_PRIVATE_KEY" | GNUPGHOME="$GNUPGHOME" gpg --batch --import
+          echo "homedir=$GNUPGHOME" >> "$GITHUB_OUTPUT"
+          echo "key_id=$GPG_KEY_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Build bundle
+        run: |
+          make bundle \
+            GPG_KEY='${{ steps.gpg.outputs.key_id }}' \
+            GPG_HOMEDIR='${{ steps.gpg.outputs.homedir }}' \
+            FLATPAK_BUILDER_ARGS='--disable-rofiles-fuse'
+
+      - name: Export public signing key
+        if: steps.gpg.outputs.key_id != ''
+        env:
+          GNUPGHOME: ${{ steps.gpg.outputs.homedir }}
+        run: gpg --armor --export "${{ steps.gpg.outputs.key_id }}" > moments-releases.asc
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-bundle
+          path: |
+            moments-*.flatpak
+            moments-*.flatpak.sha256
+            moments-releases.asc
+          if-no-files-found: error
+          retention-days: 14

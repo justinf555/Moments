@@ -1,0 +1,67 @@
+{
+    "id": "io.github.justinf555.Moments",
+    "runtime": "org.gnome.Platform",
+    "runtime-version": "50",
+    "sdk": "org.gnome.Sdk",
+    "sdk-extensions": [
+        "org.freedesktop.Sdk.Extension.rust-stable"
+    ],
+    "command": "moments",
+    "finish-args": [
+        "--share=network",
+        "--share=ipc",
+        "--device=dri",
+        "--socket=wayland",
+        "--socket=fallback-x11",
+        "--socket=pulseaudio",
+        "--talk-name=org.freedesktop.secrets"
+    ],
+    "build-options": {
+        "append-path": "/usr/lib/sdk/rust-stable/bin",
+        "build-args": [
+            "--share=network"
+        ],
+        "env": {
+            "SQLX_OFFLINE": "true"
+        }
+    },
+    "cleanup": [
+        "/include",
+        "/lib/pkgconfig",
+        "/man",
+        "/share/doc",
+        "/share/gtk-doc",
+        "/share/man",
+        "/share/pkgconfig",
+        "*.la",
+        "*.a"
+    ],
+    "modules": [
+        {
+            "name": "moments",
+            "builddir": true,
+            "buildsystem": "meson",
+            "config-opts": [
+                "--libdir=lib",
+                "-Dbuildtype=release",
+                "-Dprofile=default"
+            ],
+            "sources": [
+                {
+                    "type": "dir",
+                    "path": "..",
+                    "skip": [
+                        ".flatpak-builder",
+                        ".flatpak-builder-dev",
+                        ".git",
+                        "flatpak-build-dev",
+                        "flatpak-build-dir",
+                        "flatpak-bundle-build",
+                        "flatpak-bundle-repo",
+                        "target"
+                    ]
+                }
+            ]
+        }
+    ]
+}

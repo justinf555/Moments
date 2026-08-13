@@ -1,7 +1,8 @@
-.PHONY: run run-dev run-dhat dev-bootstrap dev clean clean-dev \
+.PHONY: run run-dev run-dhat dev-bootstrap dev clean clean-dev clean-bundle \
         check test test-nextest test-integration test-all \
         lint fmt fmt-check typos audit coverage metrics \
-        check-potfiles ci-all stack attach release
+        check-potfiles ci-all stack attach release \
+        bundle bundle-verify install-bundle uninstall-bundle
 
 run:
 	flatpak-builder --user --install --force-clean flatpak-build-dir io.github.justinf555.Moments.json && \
@@ -103,6 +104,88 @@ clean:
 
 clean-dev:
 	rm -rf .flatpak-builder-dev
+
+# ── Distributable bundle ─────────────────────────────────────────────────────
+#
+# `make bundle` produces a single-file `.flatpak` bundle that anyone can
+# install without adding a remote:
+#
+#   flatpak install --user moments-0.4.0-x86_64.flatpak
+#
+# It builds from the working tree (build-aux/…release.json uses a `dir`
+# source), exports the result into a local OSTree repo, then packs that
+# repo into the bundle. This is the same path release.yml takes to attach
+# the bundle to a GitHub Release.
+#
+# The bundle records BUNDLE_RUNTIME_REPO as its runtime source, so
+# installing it on a machine without the GNOME 50 runtime prompts to add
+# Flathub and pull the runtime instead of failing.
+#
+# Optional GPG signing — set GPG_KEY to a key id or fingerprint to sign
+# both the OSTree commit and the bundle. The exported public key is
+# embedded in the bundle, so `flatpak install` verifies the signature
+# against it (trust-on-first-use) and records it for the origin remote:
+#
+#   make bundle GPG_KEY=A1B2C3D4 [GPG_HOMEDIR=/path/to/gnupg]
+#
+# Without GPG_KEY the bundle is unsigned and installs with a warning.
+
+APP_ID          = io.github.justinf555.Moments
+BUNDLE_VERSION := $(shell sed -n "s/^[[:space:]]*version:[[:space:]]*'\([0-9][0-9.]*\)'.*/\1/p" meson.build | head -1)
+BUNDLE_ARCH    ?= $(shell flatpak --default-arch 2>/dev/null || uname -m)
+BUNDLE_MANIFEST = build-aux/$(APP_ID).release.json
+BUNDLE_REPO     = flatpak-bundle-repo
+BUNDLE_BUILD    = flatpak-bundle-build
+BUNDLE          = moments-$(BUNDLE_VERSION)-$(BUNDLE_ARCH).flatpak
+BUNDLE_RUNTIME_REPO ?= https://dl.flathub.org/repo/flathub.flatpakrepo
+
+# Extra flags for flatpak-builder (CI passes --disable-rofiles-fuse etc.)
+FLATPAK_BUILDER_ARGS ?=
+
+GPG_KEY     ?=
+GPG_HOMEDIR ?=
+BUNDLE_PUBKEY = $(BUNDLE_BUILD)/moments.gpg
+
+ifneq ($(GPG_KEY),)
+GPG_ARGS = --gpg-sign=$(GPG_KEY)
+ifneq ($(GPG_HOMEDIR),)
+GPG_ARGS += --gpg-homedir=$(GPG_HOMEDIR)
+GPG_EXPORT_ARGS = --homedir $(GPG_HOMEDIR)
+endif
+BUNDLE_GPG_ARGS = $(GPG_ARGS) --gpg-keys=$(BUNDLE_PUBKEY)
+endif
+
+bundle:
+	@if [ -z "$(BUNDLE_VERSION)" ]; then \
+		echo "could not read version from meson.build" >&2; exit 1; \
+	fi
+	@echo "==> Building $(APP_ID) $(BUNDLE_VERSION) ($(BUNDLE_ARCH))"
+	mkdir -p $(BUNDLE_BUILD)
+ifneq ($(GPG_KEY),)
+	gpg $(GPG_EXPORT_ARGS) --export "$(GPG_KEY)" > $(BUNDLE_PUBKEY)
+	@test -s $(BUNDLE_PUBKEY) || { echo "gpg exported an empty key for $(GPG_KEY)" >&2; exit 1; }
+else
+	@echo "==> GPG_KEY not set — bundle will be unsigned"
+endif
+	flatpak-builder --force-clean --repo=$(BUNDLE_REPO) \
+		$(GPG_ARGS) $(FLATPAK_BUILDER_ARGS) \
+		$(BUNDLE_BUILD)/app $(BUNDLE_MANIFEST)
+	flatpak build-bundle --arch=$(BUNDLE_ARCH) \
+		--runtime-repo=$(BUNDLE_RUNTIME_REPO) $(BUNDLE_GPG_ARGS) \
+		$(BUNDLE_REPO) $(BUNDLE) $(APP_ID)
+	sha256sum $(BUNDLE) > $(BUNDLE).sha256
+	@echo "==> $(BUNDLE) ($$(du -h $(BUNDLE) | cut -f1))"
+	@echo "==> Install with: flatpak install --user $(BUNDLE)"
+
+install-bundle:
+	@test -f $(BUNDLE) || $(MAKE) bundle
+	flatpak install --user --bundle -y $(BUNDLE)
+
+uninstall-bundle:
+	-flatpak uninstall --user -y $(APP_ID)
+
+clean-bundle:
+	rm -rf $(BUNDLE_REPO) $(BUNDLE_BUILD) moments-*.flatpak moments-*.flatpak.sha256
 
 # ── Testing (inside GNOME 50 Flatpak SDK) ────────────────────────────────────
 #
@@ -265,8 +348,10 @@ ci-all: lint check-potfiles test test-integration audit
 # Cargo.toml, and Cargo.lock, then opens a PR. On merge, the
 # release.yml GitHub Action automatically:
 #   - Creates an annotated git tag (v0.2.0)
-#   - Updates the Flathub manifest with the new tag and commit hash
 #   - Creates a GitHub Release
+#   - Builds the Flatpak bundle (`make bundle`) from the tag and attaches
+#     moments-0.2.0-x86_64.flatpak + .sha256 to that release, GPG-signed
+#     when the FLATPAK_GPG_PRIVATE_KEY / FLATPAK_GPG_KEY_ID secrets are set
 
 release:
 ifndef VERSION
