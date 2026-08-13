@@ -64,7 +64,14 @@ gpg --show-keys moments-releases.asc    # fingerprint of the release signing key
 **Requirements:**
 
 - [GNOME Builder](https://apps.gnome.org/Builder/) (recommended), or
-- `flatpak-builder` and the GNOME SDK
+- `flatpak-builder` and the GNOME 50 SDK:
+  ```bash
+  flatpak install --user flathub org.flatpak.Builder \
+      org.gnome.Sdk/x86_64/50 org.freedesktop.Sdk.Extension.rust-stable/x86_64/25.08
+  ```
+  The Makefile uses a host `flatpak-builder` if one is installed and falls back to
+  the Flatpak-packaged `org.flatpak.Builder` otherwise. Override with
+  `make run FLATPAK_BUILDER=…` if you have both.
 
 **Using GNOME Builder:**
 

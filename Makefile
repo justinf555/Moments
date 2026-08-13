@@ -4,12 +4,18 @@
         check-potfiles ci-all stack attach release \
         bundle bundle-verify install-bundle uninstall-bundle
 
+# flatpak-builder ships either as a host package or as the Flathub-packaged
+# org.flatpak.Builder app. Prefer the host binary; fall back to the Flatpak.
+# Override explicitly if you have both: make run FLATPAK_BUILDER=flatpak-builder
+FLATPAK_BUILDER ?= $(shell command -v flatpak-builder 2>/dev/null || \
+	echo 'flatpak run org.flatpak.Builder')
+
 run:
-	flatpak-builder --user --install --force-clean flatpak-build-dir io.github.justinf555.Moments.json && \
+	$(FLATPAK_BUILDER) --user --install --force-clean flatpak-build-dir io.github.justinf555.Moments.json && \
 	flatpak run io.github.justinf555.Moments
 
 run-dev:
-	flatpak-builder --user --install --force-clean \
+	$(FLATPAK_BUILDER) --user --install --force-clean \
 		--state-dir=.flatpak-builder-dev \
 		flatpak-build-dev io.github.justinf555.Moments.dev.json && \
 	flatpak run --env=RUST_LOG=moments=debug io.github.justinf555.Moments.Devel
@@ -31,7 +37,7 @@ DEV_BUILD_DIR  = .flatpak-builder-dev/builddir
 DEV_STATE_DIR  = .flatpak-builder-dev
 
 dev-bootstrap:
-	flatpak-builder --user --force-clean \
+	$(FLATPAK_BUILDER) --user --force-clean \
 		--keep-build-dirs --disable-rofiles-fuse --ccache \
 		--stop-at=moments \
 		--state-dir=$(DEV_STATE_DIR) \
@@ -167,7 +173,7 @@ ifneq ($(GPG_KEY),)
 else
 	@echo "==> GPG_KEY not set — bundle will be unsigned"
 endif
-	flatpak-builder --force-clean --repo=$(BUNDLE_REPO) \
+	$(FLATPAK_BUILDER) --force-clean --repo=$(BUNDLE_REPO) \
 		$(GPG_ARGS) $(FLATPAK_BUILDER_ARGS) \
 		$(BUNDLE_BUILD)/app $(BUNDLE_MANIFEST)
 	flatpak build-bundle --arch=$(BUNDLE_ARCH) \

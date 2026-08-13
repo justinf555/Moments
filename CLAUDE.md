@@ -26,6 +26,8 @@ make bundle
 
 The Flatpak manifest is `io.github.justinf555.Moments.json` (local dev), `io.github.justinf555.Moments.flathub.json` (Flathub submission), `build-aux/io.github.justinf555.Moments.ci.json` (CI build + tests), and `build-aux/io.github.justinf555.Moments.release.json` (redistributable bundle). The local manifest pulls source from this git repo (`"type": "git", "path": "."`, branch `main`), so **changes must be committed before rebuilding**. All manifest source paths are relative to the manifest's own directory — **never hardcode an absolute local path into a manifest**. The `make run` command installs the Flatpak locally (`--user --install`) so icons are exported to GNOME Shell.
 
+Every target that shells out to flatpak-builder goes through `$(FLATPAK_BUILDER)`, which auto-detects a host `flatpak-builder` binary and falls back to `flatpak run org.flatpak.Builder`. Don't hardcode `flatpak-builder` in new targets.
+
 ### Dev build
 
 The dev manifest (`io.github.justinf555.Moments.dev.json`) uses `type: "dir"` — picks up working tree changes without committing. It uses a **separate state dir** (`.flatpak-builder-dev/`) so switching between `make run` and `make run-dev` doesn't invalidate the cargo cache. It installs under a **separate app ID** (`io.github.justinf555.Moments.Devel`) so dev and production can run side-by-side with separate GSettings, data dirs, and keyring entries.
