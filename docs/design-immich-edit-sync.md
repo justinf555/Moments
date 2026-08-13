@@ -666,7 +666,7 @@ Acceptance: deleting the local `edits` row for a Moments-edited photo and reopen
 
 ### 10.2 End-to-end against the local Immich test instance
 
-`http://localhost:2283`, API key at `/home/justin/.config/immich-test/api_key`.
+`http://localhost:2283`, API key at `~/.config/immich-test/api_key`.
 
 Tests should be opt-in (env-gated) since CI doesn't have an Immich server. A `make test-immich` target.
 

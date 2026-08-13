@@ -24,7 +24,7 @@ make clean
 make bundle
 ```
 
-The Flatpak manifest is `io.github.justinf555.Moments.json` (local dev), `io.github.justinf555.Moments.flathub.json` (Flathub submission), `build-aux/io.github.justinf555.Moments.ci.json` (CI build + tests), and `build-aux/io.github.justinf555.Moments.release.json` (redistributable bundle). The local manifest pulls source from the local git repo (`file:///home/justin/Projects/Moments`, branch `main`), so **changes must be committed before rebuilding**. The `make run` command installs the Flatpak locally (`--user --install`) so icons are exported to GNOME Shell.
+The Flatpak manifest is `io.github.justinf555.Moments.json` (local dev), `io.github.justinf555.Moments.flathub.json` (Flathub submission), `build-aux/io.github.justinf555.Moments.ci.json` (CI build + tests), and `build-aux/io.github.justinf555.Moments.release.json` (redistributable bundle). The local manifest pulls source from this git repo (`"type": "git", "path": "."`, branch `main`), so **changes must be committed before rebuilding**. All manifest source paths are relative to the manifest's own directory — **never hardcode an absolute local path into a manifest**. The `make run` command installs the Flatpak locally (`--user --install`) so icons are exported to GNOME Shell.
 
 ### Dev build
 

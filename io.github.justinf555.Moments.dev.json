@@ -49,7 +49,17 @@
             "sources" : [
                 {
                     "type" : "dir",
-                    "path" : "/home/justin/Projects/Moments"
+                    "path" : ".",
+                    "skip" : [
+                        ".flatpak-builder",
+                        ".flatpak-builder-dev",
+                        ".git",
+                        "flatpak-build-dev",
+                        "flatpak-build-dir",
+                        "flatpak-bundle-build",
+                        "flatpak-bundle-repo",
+                        "target"
+                    ]
                 }
             ]
         }
