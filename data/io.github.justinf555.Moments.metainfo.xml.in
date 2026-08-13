@@ -64,6 +64,16 @@
   </screenshots>
 
   <releases>
+    <release version="0.4.1" date="2026-08-13">
+      <description translate="no">
+        <p>Downloadable Flatpak bundles and security updates.</p>
+        <ul>
+          <li>Releases now ship an installable Flatpak bundle you can download and install directly, with a checksum and a GPG signature</li>
+          <li>Updated dependencies to address five security advisories, including denial-of-service issues in XML parsing</li>
+          <li>Build and packaging fixes for people building Moments from source</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.0" date="2026-05-13">
       <description translate="no">
         <p>Non-destructive editing and bidirectional sync for edits.</p>
