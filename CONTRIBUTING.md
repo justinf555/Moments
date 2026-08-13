@@ -41,11 +41,25 @@ make clean  # cleans the Flatpak build directory
 
 ### Running unit tests
 
-Unit tests run outside Flatpak using `cargo test`. You need the system development libraries installed — see [README.md](README.md#system-dependencies-for-cargo-test-outside-flatpak) for the package list.
+`make test` runs the unit tests inside the Flatpak SDK and needs no host libraries.
 
 ```bash
+make test
+```
+
+You can also run `cargo test` directly outside Flatpak, which needs the system
+development libraries — see
+[README.md](README.md#system-dependencies-for-cargo-test-outside-flatpak) for the
+package list. On a **fresh clone**, generate `src/config.rs` first, otherwise cargo
+fails with `failed to resolve mod config`: it's produced by meson and gitignored, so
+a clean checkout has none.
+
+```bash
+make config   # regenerates src/config.rs via meson
 cargo test
 ```
+
+The `make` targets do this for you automatically.
 
 ## Code Style
 

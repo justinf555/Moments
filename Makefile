@@ -1,8 +1,8 @@
 .PHONY: run run-dev run-dhat dev-bootstrap dev clean clean-dev clean-bundle \
         check test test-nextest test-integration test-all \
         lint fmt fmt-check typos audit coverage metrics \
-        check-potfiles ci-all stack attach release \
-        bundle bundle-verify install-bundle uninstall-bundle
+        check-potfiles ci-all stack attach release config \
+        bundle install-bundle uninstall-bundle
 
 # flatpak-builder ships either as a host package or as the Flathub-packaged
 # org.flatpak.Builder app. Prefer the host binary; fall back to the Flatpak.
@@ -219,18 +219,51 @@ SDK_INIT = source /usr/lib/sdk/rust-stable/enable.sh && \
 	export PATH=/tmp/flatpak-cargo/bin:$$PATH && \
 	cd $(CURDIR)
 
-check:
+# ── Generated config.rs ──────────────────────────────────────────────────────
+#
+# src/config.rs is produced by meson (configure_file, then copied into the
+# source tree by src/meson.build) and is gitignored, so a fresh checkout
+# doesn't have one. `src/main.rs` declares `mod config`, so every cargo-only
+# target dies on a clean clone with:
+#
+#   failed to resolve mod `config`: src/config.rs does not exist
+#
+# `make run` doesn't cure it — that builds from a git clone inside
+# .flatpak-builder/, so the working tree never gets a copy. Rather than
+# duplicate the substitutions here (two sources of truth for VERSION and
+# APP_ID), run the real meson rule; a `meson setup` regenerates and copies
+# config.rs as a side effect of configuring.
+#
+# Depending on meson.build means a version bump (`make release`) also
+# refreshes the stale config.rs instead of silently keeping the old VERSION.
+
+CONFIG_RS       = src/config.rs
+MESON_BUILD_DIR = _build
+
+$(CONFIG_RS): src/config.rs.in meson.build
+	@echo "==> $(CONFIG_RS) missing or stale — running meson setup"
+	$(FLATPAK_RUN) -c '$(SDK_INIT) && \
+		if [ -f $(MESON_BUILD_DIR)/build.ninja ]; then \
+			meson setup --reconfigure $(MESON_BUILD_DIR); \
+		else \
+			meson setup $(MESON_BUILD_DIR); \
+		fi'
+
+# Regenerate config.rs on demand.
+config: $(CONFIG_RS)
+
+check: $(CONFIG_RS)
 	$(FLATPAK_RUN) -c '$(SDK_INIT) && cargo check'
 
-test:
+test: $(CONFIG_RS)
 	$(FLATPAK_RUN) -c '$(SDK_INIT) && cargo test'
 
-test-nextest:
+test-nextest: $(CONFIG_RS)
 	$(FLATPAK_RUN) -c '$(SDK_INIT) && \
 		cargo install cargo-nextest --locked 2>/dev/null || true && \
 		cargo nextest run --profile ci'
 
-test-integration:
+test-integration: $(CONFIG_RS)
 	flatpak run --share=network \
 	  --socket=wayland \
 	  --filesystem=$(CURDIR) \
@@ -251,16 +284,16 @@ test-all: test test-integration
 
 # ── Linting & Analysis ──────────────────────────────────────────────────────
 
-lint:
+lint: $(CONFIG_RS)
 	$(FLATPAK_RUN) -c '$(SDK_INIT) && \
 		cargo fmt -- --check && \
 		cargo clippy --all-targets -- -D warnings && \
 		cargo clippy --all-targets --features dhat-heap -- -D warnings'
 
-fmt:
+fmt: $(CONFIG_RS)
 	$(FLATPAK_RUN) -c '$(SDK_INIT) && cargo fmt'
 
-fmt-check:
+fmt-check: $(CONFIG_RS)
 	$(FLATPAK_RUN) -c '$(SDK_INIT) && cargo fmt -- --check'
 
 typos:
@@ -270,7 +303,7 @@ audit:
 	cargo audit --ignore RUSTSEC-2023-0071
 	cargo deny check
 
-coverage:
+coverage: $(CONFIG_RS)
 	$(FLATPAK_RUN) -c '$(SDK_INIT) && \
 		cargo install cargo-llvm-cov --locked 2>/dev/null || true && \
 		cargo llvm-cov --html && \
