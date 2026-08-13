@@ -81,12 +81,23 @@ jobs:
           echo "homedir=$GNUPGHOME" >> "$GITHUB_OUTPUT"
           echo "key_id=$GPG_KEY_ID" >> "$GITHUB_OUTPUT"
 
+      # --install-deps-from pulls the runtime, SDK and sdk-extensions the
+      # manifest declares. Without it flatpak-builder can't read the SDK's
+      # extension point (which pins org.freedesktop.Sdk.Extension to 25.08)
+      # and falls back to the runtime's own branch, asking for a
+      # rust-stable/x86_64/50 that doesn't exist:
+      #
+      #   error: Requested extension org.freedesktop.Sdk.Extension.rust-stable/x86_64/50 not installed
+      #
+      # ci.yml doesn't hit this because the flatpak-builder action installs
+      # deps for you. Resolving it from the manifest rather than pinning
+      # 25.08 here keeps it correct across future GNOME SDK bumps.
       - name: Build bundle
         run: |
           make bundle \
             GPG_KEY='${{ steps.gpg.outputs.key_id }}' \
             GPG_HOMEDIR='${{ steps.gpg.outputs.homedir }}' \
-            FLATPAK_BUILDER_ARGS='--disable-rofiles-fuse'
+            FLATPAK_BUILDER_ARGS='--disable-rofiles-fuse --install-deps-from=flathub'
 
       - name: Export public signing key
         if: steps.gpg.outputs.key_id != ''
