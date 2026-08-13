@@ -12,6 +12,9 @@ jobs:
     if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/v')
     permissions:
       contents: write
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
 
     steps:
       - uses: actions/checkout@v4
@@ -40,3 +43,33 @@ jobs:
             --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Build the redistributable bundle from the tag just pushed.
+  bundle:
+    name: Flatpak bundle
+    needs: tag-and-release
+    uses: ./.github/workflows/bundle.yml
+    with:
+      ref: ${{ needs.tag-and-release.outputs.tag }}
+    secrets: inherit
+
+  publish:
+    name: Attach bundle to release
+    needs: [tag-and-release, bundle]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: flatpak-bundle
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ls -lh moments-*
+          gh release upload "${{ needs.tag-and-release.outputs.tag }}" \
+            moments-* --clobber --repo "${{ github.repository }}"

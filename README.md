@@ -22,14 +22,56 @@ A photo management application for the GNOME desktop. Organize, browse, and mana
 
 ## Installation
 
-Moments is distributed as a Flatpak. There is no Flathub listing yet — for now, build from source.
+Moments is distributed as a Flatpak. There is no Flathub listing yet — install the
+bundle attached to a [GitHub Release](https://github.com/justinf555/Moments/releases),
+or build from source.
+
+### From a release bundle
+
+Every release ships a single-file `.flatpak` bundle. Download
+`moments-<version>-x86_64.flatpak` from the
+[latest release](https://github.com/justinf555/Moments/releases/latest) and install it:
+
+```bash
+flatpak install --user moments-<version>-x86_64.flatpak
+flatpak run io.github.justinf555.Moments
+```
+
+Moments needs the GNOME 50 runtime. The bundle points at Flathub as its runtime
+source, so Flatpak offers to add that remote and pull the runtime if you don't have
+it yet.
+
+Bundles are installed as a one-off, so `flatpak update` won't pick up new versions —
+download and install the next bundle the same way.
+
+**Verifying the download.** Each release also carries a `.sha256` file:
+
+```bash
+sha256sum -c moments-<version>-x86_64.flatpak.sha256
+```
+
+Signed releases additionally include `moments-releases.asc`, the public key the
+bundle was signed with. The GPG signature and a copy of that key travel inside the
+bundle itself, so the install is trust-on-first-use — the published key is there so
+the signing identity is a matter of record and stays stable across releases:
+
+```bash
+gpg --show-keys moments-releases.asc    # fingerprint of the release signing key
+```
 
 ### Building from Source
 
 **Requirements:**
 
 - [GNOME Builder](https://apps.gnome.org/Builder/) (recommended), or
-- `flatpak-builder` and the GNOME SDK
+- `flatpak-builder` and the GNOME 50 SDK:
+  ```bash
+  flatpak install --user flathub org.flatpak.Builder \
+      org.gnome.Sdk/x86_64/50 org.freedesktop.Sdk.Extension.rust-stable/x86_64/25.08
+  ```
+  The Makefile uses a host `flatpak-builder` if one is installed and falls back to
+  the Flatpak-packaged `org.flatpak.Builder` otherwise. Override with
+  `make run FLATPAK_BUILDER=…` if you have both.
 
 **Using GNOME Builder:**
 
@@ -50,6 +92,17 @@ make run
 ```
 
 This builds and installs the Flatpak locally, then launches the app.
+
+**Building your own bundle:**
+
+```bash
+make bundle           # → moments-<version>-<arch>.flatpak (+ .sha256)
+make install-bundle   # build if needed, then flatpak install --user
+```
+
+`make bundle` builds the production app ID from the working tree and packs it into a
+redistributable single-file bundle — the same command the release workflow runs. Pass
+`GPG_KEY=<key-id>` (optionally `GPG_HOMEDIR=<dir>`) to sign it.
 
 ### System Dependencies (for `cargo test` outside Flatpak)
 
