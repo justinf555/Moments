@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! User-facing error trait.
 //!
 //! Separates human-readable error messages (for toasts, dialogs) from

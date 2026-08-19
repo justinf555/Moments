@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Justin F
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 data_conf = configuration_data()
 data_conf.set('APP_ID', application_id)
 data_conf.set('APP_PATH', application_id.replace('.', '/'))

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 mod flip_horizontal;
 mod flip_vertical;
 mod rotate_ccw;

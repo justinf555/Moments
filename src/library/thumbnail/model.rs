@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 /// Processing state of a single thumbnail, mirroring the `thumbnails.status` column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i64)]

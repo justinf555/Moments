@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Album picker dialog — lets the user choose or create an album to add
 //! selected photos to.
 

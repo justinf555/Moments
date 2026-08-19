@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Sync protocol deserialization types for the Immich `/sync/stream` endpoint.
 //!
 //! All types are newline-delimited JSON (NDJSON) sent by the server.

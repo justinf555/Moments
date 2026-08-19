@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use super::model::PersonId;
 
 /// Events emitted by `FacesService` after state changes.

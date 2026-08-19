@@ -1,0 +1,77 @@
+# SPDX-FileCopyrightText: 2026 Justin F
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+version = 1
+SPDX-PackageName = "Moments"
+SPDX-PackageDownloadLocation = "https://github.com/justinf555/Moments"
+
+# Documentation and repository metadata.
+[[annotations]]
+path = [
+    "README.md",
+    "ARCHITECTURE.md",
+    "CHANGELOG.md",
+    "CLAUDE.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "docs/**.md",
+    ".github/pull_request_template.md",
+    ".github/ISSUE_TEMPLATE/**.md",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Justin F"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+# Adapted from the Contributor Covenant v2.1, which is CC-BY-4.0.
+[[annotations]]
+path = "CODE_OF_CONDUCT.md"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "Contributor Covenant contributors"
+SPDX-License-Identifier = "CC-BY-4.0"
+
+# Verbatim GPLv3 text, kept at the root for GitHub license detection.
+[[annotations]]
+path = "COPYING"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2007 Free Software Foundation, Inc."
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+# JSON has no comment syntax; Cargo.lock and cargo-sources.json are generated.
+[[annotations]]
+path = [
+    ".gitignore",
+    ".vscode/*.json",
+    "Cargo.lock",
+    "cargo-sources.json",
+    "io.github.justinf555.Moments*.json",
+    "build-aux/*.json",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Justin F"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+# AppStream, desktop and GSettings templates are left byte-exact so that
+# appstream-util and desktop-file-validate see exactly what ships.
+[[annotations]]
+path = "data/io.github.justinf555.Moments.*.in"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Justin F"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+# Binary and vector assets carry no comments.
+[[annotations]]
+path = [
+    "data/icons/**.svg",
+    "data/screenshots/*.png",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Justin F"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+# Migrations must stay byte-exact: sqlx records a checksum of each applied
+# migration in _sqlx_migrations and refuses to run if the file changes.
+[[annotations]]
+path = "src/library/db/migrations/*.sql"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Justin F"
+SPDX-License-Identifier = "GPL-3.0-or-later"

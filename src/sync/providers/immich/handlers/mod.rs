@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Sync entity handlers.
 //!
 //! Each handler processes one Immich sync entity type (e.g. `AssetV1`,

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! HTTP client for the Immich server API.
 //!
 //! Uses session-based authentication (`Authorization: Bearer {token}`).

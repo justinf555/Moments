@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! GNOME Keyring integration for storing Immich session tokens.
 //!
 //! Thin wrapper around `libsecret` — the keyring is an application-level

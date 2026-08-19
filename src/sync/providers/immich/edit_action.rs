@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Immich-shaped projection of [`EditState`].
 //!
 //! Immich's `PUT /assets/{id}/edits` API takes an ordered array of

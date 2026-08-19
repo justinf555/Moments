@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! A container widget that adds right-click and long-press context menu support.
 //!
 //! Wraps a child widget and shows a `PopoverMenu` on right-click or long-press.

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Justin F
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 name: Flatpak bundle
 
 # Builds the redistributable single-file Flatpak bundle (`make bundle`) and

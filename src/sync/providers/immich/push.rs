@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Push sync manager — drains the outbox and pushes local mutations to Immich.
 //!
 //! Reads pending entries from the `sync_outbox` table, maps each to an

@@ -1,3 +1,7 @@
+/* SPDX-FileCopyrightText: 2026 Justin F
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
 /* ── Selection highlighting for the photo grid ────────────────────────────
  *
  * Selection is driven by checkboxes via the app-owned SelectionState

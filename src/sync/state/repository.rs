@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! `sync_checkpoints` + `sync_audit` table persistence.
 //!
 //! Both tables are owned by the Immich pull engine: checkpoints record

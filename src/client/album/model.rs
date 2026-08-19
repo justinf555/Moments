@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::cell::{Cell, RefCell};
 
 use gtk::{gdk, glib, prelude::*, subclass::prelude::*};

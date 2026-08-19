@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Phase 0: Baseline tests for event wiring before the event bus migration.
 //!
 //! These tests cover the current ModelRegistry → PhotoGridModel broadcast

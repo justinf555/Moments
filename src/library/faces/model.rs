@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 /// Unique identifier for a person (Immich UUID or future local ID).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PersonId(String);
