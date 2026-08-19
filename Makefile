@@ -7,21 +7,36 @@
         check-potfiles ci-all stack attach release config \
         bundle install-bundle uninstall-bundle
 
+# Flatpak always runs on the host. Inside a toolbox/distrobox/podman
+# container there is no `flatpak` binary at all — only `flatpak-spawn`,
+# which forwards a command out to the host session — so every target here
+# would otherwise die with `flatpak: command not found`. Detect the
+# container once and prefix every flatpak call, rather than making each
+# target (or each developer) remember. `flatpak-spawn --host` inherits the
+# cwd and propagates exit codes, so the prefix is transparent; it does not
+# forward environment variables, which is why the SDK invocations below
+# pass everything they need via explicit --env= flags.
+HOST_CMD := $(shell test -f /run/.containerenv && echo flatpak-spawn --host)
+FLATPAK  ?= $(HOST_CMD) flatpak
+
 # flatpak-builder ships either as a host package or as the Flathub-packaged
 # org.flatpak.Builder app. Prefer the host binary; fall back to the Flatpak.
+# The probe runs through $(HOST_CMD) so it inspects the *host* PATH — a
+# flatpak-builder installed inside the container would be useless anyway,
+# since nested sandboxes don't work.
 # Override explicitly if you have both: make run FLATPAK_BUILDER=flatpak-builder
-FLATPAK_BUILDER ?= $(shell command -v flatpak-builder 2>/dev/null || \
-	echo 'flatpak run org.flatpak.Builder')
+HOST_FB := $(shell $(HOST_CMD) sh -c 'command -v flatpak-builder' 2>/dev/null)
+FLATPAK_BUILDER ?= $(if $(HOST_FB),$(HOST_CMD) $(HOST_FB),$(FLATPAK) run org.flatpak.Builder)
 
 run:
 	$(FLATPAK_BUILDER) --user --install --force-clean flatpak-build-dir io.github.justinf555.Moments.json && \
-	flatpak run io.github.justinf555.Moments
+	$(FLATPAK) run io.github.justinf555.Moments
 
 run-dev:
 	$(FLATPAK_BUILDER) --user --install --force-clean \
 		--state-dir=.flatpak-builder-dev \
 		flatpak-build-dev io.github.justinf555.Moments.dev.json && \
-	flatpak run --env=RUST_LOG=moments=debug io.github.justinf555.Moments.Devel
+	$(FLATPAK) run --env=RUST_LOG=moments=debug io.github.justinf555.Moments.Devel
 
 # Fast iterative dev build (mirrors GNOME Builder's inner loop).
 #
@@ -45,7 +60,7 @@ dev-bootstrap:
 		--stop-at=moments \
 		--state-dir=$(DEV_STATE_DIR) \
 		$(DEV_APP_DIR) io.github.justinf555.Moments.dev.json
-	flatpak build \
+	$(FLATPAK) build \
 		--filesystem=$(CURDIR) \
 		--filesystem=$(CURDIR)/$(DEV_BUILD_DIR):create \
 		--env=PATH=/usr/lib/sdk/rust-stable/bin:/app/bin:/usr/bin \
@@ -59,14 +74,14 @@ dev:
 		echo "==> No build dir — running dev-bootstrap first"; \
 		$(MAKE) dev-bootstrap; \
 	fi
-	flatpak build --share=network \
+	$(FLATPAK) build --share=network \
 		--filesystem=$(CURDIR) \
 		--filesystem=$(CURDIR)/$(DEV_BUILD_DIR) \
 		--env=PATH=/usr/lib/sdk/rust-stable/bin:/app/bin:/usr/bin \
 		--env=RUST_BACKTRACE=1 \
 		$(DEV_APP_DIR) \
 		meson install -C $(CURDIR)/$(DEV_BUILD_DIR)
-	flatpak build \
+	$(FLATPAK) build \
 		--share=network --share=ipc \
 		--socket=wayland --socket=fallback-x11 \
 		--device=dri --socket=pulseaudio \
@@ -92,14 +107,14 @@ run-dhat:
 		echo "==> No build dir — running dev-bootstrap first"; \
 		$(MAKE) dev-bootstrap; \
 	fi
-	flatpak build --share=network \
+	$(FLATPAK) build --share=network \
 		--filesystem=$(CURDIR) \
 		--filesystem=$(CURDIR)/$(DEV_BUILD_DIR) \
 		--env=PATH=/usr/lib/sdk/rust-stable/bin:/app/bin:/usr/bin \
 		$(DEV_APP_DIR) \
 		meson configure -Ddhat-heap=true $(CURDIR)/$(DEV_BUILD_DIR)
 	-$(MAKE) dev
-	flatpak build --share=network \
+	$(FLATPAK) build --share=network \
 		--filesystem=$(CURDIR) \
 		--filesystem=$(CURDIR)/$(DEV_BUILD_DIR) \
 		--env=PATH=/usr/lib/sdk/rust-stable/bin:/app/bin:/usr/bin \
@@ -141,7 +156,7 @@ clean-dev:
 
 APP_ID          = io.github.justinf555.Moments
 BUNDLE_VERSION := $(shell sed -n "s/^[[:space:]]*version:[[:space:]]*'\([0-9][0-9.]*\)'.*/\1/p" meson.build | head -1)
-BUNDLE_ARCH    ?= $(shell flatpak --default-arch 2>/dev/null || uname -m)
+BUNDLE_ARCH    ?= $(shell $(FLATPAK) --default-arch 2>/dev/null || uname -m)
 BUNDLE_MANIFEST = build-aux/$(APP_ID).release.json
 BUNDLE_REPO     = flatpak-bundle-repo
 BUNDLE_BUILD    = flatpak-bundle-build
@@ -179,7 +194,7 @@ endif
 	$(FLATPAK_BUILDER) --force-clean --repo=$(BUNDLE_REPO) \
 		$(GPG_ARGS) $(FLATPAK_BUILDER_ARGS) \
 		$(BUNDLE_BUILD)/app $(BUNDLE_MANIFEST)
-	flatpak build-bundle --arch=$(BUNDLE_ARCH) \
+	$(FLATPAK) build-bundle --arch=$(BUNDLE_ARCH) \
 		--runtime-repo=$(BUNDLE_RUNTIME_REPO) $(BUNDLE_GPG_ARGS) \
 		$(BUNDLE_REPO) $(BUNDLE) $(APP_ID)
 	sha256sum $(BUNDLE) > $(BUNDLE).sha256
@@ -188,10 +203,10 @@ endif
 
 install-bundle:
 	@test -f $(BUNDLE) || $(MAKE) bundle
-	flatpak install --user --bundle -y $(BUNDLE)
+	$(FLATPAK) install --user --bundle -y $(BUNDLE)
 
 uninstall-bundle:
-	-flatpak uninstall --user -y $(APP_ID)
+	-$(FLATPAK) uninstall --user -y $(APP_ID)
 
 clean-bundle:
 	rm -rf $(BUNDLE_REPO) $(BUNDLE_BUILD) moments-*.flatpak moments-*.flatpak.sha256
@@ -204,7 +219,7 @@ clean-bundle:
 # Flatpak SDK runner — uses an isolated CARGO_HOME to avoid rustup shims
 # in ~/.cargo/bin shadowing the SDK's toolchain. Registry and git caches
 # are symlinked from the host for speed.
-FLATPAK_RUN = flatpak run --share=network \
+FLATPAK_RUN = $(FLATPAK) run --share=network \
 	--filesystem=$(CURDIR) \
 	--filesystem=$(HOME)/.cargo/registry:create \
 	--filesystem=$(HOME)/.cargo/git:create \
@@ -267,7 +282,7 @@ test-nextest: $(CONFIG_RS)
 		cargo nextest run --profile ci'
 
 test-integration: $(CONFIG_RS)
-	flatpak run --share=network \
+	$(FLATPAK) run --share=network \
 	  --socket=wayland \
 	  --filesystem=$(CURDIR) \
 	  --filesystem=$(HOME)/.cargo/registry:ro \
@@ -337,17 +352,21 @@ metrics:
 # for every thread. Auto-detects the PID by matching the dev app id; pass
 # PID=… explicitly if more than one moments process is running.
 #
+# The pgrep goes through $(HOST_CMD) because the app runs on the host: a
+# container-local pgrep sees a different PID namespace, so it would either
+# find nothing or hand gdb a PID that means something else entirely.
+#
 # Example: a CR2 import sat forever on `typefind:sink`; `make stack` over
 # the same process showed `gst::Pipeline::set_state` / `pull_sample` in
 # seconds and named the deadlock unambiguously.
 
 stack:
-	@PID="$${PID:-$$(pgrep -f io.github.justinf555.Moments.Devel | tail -1)}"; \
+	@PID="$${PID:-$$($(HOST_CMD) pgrep -f io.github.justinf555.Moments.Devel | tail -1)}"; \
 	if [ -z "$$PID" ]; then \
 		echo "no PID given and no Moments.Devel process found" >&2; exit 1; \
 	fi; \
 	echo "===== thread backtraces for PID $$PID ====="; \
-	flatpak run --command=gdb org.gnome.Sdk//50 -p "$$PID" \
+	$(FLATPAK) run --command=gdb org.gnome.Sdk//50 -p "$$PID" \
 		-ex 'set pagination off' \
 		-ex 'thread apply all bt 30' \
 		-ex quit 2>&1 | grep -v '^\[New '
@@ -363,12 +382,12 @@ stack:
 #
 # Auto-detects the dev app's PID; pass PID=… to override.
 attach:
-	@PID="$${PID:-$$(pgrep -f io.github.justinf555.Moments.Devel | tail -1)}"; \
+	@PID="$${PID:-$$($(HOST_CMD) pgrep -f io.github.justinf555.Moments.Devel | tail -1)}"; \
 	if [ -z "$$PID" ]; then \
 		echo "no PID given and no Moments.Devel process found" >&2; exit 1; \
 	fi; \
 	echo "attaching gdb to PID $$PID — type 'continue' to resume, 'detach' to release"; \
-	flatpak run --command=gdb org.gnome.Sdk//50 -p "$$PID"
+	$(FLATPAK) run --command=gdb org.gnome.Sdk//50 -p "$$PID"
 
 # ── i18n ────────────────────────────────────────────────────────────────────
 
