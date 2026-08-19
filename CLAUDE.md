@@ -4,11 +4,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Pre-commit Checks
 
-Always run `make lint` before committing or creating PRs. If a Makefile exists, check available targets with `make help` or inspect the Makefile first.
+Always run `make lint` before committing or creating PRs — as `flatpak-spawn --host make lint` from inside the toolbox, see [Running make from inside a toolbox](#running-make-from-inside-a-toolbox). There is no `make help` target; read the Makefile for the target list.
 
 ## Build & Run
 
 This project uses **Meson** as its build system and is packaged as a **Flatpak**. It must be built and run through Flatpak — do not attempt to run the binary directly.
+
+### Running make from inside a toolbox
+
+Development happens in a Fedora **toolbox** container (`registry.fedoraproject.org/fedora-toolbox`), where there is no `flatpak` binary — only `flatpak-spawn`. Every `make` target that touches flatpak therefore fails inside the container with `make: flatpak: No such file or directory`. Prefix the whole `make` invocation to run it on the host instead:
+
+```bash
+flatpak-spawn --host make lint
+flatpak-spawn --host make test
+flatpak-spawn --host make run-dev
+```
+
+Prefix `make`, not `flatpak` — the host has GNU Make, and wrapping the outer command means a single prefix covers every nested `flatpak run` the Makefile issues. Don't work around a missing `flatpak` by running `cargo` directly against the container's own GTK/libadwaita: those versions drift from the runtime the app actually ships against, so a clean result there proves nothing about the Flatpak build.
+
+Behaviour of `flatpak-spawn --host` worth knowing:
+
+- **cwd is inherited** — the toolbox shares `$HOME`, so relative paths resolve identically on both sides.
+- **exit codes propagate** — a failing target still fails the command.
+- **environment variables are *not* inherited.** `FOO=bar flatpak-spawn --host …` arrives empty; pass `flatpak-spawn --host --env=FOO=bar …`, or (for Makefile variables) `flatpak-spawn --host make bundle GPG_KEY=…`.
+
+Detect the container with `test -f /run/.toolboxenv`.
 
 ```bash
 # Build and run via Flatpak (primary workflow)
