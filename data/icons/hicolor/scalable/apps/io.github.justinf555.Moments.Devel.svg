@@ -2,8 +2,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
   <defs>
     <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#3584e4"/>
-      <stop offset="1" stop-color="#1a5fb4"/>
+      <stop offset="0" stop-color="#9141ac"/>
+      <stop offset="1" stop-color="#613583"/>
     </linearGradient>
     <linearGradient id="photoGrad" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#ffffff"/>
@@ -13,6 +13,9 @@
       <stop offset="0" stop-color="#99c1f1"/>
       <stop offset="1" stop-color="#62a0ea"/>
     </linearGradient>
+    <pattern id="develStripes" width="24" height="24" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="12" height="24" fill="#ffffff" opacity="0.14"/>
+    </pattern>
     <clipPath id="photoClip">
       <rect x="30" y="28" width="68" height="52" rx="2"/>
     </clipPath>
@@ -20,6 +23,9 @@
 
   <!-- App base: rounded square -->
   <rect x="4" y="4" width="120" height="120" rx="28" ry="28" fill="url(#bgGrad)"/>
+
+  <!-- Devel marker: hazard stripes, visible around the photo cards -->
+  <rect x="4" y="4" width="120" height="120" rx="28" ry="28" fill="url(#develStripes)"/>
 
   <!-- Subtle highlight on top edge -->
   <rect x="4" y="4" width="120" height="60" rx="28" ry="28" fill="#ffffff" opacity="0.08"/>
