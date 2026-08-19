@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Justin F
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 scalable_dir = 'hicolor' / 'scalable' / 'apps'
 install_data(
   scalable_dir / ('@0@.svg').format(application_id),

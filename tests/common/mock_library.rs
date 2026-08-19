@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! A real Library backed by a temp-dir SQLite DB for integration tests.
 
 use std::sync::Arc;

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Factory for building context-sensitive action bar buttons.
 //!
 //! The action bar buttons change depending on which view the user is in:

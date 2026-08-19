@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Compile and register GResources for integration tests.
 //!
 //! Composite template widgets (PhotoGridCell, AlbumCard, etc.) require the

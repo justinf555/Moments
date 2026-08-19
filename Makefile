@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Justin F
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 .PHONY: run run-dev run-dhat dev-bootstrap dev clean clean-dev clean-bundle \
         check test test-nextest test-integration test-all \
         lint fmt fmt-check typos audit coverage metrics \

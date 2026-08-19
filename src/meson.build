@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Justin F
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 pkgdatadir = get_option('prefix') / get_option('datadir') / meson.project_name()
 gnome = import('gnome')
 

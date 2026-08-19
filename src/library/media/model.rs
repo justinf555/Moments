@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 /// Opaque identity for every media asset in the library.
 ///
 /// A UUID v4 stored as a 32-char lowercase hex string (no dashes).

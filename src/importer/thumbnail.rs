@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Thumbnail generation for imported assets.
 //!
 //! Wraps the render pipeline with I/O and DB bookkeeping:

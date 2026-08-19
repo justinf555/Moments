@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Justin F
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 project('moments', 'rust', 
           version: '0.4.1',
     meson_version: '>= 1.0.0',

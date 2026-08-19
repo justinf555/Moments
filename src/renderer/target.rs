@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Render-target hint for edit stages.
 //!
 //! Lives in its own module so both [`super::pipeline`] and [`super::edits`]

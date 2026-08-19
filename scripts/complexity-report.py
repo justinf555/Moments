@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Justin F
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Parse rust-code-analysis JSON output into a complexity summary table.
 
 Usage: rust-code-analysis-cli --metrics -O json -p src/ | python3 scripts/complexity-report.py

@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-FileCopyrightText: 2026 Justin F -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <gresources>
   <gresource prefix="/io/github/justinf555/Moments">
     <file preprocess="xml-stripblanks">ui/window/window.ui</file>

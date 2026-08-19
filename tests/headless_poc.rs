@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Proof-of-concept: headless integration tests for Moments.
 //!
 //! Validates that GTK4/libadwaita widgets can be instantiated and tested

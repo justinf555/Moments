@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Pull-side handlers for Immich's per-action edit stream.
 //!
 //! Each `SyncAssetEditV1` carries one geometric action (`crop`,

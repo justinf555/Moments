@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Image decode step.
 //!
 //! Decodes an image file using magic-byte format detection. This is the

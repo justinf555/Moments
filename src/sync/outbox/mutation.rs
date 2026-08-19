@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Single-entity mutation type used by the push manager.
 //!
 //! [`Mutation`](crate::library::mutation::Mutation) is the in-process

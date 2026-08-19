@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Periodic auto-purge of expired trash items.
 //!
 //! Runs on the Tokio runtime: queries for items past the retention period

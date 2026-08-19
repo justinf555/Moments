@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use super::model::{MediaCursor, MediaFilter, MediaId, MediaItem, MediaRecord, MediaType, Stack};
 use crate::library::db::{id_placeholders, Database, LibraryStats};
 use crate::library::error::LibraryError;

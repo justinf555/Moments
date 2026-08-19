@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Context menu and album popover wiring for the photo grid.
 
 use std::cell::Cell;

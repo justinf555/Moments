@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! XMP encode/decode + JPEG APP1 segment injection.
 //!
 //! Phase C (#224) embeds a Moments-specific XMP block in every

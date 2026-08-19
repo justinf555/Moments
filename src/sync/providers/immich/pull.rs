@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Pull sync manager — streams changes from Immich and upserts locally.
 //!
 //! Connects to `POST /sync/stream`, processes NDJSON entity records,

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Justin F
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Compact activity indicator for the sidebar header bar.
 //!
 //! Shows a spinner when sync or import is active, a status icon for
