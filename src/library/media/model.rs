@@ -51,7 +51,8 @@ pub enum MediaType {
 #[derive(Debug, Clone)]
 pub struct MediaItem {
     pub id: MediaId,
-    /// EXIF capture timestamp (UTC Unix seconds). `None` if unavailable.
+    /// Capture time as the capture-local wall clock, encoded as seconds
+    /// since the epoch. See [`MediaRecord::taken_at`]. `None` if unavailable.
     pub taken_at: Option<i64>,
     pub imported_at: i64,
     pub original_filename: String,
@@ -187,7 +188,16 @@ pub struct MediaRecord {
     /// Unix timestamp (seconds since epoch).
     pub imported_at: i64,
     pub media_type: MediaType,
-    /// Capture timestamp from EXIF (UTC Unix seconds). `None` if unavailable.
+    /// Capture time as the *capture-local wall clock* — the reading on the
+    /// camera's own clock — encoded as seconds since the epoch.
+    ///
+    /// Deliberately not an instant in UTC: photo libraries show the time the
+    /// shutter fired, not that time re-expressed wherever the viewer happens
+    /// to be. The EXIF extractor keeps `DateTimeOriginal` verbatim and the
+    /// Immich sync handler prefers the server's `localDateTime`, so both
+    /// import paths land on the same convention. Issue #549.
+    ///
+    /// `None` if unavailable.
     pub taken_at: Option<i64>,
     pub width: Option<i64>,
     pub height: Option<i64>,

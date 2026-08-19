@@ -4,11 +4,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Pre-commit Checks
 
-Always run `make lint` before committing or creating PRs. If a Makefile exists, check available targets with `make help` or inspect the Makefile first.
+Always run `make lint` before committing or creating PRs. It works unchanged inside the toolbox container — see [Container-aware flatpak invocation](#container-aware-flatpak-invocation). There is no `make help` target; read the Makefile for the target list.
 
 ## Build & Run
 
 This project uses **Meson** as its build system and is packaged as a **Flatpak**. It must be built and run through Flatpak — do not attempt to run the binary directly.
+
+### Container-aware flatpak invocation
+
+Development happens inside a Fedora **toolbox** container, which has no `flatpak` binary at all — only `flatpak-spawn`, which forwards a command out to the host session. Flatpak has to run on the host regardless, since nested sandboxes don't work.
+
+**The Makefile handles this itself — just run `make lint` / `make run-dev` normally, in the container or on the host.** `HOST_CMD` detects the container via `/run/.containerenv` and resolves to `flatpak-spawn --host` (empty on the host); `$(FLATPAK)` is that prefix plus `flatpak`.
+
+**Never write a bare `flatpak` in a recipe — always `$(FLATPAK)`.** A bare one works when you test it on the host and then fails for everyone in a container with `flatpak: command not found`. The same goes for `$(FLATPAK_BUILDER)`, which probes the *host* PATH for a `flatpak-builder` binary and otherwise falls back to `$(FLATPAK) run org.flatpak.Builder`.
+
+Behaviour of `flatpak-spawn --host` that shaped the above:
+
+- **cwd is inherited** — the toolbox shares `$HOME`, so relative paths resolve identically on both sides, and the manifests' relative source paths keep working.
+- **exit codes propagate** — a failing target still fails the build.
+- **environment variables are *not* inherited.** `FOO=bar flatpak-spawn --host …` arrives empty. This is why the SDK invocations pass everything through explicit `--env=` flags; if you add a target that depends on an inherited variable, pass it as a make argument (`make bundle GPG_KEY=…`) rather than exporting it.
+
+One trap when verifying: don't work around a flatpak problem by running `cargo` directly against the container's own GTK/libadwaita. Those versions drift from the GNOME runtime the app ships against, so a clean result there proves nothing about the Flatpak build.
 
 ```bash
 # Build and run via Flatpak (primary workflow)
@@ -26,7 +42,7 @@ make bundle
 
 The Flatpak manifest is `io.github.justinf555.Moments.json` (local dev), `io.github.justinf555.Moments.flathub.json` (Flathub submission), `build-aux/io.github.justinf555.Moments.ci.json` (CI build + tests), and `build-aux/io.github.justinf555.Moments.release.json` (redistributable bundle). The local manifest pulls source from this git repo (`"type": "git", "path": "."`, branch `main`), so **changes must be committed before rebuilding**. All manifest source paths are relative to the manifest's own directory — **never hardcode an absolute local path into a manifest**. The `make run` command installs the Flatpak locally (`--user --install`) so icons are exported to GNOME Shell.
 
-Every target that shells out to flatpak-builder goes through `$(FLATPAK_BUILDER)`, which auto-detects a host `flatpak-builder` binary and falls back to `flatpak run org.flatpak.Builder`. Don't hardcode `flatpak-builder` in new targets.
+Every target that shells out to flatpak-builder goes through `$(FLATPAK_BUILDER)`, which auto-detects a host `flatpak-builder` binary and falls back to `$(FLATPAK) run org.flatpak.Builder`. Don't hardcode `flatpak-builder` — or `flatpak` — in new targets.
 
 ### Dev build
 

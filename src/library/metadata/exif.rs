@@ -11,9 +11,21 @@ use tracing::{instrument, warn};
 /// import pipeline. Callers must handle absent data gracefully.
 #[derive(Debug, Default)]
 pub struct ExifInfo {
-    /// Capture timestamp as a Unix timestamp (seconds, UTC).
+    /// Capture time as the *capture-local wall clock*, encoded as seconds
+    /// since the epoch (the EXIF digits read as if they were UTC).
+    ///
+    /// This deliberately is not an instant in UTC. EXIF `DateTimeOriginal`
+    /// records what the camera's clock read, and photo libraries show that
+    /// same reading no matter where the viewer later opens the file — a
+    /// sunset shot at 18:04 in Sydney stays "18:04", not "08:04" because
+    /// the laptop is now in London. Immich uses the same convention for
+    /// its `localDateTime` field, which is what the sync handler stores
+    /// into `media.taken_at`, so both import paths agree. Issue #549.
     pub captured_at: Option<i64>,
-    /// UTC offset of the capture timezone, in minutes.
+    /// UTC offset of the capture timezone, in minutes east of UTC, from
+    /// the `OffsetTimeOriginal` / `OffsetTime` tags. Recorded for future
+    /// use (it is not currently persisted) and intentionally *not* applied
+    /// to [`Self::captured_at`].
     pub captured_at_tz: Option<i64>,
     pub width: Option<u32>,
     pub height: Option<u32>,
@@ -104,43 +116,54 @@ fn get_field(exif: &exif::Exif, tag: exif::Tag) -> Option<&exif::Field> {
         .or_else(|| exif.get_field(tag, exif::In::THUMBNAIL))
 }
 
-/// Parse `DateTimeOriginal` (preferred) or `DateTime` into a UTC Unix timestamp.
+/// Read an ASCII EXIF field as a trimmed `String`.
+fn ascii_field(exif: &exif::Exif, tag: exif::Tag) -> Option<String> {
+    let field = get_field(exif, tag)?;
+    match &field.value {
+        exif::Value::Ascii(vecs) => {
+            let s: String = vecs.first()?.iter().map(|&b| b as char).collect();
+            Some(s.trim_end_matches('\0').trim().to_string())
+        }
+        _ => None,
+    }
+}
+
+/// Parse `DateTimeOriginal` (preferred) or `DateTime` into `captured_at`.
+///
+/// The result is the *capture-local wall clock* encoded as seconds since
+/// the epoch — i.e. the digits the camera wrote, read as if they were UTC.
+/// See [`ExifInfo::captured_at`] for why the `OffsetTime*` tag is recorded
+/// separately in [`ExifInfo::captured_at_tz`] rather than folded in here.
 fn capture_timestamp(exif: &exif::Exif) -> Option<i64> {
-    let field = get_field(exif, exif::Tag::DateTimeOriginal)
-        .or_else(|| get_field(exif, exif::Tag::DateTime))?;
+    let s = ascii_field(exif, exif::Tag::DateTimeOriginal)
+        .or_else(|| ascii_field(exif, exif::Tag::DateTime))?;
+    parse_exif_datetime(&s)
+}
 
-    let s = match &field.value {
-        exif::Value::Ascii(vecs) => vecs.first()?.iter().map(|&b| b as char).collect::<String>(),
-        _ => return None,
-    };
-
-    // EXIF datetime format: "YYYY:MM:DD HH:MM:SS"
-    let s = s.trim_end_matches('\0').trim();
+/// Parse an EXIF `"YYYY:MM:DD HH:MM:SS"` string into a wall-clock timestamp.
+fn parse_exif_datetime(s: &str) -> Option<i64> {
     let dt = chrono::NaiveDateTime::parse_from_str(s, "%Y:%m:%d %H:%M:%S").ok()?;
-
-    // Apply timezone offset if available, otherwise treat as UTC.
-    let offset_secs = capture_tz(exif).unwrap_or(0) * 60;
-    let ts = dt.and_utc().timestamp() - offset_secs;
-    Some(ts)
+    Some(dt.and_utc().timestamp())
 }
 
 /// Parse `OffsetTimeOriginal` or `OffsetTime` into minutes east of UTC.
 fn capture_tz(exif: &exif::Exif) -> Option<i64> {
-    let field = get_field(exif, exif::Tag::OffsetTimeOriginal)
-        .or_else(|| get_field(exif, exif::Tag::OffsetTime))?;
+    let s = ascii_field(exif, exif::Tag::OffsetTimeOriginal)
+        .or_else(|| ascii_field(exif, exif::Tag::OffsetTime))?;
+    parse_tz_offset(&s)
+}
 
-    let s = match &field.value {
-        exif::Value::Ascii(vecs) => vecs.first()?.iter().map(|&b| b as char).collect::<String>(),
-        _ => return None,
-    };
-
-    // Format: "+HH:MM" or "-HH:MM"
-    let s = s.trim_end_matches('\0').trim();
+/// Parse an EXIF UTC-offset string (`"+HH:MM"` / `"-HH:MM"`) into minutes
+/// east of UTC.
+fn parse_tz_offset(s: &str) -> Option<i64> {
     let sign: i64 = if s.starts_with('-') { -1 } else { 1 };
     let s = s.trim_start_matches(['+', '-']);
     let mut parts = s.splitn(2, ':');
-    let hours: i64 = parts.next()?.parse().ok()?;
-    let mins: i64 = parts.next().and_then(|m| m.parse().ok()).unwrap_or(0);
+    let hours: i64 = parts.next()?.trim().parse().ok()?;
+    let mins: i64 = parts
+        .next()
+        .and_then(|m| m.trim().parse::<i64>().ok())
+        .unwrap_or(0);
     Some(sign * (hours * 60 + mins))
 }
 
@@ -344,5 +367,38 @@ mod tests {
         assert_eq!(gcd(0, 5), 5);
         assert_eq!(gcd(12, 8), 4);
         assert_eq!(gcd(1, 500), 1);
+    }
+
+    #[test]
+    fn parse_exif_datetime_keeps_wall_clock() {
+        // 2024-06-15 18:04:05 must round-trip to the same digits, so the
+        // info panel shows the time the shutter actually fired.
+        let ts = parse_exif_datetime("2024:06:15 18:04:05").unwrap();
+        let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0).unwrap();
+        assert_eq!(
+            dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2024-06-15 18:04:05"
+        );
+    }
+
+    #[test]
+    fn parse_exif_datetime_rejects_garbage() {
+        assert!(parse_exif_datetime("").is_none());
+        assert!(parse_exif_datetime("2024-06-15T18:04:05Z").is_none());
+    }
+
+    #[test]
+    fn parse_tz_offset_signs_and_minutes() {
+        assert_eq!(parse_tz_offset("+10:00"), Some(600));
+        assert_eq!(parse_tz_offset("-05:30"), Some(-330));
+        assert_eq!(parse_tz_offset("+00:00"), Some(0));
+        // Some cameras omit the minutes component.
+        assert_eq!(parse_tz_offset("+09"), Some(540));
+    }
+
+    #[test]
+    fn parse_tz_offset_rejects_garbage() {
+        assert!(parse_tz_offset("").is_none());
+        assert!(parse_tz_offset("Z").is_none());
     }
 }

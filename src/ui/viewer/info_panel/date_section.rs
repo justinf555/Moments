@@ -64,7 +64,19 @@ impl InfoDateSection {
     }
 }
 
-/// Split a Unix timestamp into (short date, long date, time) strings.
+/// Split a capture timestamp into (short date, long date, time) strings.
+///
+/// `taken_at` holds the *capture-local wall clock* — the time the camera's
+/// own clock read — encoded as seconds since the epoch. Both import paths
+/// agree on that: the EXIF extractor keeps `DateTimeOriginal` verbatim
+/// (`library::metadata::exif`), and the Immich sync handler prefers the
+/// server's `localDateTime`. Rendering with a fixed UTC offset therefore
+/// hands back exactly those digits, which is what the panel should show.
+///
+/// Converting to the *viewer's* local timezone would be wrong: it would
+/// slide a sunset shot taken at 18:04 in Sydney to "08:04" as soon as the
+/// laptop landed in London, and it would shift every photo in the library
+/// by the host offset even though no photo moved. Issue #549.
 fn format_date_parts(ts: Option<i64>) -> (String, String, String) {
     use chrono::{DateTime, Utc};
 
@@ -92,6 +104,30 @@ mod tests {
         assert!(short.contains("2017"));
         assert!(long.contains("March"));
         assert!(time.contains("12:00"));
+    }
+
+    #[test]
+    fn format_date_parts_is_independent_of_host_timezone() {
+        // A capture stored as 2024-06-15 18:04 wall clock must render as
+        // 18:04 regardless of the machine's TZ. Issue #549.
+        let ts = chrono::NaiveDate::from_ymd_opt(2024, 6, 15)
+            .unwrap()
+            .and_hms_opt(18, 4, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        let (short, long, time) = format_date_parts(Some(ts));
+        assert_eq!(short, "15 Jun 2024");
+        assert_eq!(long, "15 June 2024");
+        assert_eq!(time, "18:04");
+    }
+
+    #[test]
+    fn format_date_parts_out_of_range_returns_unknown() {
+        let (short, long, time) = format_date_parts(Some(i64::MAX));
+        assert_eq!(short, "Unknown");
+        assert_eq!(long, "Unknown");
+        assert_eq!(time, "Unknown");
     }
 
     #[test]
