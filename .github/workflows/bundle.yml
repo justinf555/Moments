@@ -66,8 +66,14 @@ jobs:
       - name: Ensure make is available
         run: command -v make >/dev/null || dnf install -y make
 
-      - name: Cache flatpak-builder state
-        uses: actions/cache@v4
+      # Split restore/save rather than actions/cache@v4, so the save can be
+      # gated. A manual workflow_dispatch can point `ref` at an arbitrary
+      # commit; writing that build's output to the shared cache would let it
+      # poison what the release build later restores. Dispatch builds read the
+      # cache, they don't write it.
+      - name: Restore flatpak-builder state
+        id: cache
+        uses: actions/cache/restore@v4
         with:
           path: .flatpak-builder
           key: flatpak-bundle-${{ inputs.channel }}-${{ hashFiles('build-aux/io.github.justinf555.Moments.*.json', 'Cargo.lock') }}
@@ -117,6 +123,17 @@ jobs:
             GPG_KEY='${{ steps.gpg.outputs.key_id }}' \
             GPG_HOMEDIR='${{ steps.gpg.outputs.homedir }}' \
             FLATPAK_BUILDER_ARGS='--disable-rofiles-fuse --install-deps-from=flathub'
+
+      - name: Save flatpak-builder state
+        # Trusted callers only: release.yml (a tag from a merged release PR)
+        # and nightly.yml (tip of main). Never a manual dispatch.
+        if: >-
+          github.event_name != 'workflow_dispatch'
+          && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .flatpak-builder
+          key: ${{ steps.cache.outputs.cache-primary-key }}
 
       - name: Export public signing key
         if: steps.gpg.outputs.key_id != ''

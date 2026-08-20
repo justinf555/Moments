@@ -31,6 +31,8 @@ concurrency:
 jobs:
   bundle:
     name: Flatpak bundle
+    permissions:
+      contents: read
     uses: ./.github/workflows/bundle.yml
     with:
       channel: nightly
