@@ -5,7 +5,7 @@
         check test test-nextest test-integration test-all \
         lint fmt fmt-check typos audit coverage metrics \
         check-potfiles ci-all stack attach release config \
-        bundle install-bundle uninstall-bundle
+        bundle bundle-nightly install-bundle uninstall-bundle
 
 # Flatpak always runs on the host. Inside a toolbox/distrobox/podman
 # container there is no `flatpak` binary at all — only `flatpak-spawn`,
@@ -157,11 +157,45 @@ clean-dev:
 APP_ID          = io.github.justinf555.Moments
 BUNDLE_VERSION := $(shell sed -n "s/^[[:space:]]*version:[[:space:]]*'\([0-9][0-9.]*\)'.*/\1/p" meson.build | head -1)
 BUNDLE_ARCH    ?= $(shell $(FLATPAK) --default-arch 2>/dev/null || uname -m)
-BUNDLE_MANIFEST = build-aux/$(APP_ID).release.json
 BUNDLE_REPO     = flatpak-bundle-repo
 BUNDLE_BUILD    = flatpak-bundle-build
-BUNDLE          = moments-$(BUNDLE_VERSION)-$(BUNDLE_ARCH).flatpak
 BUNDLE_RUNTIME_REPO ?= https://dl.flathub.org/repo/flathub.flatpakrepo
+
+# CHANNEL selects which manifest (and so which app id) gets bundled.
+#
+#   make bundle                  → release channel, versioned filename
+#   make bundle CHANNEL=nightly  → nightly channel, stable filename
+#
+# The nightly filename deliberately carries no version: nightly.yml
+# republishes it to a rolling `nightly` GitHub release, and a constant
+# filename is what keeps that download URL stable across builds. The version
+# it was built from is stamped into the app instead (see NIGHTLY_SUFFIX).
+CHANNEL ?= release
+
+ifeq ($(CHANNEL),release)
+BUNDLE_MANIFEST = build-aux/$(APP_ID).release.json
+BUNDLE_ID       = $(APP_ID)
+BUNDLE          = moments-$(BUNDLE_VERSION)-$(BUNDLE_ARCH).flatpak
+else ifeq ($(CHANNEL),nightly)
+# flatpak-builder takes no config-opts on the command line, so the git
+# description is substituted into a resolved copy of the manifest. It lives
+# next to the template because manifest source paths ("path": "..") resolve
+# relative to the manifest's own directory.
+BUNDLE_MANIFEST = build-aux/.$(APP_ID).nightly.resolved.json
+BUNDLE_TEMPLATE = build-aux/$(APP_ID).nightly.json
+BUNDLE_ID       = $(APP_ID).Nightly
+BUNDLE          = moments-nightly-$(BUNDLE_ARCH).flatpak
+# "+12.gab34cd1" — 12 commits past the last tag, at that short sha. Semver
+# build metadata rather than a pre-release suffix, so it never claims to be a
+# version that hasn't been released. Simply expanded, so the echo and the sed
+# below can't disagree about what HEAD was.
+NIGHTLY_SUFFIX := $(shell \
+	n=$$(git rev-list --count $$(git describe --tags --abbrev=0 2>/dev/null \
+	    || git rev-list --max-parents=0 HEAD)..HEAD 2>/dev/null || echo 0); \
+	echo "+$$n.g$$(git rev-parse --short=7 HEAD 2>/dev/null || echo unknown)")
+else
+$(error CHANNEL must be "release" or "nightly", got "$(CHANNEL)")
+endif
 
 # Extra flags for flatpak-builder (CI passes --disable-rofiles-fuse etc.)
 FLATPAK_BUILDER_ARGS ?=
@@ -183,8 +217,13 @@ bundle:
 	@if [ -z "$(BUNDLE_VERSION)" ]; then \
 		echo "could not read version from meson.build" >&2; exit 1; \
 	fi
-	@echo "==> Building $(APP_ID) $(BUNDLE_VERSION) ($(BUNDLE_ARCH))"
+	@echo "==> Building $(BUNDLE_ID) $(BUNDLE_VERSION)$(if $(BUNDLE_TEMPLATE),$(NIGHTLY_SUFFIX)) ($(BUNDLE_ARCH))"
 	mkdir -p $(BUNDLE_BUILD)
+ifneq ($(BUNDLE_TEMPLATE),)
+	sed 's/@VERSION_SUFFIX@/$(NIGHTLY_SUFFIX)/' $(BUNDLE_TEMPLATE) > $(BUNDLE_MANIFEST)
+	@grep -q '@VERSION_SUFFIX@' $(BUNDLE_MANIFEST) && \
+		{ echo "version suffix substitution failed" >&2; exit 1; } || true
+endif
 ifneq ($(GPG_KEY),)
 	gpg $(GPG_EXPORT_ARGS) --export "$(GPG_KEY)" > $(BUNDLE_PUBKEY)
 	@test -s $(BUNDLE_PUBKEY) || { echo "gpg exported an empty key for $(GPG_KEY)" >&2; exit 1; }
@@ -196,20 +235,25 @@ endif
 		$(BUNDLE_BUILD)/app $(BUNDLE_MANIFEST)
 	$(FLATPAK) build-bundle --arch=$(BUNDLE_ARCH) \
 		--runtime-repo=$(BUNDLE_RUNTIME_REPO) $(BUNDLE_GPG_ARGS) \
-		$(BUNDLE_REPO) $(BUNDLE) $(APP_ID)
+		$(BUNDLE_REPO) $(BUNDLE) $(BUNDLE_ID)
 	sha256sum $(BUNDLE) > $(BUNDLE).sha256
 	@echo "==> $(BUNDLE) ($$(du -h $(BUNDLE) | cut -f1))"
 	@echo "==> Install with: flatpak install --user $(BUNDLE)"
 
+# Convenience alias — `make bundle CHANNEL=nightly` by another name.
+bundle-nightly:
+	$(MAKE) bundle CHANNEL=nightly
+
 install-bundle:
-	@test -f $(BUNDLE) || $(MAKE) bundle
+	@test -f $(BUNDLE) || $(MAKE) bundle CHANNEL=$(CHANNEL)
 	$(FLATPAK) install --user --bundle -y $(BUNDLE)
 
 uninstall-bundle:
-	-$(FLATPAK) uninstall --user -y $(APP_ID)
+	-$(FLATPAK) uninstall --user -y $(BUNDLE_ID)
 
 clean-bundle:
-	rm -rf $(BUNDLE_REPO) $(BUNDLE_BUILD) moments-*.flatpak moments-*.flatpak.sha256
+	rm -rf $(BUNDLE_REPO) $(BUNDLE_BUILD) moments-*.flatpak moments-*.flatpak.sha256 \
+		build-aux/.$(APP_ID).nightly.resolved.json
 
 # ── Testing (inside GNOME 50 Flatpak SDK) ────────────────────────────────────
 #

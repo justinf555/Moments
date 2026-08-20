@@ -3,6 +3,7 @@
 
 data_conf = configuration_data()
 data_conf.set('APP_ID', application_id)
+data_conf.set('APP_NAME', application_name)
 data_conf.set('APP_PATH', application_id.replace('.', '/'))
 data_conf.set('bindir', get_option('prefix') / get_option('bindir'))
 

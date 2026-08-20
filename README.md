@@ -59,6 +59,29 @@ the signing identity is a matter of record and stays stable across releases:
 gpg --show-keys moments-releases.asc    # fingerprint of the release signing key
 ```
 
+### Nightly builds
+
+Every merge to `main` publishes a nightly bundle at a URL that never changes:
+
+```bash
+wget https://github.com/justinf555/Moments/releases/download/nightly/moments-nightly-x86_64.flatpak
+flatpak install --user moments-nightly-x86_64.flatpak
+flatpak run io.github.justinf555.Moments.Nightly
+```
+
+Nightlies have had **no release testing** and may be broken at any time — they
+exist so you can try an unreleased fix without building it yourself.
+
+A nightly installs under its own application id, so it runs alongside a production
+install with a separate library, settings and keyring entry rather than replacing
+it. It carries an orange icon with a `NIGHTLY` banner and a striped headerbar so
+you can tell the two apart, and reports a version like `0.4.1+6.g7ecfa4a` — six
+commits past `v0.4.1`, at that commit — which is the thing to quote in a bug
+report.
+
+The [`nightly` release](https://github.com/justinf555/Moments/releases/tag/nightly)
+page names the commit each build came from.
+
 ### Building from Source
 
 **Requirements:**

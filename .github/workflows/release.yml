@@ -51,6 +51,8 @@ jobs:
   bundle:
     name: Flatpak bundle
     needs: tag-and-release
+    permissions:
+      contents: read
     uses: ./.github/workflows/bundle.yml
     with:
       ref: ${{ needs.tag-and-release.outputs.tag }}
@@ -66,7 +68,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: flatpak-bundle
+          name: flatpak-bundle-release
 
       - name: Upload release assets
         env:

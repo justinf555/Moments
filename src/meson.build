@@ -53,11 +53,14 @@ gnome.compile_resources('moments',
 )
 
 conf = configuration_data()
-conf.set_quoted('VERSION', meson.project_version())
+# Nightlies append a git description so a bug report identifies the exact
+# build; tagged releases leave the suffix empty and report a bare version.
+conf.set_quoted('VERSION', meson.project_version() + get_option('version_suffix'))
 conf.set_quoted('GETTEXT_PACKAGE', 'moments')
 conf.set_quoted('LOCALEDIR', get_option('prefix') / get_option('localedir'))
 conf.set_quoted('PKGDATADIR', pkgdatadir)
 conf.set_quoted('APP_ID', application_id)
+conf.set_quoted('APP_NAME', application_name)
 conf.set_quoted('PROFILE', profile)
 
 configure_file(

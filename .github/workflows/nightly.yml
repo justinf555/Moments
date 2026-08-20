@@ -1,0 +1,134 @@
+# SPDX-FileCopyrightText: 2026 Justin F
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: Nightly
+
+# Builds the Nightly channel from the tip of main and republishes it to a
+# rolling `nightly` prerelease, so the download URL never changes:
+#
+#   https://github.com/justinf555/Moments/releases/download/nightly/moments-nightly-x86_64.flatpak
+#
+# The nightly installs under io.github.justinf555.Moments.Nightly, so it sits
+# alongside a production install rather than replacing it.
+#
+# Runs on every merge to main. The nightly cron is a safety net: if a push
+# build fails for an infrastructure reason, the channel recovers on its own
+# rather than going stale until someone notices.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 15 * * *'   # 01:00 AEST
+  workflow_dispatch:
+
+# A merge train shouldn't race two builds onto the same rolling release; the
+# newest merge is the one that should win.
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+jobs:
+  bundle:
+    name: Flatpak bundle
+    permissions:
+      contents: read
+    uses: ./.github/workflows/bundle.yml
+    with:
+      channel: nightly
+    secrets: inherit
+
+  publish:
+    name: Publish rolling release
+    needs: bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: flatpak-bundle-nightly
+
+      - name: Describe the build
+        id: describe
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse --short=7 HEAD)"
+          BASE="$(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)"
+          COUNT="$(git rev-list --count "$BASE"..HEAD)"
+          VERSION="$(sed -n "s/^[[:space:]]*version:[[:space:]]*'\([0-9][0-9.]*\)'.*/\1/p" meson.build | head -1)"
+          {
+            echo "sha=$SHA"
+            echo "version=$VERSION+$COUNT.g$SHA"
+            echo "subject=$(git log -1 --pretty=%s)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Write release notes
+        env:
+          VERSION: ${{ steps.describe.outputs.version }}
+          SUBJECT: ${{ steps.describe.outputs.subject }}
+          SHA: ${{ steps.describe.outputs.sha }}
+        run: |
+          set -euo pipefail
+          cat > notes.md <<EOF
+          Automatic build from the tip of \`main\`. **Not a supported release** —
+          it has had no release testing and may be broken at any time.
+
+          | | |
+          |---|---|
+          | Version | \`$VERSION\` |
+          | Commit | [\`$SHA\`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}) — $SUBJECT |
+          | Built | $(date -u '+%Y-%m-%d %H:%M UTC') |
+
+          ### Install
+
+          \`\`\`sh
+          flatpak install --user moments-nightly-x86_64.flatpak
+          \`\`\`
+
+          Installs as \`io.github.justinf555.Moments.Nightly\` with an orange
+          icon, so it runs alongside a production install with its own settings
+          and library rather than replacing it.
+
+          The download URL is stable — this release is replaced in place on
+          every merge to \`main\`.
+          EOF
+          cat notes.md
+
+      # Updated in place rather than deleted and recreated: the whole point
+      # of the rolling release is a download URL that always resolves, and a
+      # delete/create cycle leaves a window where it 404s.
+      - name: Republish rolling release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TITLE: Nightly (${{ steps.describe.outputs.version }})
+        run: |
+          set -euo pipefail
+          ls -lh moments-*
+
+          # Move the tag to the commit this bundle was built from.
+          git tag -f nightly "${{ github.sha }}"
+          git push -f origin refs/tags/nightly
+
+          if gh release view nightly --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release edit nightly \
+              --title "$TITLE" \
+              --notes-file notes.md \
+              --prerelease \
+              --repo "${{ github.repository }}"
+            gh release upload nightly moments-* \
+              --clobber --repo "${{ github.repository }}"
+          else
+            gh release create nightly \
+              --title "$TITLE" \
+              --notes-file notes.md \
+              --prerelease \
+              --repo "${{ github.repository }}" \
+              moments-*
+          fi

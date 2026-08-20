@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Justin F
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-option('profile', type: 'combo', choices: ['default', 'development'], value: 'default',
-       description: 'Build profile: "default" for production, "development" for Devel app ID')
+option('profile', type: 'combo', choices: ['default', 'nightly', 'development'], value: 'default',
+       description: 'Release channel: "default" for production, "nightly" for builds off main, "development" for local work')
 option('dhat-heap', type: 'boolean', value: false,
        description: 'Enable dhat-rs heap profiling (replaces global allocator). Off by default.')
+option('version_suffix', type: 'string', value: '',
+       description: 'Appended to the reported version, e.g. "+17.g7ecfa4a" for a nightly. Empty for tagged builds.')
