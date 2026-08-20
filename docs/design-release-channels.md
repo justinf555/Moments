@@ -121,6 +121,40 @@ Two consequences follow from that URL being the deliverable:
 `concurrency: {group: nightly, cancel-in-progress: true}` means a merge train
 doesn't race two builds onto the same release — the newest merge wins.
 
+### Build cache and the CodeQL cache-poisoning alert
+
+`bundle.yml` caches `.flatpak-builder` between runs, which is what keeps a nightly
+build to a few minutes instead of a cold ~20. CodeQL's
+`actions/cache-poisoning/direct-cache` flags that write, and the alert is
+**dismissed as a false positive**. The reasoning, recorded here because the
+dismissal comment is capped at 280 characters:
+
+- **No untrusted code reaches the workflow.** Every trigger requires repository
+  write access — `push` and `schedule` are default-branch only, `workflow_dispatch`
+  requires write, and the release path is `pull_request: closed` on a `release/v*`
+  branch. `bundle.yml` is never triggered by `pull_request`, so there is no
+  fork-PR path, which is the scenario the query is really about.
+- **Cache scopes are per-branch.** A workflow run restores caches from its own
+  branch or the default branch, never from a sibling. A dispatch build on a feature
+  branch therefore writes to *that branch's* scope, and a build on `main` will never
+  read it. Writing the scope `main` reads requires running on `main`, which requires
+  write access to `main`.
+
+The one path that was genuinely a gap — a `workflow_dispatch` **on main** pointing
+`ref` at an arbitrary commit, whose output would land in main's cache scope — is
+closed by splitting `actions/cache@v4` into `cache/restore` plus a `cache/save`
+gated on `github.event_name != 'workflow_dispatch'`. Dispatch builds read the cache;
+they never write it.
+
+Inside a reusable workflow `github.event_name` is the **caller's** event, so that
+guard sees `push` from `nightly.yml`, `pull_request` from `release.yml`, and
+`workflow_dispatch` only when `bundle.yml` is dispatched directly or via a dispatch
+of `nightly.yml`.
+
+If the trigger set ever grows a `pull_request` entry — anything that builds code
+from a fork — this reasoning no longer holds and the cache save must be
+reconsidered.
+
 ## Flow
 
 ```
