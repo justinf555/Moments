@@ -2,8 +2,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
   <defs>
     <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#9141ac"/>
-      <stop offset="1" stop-color="#613583"/>
+      <stop offset="0" stop-color="#e66100"/>
+      <stop offset="1" stop-color="#c64600"/>
     </linearGradient>
     <linearGradient id="photoGrad" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#ffffff"/>
@@ -13,9 +13,6 @@
       <stop offset="0" stop-color="#99c1f1"/>
       <stop offset="1" stop-color="#62a0ea"/>
     </linearGradient>
-    <pattern id="develStripes" width="24" height="24" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-      <rect width="12" height="24" fill="#ffffff" opacity="0.14"/>
-    </pattern>
     <clipPath id="baseClip">
       <rect x="4" y="4" width="120" height="120" rx="28" ry="28"/>
     </clipPath>
@@ -26,9 +23,6 @@
 
   <!-- App base: rounded square -->
   <rect x="4" y="4" width="120" height="120" rx="28" ry="28" fill="url(#bgGrad)"/>
-
-  <!-- Devel marker: hazard stripes, visible around the photo cards -->
-  <rect x="4" y="4" width="120" height="120" rx="28" ry="28" fill="url(#develStripes)"/>
 
   <!-- Subtle highlight on top edge -->
   <rect x="4" y="4" width="120" height="60" rx="28" ry="28" fill="#ffffff" opacity="0.08"/>
@@ -87,6 +81,6 @@
   <g clip-path="url(#baseClip)">
     <rect x="4" y="98" width="120" height="26" fill="#241f31" opacity="0.88"/>
   </g>
-  <path d="M36.00,118.00 L36.00,105.00 L44.51,105.00 L50.67,109.16 L50.67,113.84 L44.51,118.00 L36.00,118.00 M71.33,105.00 L56.67,105.00 L56.67,118.00 L71.33,118.00 M56.67,111.50 L67.23,111.50 M77.33,105.00 L84.67,118.00 L92.00,105.00" fill="none" stroke="#ffffff" stroke-width="3.0"
+  <path d="M16.00,118.00 L16.00,105.00 L28.30,118.00 L28.30,105.00 M33.39,105.00 L33.39,118.00 M50.79,107.86 L48.08,105.00 L41.19,105.00 L38.49,107.86 L38.49,115.14 L41.19,118.00 L48.08,118.00 L50.79,115.14 L50.79,112.28 L45.38,112.28 M53.79,105.00 L53.79,118.00 M66.09,105.00 L66.09,118.00 M53.79,111.50 L66.09,111.50 M69.09,105.00 L81.39,105.00 M75.24,105.00 L75.24,118.00 M84.39,105.00 L84.39,118.00 L96.70,118.00 M99.70,105.00 L105.85,111.76 L112.00,105.00 M105.85,111.76 L105.85,118.00" fill="none" stroke="#ffffff" stroke-width="2.6"
         stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

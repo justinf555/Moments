@@ -104,9 +104,10 @@ impl MomentsWindow {
             .build();
         win.restore_window_state(settings);
 
-        // Development builds get the GNOME "devel" style (striped headerbar)
-        // and a title suffix so the user can tell them apart from production.
-        if crate::config::PROFILE == "development" {
+        // Nightly and development builds get the GNOME "devel" style (striped
+        // headerbar) so the user can tell them apart from production at a
+        // glance. Only the "default" channel ships without it.
+        if crate::config::PROFILE != "default" {
             win.add_css_class("devel");
         }
 

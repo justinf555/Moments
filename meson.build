@@ -10,13 +10,20 @@ project('moments', 'rust',
 i18n = import('i18n')
 gnome = import('gnome')
 
+# Release channels. Each gets its own application id so all three can be
+# installed side by side: the id drives the GSettings path, data dir, keyring
+# entry, desktop file, D-Bus name and icon name.
 base_id = 'io.github.justinf555.Moments'
-if get_option('profile') == 'development'
+profile = get_option('profile')
+if profile == 'development'
   application_id = base_id + '.Devel'
-  profile = 'development'
+  application_name = 'Moments (Development)'
+elif profile == 'nightly'
+  application_id = base_id + '.Nightly'
+  application_name = 'Moments (Nightly)'
 else
   application_id = base_id
-  profile = 'default'
+  application_name = 'Moments'
 endif
 
 

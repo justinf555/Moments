@@ -54,23 +54,40 @@ The dev manifest (`io.github.justinf555.Moments.dev.json`) uses `type: "dir"` �
 
 Every cargo target (`check`, `test`, `test-nextest`, `test-integration`, `lint`, `fmt`, `fmt-check`, `coverage`) therefore depends on the `$(CONFIG_RS)` file target, which runs `meson setup` in `_build/` to regenerate it. It also depends on `meson.build`, so a version bump refreshes a stale `VERSION`. **Never hand-write `src/config.rs` or duplicate its substitutions in the Makefile** — meson is the single source of truth for `VERSION` and `APP_ID`.
 
-### Build profiles
+### Build profiles / release channels
 
-The Meson option `-Dprofile=development` (set automatically by the dev manifest) switches the app ID to `io.github.justinf555.Moments.Devel` and enables the GNOME "devel" visual style (striped headerbar). The `config::APP_ID` and `config::PROFILE` constants in `config.rs.in` are set at build time — **never hardcode the app ID string in Rust code**; always use `config::APP_ID`.
+The Meson option `-Dprofile={default,nightly,development}` selects the release channel. Each gets its own app ID so all three install side by side:
+
+| `-Dprofile=` | App ID | Name | Set by |
+|---|---|---|---|
+| `default` | `io.github.justinf555.Moments` | Moments | release + flathub manifests |
+| `nightly` | `…Moments.Nightly` | Moments (Nightly) | `build-aux/…nightly.json` |
+| `development` | `…Moments.Devel` | Moments (Development) | `…Moments.dev.json` |
+
+`nightly` and `development` both enable the GNOME "devel" visual style (striped headerbar) — the check is `PROFILE != "default"`, not `== "development"`, so a new channel doesn't silently look like production.
+
+The `config::APP_ID`, `config::APP_NAME`, `config::VERSION` and `config::PROFILE` constants in `config.rs.in` are set at build time — **never hardcode the app ID or a channel-specific display name in Rust code**; always use `config::APP_ID` / `config::APP_NAME`.
+
+`-Dversion_suffix=` appends git description build metadata to the reported version (`0.4.1+6.g7ecfa4a`). Empty for tagged builds; `make bundle CHANNEL=nightly` computes it.
+
+Each channel also has its own icon at `data/icons/hicolor/scalable/apps/<app-id>.svg`; `data/icons/meson.build` installs whichever matches `application_id`, so **a new profile needs a matching SVG or configure fails**. The symbolic icon is shared. See `docs/design-release-channels.md`.
 
 ### Distribution bundles
 
 `make bundle` builds `build-aux/io.github.justinf555.Moments.release.json` (production app ID, `-Dbuildtype=release`, `type: "dir"` source) into a local OSTree repo, then packs it into `moments-<version>-<arch>.flatpak` plus a `.sha256`. Set `GPG_KEY` (and `GPG_HOMEDIR`) to sign the OSTree commit and the bundle; the bundle then embeds the exported public key. `make install-bundle` installs it `--user`; `make clean-bundle` removes the outputs.
 
-`bundle.yml` is a reusable workflow that runs the same target in the flathub CI container and uploads the results as a workflow artifact. `release.yml` calls it with the release tag and attaches the artifacts to the GitHub Release; it also has a `workflow_dispatch` trigger for smoke-testing a bundle build without cutting a release. Signing happens when the `FLATPAK_GPG_PRIVATE_KEY` / `FLATPAK_GPG_KEY_ID` repo secrets exist — the CI signing key must be passphrase-less, since ostree signs non-interactively.
+`make bundle CHANNEL=nightly` builds the nightly channel instead: `build-aux/…nightly.json`, the `.Nightly` app ID, and the **unversioned** filename `moments-nightly-<arch>.flatpak`. The filename is deliberately constant — `nightly.yml` republishes it to a rolling `nightly` prerelease, and a stable download URL is the whole point. Since flatpak-builder takes no config-opts on the command line, the recipe seds the computed version suffix into `build-aux/.…nightly.resolved.json` (gitignored) and builds that; it sits beside the template because manifest source paths resolve relative to the manifest's own directory.
+
+`bundle.yml` is a reusable workflow that runs the same target in the flathub CI container and uploads the results as a workflow artifact. It takes a `channel` input (`release` or `nightly`) and names its artifact `flatpak-bundle-<channel>`. `release.yml` calls it with the release tag and attaches the artifacts to the GitHub Release; it also has a `workflow_dispatch` trigger for smoke-testing a bundle build without cutting a release. `nightly.yml` calls it on every push to `main` (plus a daily cron safety net) and edits the rolling release in place rather than deleting and recreating it, so the URL never 404s. Signing happens when the `FLATPAK_GPG_PRIVATE_KEY` / `FLATPAK_GPG_KEY_ID` repo secrets exist — the CI signing key must be passphrase-less, since ostree signs non-interactively.
 
 ```bash
 # Release: creates PR with version bump, merging triggers tag + GitHub Release + bundle
 make release VERSION=0.2.0
 
 # Build/install a redistributable single-file bundle
-make bundle [GPG_KEY=<key-id>]
-make install-bundle
+make bundle [GPG_KEY=<key-id>]          # release channel
+make bundle CHANNEL=nightly             # nightly channel (alias: make bundle-nightly)
+make install-bundle [CHANNEL=nightly]
 
 # Testing & linting (all run inside Flatpak SDK)
 make config            # regenerate src/config.rs (implicit dep of all cargo targets)
@@ -328,6 +345,7 @@ Design docs live in `docs/` and follow a consistent format with issue links, sta
 - `docs/design-photo-editing.md` — Non-destructive editing: data model, renderer, UI, Immich integration
 - `docs/design-event-bus.md` — historical record of the EventBus architecture (removed in #580); pointer to current per-service EventEmitter shape
 - `docs/design-integration-testing.md` — Headless GTK4 testing with mutter, CI config, coverage tracking
+- `docs/design-release-channels.md` — Release/Nightly/Development channels: app IDs, icon differentiation, versioning, rolling release
 
 ### Blueprint templates
 

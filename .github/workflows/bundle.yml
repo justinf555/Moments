@@ -18,6 +18,11 @@ on:
         type: string
         required: false
         default: ''
+      channel:
+        description: 'release (production app id) or nightly (.Nightly app id).'
+        type: string
+        required: false
+        default: release
   workflow_dispatch:
     inputs:
       ref:
@@ -25,6 +30,12 @@ on:
         type: string
         required: false
         default: ''
+      channel:
+        description: Which channel to bundle.
+        type: choice
+        required: false
+        default: release
+        options: [release, nightly]
 
 jobs:
   bundle:
@@ -45,6 +56,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
+          # `make bundle CHANNEL=nightly` derives its version suffix from
+          # `git describe`, which needs tags and full history.
+          fetch-depth: 0
+          fetch-tags: true
 
       # The flathub image is Fedora-based and does the real build inside the
       # flatpak sandbox, so host `make` isn't guaranteed to be present.
@@ -55,8 +70,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .flatpak-builder
-          key: flatpak-bundle-${{ hashFiles('build-aux/io.github.justinf555.Moments.release.json', 'Cargo.lock') }}
-          restore-keys: flatpak-bundle-
+          key: flatpak-bundle-${{ inputs.channel }}-${{ hashFiles('build-aux/io.github.justinf555.Moments.*.json', 'Cargo.lock') }}
+          restore-keys: flatpak-bundle-${{ inputs.channel }}-
 
       # Signing is optional: with no FLATPAK_GPG_PRIVATE_KEY secret the bundle
       # is still built and published, just unsigned. To enable it, generate a
@@ -98,6 +113,7 @@ jobs:
       - name: Build bundle
         run: |
           make bundle \
+            CHANNEL='${{ inputs.channel }}' \
             GPG_KEY='${{ steps.gpg.outputs.key_id }}' \
             GPG_HOMEDIR='${{ steps.gpg.outputs.homedir }}' \
             FLATPAK_BUILDER_ARGS='--disable-rofiles-fuse --install-deps-from=flathub'
@@ -110,7 +126,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: flatpak-bundle
+          name: flatpak-bundle-${{ inputs.channel }}
           path: |
             moments-*.flatpak
             moments-*.flatpak.sha256

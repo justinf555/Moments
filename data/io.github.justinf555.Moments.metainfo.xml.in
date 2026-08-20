@@ -4,7 +4,7 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
 
-  <name>Moments</name>
+  <name>@APP_NAME@</name>
   <summary>Manage your photo library</summary>
   <description>
     <p>Moments is a photo management application for the GNOME desktop. Browse, organize, and manage your photo library with a clean, modern interface.</p>

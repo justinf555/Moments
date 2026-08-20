@@ -13,7 +13,7 @@ use gettextrs::gettext;
 use gtk::{gio, glib};
 use tracing::{debug, error, info, instrument, warn};
 
-use crate::config::{APP_ID, PROFILE, VERSION};
+use crate::config::{APP_ID, APP_NAME, VERSION};
 use crate::library::bundle::Bundle;
 use crate::library::config::LibraryConfig;
 use crate::library::Library;
@@ -311,13 +311,8 @@ impl MomentsApplication {
         let Some(window) = self.active_window() else {
             return;
         };
-        let app_name = if PROFILE == "development" {
-            "Moments (Development)"
-        } else {
-            "Moments"
-        };
         let about = adw::AboutDialog::builder()
-            .application_name(app_name)
+            .application_name(APP_NAME)
             .application_icon(APP_ID)
             .developer_name("Justin F")
             .version(VERSION)
