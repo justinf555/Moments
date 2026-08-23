@@ -190,6 +190,8 @@ types: vec![
 ],
 ```
 
+> **Superseded (#679):** `AssetsV1` and `AssetFacesV1` were retired server-side and now return 400. The live list is `SYNC_REQUEST_TYPES` in `src/sync/providers/immich/pull.rs` — see `docs/design-immich-backend.md`.
+
 ### 4.3 Push side: new outbox mutation types
 
 Add to `src/library/mutation.rs::Mutation`:

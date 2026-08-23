@@ -76,8 +76,8 @@ All reads delegate to `self.db` — identical SQL to `LocalLibrary`. Writes go t
 4. **Per-asset event emission** — fires `AssetSynced` events for incremental grid updates (no full reload)
 
 **Sync Protocol:**
-- Uses Immich's `POST /sync/stream` (newline-delimited JSON) with entity types: `AssetsV1`, `AssetExifsV1`
-- Match-based dispatch for entity types (AssetV1, AssetExifV1, AssetDeleteV1, SyncCompleteV1, SyncResetV1)
+- Uses Immich's `POST /sync/stream` (newline-delimited JSON) with entity types: `AssetsV2`, `AssetExifsV1`
+- Match-based dispatch for entity types (AssetV2, AssetExifV1, AssetDeleteV1, SyncCompleteV1, SyncResetV1)
 - Tracks sync checkpoints via `POST /sync/ack`, persisted locally in `sync_checkpoints` table
 - `INSERT OR REPLACE` for all upserts — no pre-check queries needed
 - Transient errors don't abort the polling loop — logged and retried next cycle
@@ -253,7 +253,7 @@ The sync engine uses `POST /sync/stream` which returns **newline-delimited JSON*
 (content-type `application/jsonlines+json`). Each line is:
 
 ```json
-{"type":"AssetV1","data":{...},"ack":"AssetV1|019513a2-..."}
+{"type":"AssetV2","data":{...},"ack":"AssetV2|019513a2-..."}
 ```
 
 The `ack` field is sent back via `POST /sync/ack` to checkpoint progress. The
@@ -270,14 +270,51 @@ acknowledged position on subsequent syncs.
 
 We subscribe to these types via the `types` array in the request:
 
+The canonical list lives in `SYNC_REQUEST_TYPES` (`src/sync/providers/immich/pull.rs`).
+
 | Request Type | Entity Types Produced | What Changes |
 |-------------|----------------------|-------------|
-| `AssetsV1` | `AssetV1`, `AssetDeleteV1` | Asset created/updated/deleted |
+| `AssetsV2` | `AssetV2`, `AssetDeleteV1` | Asset created/updated/deleted |
 | `AssetExifsV1` | `AssetExifV1` | EXIF metadata changes |
-| `AlbumsV1` | `AlbumV1`, `AlbumDeleteV1` | Album created/updated/deleted (🔜 #105) |
-| `AlbumToAssetsV1` | `AlbumToAssetV1`, `AlbumToAssetDeleteV1` | Assets added/removed from albums (🔜 #105) |
+| `AlbumsV1` | `AlbumV1`, `AlbumDeleteV1` | Album created/updated/deleted |
+| `AlbumToAssetsV1` | `AlbumToAssetV1`, `AlbumToAssetDeleteV1` | Assets added/removed from albums |
+| `PeopleV1` | `PersonV1`, `PersonDeleteV1` | People created/updated/deleted |
+| `AssetFacesV2` | `AssetFaceV2`, `AssetFaceDeleteV1` | Faces detected/assigned/removed |
+| `StacksV1` | `StackV1`, `StackDeleteV1` | Stacks created/removed (#224) |
+| `AssetEditsV1` | `AssetEditV1`, `AssetEditDeleteV1` | Geometric edit actions (#224 Phase B) |
 
-Other types (People, Faces, Memories, Partners, Stacks) can be added later.
+Other types (Memories, Partners, OCR, asset metadata) can be added later.
+
+### V1 request types are fatal (#679)
+
+Immich retired `AssetsV1`, `AssetFacesV1`, `PartnerAssetsV1` and
+`AlbumAssetsV1`. Their server-side handlers now **throw a 400 outright**
+rather than degrading, and because the failure happens while building the
+response, a single deprecated entry in `types` kills the whole stream
+before any entity is emitted — it does not merely drop that one entity
+type. Requesting one takes down all of sync.
+
+Two consequences for this code:
+
+- **Request type and entity type move together.** `AssetsV2` emits
+  `AssetV2`, not `AssetV1`. Renaming one side without the other is a
+  *silent* break: unhandled entity types hit the
+  `debug!("ignoring unknown sync entity type")` branch in the dispatch
+  loop, so sync reports success while importing nothing. The
+  `requested_types_have_handlers` test pins the pairing.
+- **Delete entities stay at V1.** `syncAssetsV2()` and
+  `syncAssetFacesV2()` still emit `AssetDeleteV1` / `AssetFaceDeleteV1`.
+
+Payload differences from the retired shapes:
+
+| Entity | Change |
+|---|---|
+| `AssetV2` | `duration` is integer milliseconds, not a `"0:01:30.000000"` string |
+| `AssetFaceV2` | adds `deletedAt` (soft-delete) and `isVisible`; not yet persisted — migration tracked in #680 |
+
+Because Immich keys ack checkpoints by entity type, the first sync after
+moving to V2 re-streams every asset and face from scratch. Upserts are
+keyed on `external_id`, so this is idempotent — just slow once.
 
 ## API Endpoints Used
 

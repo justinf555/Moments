@@ -175,7 +175,7 @@ mod tests {
         let repo = SyncStateRepository::new(db.clone());
 
         let row_id = repo
-            .start_audit("AssetV1", "uuid-1", "cycle-1")
+            .start_audit("AssetV2", "uuid-1", "cycle-1")
             .await
             .unwrap();
         assert!(row_id > 0);
@@ -198,7 +198,7 @@ mod tests {
         let repo = SyncStateRepository::new(db.clone());
 
         let row_id = repo
-            .start_audit("AssetV1", "uuid-fail", "cycle-2")
+            .start_audit("AssetV2", "uuid-fail", "cycle-2")
             .await
             .unwrap();
 
@@ -220,13 +220,13 @@ mod tests {
         let repo = SyncStateRepository::new(db.clone());
 
         let pairs = vec![
-            ("AssetV1".to_string(), "ack-asset-100".to_string()),
+            ("AssetV2".to_string(), "ack-asset-100".to_string()),
             ("AlbumV1".to_string(), "ack-album-50".to_string()),
         ];
         repo.save_checkpoints(&pairs).await.unwrap();
 
         let row: (String,) =
-            sqlx::query_as("SELECT ack FROM sync_checkpoints WHERE entity_type = 'AssetV1'")
+            sqlx::query_as("SELECT ack FROM sync_checkpoints WHERE entity_type = 'AssetV2'")
                 .fetch_one(db.pool())
                 .await
                 .unwrap();
@@ -246,15 +246,15 @@ mod tests {
         let (_dir, db) = open_db().await;
         let repo = SyncStateRepository::new(db.clone());
 
-        repo.save_checkpoints(&[("AssetV1".to_string(), "ack-1".to_string())])
+        repo.save_checkpoints(&[("AssetV2".to_string(), "ack-1".to_string())])
             .await
             .unwrap();
-        repo.save_checkpoints(&[("AssetV1".to_string(), "ack-2".to_string())])
+        repo.save_checkpoints(&[("AssetV2".to_string(), "ack-2".to_string())])
             .await
             .unwrap();
 
         let row: (String,) =
-            sqlx::query_as("SELECT ack FROM sync_checkpoints WHERE entity_type = 'AssetV1'")
+            sqlx::query_as("SELECT ack FROM sync_checkpoints WHERE entity_type = 'AssetV2'")
                 .fetch_one(db.pool())
                 .await
                 .unwrap();
@@ -355,7 +355,7 @@ mod tests {
         let (_dir, db) = open_db().await;
         let repo = SyncStateRepository::new(db.clone());
 
-        // Most recent reset/complete is the reset; AssetV1 rows after
+        // Most recent reset/complete is the reset; AssetV2 rows after
         // it (the dispatch in the resumed stream) shouldn't shift us
         // out of reset mode.
         let reset_id = repo
@@ -364,13 +364,13 @@ mod tests {
             .unwrap();
         repo.complete_audit(reset_id, "reset").await.unwrap();
         for _ in 0..3 {
-            let aid = repo.start_audit("AssetV1", "", "cycle-1").await.unwrap();
+            let aid = repo.start_audit("AssetV2", "", "cycle-1").await.unwrap();
             repo.complete_audit(aid, "upsert").await.unwrap();
         }
 
         assert!(
             repo.current_reset_checkpoint().await.unwrap().is_some(),
-            "AssetV1 audit rows must not close the reset cycle"
+            "AssetV2 audit rows must not close the reset cycle"
         );
     }
 }

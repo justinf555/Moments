@@ -16,7 +16,7 @@ pub struct AssetHandler;
 #[async_trait]
 impl SyncEntityHandler for AssetHandler {
     fn entity_type(&self) -> &'static str {
-        "AssetV1"
+        "AssetV2"
     }
 
     async fn handle(
@@ -25,7 +25,7 @@ impl SyncEntityHandler for AssetHandler {
         line_number: usize,
         ctx: &SyncContext,
     ) -> Result<HandlerResult, LibraryError> {
-        let asset: SyncAssetV1 = deserialize_entity(data, "AssetV1", line_number)?;
+        let asset: SyncAssetV2 = deserialize_entity(data, "AssetV2", line_number)?;
         handle_asset(asset, ctx).await?;
         Ok(HandlerResult {
             audit_action: "upsert",
@@ -35,7 +35,7 @@ impl SyncEntityHandler for AssetHandler {
 }
 
 #[instrument(skip(ctx, asset), fields(asset_id = %asset.id))]
-async fn handle_asset(asset: SyncAssetV1, ctx: &SyncContext) -> Result<(), LibraryError> {
+async fn handle_asset(asset: SyncAssetV2, ctx: &SyncContext) -> Result<(), LibraryError> {
     let media_type = match asset.asset_type.as_str() {
         "VIDEO" => MediaType::Video,
         _ => MediaType::Image,
@@ -55,7 +55,9 @@ async fn handle_asset(asset: SyncAssetV1, ctx: &SyncContext) -> Result<(), Libra
 
     let is_trashed = asset.deleted_at.is_some();
     let trashed_at = parse_datetime(&asset.deleted_at);
-    let duration_ms = asset.duration.as_deref().and_then(parse_duration_ms);
+    // `AssetsV2` sends milliseconds directly — the `"0:01:30.000000"`
+    // string parsing the V1 stream needed is gone with it. Issue #679.
+    let duration_ms = asset.duration.map(|ms| ms.max(0) as u64);
 
     // Issue #626: keep the locally-owned `MediaId` stable across the
     // upload→pull round-trip. The Immich UUID lives only in
