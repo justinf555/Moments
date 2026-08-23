@@ -8,6 +8,7 @@ use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gettextrs::gettext;
 use gtk::{gio, glib};
+use tracing::warn;
 
 use crate::client::{PeopleClientV2, PersonItemObject};
 use crate::ui::photo_grid::texture_cache::TextureCache;
@@ -219,7 +220,9 @@ impl PeopleGridView {
                     } else {
                         unnamed::NEVER
                     };
-                    let _ = s.set_uint("people-unnamed-visibility", value);
+                    if let Err(e) = s.set_uint("people-unnamed-visibility", value) {
+                        warn!("failed to save people-unnamed-visibility: {e}");
+                    }
                 }
             });
         }
@@ -231,7 +234,9 @@ impl PeopleGridView {
                 fs.include_hidden.set(btn.is_active());
                 cf.changed(filter_change(btn.is_active()));
                 if !fs.applying.get() {
-                    let _ = s.set_boolean("people-show-hidden", btn.is_active());
+                    if let Err(e) = s.set_boolean("people-show-hidden", btn.is_active()) {
+                        warn!("failed to save people-show-hidden: {e}");
+                    }
                 }
             });
         }
@@ -379,8 +384,11 @@ fn any_named(store: &gio::ListStore) -> bool {
     })
 }
 
-/// How a toggle's new state changes the filter's strictness — turning a
-/// filter off admits more items, turning it on admits fewer.
+/// How a toggle's new state changes the filter's strictness.
+///
+/// Both toggles are "show me more" switches — Show Unnamed, Show Hidden
+/// — so activating one *relaxes* the filter and admits items it was
+/// rejecting.
 fn filter_change(now_active: bool) -> gtk::FilterChange {
     if now_active {
         gtk::FilterChange::LessStrict
@@ -478,7 +486,7 @@ mod tests {
     // ── filter_change ─────────────────────────────────────────────────
 
     #[test]
-    fn turning_a_filter_on_admits_fewer_items() {
+    fn turning_a_toggle_on_admits_more_items() {
         assert_eq!(filter_change(true), gtk::FilterChange::LessStrict);
         assert_eq!(filter_change(false), gtk::FilterChange::MoreStrict);
     }
