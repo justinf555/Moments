@@ -106,14 +106,25 @@ impl FacesService {
     /// Emits `PersonMediaChanged` for every person whose membership set
     /// changed. For a reassignment from A to B, two events fire — one for
     /// A (a media was removed) and one for B (a media was added). If the
-    /// person_id is unchanged, no events fire.
+    /// membership is unchanged, no events fire.
+    ///
+    /// Issue #680: membership is the *effective* person — a face hidden
+    /// or soft-deleted server-side contributes to nobody, so hiding a
+    /// face fires the same event as unassigning it.
     pub(crate) async fn upsert_asset_face(
         &self,
         face: &super::repository::AssetFaceRow,
     ) -> Result<(), LibraryError> {
-        let prev_person_id = self.repo.get_asset_face_person_id(&face.id).await?;
+        let prev_person_id = self
+            .repo
+            .get_asset_face_effective_person_id(&face.id)
+            .await?;
         self.repo.upsert_asset_face(face).await?;
-        let new_person_id = face.person_id.clone();
+        let new_person_id = if face.is_visible && face.deleted_at.is_none() {
+            face.person_id.clone()
+        } else {
+            None
+        };
         if prev_person_id != new_person_id {
             if let Some(p) = prev_person_id {
                 self.emit(FacesEvent::PersonMediaChanged(PersonId::from_raw(p)));
@@ -373,6 +384,77 @@ mod tests {
         assert!(rx.try_recv().is_err(), "fresh person wasn't swept");
     }
 
+    /// Issue #680: hiding a face server-side removes its asset from the
+    /// person's grid, so it must fire `PersonMediaChanged` even though
+    /// the face's `person_id` never changed. Un-hiding fires it again.
+    #[tokio::test]
+    async fn hiding_a_face_emits_person_media_changed() {
+        use crate::library::db::test_helpers::test_record;
+        use crate::library::faces::repository::AssetFaceRow;
+        use crate::library::media::repository::MediaRepository;
+        use crate::library::media::MediaId;
+
+        let thumb_root = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let media = MediaRepository::new(db.clone());
+        let svc = FacesService::new(db, thumb_root.path().to_path_buf(), Arc::new(NoOpRecorder));
+
+        media
+            .insert(&test_record(MediaId::new("m1".to_string())))
+            .await
+            .unwrap();
+        svc.upsert_person("p1", "Alice", None, false, false, None, None, None)
+            .await
+            .unwrap();
+
+        let visible = AssetFaceRow {
+            id: "f1".to_string(),
+            asset_id: "m1".to_string(),
+            person_id: Some("p1".to_string()),
+            image_width: 100,
+            image_height: 100,
+            bbox_x1: 0,
+            bbox_y1: 0,
+            bbox_x2: 50,
+            bbox_y2: 50,
+            source_type: "MachineLearning".to_string(),
+            is_visible: true,
+            deleted_at: None,
+        };
+        svc.upsert_asset_face(&visible).await.unwrap();
+
+        // Subscribe AFTER setup so the person/face upserts don't pollute
+        // the channel.
+        let mut rx = svc.subscribe();
+
+        svc.upsert_asset_face(&AssetFaceRow {
+            is_visible: false,
+            ..visible.clone()
+        })
+        .await
+        .unwrap();
+        match rx.try_recv().expect("hiding a face is a membership change") {
+            FacesEvent::PersonMediaChanged(id) => assert_eq!(id.as_str(), "p1"),
+            other => panic!("expected PersonMediaChanged; got {other:?}"),
+        }
+
+        // Re-applying the same hidden state is not a change.
+        svc.upsert_asset_face(&AssetFaceRow {
+            is_visible: false,
+            ..visible.clone()
+        })
+        .await
+        .unwrap();
+        assert!(rx.try_recv().is_err(), "no membership change, no event");
+
+        svc.upsert_asset_face(&visible).await.unwrap();
+        match rx.try_recv().expect("un-hiding is a membership change too") {
+            FacesEvent::PersonMediaChanged(id) => assert_eq!(id.as_str(), "p1"),
+            other => panic!("expected PersonMediaChanged; got {other:?}"),
+        }
+    }
+
     /// Issue #628: when stale faces are swept, every surviving person
     /// who lost faces gets their denormalised `face_count` recomputed.
     /// Without this the count drifts until the next sync cycle re-emits
@@ -420,6 +502,8 @@ mod tests {
                 bbox_x2: 50,
                 bbox_y2: 50,
                 source_type: "MachineLearning".to_string(),
+                is_visible: true,
+                deleted_at: None,
             };
             svc.repo.upsert_asset_face(&row).await.unwrap();
             svc.repo

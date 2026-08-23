@@ -63,6 +63,12 @@ impl SyncEntityHandler for AssetFaceHandler {
             source_type: face
                 .source_type
                 .unwrap_or_else(|| "MachineLearning".to_string()),
+            // Issue #680: a face the server hides or soft-deletes stays
+            // in the table but stops contributing to its person's grid
+            // and face_count. The hard delete still arrives separately
+            // as `AssetFaceDeleteV1`.
+            is_visible: face.is_visible,
+            deleted_at: parse_datetime(&face.deleted_at),
         };
 
         ctx.library.faces().upsert_asset_face(&row).await?;

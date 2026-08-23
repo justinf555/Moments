@@ -244,16 +244,15 @@ pub(crate) struct SyncAssetFaceV2 {
     /// live. Hard deletes still arrive separately as
     /// `AssetFaceDeleteV1`, so this is purely the soft-delete state.
     ///
-    /// Captured for the contract but not yet persisted — `asset_faces`
-    /// has no column for it. Migration tracked in #680.
-    #[allow(dead_code)]
+    /// Issue #680: persisted to `asset_faces.deleted_at`; soft-deleted
+    /// faces are filtered out of person queries rather than deleted, so
+    /// an un-delete on the server needs no resync.
     #[serde(rename = "deletedAt", default)]
     pub deleted_at: Option<String>,
     /// Whether the face is visible in the asset. Defaults to `true` so
     /// a server that pre-dates the field doesn't hide every face.
     ///
-    /// Captured for the contract but not yet persisted — see #680.
-    #[allow(dead_code)]
+    /// Issue #680: persisted to `asset_faces.is_visible`.
     #[serde(rename = "isVisible", default = "default_true")]
     pub is_visible: bool,
 }
