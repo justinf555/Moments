@@ -441,6 +441,8 @@ Phase 7 is a polish enhancement.
 ## Edge Cases
 
 - **Unnamed people**: Immich clusters faces before users name them. Show as "Unnamed" with face thumbnail. Allow filtering these out via `include_unnamed`.
+  - [#681](https://github.com/justinf555/Moments/issues/681): the filter's default is *automatic*, not off. A freshly synced library is 100% unnamed people, so defaulting the filter on rendered an empty grid with no affordance but an unlabelled header toggle. `people-unnamed-visibility` is therefore a tri-state (`0` automatic, `1` always, `2` never) rather than a boolean: automatic shows unnamed people while nobody has been named and hides them once somebody has, which is what the filter is actually for. It resolves once per view against the loaded people — naming your first person shouldn't make everyone else vanish mid-session — and stops being consulted the moment the user touches the toggle. Both toggles persist (`people-unnamed-visibility`, `people-show-hidden`); before #681 each reset on every launch.
+  - When the grid would render bare, an `Adw.StatusPage` says which case it is: no people at all, or everyone filtered out — the latter with a "Show Everyone" button that clears both filters.
 - **Hidden people**: Respect the `isHidden` flag from Immich. Don't show in sidebar by default.
 - **No faces detected**: Some assets have no face data. The People section simply shows fewer results.
 - **Person with no assets**: Can occur after face reassignment. Show in sidebar with count 0; grid view shows empty state.

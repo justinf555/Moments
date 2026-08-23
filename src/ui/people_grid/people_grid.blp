@@ -32,14 +32,40 @@ template $MomentsPeopleGridView : Gtk.Widget {
           }
         }
 
-        content: Gtk.ScrolledWindow {
-          hscrollbar-policy: never;
-          vexpand: true;
+        content: Gtk.Stack content_stack {
+          transition-type: crossfade;
 
-          child: Gtk.GridView grid_view {
-            min-columns: 3;
-            max-columns: 8;
-          };
+          Gtk.StackPage {
+            name: "grid";
+
+            child: Gtk.ScrolledWindow {
+              hscrollbar-policy: never;
+              vexpand: true;
+
+              child: Gtk.GridView grid_view {
+                min-columns: 3;
+                max-columns: 8;
+              };
+            };
+          }
+
+          Gtk.StackPage {
+            name: "empty";
+
+            child: Adw.StatusPage empty_page {
+              icon-name: "avatar-default-symbolic";
+              title: _("No People Yet");
+              description: _("People appear here once faces have been detected in your photos.");
+              vexpand: true;
+
+              Gtk.Button empty_show_all_btn {
+                label: _("Show Everyone");
+                halign: center;
+                visible: false;
+                styles ["pill", "suggested-action"]
+              }
+            };
+          }
         };
       };
     }

@@ -67,6 +67,27 @@
 				in the order they should appear. Maximum 5.
 			</description>
 		</key>
+		<key name="people-unnamed-visibility" type="u">
+			<default>0</default>
+			<summary>Whether the People grid shows unnamed people</summary>
+			<description>
+				0 = automatic, 1 = always shown, 2 = always hidden. The
+				"Show Unnamed" toggle in the People header writes 1 or 2.
+				Automatic — the default until the user touches the toggle
+				— shows unnamed people while nobody has been named, and
+				hides them once someone has, so a freshly synced library
+				isn't an empty grid.
+			</description>
+		</key>
+		<key name="people-show-hidden" type="b">
+			<default>false</default>
+			<summary>Whether the People grid shows hidden people</summary>
+			<description>
+				State of the "Show Hidden" toggle in the People header.
+				People hidden on the server (or locally) are excluded from
+				the grid unless this is true.
+			</description>
+		</key>
 		<key name="album-sort-order" type="u">
 			<default>0</default>
 			<summary>Album grid sort order</summary>
