@@ -23,6 +23,37 @@ use super::handlers::{self, CounterKind, SyncContext};
 use super::types::*;
 use super::ACK_FLUSH_THRESHOLD;
 
+/// Entity streams requested from `POST /sync/stream`, in the order we
+/// declare them (the server applies its own `SYNC_TYPES_ORDER`).
+///
+/// Issue #679: the `AssetsV1` and `AssetFacesV1` request types were
+/// retired server-side. Immich's handlers for them now throw a 400
+/// outright rather than degrading, which fails the entire stream before
+/// a single entity is emitted — so a deprecated entry here takes down
+/// all of sync, not just its own entity type.
+///
+/// Each entry's entity types must have a registered handler in
+/// [`handlers::all_handlers`]; `requested_types_have_handlers` pins that
+/// pairing, because an unhandled entity type is silently ignored by the
+/// dispatch loop rather than raised as an error.
+const SYNC_REQUEST_TYPES: &[&str] = &[
+    "AssetsV2",
+    "AssetExifsV1",
+    "AlbumsV1",
+    "AlbumToAssetsV1",
+    "PeopleV1",
+    "AssetFacesV2",
+    // Issue #224: stacks arrive on their own stream as SyncStackV1 /
+    // SyncStackDeleteV1. AssetV2 carries only `stackId`; the primary
+    // lives on StackV1.
+    "StacksV1",
+    // Issue #224 Phase B: per-action geometric edit records. Each
+    // SyncAssetEditV1 carries one (action, parameters, sequence) tuple;
+    // the handler caches them and recomposes a local EditState from the
+    // asset's full action list.
+    "AssetEditsV1",
+];
+
 /// Counters for a single sync cycle.
 #[derive(Default)]
 struct SyncCounters {
@@ -150,23 +181,10 @@ impl PullManager {
     #[instrument(skip(self))]
     async fn run_sync(&self) -> Result<(usize, usize), LibraryError> {
         let request = SyncStreamRequest {
-            types: vec![
-                "AssetsV1".to_string(),
-                "AssetExifsV1".to_string(),
-                "AlbumsV1".to_string(),
-                "AlbumToAssetsV1".to_string(),
-                "PeopleV1".to_string(),
-                "AssetFacesV1".to_string(),
-                // Issue #224: stacks arrive on their own stream as
-                // SyncStackV1 / SyncStackDeleteV1. AssetV1 carries
-                // only `stackId`; the primary lives on StackV1.
-                "StacksV1".to_string(),
-                // Issue #224 Phase B: per-action geometric edit records.
-                // Each SyncAssetEditV1 carries one (action, parameters,
-                // sequence) tuple; the handler caches them and recomposes
-                // a local EditState from the asset's full action list.
-                "AssetEditsV1".to_string(),
-            ],
+            types: SYNC_REQUEST_TYPES
+                .iter()
+                .map(|t| (*t).to_string())
+                .collect(),
         };
 
         debug!("starting sync stream");
@@ -487,5 +505,64 @@ mod tests {
         assert_eq!(c.assets, 2);
         assert_eq!(c.deletes, 1);
         assert_eq!(c.errors, 0);
+    }
+
+    /// Issue #679: a request type and the entity types it produces move
+    /// together. Renaming one side without the other is not a loud
+    /// failure — the dispatch loop logs unknown entity types at `debug`
+    /// and carries on, so sync reports success while importing nothing.
+    /// This pins the pairing so that combination cannot ship.
+    #[test]
+    fn requested_types_have_handlers() {
+        // (request type, entity types it emits on the stream)
+        let contract: &[(&str, &[&str])] = &[
+            ("AssetsV2", &["AssetV2", "AssetDeleteV1"]),
+            ("AssetExifsV1", &["AssetExifV1"]),
+            ("AlbumsV1", &["AlbumV1", "AlbumDeleteV1"]),
+            (
+                "AlbumToAssetsV1",
+                &["AlbumToAssetV1", "AlbumToAssetDeleteV1"],
+            ),
+            ("PeopleV1", &["PersonV1", "PersonDeleteV1"]),
+            ("AssetFacesV2", &["AssetFaceV2", "AssetFaceDeleteV1"]),
+            ("StacksV1", &["StackV1", "StackDeleteV1"]),
+            ("AssetEditsV1", &["AssetEditV1", "AssetEditDeleteV1"]),
+        ];
+
+        let requested: Vec<&str> = contract.iter().map(|(req, _)| *req).collect();
+        assert_eq!(
+            requested, SYNC_REQUEST_TYPES,
+            "SYNC_REQUEST_TYPES changed without updating the entity-type contract below"
+        );
+
+        let handlers = handlers::all_handlers();
+        let registered: Vec<&str> = handlers.iter().map(|h| h.entity_type()).collect();
+
+        for (request_type, entity_types) in contract {
+            for entity in *entity_types {
+                assert!(
+                    registered.contains(entity),
+                    "requesting {request_type} but no handler is registered for its \
+                     {entity} entities — sync would silently drop them"
+                );
+            }
+        }
+    }
+
+    /// Immich throws a 400 for these rather than degrading, which takes
+    /// down the whole stream. Issue #679.
+    #[test]
+    fn no_retired_request_types() {
+        for retired in [
+            "AssetsV1",
+            "AssetFacesV1",
+            "PartnerAssetsV1",
+            "AlbumAssetsV1",
+        ] {
+            assert!(
+                !SYNC_REQUEST_TYPES.contains(&retired),
+                "{retired} is deprecated server-side and 400s the entire sync stream"
+            );
+        }
     }
 }

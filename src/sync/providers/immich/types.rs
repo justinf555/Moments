@@ -32,8 +32,14 @@ pub(crate) struct SyncAckRequest {
 
 // ── Asset types ─────────────────────────────────────────────────────────────
 
+/// Asset entity emitted on the `AssetsV2` sync stream.
+///
+/// Identical to the retired `SyncAssetV1` except for `duration`, which
+/// Immich changed from a formatted `"H:MM:SS.ffffff"` string to plain
+/// integer milliseconds when `asset.duration` became an `integer`
+/// column server-side. Issue #679.
 #[derive(Debug, Deserialize)]
-pub(crate) struct SyncAssetV1 {
+pub(crate) struct SyncAssetV2 {
     pub id: String,
     #[serde(rename = "originalFileName")]
     pub original_file_name: String,
@@ -49,7 +55,10 @@ pub(crate) struct SyncAssetV1 {
     pub is_favorite: bool,
     pub width: Option<i64>,
     pub height: Option<i64>,
-    pub duration: Option<String>,
+    /// Runtime in milliseconds, or `None` for stills. Already in the
+    /// unit `media.duration_ms` stores, so no conversion is needed —
+    /// `AssetsV1` sent this as a `"0:01:30.000000"` string instead.
+    pub duration: Option<i64>,
     /// SHA-1 of the file's bytes, base64-encoded. Stored verbatim into
     /// `media.content_hash` so locally-imported and server-pulled rows
     /// share a comparable dedup key. Optional in the serde shape so
@@ -206,8 +215,12 @@ pub(crate) struct SyncPersonDeleteV1 {
     pub person_id: String,
 }
 
+/// Face entity emitted on the `AssetFacesV2` sync stream.
+///
+/// A superset of the retired `SyncAssetFaceV1`: same geometry, plus
+/// `deletedAt` and `isVisible`. Issue #679.
 #[derive(Debug, Deserialize)]
-pub(crate) struct SyncAssetFaceV1 {
+pub(crate) struct SyncAssetFaceV2 {
     pub id: String,
     #[serde(rename = "assetId")]
     pub asset_id: String,
@@ -227,6 +240,26 @@ pub(crate) struct SyncAssetFaceV1 {
     pub bounding_box_y2: i32,
     #[serde(rename = "sourceType")]
     pub source_type: Option<String>,
+    /// Server-side soft-deletion timestamp, or `None` while the face is
+    /// live. Hard deletes still arrive separately as
+    /// `AssetFaceDeleteV1`, so this is purely the soft-delete state.
+    ///
+    /// Captured for the contract but not yet persisted — `asset_faces`
+    /// has no column for it. Migration tracked in #680.
+    #[allow(dead_code)]
+    #[serde(rename = "deletedAt", default)]
+    pub deleted_at: Option<String>,
+    /// Whether the face is visible in the asset. Defaults to `true` so
+    /// a server that pre-dates the field doesn't hide every face.
+    ///
+    /// Captured for the contract but not yet persisted — see #680.
+    #[allow(dead_code)]
+    #[serde(rename = "isVisible", default = "default_true")]
+    pub is_visible: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -261,18 +294,6 @@ pub(crate) fn parse_datetime(s: &Option<String>) -> Option<i64> {
         .map(|dt| dt.timestamp())
 }
 
-/// Parse Immich duration string (e.g. "0:01:30.000000") to milliseconds.
-pub(crate) fn parse_duration_ms(s: &str) -> Option<u64> {
-    let parts: Vec<&str> = s.split(':').collect();
-    if parts.len() != 3 {
-        return None;
-    }
-    let hours: u64 = parts[0].parse().ok()?;
-    let minutes: u64 = parts[1].parse().ok()?;
-    let seconds: f64 = parts[2].parse().ok()?;
-    Some(hours * 3_600_000 + minutes * 60_000 + (seconds * 1000.0) as u64)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,50 +318,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_duration_ms_standard() {
-        assert_eq!(parse_duration_ms("0:01:30.000000"), Some(90_000));
-    }
-
-    #[test]
-    fn parse_duration_ms_with_hours() {
-        assert_eq!(parse_duration_ms("1:02:03.500000"), Some(3_723_500));
-    }
-
-    #[test]
-    fn parse_duration_ms_invalid_format() {
-        assert!(parse_duration_ms("invalid").is_none());
-    }
-
-    #[test]
     fn deserialize_sync_line() {
-        let json = r#"{"type":"AssetV1","data":{},"ack":"abc123"}"#;
+        let json = r#"{"type":"AssetV2","data":{},"ack":"abc123"}"#;
         let line: SyncLine = serde_json::from_str(json).unwrap();
-        assert_eq!(line.entity_type, "AssetV1");
+        assert_eq!(line.entity_type, "AssetV2");
         assert_eq!(line.ack, "abc123");
     }
 
     // ── Additional DTO deserialization tests ──────────────────────────
-
-    #[test]
-    fn parse_duration_ms_zero() {
-        assert_eq!(parse_duration_ms("0:00:00.000000"), Some(0));
-    }
-
-    #[test]
-    fn parse_duration_ms_fractional_seconds() {
-        // 0h 0m 1.5s = 1500ms
-        assert_eq!(parse_duration_ms("0:00:01.500000"), Some(1_500));
-    }
-
-    #[test]
-    fn parse_duration_ms_too_few_parts() {
-        assert!(parse_duration_ms("30.000").is_none());
-    }
-
-    #[test]
-    fn parse_duration_ms_non_numeric() {
-        assert!(parse_duration_ms("a:b:c").is_none());
-    }
 
     #[test]
     fn parse_datetime_with_offset() {
@@ -351,7 +336,7 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_sync_asset_v1() {
+    fn deserialize_sync_asset_v2() {
         let json = serde_json::json!({
             "id": "uuid-1234",
             "originalFileName": "DSC_0001.jpg",
@@ -366,7 +351,7 @@ mod tests {
             "checksum": "qZk+NkcGgWq6PiVxeFDCbJzQ2J0="
         });
 
-        let asset: SyncAssetV1 = serde_json::from_value(json).unwrap();
+        let asset: SyncAssetV2 = serde_json::from_value(json).unwrap();
         assert_eq!(asset.id, "uuid-1234");
         assert_eq!(asset.original_file_name, "DSC_0001.jpg");
         assert_eq!(asset.asset_type, "IMAGE");
@@ -385,7 +370,7 @@ mod tests {
     /// `checksum` field — deserialisation must still succeed and leave
     /// the field as `None` rather than failing the whole sync line.
     #[test]
-    fn deserialize_sync_asset_v1_without_checksum_is_optional() {
+    fn deserialize_sync_asset_v2_without_checksum_is_optional() {
         let json = serde_json::json!({
             "id": "uuid-noosum",
             "originalFileName": "old.jpg",
@@ -398,14 +383,35 @@ mod tests {
             "height": null,
             "duration": null
         });
-        let asset: SyncAssetV1 = serde_json::from_value(json).unwrap();
+        let asset: SyncAssetV2 = serde_json::from_value(json).unwrap();
         assert!(asset.checksum.is_none());
     }
 
-    /// Issue #224: `AssetV1` carries flat `stackId` (not a nested
+    /// Issue #679: `AssetsV2` sends `duration` as integer milliseconds
+    /// rather than the `"0:01:30.000000"` string `AssetsV1` used.
+    #[test]
+    fn deserialize_sync_asset_v2_duration_is_integer_milliseconds() {
+        let json = serde_json::json!({
+            "id": "uuid-video",
+            "originalFileName": "clip.mp4",
+            "fileCreatedAt": "2024-06-15T10:30:00.000Z",
+            "localDateTime": null,
+            "type": "VIDEO",
+            "deletedAt": null,
+            "isFavorite": false,
+            "width": 1920,
+            "height": 1080,
+            "duration": 3_723_500
+        });
+
+        let asset: SyncAssetV2 = serde_json::from_value(json).unwrap();
+        assert_eq!(asset.duration, Some(3_723_500));
+    }
+
+    /// Issue #224: `AssetV2` carries flat `stackId` (not a nested
     /// object). The matching `SyncStackV1` event carries the primary.
     #[test]
-    fn deserialize_sync_asset_v1_with_stack_id() {
+    fn deserialize_sync_asset_v2_with_stack_id() {
         let json = serde_json::json!({
             "id": "asset-uuid",
             "originalFileName": "burst.jpg",
@@ -420,14 +426,14 @@ mod tests {
             "stackId": "stack-uuid",
             "isEdited": true
         });
-        let asset: SyncAssetV1 = serde_json::from_value(json).unwrap();
+        let asset: SyncAssetV2 = serde_json::from_value(json).unwrap();
         assert_eq!(asset.stack_id.as_deref(), Some("stack-uuid"));
         assert_eq!(asset.is_edited, Some(true));
     }
 
     /// `stackId` is `null` when the asset is not in a stack.
     #[test]
-    fn deserialize_sync_asset_v1_with_null_stack_id() {
+    fn deserialize_sync_asset_v2_with_null_stack_id() {
         let json = serde_json::json!({
             "id": "asset-uuid",
             "originalFileName": "lone.jpg",
@@ -442,7 +448,7 @@ mod tests {
             "stackId": null,
             "isEdited": false
         });
-        let asset: SyncAssetV1 = serde_json::from_value(json).unwrap();
+        let asset: SyncAssetV2 = serde_json::from_value(json).unwrap();
         assert!(asset.stack_id.is_none());
         assert_eq!(asset.is_edited, Some(false));
     }
@@ -450,7 +456,7 @@ mod tests {
     /// Older Immich versions don't emit `stackId`/`isEdited` at all —
     /// deserialisation must succeed and leave both fields `None`.
     #[test]
-    fn deserialize_sync_asset_v1_without_stack_fields_is_optional() {
+    fn deserialize_sync_asset_v2_without_stack_fields_is_optional() {
         let json = serde_json::json!({
             "id": "asset-old",
             "originalFileName": "old.jpg",
@@ -463,7 +469,7 @@ mod tests {
             "height": null,
             "duration": null
         });
-        let asset: SyncAssetV1 = serde_json::from_value(json).unwrap();
+        let asset: SyncAssetV2 = serde_json::from_value(json).unwrap();
         assert!(asset.stack_id.is_none());
         assert!(asset.is_edited.is_none());
     }
@@ -492,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_sync_asset_v1_video() {
+    fn deserialize_sync_asset_v2_video() {
         let json = serde_json::json!({
             "id": "video-uuid",
             "originalFileName": "MOV_001.mp4",
@@ -503,16 +509,16 @@ mod tests {
             "isFavorite": false,
             "width": 1920,
             "height": 1080,
-            "duration": "0:01:30.000000"
+            "duration": 90_000
         });
 
-        let asset: SyncAssetV1 = serde_json::from_value(json).unwrap();
+        let asset: SyncAssetV2 = serde_json::from_value(json).unwrap();
         assert_eq!(asset.asset_type, "VIDEO");
-        assert_eq!(asset.duration.as_deref(), Some("0:01:30.000000"));
+        assert_eq!(asset.duration, Some(90_000));
     }
 
     #[test]
-    fn deserialize_sync_asset_v1_trashed() {
+    fn deserialize_sync_asset_v2_trashed() {
         let json = serde_json::json!({
             "id": "trashed-uuid",
             "originalFileName": "photo.jpg",
@@ -526,7 +532,7 @@ mod tests {
             "duration": null
         });
 
-        let asset: SyncAssetV1 = serde_json::from_value(json).unwrap();
+        let asset: SyncAssetV2 = serde_json::from_value(json).unwrap();
         assert!(asset.deleted_at.is_some());
         assert_eq!(
             asset.deleted_at.as_deref(),
@@ -690,7 +696,7 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_sync_asset_face_v1() {
+    fn deserialize_sync_asset_face_v2() {
         let json = serde_json::json!({
             "id": "face-uuid",
             "assetId": "asset-uuid",
@@ -704,7 +710,7 @@ mod tests {
             "sourceType": "MachineLearning"
         });
 
-        let face: SyncAssetFaceV1 = serde_json::from_value(json).unwrap();
+        let face: SyncAssetFaceV2 = serde_json::from_value(json).unwrap();
         assert_eq!(face.id, "face-uuid");
         assert_eq!(face.asset_id, "asset-uuid");
         assert_eq!(face.person_id.as_deref(), Some("person-uuid"));
@@ -718,7 +724,7 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_sync_asset_face_v1_no_person() {
+    fn deserialize_sync_asset_face_v2_no_person() {
         let json = serde_json::json!({
             "id": "face-no-person",
             "assetId": "asset-uuid",
@@ -732,9 +738,55 @@ mod tests {
             "sourceType": null
         });
 
-        let face: SyncAssetFaceV1 = serde_json::from_value(json).unwrap();
+        let face: SyncAssetFaceV2 = serde_json::from_value(json).unwrap();
         assert!(face.person_id.is_none());
         assert!(face.source_type.is_none());
+    }
+
+    /// Issue #679: `AssetFaceV2` adds `deletedAt` and `isVisible` on top
+    /// of the retired V1 shape.
+    #[test]
+    fn deserialize_sync_asset_face_v2_visibility_fields() {
+        let json = serde_json::json!({
+            "id": "face-v2",
+            "assetId": "asset-uuid",
+            "personId": "person-uuid",
+            "imageWidth": 4032,
+            "imageHeight": 3024,
+            "boundingBoxX1": 100,
+            "boundingBoxY1": 200,
+            "boundingBoxX2": 300,
+            "boundingBoxY2": 400,
+            "sourceType": "MachineLearning",
+            "deletedAt": "2026-08-23T10:15:18.000Z",
+            "isVisible": false
+        });
+
+        let face: SyncAssetFaceV2 = serde_json::from_value(json).unwrap();
+        assert_eq!(face.deleted_at.as_deref(), Some("2026-08-23T10:15:18.000Z"));
+        assert!(!face.is_visible);
+    }
+
+    /// A server that pre-dates the V2 face fields must not make every
+    /// face invisible — `isVisible` defaults to `true` when absent.
+    #[test]
+    fn deserialize_sync_asset_face_v2_defaults_to_visible() {
+        let json = serde_json::json!({
+            "id": "face-no-visibility",
+            "assetId": "asset-uuid",
+            "personId": null,
+            "imageWidth": 1920,
+            "imageHeight": 1080,
+            "boundingBoxX1": 50,
+            "boundingBoxY1": 50,
+            "boundingBoxX2": 150,
+            "boundingBoxY2": 150,
+            "sourceType": null
+        });
+
+        let face: SyncAssetFaceV2 = serde_json::from_value(json).unwrap();
+        assert!(face.is_visible);
+        assert!(face.deleted_at.is_none());
     }
 
     #[test]
@@ -765,12 +817,12 @@ mod tests {
     #[test]
     fn sync_stream_request_serializes() {
         let req = SyncStreamRequest {
-            types: vec!["AssetsV1".to_string(), "AlbumsV1".to_string()],
+            types: vec!["AssetsV2".to_string(), "AlbumsV1".to_string()],
         };
         let json = serde_json::to_value(&req).unwrap();
         let types = json["types"].as_array().unwrap();
         assert_eq!(types.len(), 2);
-        assert_eq!(types[0], "AssetsV1");
+        assert_eq!(types[0], "AssetsV2");
     }
 
     #[test]

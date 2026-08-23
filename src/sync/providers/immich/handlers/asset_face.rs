@@ -15,17 +15,17 @@ pub struct AssetFaceHandler;
 #[async_trait]
 impl SyncEntityHandler for AssetFaceHandler {
     fn entity_type(&self) -> &'static str {
-        "AssetFaceV1"
+        "AssetFaceV2"
     }
 
-    #[instrument(skip(self, data, ctx), fields(entity = "AssetFaceV1"))]
+    #[instrument(skip(self, data, ctx), fields(entity = "AssetFaceV2"))]
     async fn handle(
         &self,
         data: &serde_json::Value,
         line_number: usize,
         ctx: &SyncContext,
     ) -> Result<HandlerResult, LibraryError> {
-        let face: SyncAssetFaceV1 = deserialize_entity(data, "AssetFaceV1", line_number)?;
+        let face: SyncAssetFaceV2 = deserialize_entity(data, "AssetFaceV2", line_number)?;
 
         // Issue #626: `face.asset_id` is the Immich UUID; `asset_faces.asset_id`
         // references the local `MediaId`. Translate via `external_id` lookup;
@@ -41,7 +41,7 @@ impl SyncEntityHandler for AssetFaceHandler {
                 warn!(
                     face_id = %face.id,
                     asset_id = %face.asset_id,
-                    "AssetFaceV1: parent asset not found locally; skipping face row"
+                    "AssetFaceV2: parent asset not found locally; skipping face row"
                 );
                 return Ok(HandlerResult {
                     audit_action: "upsert",

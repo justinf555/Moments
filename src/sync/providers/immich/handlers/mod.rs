@@ -82,7 +82,7 @@ pub struct SyncContext {
 /// A handler for one Immich sync entity type.
 #[async_trait]
 pub trait SyncEntityHandler: Send + Sync {
-    /// The entity type string this handler matches (e.g. "AssetV1").
+    /// The entity type string this handler matches (e.g. "AssetV2").
     fn entity_type(&self) -> &'static str;
 
     /// Deserialize the raw JSON data, apply the change, and return

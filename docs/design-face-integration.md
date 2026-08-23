@@ -58,6 +58,8 @@ No ML models, no face detection, no image processing — just data sync and UI.
 ### Sync Stream Entity Types
 
 Adding `"PeopleV1"` and `"AssetFacesV1"` to the sync stream request causes the server to include person and face records in the same NDJSON stream we already process.
+> **Superseded (#679):** `AssetsV1` and `AssetFacesV1` were retired server-side and now return 400. The live list is `SYNC_REQUEST_TYPES` in `src/sync/providers/immich/pull.rs` — see `docs/design-immich-backend.md`.
+
 
 **PersonV1** (upsert):
 ```json
