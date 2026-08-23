@@ -16,6 +16,7 @@ struct PersonRow {
 }
 
 /// Internal row type for asset face upserts (from sync).
+#[derive(Clone)]
 pub(crate) struct AssetFaceRow {
     pub id: String,
     pub asset_id: String,
@@ -27,6 +28,11 @@ pub(crate) struct AssetFaceRow {
     pub bbox_x2: i32,
     pub bbox_y2: i32,
     pub source_type: String,
+    /// Issue #680: `false` when Immich hides the face in the asset.
+    pub is_visible: bool,
+    /// Issue #680: server-side soft-deletion timestamp, or `None` while
+    /// the face is live.
+    pub deleted_at: Option<i64>,
 }
 
 /// Faces/people persistence layer.
@@ -86,6 +92,11 @@ impl FacesRepository {
     }
 
     /// List media IDs for all assets containing a specific person.
+    ///
+    /// Issue #680: faces hidden (`is_visible = 0`) or soft-deleted
+    /// (`deleted_at` set) on the server don't put their asset in the
+    /// person's grid. The rows stay — Immich can reverse either state —
+    /// so this is a filter, not a delete.
     pub async fn list_media_for_person(
         &self,
         person_id: &str,
@@ -96,6 +107,7 @@ impl FacesRepository {
              LEFT JOIN stacks s ON m.stack_id = s.id
              LEFT JOIN media render ON render.stack_id = s.id AND render.is_moments_render = 1
              WHERE af.person_id = ? AND m.is_trashed = 0
+               AND af.is_visible = 1 AND af.deleted_at IS NULL
                AND (s.id IS NULL AND m.is_moments_render = 0
                     OR (render.id IS NULL AND s.primary_asset_id = m.id)
                     OR (render.id IS NOT NULL AND m.is_moments_render = 0))
@@ -190,8 +202,8 @@ impl FacesRepository {
     /// Upsert an asset face record (from sync).
     pub(crate) async fn upsert_asset_face(&self, face: &AssetFaceRow) -> Result<(), LibraryError> {
         sqlx::query(
-            "INSERT INTO asset_faces (id, asset_id, person_id, image_width, image_height, bbox_x1, bbox_y1, bbox_x2, bbox_y2, source_type)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO asset_faces (id, asset_id, person_id, image_width, image_height, bbox_x1, bbox_y1, bbox_x2, bbox_y2, source_type, is_visible, deleted_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                  asset_id = excluded.asset_id,
                  person_id = excluded.person_id,
@@ -201,7 +213,9 @@ impl FacesRepository {
                  bbox_y1 = excluded.bbox_y1,
                  bbox_x2 = excluded.bbox_x2,
                  bbox_y2 = excluded.bbox_y2,
-                 source_type = excluded.source_type",
+                 source_type = excluded.source_type,
+                 is_visible = excluded.is_visible,
+                 deleted_at = excluded.deleted_at",
         )
         .bind(&face.id)
         .bind(&face.asset_id)
@@ -213,24 +227,36 @@ impl FacesRepository {
         .bind(face.bbox_x2)
         .bind(face.bbox_y2)
         .bind(&face.source_type)
+        .bind(face.is_visible)
+        .bind(face.deleted_at)
         .execute(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
         Ok(())
     }
 
-    /// Look up the `person_id` currently assigned to an asset face.
+    /// Look up the person an asset face currently contributes media to.
     ///
-    /// Returns `None` if the face row does not exist, or if the row exists
-    /// with a null `person_id`. Callers that need to distinguish those two
-    /// cases must query separately.
-    pub async fn get_asset_face_person_id(&self, id: &str) -> Result<Option<String>, LibraryError> {
-        let row: Option<(Option<String>,)> =
-            sqlx::query_as("SELECT person_id FROM asset_faces WHERE id = ?")
-                .bind(id)
-                .fetch_optional(self.db.pool())
-                .await
-                .map_err(LibraryError::Db)?;
+    /// Returns `None` if the face row does not exist, if it has a null
+    /// `person_id`, or — issue #680 — if it is hidden or soft-deleted
+    /// server-side and so contributes to nobody. Callers that need to
+    /// distinguish those cases must query separately.
+    ///
+    /// Folding visibility into the answer is what lets
+    /// `FacesService::upsert_asset_face` emit `PersonMediaChanged` when a
+    /// face is hidden or un-hidden without its `person_id` changing.
+    pub async fn get_asset_face_effective_person_id(
+        &self,
+        id: &str,
+    ) -> Result<Option<String>, LibraryError> {
+        let row: Option<(Option<String>,)> = sqlx::query_as(
+            "SELECT person_id FROM asset_faces
+             WHERE id = ? AND is_visible = 1 AND deleted_at IS NULL",
+        )
+        .bind(id)
+        .fetch_optional(self.db.pool())
+        .await
+        .map_err(LibraryError::Db)?;
         Ok(row.and_then(|(p,)| p))
     }
 
@@ -251,10 +277,14 @@ impl FacesRepository {
     }
 
     /// Recount faces for a person and update the denormalised face_count.
+    ///
+    /// Issue #680: counts only faces that are visible and not
+    /// soft-deleted server-side, matching `list_media_for_person`.
     pub async fn update_face_count(&self, person_id: &str) -> Result<(), LibraryError> {
         sqlx::query(
             "UPDATE people SET face_count = (
-                SELECT COUNT(*) FROM asset_faces WHERE person_id = ?
+                SELECT COUNT(*) FROM asset_faces
+                WHERE person_id = ? AND is_visible = 1 AND deleted_at IS NULL
             ) WHERE id = ?",
         )
         .bind(person_id)
@@ -386,6 +416,26 @@ mod tests {
         (repo, media, db)
     }
 
+    /// A visible, live face row — what every test assumed before #680
+    /// gave `asset_faces` a visibility state. Override with struct
+    /// update syntax for the hidden/soft-deleted cases.
+    fn face_row(id: &str, asset_id: &str, person_id: Option<&str>) -> AssetFaceRow {
+        AssetFaceRow {
+            id: id.to_string(),
+            asset_id: asset_id.to_string(),
+            person_id: person_id.map(str::to_string),
+            image_width: 100,
+            image_height: 100,
+            bbox_x1: 0,
+            bbox_y1: 0,
+            bbox_x2: 50,
+            bbox_y2: 50,
+            source_type: "MachineLearning".to_string(),
+            is_visible: true,
+            deleted_at: None,
+        }
+    }
+
     #[tokio::test]
     async fn upsert_and_list_people() {
         let dir = tempdir().unwrap();
@@ -455,42 +505,9 @@ mod tests {
         media.insert(&rec1).await.unwrap();
         media.insert(&rec2).await.unwrap();
 
-        let face1 = AssetFaceRow {
-            id: "f1".to_string(),
-            asset_id: "m1".to_string(),
-            person_id: Some("p2".to_string()),
-            image_width: 100,
-            image_height: 100,
-            bbox_x1: 0,
-            bbox_y1: 0,
-            bbox_x2: 50,
-            bbox_y2: 50,
-            source_type: "MachineLearning".to_string(),
-        };
-        let face2 = AssetFaceRow {
-            id: "f2".to_string(),
-            asset_id: "m2".to_string(),
-            person_id: Some("p2".to_string()),
-            image_width: 100,
-            image_height: 100,
-            bbox_x1: 0,
-            bbox_y1: 0,
-            bbox_x2: 50,
-            bbox_y2: 50,
-            source_type: "MachineLearning".to_string(),
-        };
-        let face3 = AssetFaceRow {
-            id: "f3".to_string(),
-            asset_id: "m1".to_string(),
-            person_id: Some("p1".to_string()),
-            image_width: 100,
-            image_height: 100,
-            bbox_x1: 60,
-            bbox_y1: 60,
-            bbox_x2: 90,
-            bbox_y2: 90,
-            source_type: "MachineLearning".to_string(),
-        };
+        let face1 = face_row("f1", "m1", Some("p2"));
+        let face2 = face_row("f2", "m2", Some("p2"));
+        let face3 = face_row("f3", "m1", Some("p1"));
         repo.upsert_asset_face(&face1).await.unwrap();
         repo.upsert_asset_face(&face2).await.unwrap();
         repo.upsert_asset_face(&face3).await.unwrap();
@@ -559,18 +576,7 @@ mod tests {
         let rec = test_record(MediaId::new("m1".to_string()));
         media.insert(&rec).await.unwrap();
 
-        let face = AssetFaceRow {
-            id: "f1".to_string(),
-            asset_id: "m1".to_string(),
-            person_id: Some("p1".to_string()),
-            image_width: 100,
-            image_height: 100,
-            bbox_x1: 10,
-            bbox_y1: 20,
-            bbox_x2: 50,
-            bbox_y2: 60,
-            source_type: "MachineLearning".to_string(),
-        };
+        let face = face_row("f1", "m1", Some("p1"));
         repo.upsert_asset_face(&face).await.unwrap();
         repo.update_face_count("p1").await.unwrap();
 
@@ -586,6 +592,171 @@ mod tests {
 
         let people = repo.list_people().await.unwrap();
         assert_eq!(people[0].face_count, 0);
+    }
+
+    // ── #680: server-side face visibility ─────────────────────────
+
+    #[tokio::test]
+    async fn hidden_and_soft_deleted_faces_are_excluded() {
+        let dir = tempdir().unwrap();
+        let (repo, media, _db) = test_repo(dir.path()).await;
+
+        repo.upsert_person("p1", "Alice", None, false, false, None, None, None)
+            .await
+            .unwrap();
+        for (n, taken) in [(1, 1000), (2, 2000), (3, 3000)] {
+            let rec = record_with_taken_at(
+                MediaId::new(format!("m{n}")),
+                &format!("a/photo{n}.jpg"),
+                Some(taken),
+            );
+            media.insert(&rec).await.unwrap();
+        }
+
+        repo.upsert_asset_face(&face_row("f1", "m1", Some("p1")))
+            .await
+            .unwrap();
+        repo.upsert_asset_face(&AssetFaceRow {
+            is_visible: false,
+            ..face_row("f2", "m2", Some("p1"))
+        })
+        .await
+        .unwrap();
+        repo.upsert_asset_face(&AssetFaceRow {
+            deleted_at: Some(12345),
+            ..face_row("f3", "m3", Some("p1"))
+        })
+        .await
+        .unwrap();
+        repo.update_face_count("p1").await.unwrap();
+
+        let media = repo.list_media_for_person("p1").await.unwrap();
+        assert_eq!(media, vec!["m1"], "only the visible, live face counts");
+
+        let people = repo.list_people().await.unwrap();
+        assert_eq!(people[0].face_count, 1);
+    }
+
+    /// Hiding a face server-side must drop it from the person on the
+    /// next sync, and un-hiding must bring it back — the row is filtered,
+    /// never deleted, so no resync is needed either way.
+    #[tokio::test]
+    async fn hiding_and_unhiding_a_face_round_trips() {
+        let dir = tempdir().unwrap();
+        let (repo, media, db) = test_repo(dir.path()).await;
+
+        repo.upsert_person("p1", "Alice", None, false, false, None, None, None)
+            .await
+            .unwrap();
+        media
+            .insert(&test_record(MediaId::new("m1".to_string())))
+            .await
+            .unwrap();
+
+        repo.upsert_asset_face(&face_row("f1", "m1", Some("p1")))
+            .await
+            .unwrap();
+        repo.update_face_count("p1").await.unwrap();
+        assert_eq!(repo.list_media_for_person("p1").await.unwrap(), vec!["m1"]);
+
+        repo.upsert_asset_face(&AssetFaceRow {
+            is_visible: false,
+            ..face_row("f1", "m1", Some("p1"))
+        })
+        .await
+        .unwrap();
+        repo.update_face_count("p1").await.unwrap();
+        assert!(repo.list_media_for_person("p1").await.unwrap().is_empty());
+        assert_eq!(repo.list_people().await.unwrap()[0].face_count, 0);
+
+        let surviving: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM asset_faces WHERE id = 'f1'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(surviving.0, 1, "hidden face is filtered, not deleted");
+
+        repo.upsert_asset_face(&face_row("f1", "m1", Some("p1")))
+            .await
+            .unwrap();
+        repo.update_face_count("p1").await.unwrap();
+        assert_eq!(repo.list_media_for_person("p1").await.unwrap(), vec!["m1"]);
+        assert_eq!(repo.list_people().await.unwrap()[0].face_count, 1);
+    }
+
+    #[tokio::test]
+    async fn effective_person_id_is_none_for_inactive_faces() {
+        let dir = tempdir().unwrap();
+        let (repo, media, _db) = test_repo(dir.path()).await;
+
+        repo.upsert_person("p1", "Alice", None, false, false, None, None, None)
+            .await
+            .unwrap();
+        media
+            .insert(&test_record(MediaId::new("m1".to_string())))
+            .await
+            .unwrap();
+
+        repo.upsert_asset_face(&face_row("f1", "m1", Some("p1")))
+            .await
+            .unwrap();
+        assert_eq!(
+            repo.get_asset_face_effective_person_id("f1").await.unwrap(),
+            Some("p1".to_string())
+        );
+
+        repo.upsert_asset_face(&AssetFaceRow {
+            is_visible: false,
+            ..face_row("f1", "m1", Some("p1"))
+        })
+        .await
+        .unwrap();
+        assert!(repo
+            .get_asset_face_effective_person_id("f1")
+            .await
+            .unwrap()
+            .is_none());
+
+        repo.upsert_asset_face(&AssetFaceRow {
+            deleted_at: Some(12345),
+            ..face_row("f1", "m1", Some("p1"))
+        })
+        .await
+        .unwrap();
+        assert!(repo
+            .get_asset_face_effective_person_id("f1")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    /// Rows written before migration 027 must keep their old behaviour:
+    /// the column defaults leave them visible and live.
+    #[tokio::test]
+    async fn pre_migration_rows_default_to_visible_and_live() {
+        let dir = tempdir().unwrap();
+        let (repo, media, db) = test_repo(dir.path()).await;
+
+        repo.upsert_person("p1", "Alice", None, false, false, None, None, None)
+            .await
+            .unwrap();
+        media
+            .insert(&test_record(MediaId::new("m1".to_string())))
+            .await
+            .unwrap();
+
+        // Insert without the #680 columns, as migration 026 would have.
+        sqlx::query(
+            "INSERT INTO asset_faces (id, asset_id, person_id, image_width, image_height,
+                                      bbox_x1, bbox_y1, bbox_x2, bbox_y2, source_type)
+             VALUES ('f1', 'm1', 'p1', 100, 100, 0, 0, 50, 50, 'MachineLearning')",
+        )
+        .execute(db.pool())
+        .await
+        .unwrap();
+        repo.update_face_count("p1").await.unwrap();
+
+        assert_eq!(repo.list_media_for_person("p1").await.unwrap(), vec!["m1"]);
+        assert_eq!(repo.list_people().await.unwrap()[0].face_count, 1);
     }
 
     #[tokio::test]
@@ -605,30 +776,8 @@ mod tests {
         media.insert(&rec1).await.unwrap();
         media.insert(&rec2).await.unwrap();
 
-        let face1 = AssetFaceRow {
-            id: "f1".to_string(),
-            asset_id: "m1".to_string(),
-            person_id: Some("p1".to_string()),
-            image_width: 100,
-            image_height: 100,
-            bbox_x1: 0,
-            bbox_y1: 0,
-            bbox_x2: 50,
-            bbox_y2: 50,
-            source_type: "MachineLearning".to_string(),
-        };
-        let face2 = AssetFaceRow {
-            id: "f2".to_string(),
-            asset_id: "m2".to_string(),
-            person_id: Some("p1".to_string()),
-            image_width: 100,
-            image_height: 100,
-            bbox_x1: 0,
-            bbox_y1: 0,
-            bbox_x2: 50,
-            bbox_y2: 50,
-            source_type: "MachineLearning".to_string(),
-        };
+        let face1 = face_row("f1", "m1", Some("p1"));
+        let face2 = face_row("f2", "m2", Some("p1"));
         repo.upsert_asset_face(&face1).await.unwrap();
         repo.upsert_asset_face(&face2).await.unwrap();
 
@@ -647,18 +796,7 @@ mod tests {
         let rec = test_record(MediaId::new("m1".to_string()));
         media.insert(&rec).await.unwrap();
 
-        let face = AssetFaceRow {
-            id: "f1".to_string(),
-            asset_id: "m1".to_string(),
-            person_id: Some("p1".to_string()),
-            image_width: 100,
-            image_height: 100,
-            bbox_x1: 0,
-            bbox_y1: 0,
-            bbox_x2: 50,
-            bbox_y2: 50,
-            source_type: "MachineLearning".to_string(),
-        };
+        let face = face_row("f1", "m1", Some("p1"));
         repo.upsert_asset_face(&face).await.unwrap();
 
         // Deleting person should SET NULL on the face, not delete it.
@@ -701,18 +839,7 @@ mod tests {
             .insert(&test_record(MediaId::new("m1".to_string())))
             .await
             .unwrap();
-        let face = AssetFaceRow {
-            id: "f1".to_string(),
-            asset_id: "m1".to_string(),
-            person_id: None,
-            image_width: 100,
-            image_height: 100,
-            bbox_x1: 0,
-            bbox_y1: 0,
-            bbox_x2: 50,
-            bbox_y2: 50,
-            source_type: "MachineLearning".to_string(),
-        };
+        let face = face_row("f1", "m1", None);
         repo.upsert_asset_face(&face).await.unwrap();
 
         repo.bump_asset_face_last_seen_at("f1", 12345)
@@ -772,18 +899,7 @@ mod tests {
             .unwrap();
         repo.bump_person_last_seen_at("p1", 100).await.unwrap();
 
-        let face = AssetFaceRow {
-            id: "f1".to_string(),
-            asset_id: "m1".to_string(),
-            person_id: Some("p1".to_string()),
-            image_width: 100,
-            image_height: 100,
-            bbox_x1: 0,
-            bbox_y1: 0,
-            bbox_x2: 50,
-            bbox_y2: 50,
-            source_type: "MachineLearning".to_string(),
-        };
+        let face = face_row("f1", "m1", Some("p1"));
         repo.upsert_asset_face(&face).await.unwrap();
 
         repo.delete_people_with_stale_heartbeat(200).await.unwrap();
@@ -808,18 +924,7 @@ mod tests {
             .unwrap();
 
         for (id, beat) in [("stale", 100), ("fresh", 300)] {
-            let face = AssetFaceRow {
-                id: id.to_string(),
-                asset_id: "m1".to_string(),
-                person_id: None,
-                image_width: 100,
-                image_height: 100,
-                bbox_x1: 0,
-                bbox_y1: 0,
-                bbox_x2: 50,
-                bbox_y2: 50,
-                source_type: "MachineLearning".to_string(),
-            };
+            let face = face_row(id, "m1", None);
             repo.upsert_asset_face(&face).await.unwrap();
             repo.bump_asset_face_last_seen_at(id, beat).await.unwrap();
         }

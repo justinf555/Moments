@@ -334,8 +334,12 @@ impl MediaRepository {
                 " AND m.is_trashed = 0 AND m.id IN (SELECT media_id FROM album_media WHERE album_id = ?)",
                 "COALESCE(m.taken_at, 0)",
             ),
+            // Issue #680: faces hidden or soft-deleted server-side don't
+            // put their asset in the person's grid — see
+            // `FacesRepository::list_media_for_person`.
             MediaFilter::Person { .. } => (
-                " AND m.is_trashed = 0 AND m.id IN (SELECT DISTINCT asset_id FROM asset_faces WHERE person_id = ?)",
+                " AND m.is_trashed = 0 AND m.id IN (SELECT DISTINCT asset_id FROM asset_faces
+                   WHERE person_id = ? AND is_visible = 1 AND deleted_at IS NULL)",
                 "COALESCE(m.taken_at, 0)",
             ),
         };
@@ -998,6 +1002,63 @@ mod tests {
         let db = open_test_db(dir).await;
         let repo = MediaRepository::new(db.clone());
         (repo, db)
+    }
+
+    /// Issue #680: the person grid is the other half of
+    /// `FacesRepository::list_media_for_person` — a face hidden or
+    /// soft-deleted server-side must not put its asset here either.
+    #[tokio::test]
+    async fn person_filter_excludes_hidden_and_soft_deleted_faces() {
+        use crate::library::faces::PersonId;
+
+        let dir = tempdir().unwrap();
+        let (repo, db) = test_repo(dir.path()).await;
+
+        sqlx::query("INSERT INTO people (id, name) VALUES ('p1', 'Alice')")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        for (n, taken) in [(1, 1000), (2, 2000), (3, 3000)] {
+            let rec = record_with_taken_at(
+                MediaId::new(format!("m{n}")),
+                &format!("a/photo{n}.jpg"),
+                Some(taken),
+            );
+            repo.insert(&rec).await.unwrap();
+        }
+
+        // f1 live and visible, f2 hidden, f3 soft-deleted.
+        for (id, asset, visible, deleted) in [
+            ("f1", "m1", 1, None),
+            ("f2", "m2", 0, None),
+            ("f3", "m3", 1, Some(12345_i64)),
+        ] {
+            sqlx::query(
+                "INSERT INTO asset_faces (id, asset_id, person_id, is_visible, deleted_at)
+                 VALUES (?, ?, 'p1', ?, ?)",
+            )
+            .bind(id)
+            .bind(asset)
+            .bind(visible)
+            .bind(deleted)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        }
+
+        let items = repo
+            .list(
+                MediaFilter::Person {
+                    person_id: PersonId::from_raw("p1".to_string()),
+                },
+                None,
+                50,
+            )
+            .await
+            .unwrap();
+
+        let ids: Vec<&str> = items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(ids, vec!["m1"]);
     }
 
     #[tokio::test]

@@ -158,6 +158,26 @@ CREATE INDEX idx_asset_faces_asset ON asset_faces(asset_id);
 CREATE INDEX idx_asset_faces_person ON asset_faces(person_id);
 ```
 
+### Migration 027: `add_asset_face_visibility` — [#680](https://github.com/justinf555/Moments/issues/680)
+
+`AssetFaceV2` carries two fields V1 did not, and Immich distinguishes three face states where the original schema had one:
+
+```sql
+ALTER TABLE asset_faces ADD COLUMN is_visible INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE asset_faces ADD COLUMN deleted_at INTEGER;
+```
+
+| state | wire | local |
+|---|---|---|
+| live and visible | `isVisible: true`, `deletedAt: null` | counts and shows |
+| hidden in the asset | `isVisible: false` | row kept, filtered out |
+| soft-deleted | `deletedAt` set | row kept, filtered out |
+| hard-deleted | `AssetFaceDeleteV1` | row deleted |
+
+Inactive faces are **filtered, not deleted**: that matches the server's own model, and an un-delete or un-hide on the server takes effect on the next sync with no resync. Both column defaults leave pre-027 rows in the "live and visible" state, so existing libraries upgrade with no visible change.
+
+Every read that answers "which media / how many faces does this person have" filters on `is_visible = 1 AND deleted_at IS NULL` — `FacesRepository::list_media_for_person`, `FacesRepository::update_face_count`, `FacesRepository::get_asset_face_effective_person_id`, and `MediaFilter::Person` in `MediaRepository`. The heartbeat sweeps (`delete_*_with_stale_heartbeat`, `persons_with_stale_faces`) deliberately do not: they reap rows the server has stopped sending regardless of state.
+
 The `face_count` column on `people` is a denormalised count maintained by triggers or updated during sync. It enables sorting the People sidebar by number of photos without a join.
 
 ## Library Trait
