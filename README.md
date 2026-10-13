@@ -189,6 +189,15 @@ For an overview of the codebase, see [ARCHITECTURE.md](ARCHITECTURE.md).
 - [GitHub Issues](https://github.com/justinf555/Moments/issues) — bug reports and feature requests
 - [GitHub Discussions](https://github.com/justinf555/Moments/discussions) — questions and general discussion
 
+## AI disclosure
+
+Nearly all of the code in this repository was written by Claude Code under the
+maintainer's direction, with the maintainer deciding what to build, choosing the
+architecture, and reviewing and testing every change before merge. Each commit
+records the tool and model that helped in an `Assisted-by` trailer.
+[AI_DISCLOSURE.md](AI_DISCLOSURE.md) has the full account, including how the
+project reviews changes and how it treats copyright.
+
 ## License
 
 Moments is licensed under the [GNU General Public License v3.0 or later](COPYING).

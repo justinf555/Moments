@@ -97,6 +97,35 @@ If your change modifies the SQLite schema:
    ```
 3. Commit the updated `.sqlx/` directory with your PR
 
+## AI-assisted contributions
+
+Moments is itself built with AI coding tools; [AI_DISCLOSURE.md](AI_DISCLOSURE.md)
+says how. Contributions made with AI tools are welcome on the same terms the project
+applies to itself:
+
+- **You are the author.** You must understand the change, have tested it, and be able
+  to explain and defend it in review. "The tool wrote it" is not an answer to a review
+  question.
+- **Disclose it.** Add an `Assisted-by` trailer to each commit an AI tool helped with,
+  one line per model that materially contributed, naming the tool and its exact
+  model identifier:
+
+  ```
+  Assisted-by: Claude Code:claude-fable-5-1
+  ```
+
+  If the tool doesn't tell you which model it used, name the tool alone
+  (`Assisted-by: Claude Code`) rather than guessing.
+
+  Fill in the **AI assistance** section of the pull request template with the same
+  lines, or write `None` if no AI tool was involved. CI checks the section and fails
+  the PR if it is missing or empty.
+- **Never credit a tool as a co-author.** Do not add a `Co-Authored-By` trailer naming
+  an AI tool or model. That trailer asserts authorship, and a tool is not an author.
+  CI rejects commits that do this. If your tool adds one by default, turn that off.
+- **No autonomous contributions.** Pull requests must be opened by a person who has
+  read what they are submitting. Bots and agents acting on their own are not accepted.
+
 ## Code of Conduct
 
 This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code.

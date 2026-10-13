@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- AI assistance is now disclosed in `AI_DISCLOSURE.md` and recorded per commit with
+  a kernel-style `Assisted-by` trailer instead of `Co-Authored-By`; CI checks it
+
 ### Added
 - Local filesystem library backend with BLAKE3 content-addressable storage
 - Immich server backend with offline-first sync

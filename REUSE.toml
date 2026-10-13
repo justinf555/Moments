@@ -9,6 +9,7 @@ SPDX-PackageDownloadLocation = "https://github.com/justinf555/Moments"
 [[annotations]]
 path = [
     "README.md",
+    "AI_DISCLOSURE.md",
     "ARCHITECTURE.md",
     "CHANGELOG.md",
     "CLAUDE.md",
@@ -41,6 +42,7 @@ SPDX-License-Identifier = "GPL-3.0-or-later"
 path = [
     ".gitignore",
     ".vscode/*.json",
+    ".claude/settings.json",
     "Cargo.lock",
     "cargo-sources.json",
     "io.github.justinf555.Moments*.json",
