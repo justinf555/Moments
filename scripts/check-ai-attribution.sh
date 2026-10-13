@@ -30,6 +30,12 @@ fi
 ai_pattern='anthropic\.com|copilot|openai|codex|gemini|cursor|devin|aider|claude'
 assisted_re='^Assisted-by: [A-Za-z0-9][A-Za-z0-9 ._-]*[A-Za-z0-9](:[A-Za-z0-9][A-Za-z0-9._-]*)?( \[[^][]+\])*$'
 
+trim() {
+    local v="${1%$'\r'}"
+    v="${v%"${v##*[![:space:]]}"}"
+    printf '%s' "$v"
+}
+
 status=0
 
 for sha in $(git rev-list --no-merges "$range"); do
@@ -42,6 +48,7 @@ for sha in $(git rev-list --no-merges "$range"); do
     fi
 
     while IFS= read -r line; do
+        line=$(trim "$line")
         [[ -z "$line" ]] && continue
         if ! grep -qE "$assisted_re" <<<"$line"; then
             echo "::error::$short has a malformed trailer: '$line' (expected 'Assisted-by: AGENT:MODEL [TOOL]' or 'Assisted-by: AGENT')"
@@ -53,13 +60,15 @@ done
 if [[ -n "$body_file" ]]; then
     # Take the "AI assistance" section up to the next heading, drop HTML
     # comments and blank lines.
-    section=$(awk '
+    # GitHub delivers PR bodies with CRLF line endings, and editors leave
+    # trailing spaces; neither should fail the check.
+    section=$(tr -d '\r' < "$body_file" | awk '
         /^## AI assistance[[:space:]]*$/ { found = 1; next }
         found && /^## / { exit }
         found { print }
-    ' "$body_file" | sed -E 's/<!--.*-->//g' | sed -E '/^[[:space:]]*$/d' || true)
+    ' | sed -E 's/<!--.*-->//g; s/[[:space:]]+$//' | sed -E '/^[[:space:]]*$/d' || true)
 
-    if ! grep -qE '^## AI assistance[[:space:]]*$' "$body_file"; then
+    if ! tr -d '\r' < "$body_file" | grep -qE '^## AI assistance[[:space:]]*$'; then
         echo "::error::PR description has no '## AI assistance' section (see .github/pull_request_template.md)"
         status=1
     elif [[ -z "$section" ]]; then
