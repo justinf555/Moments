@@ -23,6 +23,11 @@
     "**/_build": true
   },
   "search.followSymlinks": false,
+  // The Makefile configures meson (_build for config.rs, the dev build in
+  // .flatpak-builder-dev). Don't let the Meson extension set up its own
+  // builddir with the toolbox's meson; read _build instead.
+  "mesonbuild.configureOnOpen": false,
+  "mesonbuild.buildFolder": "_build",
   // ms-vscode.cpptools is here only for the gdb debugger; its C/C++ code
   // indexing has nothing to index but vendored C in the build dirs.
   "C_Cpp.intelliSenseEngine": "disabled",
