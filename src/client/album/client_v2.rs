@@ -243,12 +243,11 @@ impl AlbumClientV2 {
 
     /// Delete one or more albums.
     ///
-    /// On success, removes from all tracked models and emits
-    /// `album-deleted` for each ID.
+    /// On success the `AlbumRemoved` event listener removes each album
+    /// from all tracked models and emits `album-deleted`.
     #[instrument(skip(self, ids))]
     pub fn delete_album(&self, ids: Vec<AlbumId>) {
         let (library, tokio) = self.deps();
-        let client_weak: glib::SendWeakRef<AlbumClientV2> = self.downgrade().into();
 
         glib::MainContext::default().spawn_local(async move {
             for id in ids {
@@ -261,11 +260,12 @@ impl AlbumClientV2 {
 
                 match result {
                     Ok(()) => {
+                        // `AlbumService::delete_album` emits
+                        // `AlbumEvent::AlbumRemoved`; the event listener
+                        // removes the row and emits `album-deleted`, for
+                        // local and sync deletes alike. Doing it here too
+                        // fired the signal twice (#589).
                         debug!(album_id = %id, "album deleted");
-                        if let Some(client) = client_weak.upgrade() {
-                            client.remove_from_models(&id);
-                            client.emit_by_name::<()>("album-deleted", &[&id.as_str().to_string()]);
-                        }
                     }
                     Err(e) => {
                         error!(album_id = %id, "delete_album failed: {e}");
@@ -278,7 +278,8 @@ impl AlbumClientV2 {
 
     /// Add media items to an album.
     ///
-    /// On success, refreshes the album metadata in all tracked models.
+    /// On success, emits `album-media-changed`. The album row itself is
+    /// refreshed by the `AlbumUpdated` event listener.
     #[instrument(skip(self, media_ids), fields(album_id = %album_id))]
     pub fn add_to_album(&self, album_id: AlbumId, media_ids: Vec<MediaId>) {
         let (library, tokio) = self.deps();
@@ -287,20 +288,17 @@ impl AlbumClientV2 {
         glib::MainContext::default().spawn_local(async move {
             let aid = album_id.clone();
             let result = crate::client::spawn_on(&tokio, async move {
-                library.albums().add_to_album(&aid, &media_ids).await?;
-                library
-                    .albums()
-                    .get_album(&aid)
-                    .await?
-                    .ok_or_else(|| LibraryError::Runtime(format!("album {aid} not found")))
+                library.albums().add_to_album(&aid, &media_ids).await
             })
             .await;
 
             match result {
-                Ok(album) => {
+                Ok(()) => {
+                    // The album row (count, cover) is refreshed by the
+                    // `AlbumUpdated` event listener; refreshing it here
+                    // too fetched the album twice (#589).
                     debug!(album_id = %album_id, "photos added to album");
                     if let Some(client) = client_weak.upgrade() {
-                        client.update_album_in_models(&album);
                         client.emit_by_name::<()>(
                             "album-media-changed",
                             &[&album_id.as_str().to_string()],
@@ -317,7 +315,8 @@ impl AlbumClientV2 {
 
     /// Remove media items from an album.
     ///
-    /// On success, refreshes the album metadata in all tracked models.
+    /// On success, emits `album-media-changed`. The album row itself is
+    /// refreshed by the `AlbumUpdated` event listener.
     #[instrument(skip(self, media_ids), fields(album_id = %album_id))]
     pub fn remove_from_album(&self, album_id: AlbumId, media_ids: Vec<MediaId>) {
         let (library, tokio) = self.deps();
@@ -326,20 +325,17 @@ impl AlbumClientV2 {
         glib::MainContext::default().spawn_local(async move {
             let aid = album_id.clone();
             let result = crate::client::spawn_on(&tokio, async move {
-                library.albums().remove_from_album(&aid, &media_ids).await?;
-                library
-                    .albums()
-                    .get_album(&aid)
-                    .await?
-                    .ok_or_else(|| LibraryError::Runtime(format!("album {aid} not found")))
+                library.albums().remove_from_album(&aid, &media_ids).await
             })
             .await;
 
             match result {
-                Ok(album) => {
+                Ok(()) => {
+                    // The album row (count, cover) is refreshed by the
+                    // `AlbumUpdated` event listener; refreshing it here
+                    // too fetched the album twice (#589).
                     debug!(album_id = %album_id, "photos removed from album");
                     if let Some(client) = client_weak.upgrade() {
-                        client.update_album_in_models(&album);
                         client.emit_by_name::<()>(
                             "album-media-changed",
                             &[&album_id.as_str().to_string()],
