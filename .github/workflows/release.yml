@@ -24,28 +24,40 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The branch name is chosen by whoever opens the PR, so it reaches the
+      # script through env (never ${{ }} interpolation) and the version must
+      # be plain X.Y.Z before it becomes a tag that later steps use.
       - name: Extract version from branch name
         id: version
+        env:
+          BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
-          BRANCH="${{ github.event.pull_request.head.ref }}"
+          set -euo pipefail
           VERSION="${BRANCH#release/v}"
+          if [[ ! $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release branch must be release/vX.Y.Z"
+            exit 1
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Create annotated tag
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
-          git push origin "${{ steps.version.outputs.tag }}"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
 
       - name: Create GitHub Release
         run: |
-          gh release create "${{ steps.version.outputs.tag }}" \
-            --title "Moments ${{ steps.version.outputs.tag }}" \
+          gh release create "$TAG" \
+            --title "Moments $TAG" \
             --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
 
   # Build the redistributable bundle from the tag just pushed.
   bundle:
@@ -73,8 +85,9 @@ jobs:
       - name: Upload release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.tag-and-release.outputs.tag }}
         run: |
           set -euo pipefail
           ls -lh moments-*
-          gh release upload "${{ needs.tag-and-release.outputs.tag }}" \
+          gh release upload "$TAG" \
             moments-* --clobber --repo "${{ github.repository }}"
