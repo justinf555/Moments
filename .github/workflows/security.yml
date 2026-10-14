@@ -4,7 +4,17 @@
 name: Security
 
 on:
+  # On PRs, only when the dependency set or the audit policy changes. A newly
+  # published advisory otherwise turns every open PR red for reasons that have
+  # nothing to do with it; main and the weekly schedule still catch those.
+  # Not a required check, so a filtered-out run can't block a merge.
   pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - deny.toml
+      - .cargo/audit.toml
+      - .github/workflows/security.yml
   push:
     branches: [main]
   schedule:
