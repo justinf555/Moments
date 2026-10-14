@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Justin F
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-.PHONY: run run-dev run-dhat dev-bootstrap dev clean clean-dev clean-bundle \
-        check test test-nextest test-integration test-all \
+.PHONY: run run-dev run-dhat dev-bootstrap dev-build dev dev-gdb clean clean-dev clean-bundle \
+        check test test-nextest test-integration test-all sdk-cargo \
         lint fmt fmt-check typos audit coverage metrics \
         check-potfiles ci-all stack attach release config \
         bundle bundle-nightly install-bundle uninstall-bundle
@@ -69,7 +69,25 @@ dev-bootstrap:
 		meson setup --prefix=/app --libdir=lib -Dprofile=development \
 			$(CURDIR)/$(DEV_BUILD_DIR) $(CURDIR)
 
-dev:
+# Sandbox for running the dev build. Shared by `make dev` and `make dev-gdb`
+# so the debugger sees exactly the app that `make dev` runs.
+DEV_RUN_FLAGS = \
+	--share=network --share=ipc \
+	--socket=wayland --socket=fallback-x11 \
+	--device=dri --socket=pulseaudio \
+	--talk-name=org.freedesktop.secrets \
+	--talk-name=org.freedesktop.portal.* \
+	--bind-mount=/run/user/$(shell id -u)/doc=/run/user/$(shell id -u)/doc/by-app/io.github.justinf555.Moments.Devel \
+	--filesystem=$(HOME)/.var/app/io.github.justinf555.Moments.Devel:create \
+	--env=GTK_A11Y=none \
+	--env=RUST_LOG=moments=debug \
+	--env=XDG_DATA_HOME=$(HOME)/.var/app/io.github.justinf555.Moments.Devel/data \
+	--env=XDG_CONFIG_HOME=$(HOME)/.var/app/io.github.justinf555.Moments.Devel/config \
+	--env=XDG_CACHE_HOME=$(HOME)/.var/app/io.github.justinf555.Moments.Devel/cache
+
+# Incremental build + install into the dev app dir, without running it.
+# VS Code's debug launch runs this as its preLaunchTask.
+dev-build:
 	@if [ ! -f $(DEV_BUILD_DIR)/build.ninja ]; then \
 		echo "==> No build dir — running dev-bootstrap first"; \
 		$(MAKE) dev-bootstrap; \
@@ -81,20 +99,18 @@ dev:
 		--env=RUST_BACKTRACE=1 \
 		$(DEV_APP_DIR) \
 		meson install -C $(CURDIR)/$(DEV_BUILD_DIR)
-	$(FLATPAK) build \
-		--share=network --share=ipc \
-		--socket=wayland --socket=fallback-x11 \
-		--device=dri --socket=pulseaudio \
-		--talk-name=org.freedesktop.secrets \
-		--talk-name=org.freedesktop.portal.* \
-		--bind-mount=/run/user/$(shell id -u)/doc=/run/user/$(shell id -u)/doc/by-app/io.github.justinf555.Moments.Devel \
-		--filesystem=$(HOME)/.var/app/io.github.justinf555.Moments.Devel:create \
-		--env=GTK_A11Y=none \
-		--env=RUST_LOG=moments=debug \
-		--env=XDG_DATA_HOME=$(HOME)/.var/app/io.github.justinf555.Moments.Devel/data \
-		--env=XDG_CONFIG_HOME=$(HOME)/.var/app/io.github.justinf555.Moments.Devel/config \
-		--env=XDG_CACHE_HOME=$(HOME)/.var/app/io.github.justinf555.Moments.Devel/cache \
-		$(DEV_APP_DIR) moments
+
+dev: dev-build
+	$(FLATPAK) build $(DEV_RUN_FLAGS) $(DEV_APP_DIR) moments
+
+# gdb from the SDK, inside the same sandbox as `make dev`. Run `make dev-build`
+# first. GDB_CMD is the debugger command line; VS Code's launch.json drives
+# this through scripts/flatpak-gdb.sh with GDB_CMD="gdb --interpreter=mi".
+# GDB_CMD runs inside single quotes, so use double quotes within it.
+# By hand: make dev-gdb (interactive gdb on the dev build)
+GDB_CMD ?= gdb /app/bin/moments
+dev-gdb:
+	@$(FLATPAK) build $(DEV_RUN_FLAGS) --filesystem=$(CURDIR):ro $(DEV_APP_DIR) sh -c '$(GDB_CMD)'
 
 DHAT_OUT = $(HOME)/.var/app/io.github.justinf555.Moments.Devel/cache/moments-dhat-heap.json
 
@@ -319,6 +335,14 @@ check: $(CONFIG_RS)
 
 test: $(CONFIG_RS)
 	$(FLATPAK_RUN) -c '$(SDK_INIT) && cargo test'
+
+# Any cargo command in the SDK, e.g. make sdk-cargo CARGO_ARGS="test foo".
+# rust-analyzer's Run/Run Test buttons use it via scripts/sdk-cargo.sh
+# (rust-analyzer.runnables.command), so they share target/ with `make test`
+# instead of rebuilding with the toolbox's own cargo. CARGO_ARGS is expanded
+# inside single quotes and must not contain them.
+sdk-cargo: $(CONFIG_RS)
+	@$(FLATPAK_RUN) -c '$(SDK_INIT) && cargo $(CARGO_ARGS)'
 
 test-nextest: $(CONFIG_RS)
 	$(FLATPAK_RUN) -c '$(SDK_INIT) && \
