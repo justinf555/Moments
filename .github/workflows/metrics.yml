@@ -8,6 +8,13 @@ on:
   push:
     branches: [main]
 
+# Superseded PR runs are cancelled by the next push; every other run (push to
+# main, schedule) gets a group of its own so main commits never queue behind
+# or get dropped in favour of each other.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   pull-requests: write
 

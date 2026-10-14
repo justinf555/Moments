@@ -4,11 +4,28 @@
 name: Security
 
 on:
+  # On PRs, only when the dependency set or the audit policy changes. A newly
+  # published advisory otherwise turns every open PR red for reasons that have
+  # nothing to do with it; main and the weekly schedule still catch those.
+  # Not a required check, so a filtered-out run can't block a merge.
   pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - deny.toml
+      - .cargo/audit.toml
+      - .github/workflows/security.yml
   push:
     branches: [main]
   schedule:
     - cron: '0 8 * * 1'  # Weekly Monday 8am UTC
+
+# Superseded PR runs are cancelled by the next push; every other run (push to
+# main, schedule) gets a group of its own so main commits never queue behind
+# or get dropped in favour of each other.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   pull-requests: write
