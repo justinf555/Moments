@@ -1,7 +1,7 @@
 # Sidebar Status Bar Design
 
 **Issue:** [#145](https://github.com/justinf555/Moments/issues/145)
-**Status:** Proposed
+**Status:** Superseded by `docs/design-activity-indicator.md`. The bottom-sheet status bar shipped in #145 and was replaced by the sidebar header activity indicator.
 **Date:** 2026-03-25
 
 ## Overview

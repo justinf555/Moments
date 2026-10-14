@@ -2,7 +2,7 @@
 
 **Issue:** Replaces [#145](https://github.com/justinf555/Moments/issues/145) (sidebar status bar)
 **Supersedes:** `docs/design-sidebar-status-bar.md`
-**Status:** Proposed
+**Status:** Implemented (`src/ui/widgets/activity_indicator/`)
 **Date:** 2026-04-16
 
 ## Overview
