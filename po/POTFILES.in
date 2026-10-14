@@ -5,7 +5,10 @@
 # Please keep this file sorted alphabetically.
 data/io.github.justinf555.Moments.desktop.in
 data/io.github.justinf555.Moments.metainfo.xml.in
-src/application/mod.rs
+src/application/actions.rs
+src/application/import.rs
+src/application/load.rs
+src/application/open.rs
 src/library/error/mod.rs
 src/renderer/error.rs
 src/ui/album_grid/album_grid.blp
