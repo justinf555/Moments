@@ -144,7 +144,7 @@ impl ImportPipeline {
             }
         };
 
-        // Step 2: Hash — compute BLAKE3 content hash for dedup
+        // Step 2: Hash — compute SHA-1 content hash for dedup
         let content_hash = hasher::hash_file(source).await?;
 
         // Step 3: Deduplicate — check if content hash already exists
