@@ -290,12 +290,17 @@ impl PeopleClientV2 {
     // ── Model patching (private) ───────────────────────────────────────
 
     /// Insert a person into all tracked models. Prunes dead weak refs.
+    ///
+    /// Idempotent: a store that already holds this person ID is left
+    /// unchanged, matching `AlbumClientV2::insert_into_models` (#589).
     fn insert_into_models(&self, person: &Person, thumb: Option<std::path::PathBuf>) {
         let mut models = self.imp().models.borrow_mut();
         let obj = PersonItemObject::new(person, thumb);
         models.retain(|weak| {
             if let Some(store) = weak.upgrade() {
-                store.append(&obj);
+                if find_by_id(&store, person.id.as_str()).is_none() {
+                    store.append(&obj);
+                }
                 true
             } else {
                 false
@@ -447,6 +452,21 @@ mod tests {
 
         client.insert_into_models(&test_person("p1", "Alice"), None);
         assert_eq!(live.n_items(), 1);
+    }
+
+    #[test]
+    fn insert_into_models_is_idempotent() {
+        let client = PeopleClientV2::new();
+        let store = client.create_model();
+
+        client.insert_into_models(&test_person("p1", "Alice"), None);
+        client.insert_into_models(&test_person("p1", "Alice"), None);
+
+        assert_eq!(
+            store.n_items(),
+            1,
+            "second insert of same ID should be a no-op"
+        );
     }
 
     // ── update_in_models ──────────────────────────────────────────────
