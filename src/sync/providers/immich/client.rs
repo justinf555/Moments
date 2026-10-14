@@ -11,6 +11,7 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument};
 
+use crate::config;
 use crate::library::error::LibraryError;
 
 /// Truncate an API error body to avoid leaking server internals in toasts.
@@ -19,6 +20,11 @@ fn truncate_error_body(body: &str, max_len: usize) -> &str {
         Some((idx, _)) => &body[..idx],
         None => body,
     }
+}
+
+/// `User-Agent` sent with every Immich request, e.g. `Moments/0.4.1`.
+fn user_agent() -> String {
+    format!("Moments/{}", config::VERSION)
 }
 
 /// HTTP client for the Immich server API.
@@ -48,7 +54,7 @@ impl ImmichClient {
 
         let client = reqwest::Client::builder()
             .default_headers(headers)
-            .user_agent("Moments/0.1")
+            .user_agent(user_agent())
             .build()
             .map_err(|e| LibraryError::Immich(format!("failed to build HTTP client: {e}")))?;
 
@@ -79,7 +85,7 @@ impl ImmichClient {
         };
 
         let client = reqwest::Client::builder()
-            .user_agent("Moments/0.1")
+            .user_agent(user_agent())
             .build()
             .map_err(|e| LibraryError::Immich(format!("failed to build HTTP client: {e}")))?;
 
