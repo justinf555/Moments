@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 .PHONY: run run-dev run-dhat dev-bootstrap dev-build dev dev-gdb clean clean-dev clean-bundle \
-        check test test-nextest test-integration test-all \
+        check test test-nextest test-integration test-all sdk-cargo \
         lint fmt fmt-check typos audit coverage metrics \
         check-potfiles ci-all stack attach release config \
         bundle bundle-nightly install-bundle uninstall-bundle
@@ -335,6 +335,14 @@ check: $(CONFIG_RS)
 
 test: $(CONFIG_RS)
 	$(FLATPAK_RUN) -c '$(SDK_INIT) && cargo test'
+
+# Any cargo command in the SDK, e.g. make sdk-cargo CARGO_ARGS="test foo".
+# rust-analyzer's Run/Run Test buttons use it via scripts/sdk-cargo.sh
+# (rust-analyzer.runnables.command), so they share target/ with `make test`
+# instead of rebuilding with the toolbox's own cargo. CARGO_ARGS is expanded
+# inside single quotes and must not contain them.
+sdk-cargo: $(CONFIG_RS)
+	@$(FLATPAK_RUN) -c '$(SDK_INIT) && cargo $(CARGO_ARGS)'
 
 test-nextest: $(CONFIG_RS)
 	$(FLATPAK_RUN) -c '$(SDK_INIT) && \

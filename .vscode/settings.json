@@ -10,6 +10,22 @@
     "flatpak-bundle-repo",
     "_build"
   ],
+  // Hidden from the explorer and from VS Code's file searches (including the
+  // ones extensions run at startup, which otherwise crawl gigabytes of build
+  // output and follow its symlinks).
+  "files.exclude": {
+    "**/.flatpak-builder": true,
+    "**/.flatpak-builder-dev": true,
+    "**/flatpak-build-dir": true,
+    "**/flatpak-build-dev": true,
+    "**/flatpak-bundle-build": true,
+    "**/flatpak-bundle-repo": true,
+    "**/_build": true
+  },
+  "search.followSymlinks": false,
+  // ms-vscode.cpptools is here only for the gdb debugger; its C/C++ code
+  // indexing has nothing to index but vendored C in the build dirs.
+  "C_Cpp.intelliSenseEngine": "disabled",
   "files.watcherExclude": {
     "**/.flatpak-builder/**": true,
     "**/.flatpak-builder-dev/**": true,
@@ -21,5 +37,9 @@
   },
   // rust-analyzer runs the toolbox's cargo, `make check`/`lint` the SDK's.
   // Separate target dirs stop each from invalidating the other's build.
-  "rust-analyzer.cargo.targetDir": true
+  "rust-analyzer.cargo.targetDir": true,
+  // Run/Run Test buttons: cargo inside the GNOME SDK (as `make test`), not
+  // the toolbox's cargo against the toolbox's GTK.
+  "rust-analyzer.runnables.command": "${workspaceFolder}/scripts/sdk-cargo.sh",
+  "C_Cpp.default.configurationProvider": "mesonbuild.mesonbuild"
 }

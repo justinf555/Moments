@@ -54,7 +54,9 @@ Debug the Flatpak dev build, never a binary run outside the sandbox. `make dev-b
 
 VS Code's **Debug Moments (Flatpak dev build)** launch config (`.vscode/launch.json`, needs `ms-vscode.cpptools`) drives this over a `pipeTransport`: `scripts/flatpak-gdb.sh` passes the extension's debugger command to `make dev-gdb` as `GDB_CMD`, adding `--interpreter=mi` if the extension leaves it off. Its stdout must carry nothing but gdb's MI output, so keep `dev-gdb` silent (`@`, and the script's `make -s --no-print-directory`). `GDB_CMD` is expanded inside single quotes — use double quotes within it. The SDK has gdb but no lldb, so CodeLLDB can't be used here.
 
-The Flatpak build dirs (`.flatpak-builder*/`, `flatpak-build-*/`, `_build/`) sit inside the repo and hold thousands of vendored `.rs` files; `.vscode/settings.json` keeps rust-analyzer and the file watcher out of them and gives rust-analyzer its own target dir. Add any new build dir there too.
+rust-analyzer's **Run / Run Test** buttons go through `scripts/sdk-cargo.sh` (`rust-analyzer.runnables.command`), which runs `cargo "$@"` in the SDK via `make sdk-cargo CARGO_ARGS=…` — the same environment and `target/` as `make test`. The script `printf %q`-quotes each argument for the SDK's `bash -c`; `CARGO_ARGS` sits inside single quotes, so it can't contain them. rust-analyzer's **Debug** button is not covered and still runs outside the sandbox.
+
+The Flatpak build dirs (`.flatpak-builder*/`, `flatpak-build-*/`, `_build/`) sit inside the repo and hold gigabytes of build output, including thousands of vendored `.rs` files and symlinks. `.vscode/settings.json` keeps all of VS Code out of them — rust-analyzer, the file watcher, file searches (`files.exclude`, no symlink following; extensions' startup `workspaceContains` searches otherwise crawl them indefinitely) — gives rust-analyzer its own target dir, and disables cpptools' C/C++ indexing (the extension is only there for gdb). Add any new build dir to every list there.
 
 ### Generated `src/config.rs`
 
