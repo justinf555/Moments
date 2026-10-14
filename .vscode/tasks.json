@@ -10,6 +10,13 @@
       "presentation": { "reveal": "always", "panel": "dedicated" }
     },
     {
+      "label": "dev-build",
+      "type": "shell",
+      "command": "make dev-build",
+      "group": "build",
+      "problemMatcher": ["$rustc"]
+    },
+    {
       "label": "run",
       "type": "shell",
       "command": "make run",

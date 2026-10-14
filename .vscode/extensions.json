@@ -3,6 +3,7 @@
     "rust-lang.rust-analyzer",
     "bodil.blueprint-gtk",
     "vadimcn.vscode-lldb",
+    "ms-vscode.cpptools",
     "mesonbuild.mesonbuild",
     "tamasfe.even-better-toml",
     "fill-labs.dependi"

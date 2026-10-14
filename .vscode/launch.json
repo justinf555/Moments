@@ -1,0 +1,24 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug Moments (Flatpak dev build)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "/app/bin/moments",
+      "cwd": "${workspaceFolder}",
+      "MIMode": "gdb",
+      "pipeTransport": {
+        "pipeProgram": "${workspaceFolder}/scripts/flatpak-gdb.sh",
+        "pipeArgs": [],
+        "debuggerPath": "gdb",
+        "pipeCwd": "${workspaceFolder}"
+      },
+      "preLaunchTask": "dev-build",
+      "setupCommands": [
+        { "text": "-enable-pretty-printing", "ignoreFailures": true },
+        { "text": "source /usr/lib/sdk/rust-stable/lib/rustlib/etc/gdb_load_rust_pretty_printers.py", "ignoreFailures": true }
+      ]
+    }
+  ]
+}
