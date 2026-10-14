@@ -1,0 +1,25 @@
+{
+  // Flatpak build dirs live inside the repo and hold thousands of copied and
+  // vendored .rs files. Keep rust-analyzer and the file watcher out of them.
+  "rust-analyzer.files.exclude": [
+    ".flatpak-builder",
+    ".flatpak-builder-dev",
+    "flatpak-build-dir",
+    "flatpak-build-dev",
+    "flatpak-bundle-build",
+    "flatpak-bundle-repo",
+    "_build"
+  ],
+  "files.watcherExclude": {
+    "**/.flatpak-builder/**": true,
+    "**/.flatpak-builder-dev/**": true,
+    "**/flatpak-build-dir/**": true,
+    "**/flatpak-build-dev/**": true,
+    "**/flatpak-bundle-build/**": true,
+    "**/flatpak-bundle-repo/**": true,
+    "**/_build/**": true
+  },
+  // rust-analyzer runs the toolbox's cargo, `make check`/`lint` the SDK's.
+  // Separate target dirs stop each from invalidating the other's build.
+  "rust-analyzer.cargo.targetDir": true
+}
