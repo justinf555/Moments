@@ -99,10 +99,13 @@ mod imp {
         fn shutdown(&self) {
             info!("application shutting down");
 
-            // Drop all library-related state so the Arc<Library>
-            // (and the SqlitePool it wraps) is freed before drop(tokio)
-            // in main() tries to shut down the runtime.
-            // Shut down sync engine explicitly before dropping clients.
+            // Release every holder of the Arc<Library> (and the SqlitePool
+            // it wraps) before drop(tokio) in main() shuts the runtime down.
+            // The purge task and sync engine hold their own references, so
+            // stop them before dropping the clients.
+            if let Some(handle) = self.purge_handle.borrow_mut().take() {
+                handle.abort();
+            }
             if let Some(ref handle) = *self.sync_handle.borrow() {
                 handle.shutdown();
             }
@@ -146,8 +149,6 @@ mod imp {
                 window.present();
                 return;
             }
-
-            let settings = self.settings.get_or_init(|| gio::Settings::new(APP_ID));
 
             let library_path = settings.string("library-path");
 
@@ -194,6 +195,15 @@ impl MomentsApplication {
     /// Available from anywhere via `MomentsApplication::default().tokio_handle()`.
     pub fn tokio_handle(&self) -> tokio::runtime::Handle {
         self.imp().tokio.get().expect("tokio handle set").clone()
+    }
+
+    /// The app's GSettings, created on first `activate`.
+    fn settings(&self) -> gio::Settings {
+        self.imp()
+            .settings
+            .get()
+            .expect("settings initialised")
+            .clone()
     }
 
     /// Access the import client singleton.
@@ -324,12 +334,7 @@ impl MomentsApplication {
             Some(w) => w,
             None => return,
         };
-        let settings = self
-            .imp()
-            .settings
-            .get()
-            .expect("settings initialised")
-            .clone();
+        let settings = self.settings();
         let is_immich = self.imp().is_immich.get();
         let immich_url = self.imp().immich_server_url.borrow().clone();
 
@@ -368,65 +373,55 @@ impl MomentsApplication {
                 error!("failed to open bundle: {e}");
                 show_library_error_dialog(
                     setup_win,
-                    "Could not open library",
-                    &format!(
-                        "The library at {} could not be opened.\n\nDetails: {e}",
-                        bundle_path.display()
+                    &gettext("Could not open library"),
+                    &with_details(
+                        &gettext("The library at {} could not be opened.")
+                            .replace("{}", &bundle_path.display().to_string()),
+                        &e,
                     ),
                 );
                 return;
             }
         };
 
-        // For Immich configs, inject the session token from the keyring.
         // The setup wizard stores the token before emitting setup-complete,
         // so a failure here means the keyring became unavailable between
         // store and lookup — surface it rather than booting the user into a
         // library that can never authenticate.
-        let config = match config {
-            LibraryConfig::Immich { server_url, .. } => {
-                match keyring::resolve_immich_token(&server_url) {
-                    Ok(access_token) => LibraryConfig::Immich {
-                        server_url,
-                        access_token,
-                    },
-                    Err(err) => {
-                        let (heading, body) = match err {
-                            keyring::TokenError::Missing => (
-                                gettext("Sign in required"),
-                                gettext(
-                                    "The session token saved during setup could not be read back. Please try signing in again.",
-                                ),
+        let config = match with_immich_token(config) {
+            Ok(config) => config,
+            Err(err) => {
+                let (heading, body) = match err {
+                    keyring::TokenError::Missing => (
+                        gettext("Sign in required"),
+                        gettext(
+                            "The session token saved during setup could not be read back. Please try signing in again.",
+                        ),
+                    ),
+                    keyring::TokenError::KeyringFailed(e) => {
+                        error!("keyring lookup failed immediately after setup: {e}");
+                        (
+                            gettext("Could not access the system keyring"),
+                            with_details(
+                                &gettext("Moments stored your session in the keyring but could not read it back. Please check your keyring service and try again."),
+                                &e,
                             ),
-                            keyring::TokenError::KeyringFailed(e) => {
-                                error!(
-                                    "keyring lookup failed immediately after setup: {e}"
-                                );
-                                (
-                                    gettext("Could not access the system keyring"),
-                                    format!(
-                                        "{}\n\nDetails: {e}",
-                                        gettext("Moments stored your session in the keyring but could not read it back. Please check your keyring service and try again.")
-                                    ),
-                                )
-                            }
-                        };
-                        show_library_error_dialog(setup_win, &heading, &body);
-                        return;
+                        )
                     }
-                }
+                };
+                show_library_error_dialog(setup_win, &heading, &body);
+                return;
             }
-            other => other,
         };
 
-        let settings = self.imp().settings.get().expect("settings initialised");
+        let settings = self.settings();
         if let Err(e) = settings.set_string("library-path", &path) {
             error!("failed to save library path to GSettings: {e}");
         }
 
         // Present the main window first, then close setup — ensures there is
         // always at least one window alive during the transition.
-        let window = MomentsWindow::new(self, settings);
+        let window = MomentsWindow::new(self, &settings);
         window.present();
         setup_win.close();
 
@@ -446,82 +441,75 @@ impl MomentsApplication {
             Ok(result) => result,
             Err(e) => {
                 error!("failed to open library bundle: {e}");
-                let settings = self.imp().settings.get().expect("settings initialised");
-                if let Err(e) = settings.set_string("library-path", "") {
-                    error!("failed to clear stale library path: {e}");
-                }
+                self.clear_library_path();
                 // Show setup window with an error dialog explaining what happened.
                 let setup_win = self.show_setup_window();
                 show_library_error_dialog(
                     &setup_win,
-                    "Could not open library",
-                    &format!(
-                        "The library at {} could not be opened. Please set up a new library.\n\nDetails: {e}",
-                        path.display()
+                    &gettext("Could not open library"),
+                    &with_details(
+                        &gettext(
+                            "The library at {} could not be opened. Please set up a new library.",
+                        )
+                        .replace("{}", &path.display().to_string()),
+                        &e,
                     ),
                 );
                 return;
             }
         };
 
-        // For Immich configs, inject the session token from the keyring.
         // If the token cannot be resolved, refuse to load the library — passing
         // an empty string downstream produces opaque 401 toasts and keeps the
         // outbox spinning. Bounce the user back to the setup window with an
         // explanation instead.
-        let config = match config {
-            LibraryConfig::Immich { server_url, .. } => {
-                match keyring::resolve_immich_token(&server_url) {
-                    Ok(access_token) => LibraryConfig::Immich {
-                        server_url,
-                        access_token,
-                    },
-                    Err(err) => {
-                        // Only `Missing` warrants clearing `library-path`: the
-                        // user has no credential for this server and must
-                        // re-run setup. `KeyringFailed` is typically transient
-                        // (D-Bus race during session start, locked collection
-                        // prompt timeout) — leave the saved path intact so a
-                        // simple relaunch recovers once the keyring is healthy.
-                        let setup_win = self.show_setup_window();
-                        let (heading, body) = match err {
-                            keyring::TokenError::Missing => {
-                                let settings =
-                                    self.imp().settings.get().expect("settings initialised");
-                                if let Err(e) = settings.set_string("library-path", "") {
-                                    error!("failed to clear stale library path: {e}");
-                                }
-                                (
-                                    gettext("Sign in required"),
-                                    gettext(
-                                        "Your saved Immich session was not found in the system keyring. Please sign in again to continue.",
-                                    ),
-                                )
-                            }
-                            keyring::TokenError::KeyringFailed(e) => {
-                                error!("keyring lookup failed during open_library: {e}");
-                                (
-                                    gettext("Could not access the system keyring"),
-                                    format!(
-                                        "{}\n\nDetails: {e}",
-                                        gettext("Moments could not read your saved Immich session. Try restarting the app once your keyring service is available, or sign in again to continue.")
-                                    ),
-                                )
-                            }
-                        };
-                        show_library_error_dialog(&setup_win, &heading, &body);
-                        return;
+        let config = match with_immich_token(config) {
+            Ok(config) => config,
+            Err(err) => {
+                // Only `Missing` warrants clearing `library-path`: the user has
+                // no credential for this server and must re-run setup.
+                // `KeyringFailed` is typically transient (D-Bus race during
+                // session start, locked collection prompt timeout) — leave the
+                // saved path intact so a simple relaunch recovers once the
+                // keyring is healthy.
+                let setup_win = self.show_setup_window();
+                let (heading, body) = match err {
+                    keyring::TokenError::Missing => {
+                        self.clear_library_path();
+                        (
+                            gettext("Sign in required"),
+                            gettext(
+                                "Your saved Immich session was not found in the system keyring. Please sign in again to continue.",
+                            ),
+                        )
                     }
-                }
+                    keyring::TokenError::KeyringFailed(e) => {
+                        error!("keyring lookup failed during open_library: {e}");
+                        (
+                            gettext("Could not access the system keyring"),
+                            with_details(
+                                &gettext("Moments could not read your saved Immich session. Try restarting the app once your keyring service is available, or sign in again to continue."),
+                                &e,
+                            ),
+                        )
+                    }
+                };
+                show_library_error_dialog(&setup_win, &heading, &body);
+                return;
             }
-            other => other,
         };
 
-        let settings = self.imp().settings.get().expect("settings initialised");
-        let window = MomentsWindow::new(self, settings);
+        let window = MomentsWindow::new(self, &self.settings());
         window.present();
 
         self.load_library_async(bundle, config, window);
+    }
+
+    /// Forget the saved library so the next launch shows the setup window.
+    fn clear_library_path(&self) {
+        if let Err(e) = self.settings().set_string("library-path", "") {
+            error!("failed to clear stale library path: {e}");
+        }
     }
 
     /// Open a folder picker and start importing the selected folder.
@@ -532,7 +520,7 @@ impl MomentsApplication {
         };
 
         let file_dialog = gtk::FileDialog::builder()
-            .title("Select Folder to Import")
+            .title(gettext("Select Folder to Import"))
             .modal(true)
             .build();
 
@@ -583,12 +571,11 @@ impl MomentsApplication {
         import_client.import(sources);
     }
 
-    /// Spawn the async factory call on the glib main context.
+    /// Open the library on Tokio, then wire up the app on the GTK thread.
     ///
-    /// On success:
-    ///  1. Creates the event bus and opens the library backend.
-    ///  2. Wires the shell (sidebar, views, command dispatcher).
-    ///  3. Switches the window to its content page.
+    /// On success: creates the client singletons, sets up the window's
+    /// content, and starts the trash purge task and (for Immich) the sync
+    /// engine. On failure: offers to re-run setup or quit.
     fn load_library_async(&self, bundle: Bundle, config: LibraryConfig, window: MomentsWindow) {
         // Extract Immich connection info before the config is consumed.
         let immich_info = match &config {
@@ -626,27 +613,41 @@ impl MomentsApplication {
                 let db = crate::library::db::Database::new();
 
                 // Build Immich client + recorder + resolver based on config.
-                let immich_client = immich_info.as_ref().and_then(|(url, token)| {
-                    crate::sync::providers::immich::client::ImmichClient::new(url, token).ok()
-                });
+                // A client that fails to build must stop the open: falling
+                // back to None would run an Immich library as local, with
+                // no sync and no outbox.
+                let immich_client = match immich_info
+                    .as_ref()
+                    .map(|(url, token)| {
+                        crate::sync::providers::immich::client::ImmichClient::new(url, token)
+                    })
+                    .transpose()
+                {
+                    Ok(client) => client,
+                    Err(e) => {
+                        error!("failed to create Immich client: {e}");
+                        app.show_open_failed_dialog(&window, &e);
+                        return;
+                    }
+                };
 
-                let recorder: std::sync::Arc<dyn crate::library::recorder::MutationRecorder> =
+                let recorder: Arc<dyn crate::library::recorder::MutationRecorder> =
                     if immich_client.is_some() {
-                        std::sync::Arc::new(crate::sync::outbox::QueueWriterOutbox::new(db.clone()))
+                        Arc::new(crate::sync::outbox::QueueWriterOutbox::new(db.clone()))
                     } else {
-                        std::sync::Arc::new(crate::sync::outbox::NoOpRecorder)
+                        Arc::new(crate::sync::outbox::NoOpRecorder)
                     };
 
-                let resolver: std::sync::Arc<dyn crate::library::resolver::OriginalResolver> =
+                let resolver: Arc<dyn crate::library::resolver::OriginalResolver> =
                     if let Some(ref client) = immich_client {
-                        std::sync::Arc::new(
+                        Arc::new(
                             crate::sync::providers::immich::resolver::CachedResolver::new(
-                                std::sync::Arc::new(client.clone()),
+                                Arc::new(client.clone()),
                                 originals_dir.clone(),
                             ),
                         )
                     } else {
-                        std::sync::Arc::new(crate::library::resolver::LocalResolver::new(
+                        Arc::new(crate::library::resolver::LocalResolver::new(
                             originals_dir.clone(),
                             import_mode.clone(),
                         ))
@@ -671,9 +672,8 @@ impl MomentsApplication {
                         // Create the import client (GObject singleton).
                         let sync_thumbnails_dir = thumbnails_dir.clone();
                         {
-                            let render_pipeline = std::sync::Arc::new(
-                                crate::renderer::pipeline::RenderPipeline::new(),
-                            );
+                            let render_pipeline =
+                                Arc::new(crate::renderer::pipeline::RenderPipeline::new());
                             *app.imp().render_pipeline.borrow_mut() =
                                 Some(Arc::clone(&render_pipeline));
 
@@ -724,27 +724,14 @@ impl MomentsApplication {
                         // and switches to the content page. Components react
                         // to mutations via per-service event channels and
                         // GObject signals on the client singletons.
-                        let settings = app
-                            .imp()
-                            .settings
-                            .get()
-                            .expect("settings initialised")
-                            .clone();
-                        window.setup(settings);
+                        let settings = app.settings();
+                        window.setup(settings.clone());
 
                         // Start periodic trash purge task.
                         {
-                            let lib = Arc::clone(
-                                app.imp().library.borrow().as_ref().expect("library set"),
-                            );
-                            let retention_days = app
-                                .imp()
-                                .settings
-                                .get()
-                                .expect("settings initialised")
-                                .uint("trash-retention-days");
+                            let retention_days = settings.uint("trash-retention-days");
                             let handle = crate::library::purge_trash::start(
-                                lib,
+                                Arc::clone(&library),
                                 retention_days,
                                 tokio.clone(),
                             );
@@ -753,23 +740,14 @@ impl MomentsApplication {
 
                         // Start Immich sync engine and sync client.
                         if let Some(client) = immich_client {
-                            let lib = Arc::clone(
-                                app.imp().library.borrow().as_ref().expect("library set"),
-                            );
-                            let sync_interval = app
-                                .imp()
-                                .settings
-                                .get()
-                                .expect("settings initialised")
-                                .uint("sync-interval-seconds")
-                                as u64;
+                            let sync_interval = u64::from(settings.uint("sync-interval-seconds"));
 
                             let (sync_events_tx, sync_events_rx) =
                                 tokio::sync::mpsc::unbounded_channel();
 
                             let handle = crate::sync::SyncHandle::start(
                                 client,
-                                lib,
+                                Arc::clone(&library),
                                 db_for_sync.clone(),
                                 sync_events_tx,
                                 sync_thumbnails_dir,
@@ -788,40 +766,45 @@ impl MomentsApplication {
                     }
                     Err(e) => {
                         error!("failed to open library: {e}");
-
-                        let dialog = adw::AlertDialog::builder()
-                            .heading("Could not open library")
-                            .body(format!(
-                                "An error occurred while opening the library.\n\nDetails: {e}"
-                            ))
-                            .build();
-                        dialog.add_response("setup", "Set Up Library");
-                        dialog.add_response("quit", "Quit");
-                        dialog
-                            .set_response_appearance("quit", adw::ResponseAppearance::Destructive);
-                        dialog.set_default_response(Some("setup"));
-                        dialog.set_close_response("setup");
-
-                        let app_weak = app.downgrade();
-                        let win_weak = window.downgrade();
-                        dialog.connect_response(None, move |_, response| {
-                            if response == "setup" {
-                                if let Some(app) = app_weak.upgrade() {
-                                    if let Some(win) = win_weak.upgrade() {
-                                        win.close();
-                                    }
-                                    app.show_setup_window();
-                                }
-                            } else if let Some(app) = app_weak.upgrade() {
-                                app.quit();
-                            }
-                        });
-
-                        dialog.present(Some(&window));
+                        app.show_open_failed_dialog(&window, &e);
                     }
                 }
             }
         ));
+    }
+
+    /// Tell the user the library could not be opened, offering to re-run
+    /// setup (closing `window`) or quit.
+    fn show_open_failed_dialog(&self, window: &MomentsWindow, err: &impl std::fmt::Display) {
+        let dialog = adw::AlertDialog::builder()
+            .heading(gettext("Could not open library"))
+            .body(with_details(
+                &gettext("An error occurred while opening the library."),
+                err,
+            ))
+            .build();
+        dialog.add_response("setup", &gettext("Set Up Library"));
+        dialog.add_response("quit", &gettext("Quit"));
+        dialog.set_response_appearance("quit", adw::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("setup"));
+        dialog.set_close_response("setup");
+
+        let app_weak = self.downgrade();
+        let win_weak = window.downgrade();
+        dialog.connect_response(None, move |_, response| {
+            if response == "setup" {
+                if let Some(app) = app_weak.upgrade() {
+                    if let Some(win) = win_weak.upgrade() {
+                        win.close();
+                    }
+                    app.show_setup_window();
+                }
+            } else if let Some(app) = app_weak.upgrade() {
+                app.quit();
+            }
+        });
+
+        dialog.present(Some(window));
     }
 }
 
@@ -831,9 +814,34 @@ fn show_library_error_dialog(parent: &impl IsA<gtk::Widget>, heading: &str, body
         .heading(heading)
         .body(body)
         .build();
-    dialog.add_response("ok", "OK");
+    dialog.add_response("ok", &gettext("OK"));
     dialog.set_default_response(Some("ok"));
     dialog.present(Some(parent));
+}
+
+/// Append the technical error to a user-facing message, for dialog bodies.
+fn with_details(message: &str, err: &impl std::fmt::Display) -> String {
+    format!(
+        "{message}\n\n{}",
+        gettext("Details: {}").replace("{}", &err.to_string())
+    )
+}
+
+/// For an Immich config, inject the session token from the keyring.
+///
+/// The bundle's `library.toml` doesn't hold the token, so the config read
+/// from it has an empty `access_token`. Local configs pass through.
+fn with_immich_token(config: LibraryConfig) -> Result<LibraryConfig, keyring::TokenError> {
+    match config {
+        LibraryConfig::Immich { server_url, .. } => {
+            let access_token = keyring::resolve_immich_token(&server_url)?;
+            Ok(LibraryConfig::Immich {
+                server_url,
+                access_token,
+            })
+        }
+        other => Ok(other),
+    }
 }
 
 /// Recursively enumerate a folder's contents using GIO.
