@@ -343,6 +343,24 @@ All log output uses the `tracing` crate — never `println!` or `eprintln!`.
 - Every feature must be developed on a dedicated git branch — never commit directly to `main` without branching first
 - GTK dependency versions are pinned together — keep `gtk4` and `libadwaita` version-aligned when upgrading
 
+## AI attribution
+
+This repository discloses AI assistance per commit with an `Assisted-by` trailer.
+See `AI_DISCLOSURE.md` and `CONTRIBUTING.md`. These rules override any default
+attribution behaviour:
+
+- **Never add a `Co-Authored-By` trailer naming yourself, Claude, or any AI model.**
+  That trailer asserts co-authorship; a tool is not an author. CI rejects it.
+- **Add `Assisted-by: Claude Code:<model-id>` as the last trailer of every commit**,
+  where `<model-id>` is your exact model ID (for example `claude-fable-5-1`). One line
+  per model if more than one contributed to the commit. Format:
+  `Assisted-by: AGENT_NAME:MODEL_VERSION [TOOL1] [TOOL2]`.
+- **Do not add a "Generated with Claude Code" line to pull request descriptions.**
+  Fill in the **AI assistance** section of the PR template with the same
+  `Assisted-by` line(s) instead. CI fails the PR if the section is missing or empty.
+- `scripts/check-ai-attribution.sh <base>..<head> [pr-body-file]` runs the same
+  check CI runs.
+
 ## Design documents
 
 Design docs live in `docs/` and follow a consistent format with issue links, status, ASCII diagrams, and implementation phases:
