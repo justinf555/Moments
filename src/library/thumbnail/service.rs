@@ -8,9 +8,9 @@ use tokio::sync::mpsc;
 use super::event::ThumbnailEvent;
 use super::model::ThumbnailStatus;
 use super::repository::ThumbnailRepository;
-use crate::event_emitter::EventEmitter;
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
+use crate::library::event_emitter::EventEmitter;
 use crate::library::media::MediaId;
 
 /// Compute the two-level sharded thumbnail path.

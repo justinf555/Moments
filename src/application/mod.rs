@@ -299,12 +299,7 @@ impl MomentsApplication {
         let Some(window) = self.active_window() else {
             return;
         };
-        let builder =
-            gtk::Builder::from_resource("/io/github/justinf555/Moments/shortcuts-dialog.ui");
-        let dialog = builder
-            .object::<adw::ShortcutsDialog>("shortcuts_dialog")
-            .expect("shortcuts_dialog in resource");
-        dialog.present(Some(&window));
+        crate::ui::shortcuts_dialog::show_shortcuts(&window);
     }
 
     fn show_about(&self) {
@@ -748,7 +743,7 @@ impl MomentsApplication {
                                 .get()
                                 .expect("settings initialised")
                                 .uint("trash-retention-days");
-                            let handle = crate::tasks::purge_trash::start(
+                            let handle = crate::library::purge_trash::start(
                                 lib,
                                 retention_days,
                                 tokio.clone(),

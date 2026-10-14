@@ -10,7 +10,7 @@ use super::model::PersonId;
 /// Delivered via an [`EventEmitter`] — single producer (the service),
 /// multiple consumers (fan-out).
 ///
-/// [`EventEmitter`]: crate::event_emitter::EventEmitter
+/// [`EventEmitter`]: crate::library::event_emitter::EventEmitter
 #[derive(Debug, Clone)]
 pub enum FacesEvent {
     /// A new person was added (sync upsert, no prior row).

@@ -14,7 +14,7 @@ use crate::library::media::MediaId;
 /// asset, both by the local import pipeline and by the Immich sync
 /// download. There is no batch producer.
 ///
-/// [`EventEmitter`]: crate::event_emitter::EventEmitter
+/// [`EventEmitter`]: crate::library::event_emitter::EventEmitter
 #[derive(Debug, Clone)]
 pub enum ThumbnailEvent {
     /// A thumbnail is now on disk and can be loaded as a texture.

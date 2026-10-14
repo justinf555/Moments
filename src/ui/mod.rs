@@ -11,6 +11,7 @@ pub mod people_grid;
 pub mod photo_grid;
 pub mod preferences_dialog;
 pub mod setup_window;
+pub mod shortcuts_dialog;
 pub mod sidebar;
 pub mod video_viewer;
 pub mod viewer;
