@@ -1,380 +1,124 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Rules and gotchas for agents working in this repository. For how the code fits together, read [`ARCHITECTURE.md`](ARCHITECTURE.md). For the build/debug toolchain in depth (VS Code, gdb, dhat, bundles, release), read [`docs/dev-environment.md`](docs/dev-environment.md).
 
-## Pre-commit Checks
+Moments is a GNOME photo manager in Rust (GTK4 + libadwaita), targeting GNOME Circle, with a local backend and an Immich server backend.
 
-Always run `make lint` before committing or creating PRs. It works unchanged inside the toolbox container — see [Container-aware flatpak invocation](#container-aware-flatpak-invocation). There is no `make help` target; read the Makefile for the target list.
+## Golden rules
 
-## Build & Run
+- **Build, run, test and lint only through the Makefile.** Everything runs inside the Flatpak GNOME SDK. Never run the app binary directly, and never run `cargo` against the host/container's own GTK — its versions drift from the GNOME 50 runtime, so a clean result there proves nothing.
+- **Run `make lint` before every commit.** It is `cargo fmt --check` + `clippy --all-targets -D warnings` + clippy again with `--features dhat-heap`.
+- **Verify compile fixes with `make check` or `make lint`** — never assume a fix compiles.
+- **Branch for every change** — never commit directly to `main`.
+- To test UI behaviour, ask the user to run `make run-dev` (or GNOME Builder). Don't launch the app yourself.
 
-This project uses **Meson** as its build system and is packaged as a **Flatpak**. It must be built and run through Flatpak — do not attempt to run the binary directly.
+## Everyday commands
 
-### Container-aware flatpak invocation
+| Command | What it does |
+|---|---|
+| `make lint` | fmt check + clippy (both feature sets). Required before commit. |
+| `make check` | `cargo check` in the SDK |
+| `make test` | unit tests |
+| `make test-integration` | headless GTK tests under `tests/` (needs a Wayland session) |
+| `make test-all` | unit + integration |
+| `make fmt` | apply rustfmt |
+| `make typos` / `make check-potfiles` | spelling check / verify `po/POTFILES.in` paths exist |
+| `make audit` | `cargo audit` + `cargo deny check` |
+| `make ci-all` | lint + check-potfiles + test + test-integration + audit |
+| `make run-dev` | full dev Flatpak build (uncommitted changes OK) and run |
+| `make dev-bootstrap`, then `make dev` | fast incremental dev loop (Builder-style); re-bootstrap after manifest changes |
+| `make run` | production-ID build from the **committed** tree, installed `--user` |
 
-Development happens inside a Fedora **toolbox** container, which has no `flatpak` binary at all — only `flatpak-spawn`, which forwards a command out to the host session. Flatpak has to run on the host regardless, since nested sandboxes don't work.
+There is no `make help` and no `make build`; read the Makefile for the rest (`dev-gdb`, `stack`, `attach`, `run-dhat`, `coverage`, `metrics`, `bundle`, `release`, `clean`, `clean-dev`).
 
-**The Makefile handles this itself — just run `make lint` / `make run-dev` normally, in the container or on the host.** `HOST_CMD` detects the container via `/run/.containerenv` and resolves to `flatpak-spawn --host` (empty on the host); `$(FLATPAK)` is that prefix plus `flatpak`.
+## Flatpak and the toolbox container
 
-**Never write a bare `flatpak` in a recipe — always `$(FLATPAK)`.** A bare one works when you test it on the host and then fails for everyone in a container with `flatpak: command not found`. The same goes for `$(FLATPAK_BUILDER)`, which probes the *host* PATH for a `flatpak-builder` binary and otherwise falls back to `$(FLATPAK) run org.flatpak.Builder`.
+Development happens inside a Fedora toolbox, which has no `flatpak` binary — only `flatpak-spawn`. The Makefile detects the container (`/run/.containerenv`) and sets `HOST_CMD` to `flatpak-spawn --host`, so every target works unchanged on the host or in the container.
 
-Behaviour of `flatpak-spawn --host` that shaped the above:
+- **Never write a bare `flatpak` or `flatpak-builder` in a recipe.** Use `$(FLATPAK)` and `$(FLATPAK_BUILDER)`. A bare one works when tested on the host and fails in the container with `flatpak: command not found`.
+- `flatpak-spawn --host` inherits cwd and propagates exit codes, but **does not pass environment variables**. SDK invocations pass everything via explicit `--env=` flags; a new target that needs a variable takes it as a make argument (`make bundle GPG_KEY=…`), never an exported env var.
+- Nested sandboxes don't work: never run `flatpak-builder --run` (or similar) from inside a Flatpak.
 
-- **cwd is inherited** — the toolbox shares `$HOME`, so relative paths resolve identically on both sides, and the manifests' relative source paths keep working.
-- **exit codes propagate** — a failing target still fails the build.
-- **environment variables are *not* inherited.** `FOO=bar flatpak-spawn --host …` arrives empty. This is why the SDK invocations pass everything through explicit `--env=` flags; if you add a target that depends on an inherited variable, pass it as a make argument (`make bundle GPG_KEY=…`) rather than exporting it.
+## Manifests
 
-One trap when verifying: don't work around a flatpak problem by running `cargo` directly against the container's own GTK/libadwaita. Those versions drift from the GNOME runtime the app ships against, so a clean result there proves nothing about the Flatpak build.
-
-```bash
-# Build and run via Flatpak (primary workflow)
-make run
-
-# Build with editing feature, debug logs, installs as Flatpak
-make run-dev
-
-# Clean the Flatpak build directories
-make clean
-
-# Build a redistributable single-file bundle
-make bundle
-```
-
-The Flatpak manifest is `io.github.justinf555.Moments.json` (local dev), `io.github.justinf555.Moments.flathub.json` (Flathub submission), `build-aux/io.github.justinf555.Moments.ci.json` (CI build + tests), and `build-aux/io.github.justinf555.Moments.release.json` (redistributable bundle). The local manifest pulls source from this git repo (`"type": "git", "path": "."`, branch `main`), so **changes must be committed before rebuilding**. All manifest source paths are relative to the manifest's own directory — **never hardcode an absolute local path into a manifest**. The `make run` command installs the Flatpak locally (`--user --install`) so icons are exported to GNOME Shell.
-
-Every target that shells out to flatpak-builder goes through `$(FLATPAK_BUILDER)`, which auto-detects a host `flatpak-builder` binary and falls back to `$(FLATPAK) run org.flatpak.Builder`. Don't hardcode `flatpak-builder` — or `flatpak` — in new targets.
-
-### Dev build
-
-The dev manifest (`io.github.justinf555.Moments.dev.json`) uses `type: "dir"` — picks up working tree changes without committing. It uses a **separate state dir** (`.flatpak-builder-dev/`) so switching between `make run` and `make run-dev` doesn't invalidate the cargo cache. It installs under a **separate app ID** (`io.github.justinf555.Moments.Devel`) so dev and production can run side-by-side with separate GSettings, data dirs, and keyring entries.
-
-### Debugging
-
-Debug the Flatpak dev build, never a binary run outside the sandbox. `make dev-build` rebuilds and installs into `.flatpak-builder-dev/app` without launching; `make dev` is `dev-build` plus a run. `make dev-gdb` starts the SDK's gdb inside the **same sandbox** `make dev` uses — both take their flags from `DEV_RUN_FLAGS`, so add any new sandbox permission there, not to one target. Run `make dev-build` first.
-
-VS Code's **Debug Moments (Flatpak dev build)** launch config (`.vscode/launch.json`, needs `ms-vscode.cpptools`) drives this over a `pipeTransport`: `scripts/flatpak-gdb.sh` passes the extension's debugger command to `make dev-gdb` as `GDB_CMD`, adding `--interpreter=mi` if the extension leaves it off. Its stdout must carry nothing but gdb's MI output, so keep `dev-gdb` silent (`@`, and the script's `make -s --no-print-directory`). `GDB_CMD` is expanded inside single quotes — use double quotes within it. The SDK has gdb but no lldb, so CodeLLDB can't be used here.
-
-rust-analyzer's **Run / Run Test** buttons go through `scripts/sdk-cargo.sh` (`rust-analyzer.runnables.command`), which runs `cargo "$@"` in the SDK via `make sdk-cargo CARGO_ARGS=…` — the same environment and `target/` as `make test`. The script `printf %q`-quotes each argument for the SDK's `bash -c`; `CARGO_ARGS` sits inside single quotes, so it can't contain them. rust-analyzer's **Debug** button is not covered and still runs outside the sandbox.
-
-The Flatpak build dirs (`.flatpak-builder*/`, `flatpak-build-*/`, `_build/`) sit inside the repo and hold gigabytes of build output, including thousands of vendored `.rs` files and symlinks. `.vscode/settings.json` keeps all of VS Code out of them — rust-analyzer, the file watcher, file searches (`files.exclude`, no symlink following; extensions' startup `workspaceContains` searches otherwise crawl them indefinitely) — gives rust-analyzer its own target dir, and disables cpptools' C/C++ indexing (the extension is only there for gdb). Add any new build dir to every list there.
-
-### Generated `src/config.rs`
-
-`src/config.rs` is generated by meson (`configure_file`, then copied into the source tree by `src/meson.build`) and is gitignored, so a **fresh checkout doesn't have one**. `src/main.rs` declares `mod config`, so every cargo-only target would otherwise fail with `failed to resolve mod config`. `make run` does not fix this — it builds from a git clone inside `.flatpak-builder/`, so the working tree never gets a copy.
-
-Every cargo target (`check`, `test`, `test-nextest`, `test-integration`, `lint`, `fmt`, `fmt-check`, `coverage`) therefore depends on the `$(CONFIG_RS)` file target, which runs `meson setup` in `_build/` to regenerate it. It also depends on `meson.build`, so a version bump refreshes a stale `VERSION`. **Never hand-write `src/config.rs` or duplicate its substitutions in the Makefile** — meson is the single source of truth for `VERSION` and `APP_ID`.
-
-### Build profiles / release channels
-
-The Meson option `-Dprofile={default,nightly,development}` selects the release channel. Each gets its own app ID so all three install side by side:
-
-| `-Dprofile=` | App ID | Name | Set by |
+| Manifest | Source | App ID / profile | Used by |
 |---|---|---|---|
-| `default` | `io.github.justinf555.Moments` | Moments | release + flathub manifests |
-| `nightly` | `…Moments.Nightly` | Moments (Nightly) | `build-aux/…nightly.json` |
-| `development` | `…Moments.Devel` | Moments (Development) | `…Moments.dev.json` |
+| `io.github.justinf555.Moments.json` | `type: git`, branch `main` | production | `make run` — **commit before rebuilding** |
+| `io.github.justinf555.Moments.dev.json` | `type: dir` | `.Devel` / development | `make run-dev`, `make dev*`, GNOME Builder |
+| `build-aux/…ci.json` | `type: dir` | `.Devel` / development | CI build + tests (`appstream-compose` off) |
+| `build-aux/…release.json` | `type: dir` | production / default | `make bundle` |
+| `build-aux/…nightly.json` | `type: dir` | `.Nightly` / nightly | `make bundle CHANNEL=nightly` |
+| `io.github.justinf555.Moments.flathub.json` | git URL + tag | production / default | Flathub submission |
 
-`nightly` and `development` both enable the GNOME "devel" visual style (striped headerbar) — the check is `PROFILE != "default"`, not `== "development"`, so a new channel doesn't silently look like production.
-
-The `config::APP_ID`, `config::APP_NAME`, `config::VERSION` and `config::PROFILE` constants in `config.rs.in` are set at build time — **never hardcode the app ID or a channel-specific display name in Rust code**; always use `config::APP_ID` / `config::APP_NAME`.
+- Manifest source paths are **relative to the manifest's own directory**. Never hardcode an absolute local path.
+- The dev builds use separate state dirs (`.flatpak-builder-dev/`) via the Makefile's `--state-dir`, so switching between `make run` and `make run-dev` keeps the cargo cache.
 
-`-Dversion_suffix=` appends git description build metadata to the reported version (`0.4.1+6.g7ecfa4a`). Empty for tagged builds; `make bundle CHANNEL=nightly` computes it.
+## Generated `src/config.rs`
 
-Each channel also has its own icon at `data/icons/hicolor/scalable/apps/<app-id>.svg`; `data/icons/meson.build` installs whichever matches `application_id`, so **a new profile needs a matching SVG or configure fails**. The symbolic icon is shared. See `docs/design-release-channels.md`.
+`src/config.rs` is generated by meson from `src/config.rs.in` and is gitignored — a fresh checkout has none. Every cargo target depends on the `$(CONFIG_RS)` file target, which runs `meson setup _build` to create it (`make config` forces it). **Never hand-write `config.rs` or copy its values into the Makefile**; meson is the single source of truth for `VERSION`, `APP_ID`, `APP_NAME` and `PROFILE`.
 
-### Distribution bundles
+## Release channels and app identity
 
-`make bundle` builds `build-aux/io.github.justinf555.Moments.release.json` (production app ID, `-Dbuildtype=release`, `type: "dir"` source) into a local OSTree repo, then packs it into `moments-<version>-<arch>.flatpak` plus a `.sha256`. Set `GPG_KEY` (and `GPG_HOMEDIR`) to sign the OSTree commit and the bundle; the bundle then embeds the exported public key. `make install-bundle` installs it `--user`; `make clean-bundle` removes the outputs.
+`-Dprofile={default,nightly,development}` selects the channel; each has its own app ID (`io.github.justinf555.Moments`, `….Nightly`, `….Devel`) so all three install side by side.
 
-`make bundle CHANNEL=nightly` builds the nightly channel instead: `build-aux/…nightly.json`, the `.Nightly` app ID, and the **unversioned** filename `moments-nightly-<arch>.flatpak`. The filename is deliberately constant — `nightly.yml` republishes it to a rolling `nightly` prerelease, and a stable download URL is the whole point. Since flatpak-builder takes no config-opts on the command line, the recipe seds the computed version suffix into `build-aux/.…nightly.resolved.json` (gitignored) and builds that; it sits beside the template because manifest source paths resolve relative to the manifest's own directory.
-
-`bundle.yml` is a reusable workflow that runs the same target in the flathub CI container and uploads the results as a workflow artifact. It takes a `channel` input (`release` or `nightly`) and names its artifact `flatpak-bundle-<channel>`. `release.yml` calls it with the release tag and attaches the artifacts to the GitHub Release; it also has a `workflow_dispatch` trigger for smoke-testing a bundle build without cutting a release. `nightly.yml` calls it on every push to `main` (plus a daily cron safety net) and edits the rolling release in place rather than deleting and recreating it, so the URL never 404s. Signing happens when the `FLATPAK_GPG_PRIVATE_KEY` / `FLATPAK_GPG_KEY_ID` repo secrets exist — the CI signing key must be passphrase-less, since ostree signs non-interactively.
-
-```bash
-# Release: creates PR with version bump, merging triggers tag + GitHub Release + bundle
-make release VERSION=0.2.0
-
-# Build/install a redistributable single-file bundle
-make bundle [GPG_KEY=<key-id>]          # release channel
-make bundle CHANNEL=nightly             # nightly channel (alias: make bundle-nightly)
-make install-bundle [CHANNEL=nightly]
+- **Never hardcode the app ID or a display name in Rust.** Use `config::APP_ID` / `config::APP_NAME` / `config::VERSION`.
+- The devel visual style is gated on `PROFILE != "default"`, not `== "development"`, so a new channel doesn't silently look like production.
+- **A new profile needs a matching icon** at `data/icons/hicolor/scalable/apps/<app-id>.svg`, or configure fails.
 
-# Testing & linting (all run inside Flatpak SDK)
-make config            # regenerate src/config.rs (implicit dep of all cargo targets)
-make lint              # cargo clippy
-make test              # cargo test (unit tests)
-make test-integration  # headless GTK integration tests (requires Wayland)
-make check             # cargo check
-make coverage          # cargo-llvm-cov HTML report
-make metrics           # complexity report (top 20 functions)
-make ci-all            # lint + test + test-integration + audit
-make audit             # cargo audit + cargo deny
-```
+Details: `docs/design-release-channels.md`, `docs/dev-environment.md`.
 
-GNOME Builder can also use the dev manifest — configure it in the project build settings.
+## Architecture rules
 
-Instruct the user to test via GNOME Builder or `make run-dev` — do not attempt to run the app binary directly.
+The full picture is in `ARCHITECTURE.md`. The rules that matter when changing code:
 
-### Heap profiling (dhat-rs)
+- **Layering:** `ui/` → `client/` (GObject singletons) → `library/` services → repositories → `library/db`. Widgets get clients from `MomentsApplication::default()` accessors (`media_client_v2()`, `album_client_v2()`, `people_client()`, `import_client()`, `sync_client()`) and **never import `Library` or call services directly**. Using `library` *model* types (`MediaId`, `AlbumId`, `MediaFilter`, …) in `ui/` is fine.
+- **Library features** (`album`, `faces`, `editing`, `media`, `metadata`, `thumbnail`) each split into `model.rs` / `repository.rs` / `service.rs` (+ `event.rs` where the service emits). Business logic goes in services; repositories are thin `sqlx` wrappers.
+- **Events:** each service owns a typed `EventEmitter<T>` (`src/event_emitter.rs`). Clients subscribe on Tokio and patch their `ListStore`s on the GTK thread via `glib::idle_add_once`. Where a service emits an event for a change, the client's **event listener owns the model patch** — the command path must not repeat it (see #589). Widgets connect to client GObject signals in `realize` and disconnect in `unrealize`.
+- **Commands** flow UI → client method → service on Tokio → service emits. No command bus.
+- **Errors** reach the user via `crate::client::show_error_toast(&err)` (safe from Tokio threads).
+- **Two executors:** GTK main context for widgets only; the Tokio runtime (`tokio_handle()`) for all I/O. Never block the GTK thread.
+- **Sync writes go through services.** `sync/providers/immich/push.rs` and `handlers/asset_edit.rs` still run raw SQL against library tables — a known violation being removed. Don't add more; add a service/repository method instead.
+- **Known legacy, don't copy:** some widgets (`viewer/loading.rs`, `edit_panel`, grid factories, `setup_window`) call `tokio_handle()` / `renderer` / `ImmichClient` directly. New code goes through a client.
+- The `V2` suffix on `MediaClientV2` / `AlbumClientV2` / `PeopleClientV2` is historical; there is no V1. A rename is planned — don't introduce new `V2` names.
 
-`make run-dhat` rebuilds the dev Flatpak with `-Ddhat-heap=true` (Cargo `--features dhat-heap`), which swaps the global allocator for `dhat::Alloc`, runs the app, then flips the option back off. On exit dhat writes `~/.var/app/io.github.justinf555.Moments.Devel/cache/moments-dhat-heap.json`; load that into <https://nnethercote.github.io/dh_view/dh_view.html> for a flame view of allocations by Rust call path. There's measurable per-allocation overhead, so don't ship with the feature on.
+## Database
 
-## Architecture & Platform Constraints
+- SQLite via `sqlx` with **runtime-checked** queries (`sqlx::query`, no `query!` macros, no `.sqlx/` snapshot). `SQLX_OFFLINE=true` in the manifests is a leftover and currently has no effect.
+- **Every schema change is a new numbered migration** in `src/library/db/migrations/` (embedded via `sqlx::migrate!`). No ad-hoc `CREATE TABLE IF NOT EXISTS` in code.
+- `MediaId` is a UUID v4 as 32 lowercase hex chars (`MediaId::generate()` locally, `MediaId::new()` from DB/sync). Deduplication uses `content_hash` (SHA-1, matching Immich), never the ID.
 
-This is a Rust/GTK4 GNOME application using Flatpak. Key constraints:
-- GObject subclassing requires careful handling of Cell/RefCell, Debug traits, and WeakRef lifetimes
-- Always register new source files in meson.build
-- Use `WidgetExt` not `ActionGroupExt` for toast/action patterns
-- GTK cell virtualization means widget positions aren't stable — never assume fixed grid positions
-- Avoid nested Flatpak sandbox operations (flatpak-builder --run inside Flatpak won't work)
+## GTK / GObject conventions
 
-## Architecture
+- Every GObject type uses the `mod imp {}` + `glib::wrapper!` pattern. Watch `Cell`/`RefCell` borrows across signal emission, `Debug` impls, and `WeakRef` lifetimes in closures.
+- Widgets use **Blueprint** templates for static layout; dynamic construction stays in Rust. See `docs/design-gobject-blueprint-refactor.md`.
+- One directory per widget: `mod.rs` + `<widget>.blp` (+ `cell.blp` etc.) side by side, e.g. `src/ui/photo_grid/`.
+- **Registering files:** `.rs` files need nothing (cargo finds them). A new `.blp` must be added to the `blueprints` list in `src/meson.build` **and** its compiled `.ui` to `src/moments.gresource.xml`. A file with translatable strings goes in `po/POTFILES.in` (alphabetical; `make check-potfiles` verifies).
+- Crates are renamed in `Cargo.toml`: write `gtk::` and `adw::`, not `gtk4::` / `libadwaita::`. Keep `gtk4` and `libadwaita` versions aligned when upgrading.
+- Use `WidgetExt::activate_action` (not `ActionGroupExt`) for toast/action patterns. Views install their own action group with `insert_action_group("view", …)`.
+- GTK list virtualisation recycles cells — never assume a widget's grid position is stable.
+- Only use icons that exist in the Adwaita theme of the **GNOME 50 runtime**. `find /usr/share/icons/Adwaita -name "<icon>.svg"` on the host/container is a hint only; its theme version can differ.
+- Access shared state through `MomentsApplication::default()`, never by walking the widget tree (`.root().application()`).
 
-Moments is a GNOME/GTK4 photo management app written in Rust, targeting GNOME Circle. It uses:
+## Logging
 
-- **GTK4** (`gtk4` crate) + **libadwaita** (`libadwaita` crate) for the UI
-- **GLib/GObject** subclassing pattern throughout — every widget and application type uses the `mod imp {}` pattern with `#[glib::object_subclass]`
-- **`gettextrs`** for i18n
-- **`async-trait`** for async trait definitions
-- **Tokio** (`tokio` crate) as the library executor — created in `main()`, shared across all backends via `tokio::runtime::Handle`
-- **`thiserror`** for error types
-
-### Layered architecture
-
-The codebase follows a strict layered architecture:
-
-```
-GTK Widgets (ui/)
-    ↕ GObject properties, signals, ListStore models
-Client Layer (client/)
-    ↕ async calls on Tokio, results via GObject property notifications
-Library Services (library/)
-    ↕ service methods, model types
-Repository Layer (library/*/repository.rs)
-    ↕ SQL queries via sqlx
-Database (library/db/)
-```
-
-Each library feature (media, album, faces, editing, thumbnail, metadata) is split into:
-- **`model.rs`** — domain types (newtypes, enums, records)
-- **`repository.rs`** — database queries (thin sqlx wrappers)
-- **`service.rs`** — business logic composing repository calls
-
-### Top-level modules
-
-```
-src/
-  main.rs              — Entry point: gettext, GResources, MomentsApplication
-  config.rs            — Compile-time constants (VERSION, PKGDATADIR, etc.)
-  application/         — MomentsApplication (adw::Application subclass)
-  event_emitter/       — EventEmitter<T> fan-out primitive (per-service mpsc subscribe/emit)
-  library/             — Core domain: Library struct + feature services
-  client/              — GObject bridge layer (MediaClientV2, AlbumClientV2, etc.)
-  renderer/            — RenderPipeline (decode → orient → resize → edits)
-  importer/            — Import pipeline (discovery → hash → metadata → persist)
-  sync/                — Bidirectional Immich sync engine
-  tasks/               — Background tasks (trash auto-purge)
-  ui/                  — All GTK widgets
-```
-
-### Library (service layer)
-
-`Library` (`library/mod.rs`) is a **concrete struct** composing six feature services:
-
-```rust
-pub struct Library {
-    albums: AlbumService,
-    faces: FacesService,
-    editing: EditingService,
-    media: MediaService,
-    metadata: MetadataService,
-    thumbnails: ThumbnailService,
-}
-```
-
-Constructed via `Library::open(bundle, mode, db, recorder, resolver)`. Access features through service accessors: `.media()`, `.albums()`, `.faces()`, `.editing()`, `.metadata()`, `.thumbnails()`.
-
-Key abstractions injected at construction:
-- **`MutationRecorder`** (`library/recorder.rs`) — trait for recording state changes. `NoOpRecorder` for local backend; `QueueWriterOutbox` for Immich (writes to outbox table for push sync).
-- **`OriginalResolver`** (`library/resolver.rs`) — trait for accessing original files. `LocalResolver` for local filesystem; `CachedResolver` for Immich (downloads from server to cache).
-
-### Client layer (GObject bridge)
-
-`src/client/` — GObject singletons that bridge Library services to GTK widgets:
-
-- **`MediaClientV2`** — media queries + commands (trash/restore/delete/favorite/empty_trash/restore_all_trash), filtering, ListStore model factory
-- **`AlbumClientV2`** — album CRUD, album picker data
-- **`PeopleClientV2`** — person queries, visibility management
-- **`ImportClient`** — import pipeline orchestration, progress tracking
-
-Clients are GObject subclasses with property notifications. They create and manage `ListStore` models via weak refs (factory pattern). GTK widgets bind to client properties and models — they never import `Library` directly.
-
-### Renderer
-
-`src/renderer/` — stateless `RenderPipeline` with step modules:
-
-- `decode.rs` — format detection and decoding (delegates to format registry)
-- `orientation.rs` — EXIF orientation correction
-- `resize.rs` — thumbnail sizing
-- `edits.rs` — non-destructive edit application
-- `output.rs` — RGBA/WebP conversion
-- `format/` — `FormatRegistry` with handlers: `standard.rs` (JPEG/PNG/WebP), `raw.rs` (RAW via libraw), `video.rs` (video frame extraction)
-
-The pipeline builds its own `FormatRegistry` internally — format handlers are private. All consumers (thumbnail generation, viewer full-res, edit sessions) go through `RenderPipeline`.
-
-### Importer
-
-`src/importer/` — standalone import pipeline built with a builder pattern:
-
-`ImportPipelineBuilder` → `ImportPipeline::run()` with steps: discovery → filter → hash → metadata → persistence → thumbnail. Emits `ImportProgress` updates and returns `ImportSummary`. Independent of the Library trait system.
-
-### Sync engine
-
-`src/sync/` — bidirectional Immich sync:
-
-- `outbox/` — mutation recording: `MutationRecorder` trait, `QueueWriterOutbox` (writes to DB), `NoOpRecorder` (local backend)
-- `providers/immich/` — Immich-specific sync:
-  - `client.rs` — HTTP client for Immich API (`POST /sync/stream`)
-  - `pull.rs` — inbound sync (server → local)
-  - `push.rs` — outbound sync (local → server, drains outbox)
-  - `handlers/` — per-entity sync handlers (asset, album, person, face, exif)
-  - `resolver.rs` — `CachedResolver` for downloading originals
-
-The sync engine is spawned from `application/mod.rs` via `SyncHandle::start()`, not from Library.
-
-### Database
-
-`src/library/db/mod.rs` — backend-agnostic `Database` struct wrapping `sqlx::SqlitePool`. Created with `Database::new()`, connected with `db.open(&path)`. Migrations live at `src/library/db/migrations/` and are embedded via `sqlx::migrate!()`. **Every schema change must be a numbered migration — no ad-hoc `CREATE TABLE IF NOT EXISTS` in code.**
-
-After any schema change, regenerate the offline query snapshot:
-```bash
-cargo sqlx database create
-cargo sqlx migrate run
-cargo sqlx prepare    # regenerates .sqlx/ — commit this directory
-```
-
-CI sets `SQLX_OFFLINE=true` and uses the committed `.sqlx/` snapshot.
-
-### MediaId
-
-`MediaId` is a UUID v4 stored as a 32-char lowercase hex string (no dashes). Generated via `MediaId::generate()` for local imports; loaded from DB or Immich sync via `MediaId::new()`. Content-based deduplication uses the separate `content_hash` field, not the ID.
-
-### Two-executor model
-
-- **GTK executor** (`glib::MainContext`) — UI thread only. Widget updates, signal handlers, client calls via `glib::MainContext::default().spawn_local()`.
-- **Library executor** (Tokio runtime) — all backend I/O: database, file ops, HTTP. Created in `main()`, shared via `tokio::runtime::Handle` on `MomentsApplication`.
-
-Results flow from Tokio → GTK via the event bus (`glib::idle_add_once`) or GObject property notifications on clients.
-
-### Application singleton pattern
-
-Access shared state via `MomentsApplication::default()` with typed accessors: `tokio_handle()`, `library()`, `media_client_v2()`, `album_client_v2()`, `people_client()`, `import_client()`, `render_pipeline()`. Don't walk the widget tree with `.root().application()`.
-
-### Events and command flow
-
-There is no central event bus. Events are delivered through two cooperating mechanisms:
-
-- **Per-service `EventEmitter<T>` channels** (`src/event_emitter.rs`). Each library service owns a typed emitter — `MediaService` → `MediaEvent`, `ThumbnailService` → `ThumbnailEvent`, `AlbumService` → `AlbumEvent`, `FacesService` → `FacesEvent`. Subscribers call `service.subscribe()` for an `mpsc::UnboundedReceiver` on the Tokio side. Used by client GObjects to react to library state changes.
-- **GObject signals on client singletons**. UI-side fan-out for command results: `MediaClientV2` emits `items-trashed`/`items-restored`/`items-deleted`/`favorite-changed`; `AlbumClientV2` emits `album-media-changed`/`album-deleted`. Widgets `connect_closure` in `realize` and disconnect in `unrealize`.
-
-Commands flow directly: UI → client method (e.g. `MediaClientV2::trash(ids)`) → library service on Tokio → service emits its event. No `*Requested` / `CommandDispatcher` indirection.
-
-Errors surface as toasts via `crate::client::show_error_toast(&err)` from the failing client method — safe to call from Tokio threads (uses `glib::idle_add_once` internally).
-
-See `docs/design-event-bus.md` for the migration history that produced this shape.
-
-### GTK/GObject subclassing pattern
-
-All GObject types follow the split `imp` module pattern:
-- The inner `mod imp` struct holds state and implements GObject trait impls
-- The outer `glib::wrapper!` macro creates the public Rust type
-- UI templates are declared with `#[template(resource = "...")]` and bound in `class_init`/`instance_init`
-
-### Sidebar
-
-The sidebar uses `AdwSidebar` with routes defined in `sidebar/route.rs`. People route is hidden for the Local backend (no face detection). Pinned albums are added dynamically as a separate `AdwSidebarSection`.
-
-The sidebar bottom bar is a persistent `AdwBottomSheet` with a `GtkStack` that switches between five states: Idle, Sync, Thumbnails, Upload, and Complete. Priority-based: upload > sync > thumbnails > idle. See `docs/design-sidebar-status-bar.md`.
-
-Import button and hamburger menu live in the **sidebar header** — content headers have view-specific controls only (zoom, selection).
-
-### Live-update pattern (watch channels)
-
-Settings that affect background tasks (sync interval, cache limit) use `tokio::sync::watch` channels:
-
-1. GSettings value → initial `watch::channel` value
-2. Background task reads via `borrow_and_update()` each cycle
-3. Preferences dialog sends new value via setter
-4. `tokio::select!` on sleep + `changed()` wakes task immediately
-
-### View routing and action groups
-
-Content views are GObject widget subclasses registered with `ContentCoordinator` (a `GtkStack` wrapper). Views self-install action groups via `widget.insert_action_group("view", ...)` — GTK's action resolution walks the widget tree.
-
-### Viewer headerbar and overflow menu
-
-Photo and video viewers: `[★] [ℹ] [✏] [⋮]`. The overflow menu uses a manual `gtk::Popover` with icon+label buttons (not `GMenuModel`). Shared builder in `viewer/menu.rs`.
-
-### Album picker dialog
-
-`src/ui/album_picker_dialog/` — `adw::Dialog` with search, cover thumbnails, "Already added" pills, inline creation. Architecture: async data fetch → `AlbumPickerData` (plain structs) → dialog → `AlbumClientV2` method calls. Never imports `Library`.
-
-### Icons
-
-Use only icons confirmed in the Adwaita icon theme. Check with `find /usr/share/icons/Adwaita -name "icon-name.svg"` before using.
-
-## Development Workflow
-
-When fixing compilation errors, always run a full build (`cargo build` or `make build`) to verify the fix compiles before moving on. Do not assume a fix works without compiling.
-
-## Tracing / logging
-
-All log output uses the `tracing` crate — never `println!` or `eprintln!`.
-
-- `tracing_subscriber` is initialised in `main()` with `EnvFilter::from_default_env()`; default level is `info`, control verbosity with `RUST_LOG=moments=debug`
-- Use `#[instrument]` on every function worth timing (async backend methods, factory calls, bundle open/create)
-- Use `#[instrument(skip(field))]` to omit large or sensitive parameters from spans
-- Level guidance: `error!` — unrecoverable; `warn!` — degraded but continuing; `info!` — lifecycle milestones (start, open, close); `debug!` — per-operation detail
+All output uses `tracing` — never `println!` / `eprintln!`. `#[instrument]` async backend methods and other functions worth timing; `skip(...)` large or sensitive arguments. Levels: `error!` unrecoverable, `warn!` degraded but continuing, `info!` lifecycle milestones, `debug!` per-operation detail. Verbosity via `RUST_LOG=moments=debug` (the dev targets set it).
 
 ## Code conventions
 
-- Use `mod.rs` for modules with children; co-locate `.blp` Blueprint templates with their Rust code inside the directory (e.g. `src/ui/photo_grid/mod.rs` + `photo_grid.blp` + `cell.blp`)
-- Prefer many small, focused files over large ones
-- Every feature must be developed on a dedicated git branch — never commit directly to `main` without branching first
-- GTK dependency versions are pinned together — keep `gtk4` and `libadwaita` version-aligned when upgrading
+- Prefer many small, focused files. Use `mod.rs` for modules with children.
+- Unit tests live in `#[cfg(test)]` modules beside the code; async tests use `#[tokio::test]`.
 
-## AI attribution
+## Commits, PRs and AI attribution
 
-This repository discloses AI assistance per commit with an `Assisted-by` trailer.
-See `AI_DISCLOSURE.md` and `CONTRIBUTING.md`. These rules override any default
-attribution behaviour:
+This repo discloses AI assistance per commit (`AI_DISCLOSURE.md`, `CONTRIBUTING.md`). These rules override any default attribution behaviour:
 
-- **Never add a `Co-Authored-By` trailer naming yourself, Claude, or any AI model.**
-  That trailer asserts co-authorship; a tool is not an author. CI rejects it.
-- **Add `Assisted-by: Claude Code:<model-id>` as the last trailer of every commit**,
-  where `<model-id>` is your exact model ID (for example `claude-fable-5-1`). One line
-  per model if more than one contributed to the commit. Format:
-  `Assisted-by: AGENT_NAME:MODEL_VERSION [TOOL1] [TOOL2]`.
-- **Do not add a "Generated with Claude Code" line to pull request descriptions.**
-  Fill in the **AI assistance** section of the PR template with the same
-  `Assisted-by` line(s) instead. CI fails the PR if the section is missing or empty.
-- `scripts/check-ai-attribution.sh <base>..<head> [pr-body-file]` runs the same
-  check CI runs.
+- **Never add a `Co-Authored-By` trailer naming yourself, Claude, or any AI model.** CI rejects it.
+- **End every commit with `Assisted-by: Claude Code:<model-id>`** using your exact model ID; one line per model if several contributed. Format: `Assisted-by: AGENT_NAME:MODEL_VERSION [TOOL1] [TOOL2]`.
+- **No "Generated with Claude Code" line in PR descriptions.** Fill in the PR template's **AI assistance** section with the same `Assisted-by` line(s); CI fails the PR if it's missing or empty.
+- `scripts/check-ai-attribution.sh <base>..<head> [pr-body-file]` runs the same check as CI.
+- PRs are squash-merged.
 
-## Design documents
+## Issues and design docs
 
-Design docs live in `docs/` and follow a consistent format with issue links, status, ASCII diagrams, and implementation phases:
-
-- `docs/design-immich-backend.md` — Immich backend architecture, offline-first sync, trait status table
-- `docs/design-face-integration.md` — People/face sync, DB schema, UI, management
-- `docs/design-sidebar-status-bar.md` — Persistent status bar states, button relocation, event flow
-- `docs/design-lazy-view-loading.md` — Lazy view registration pattern
-- `docs/design-video-import.md` — Video format detection and import
-- `docs/design-photo-editing.md` — Non-destructive editing: data model, renderer, UI, Immich integration
-- `docs/design-event-bus.md` — historical record of the EventBus architecture (removed in #580); pointer to current per-service EventEmitter shape
-- `docs/design-integration-testing.md` — Headless GTK4 testing with mutter, CI config, coverage tracking
-- `docs/design-release-channels.md` — Release/Nightly/Development channels: app IDs, icon differentiation, versioning, rolling release
-
-### Blueprint templates
-
-Most widgets use Blueprint (`.blp`) declarative templates compiled to GTK XML. New widgets should use Blueprint for static layout and keep dynamic construction in Rust. See `docs/design-gobject-blueprint-refactor.md` for the full pattern and lessons learned.
+- Design docs live in `docs/design-*.md` (issue links, status, ASCII diagrams, phases). Check the relevant one before changing a feature, and update its status table when a phase lands.
+- Backlog triage follows `docs/issue-triage.md`. Parked ideas carry the `someday` label and stay open.
