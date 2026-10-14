@@ -13,7 +13,8 @@ name: Nightly
 #
 # Runs on every merge to main. The nightly cron is a safety net: if a push
 # build fails for an infrastructure reason, the channel recovers on its own
-# rather than going stale until someone notices.
+# rather than going stale until someone notices. When the last push build did
+# publish, the cron run finds nothing new and skips the build.
 
 on:
   push:
@@ -29,8 +30,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The `nightly` tag only moves after a successful publish, so on the cron
+  # run it marks the last commit that actually shipped. Skip the build when
+  # that is already main's tip; a failed push build leaves the tag behind,
+  # and the cron then rebuilds as the safety net intended.
+  changed:
+    name: Anything new to publish?
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+    steps:
+      - name: Compare the nightly tag with this commit
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          BUILD=true
+          if [[ "${{ github.event_name }}" == schedule ]]; then
+            TAGGED="$(gh api "repos/${{ github.repository }}/git/ref/tags/nightly" \
+              --jq .object.sha 2>/dev/null || true)"
+            if [[ "$TAGGED" == "${{ github.sha }}" ]]; then
+              echo "Nightly already built from ${{ github.sha }}; nothing to do."
+              BUILD=false
+            fi
+          fi
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+
   bundle:
     name: Flatpak bundle
+    needs: changed
+    if: needs.changed.outputs.build == 'true'
     permissions:
       contents: read
     uses: ./.github/workflows/bundle.yml
