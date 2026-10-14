@@ -7,6 +7,7 @@
         "org.freedesktop.Sdk.Extension.rust-stable"
     ],
     "command": "moments",
+    "appstream-compose": false,
     "finish-args": [
         "--share=network",
         "--device=dri",

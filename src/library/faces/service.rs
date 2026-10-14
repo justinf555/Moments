@@ -239,7 +239,7 @@ impl FacesService {
         _target: &PersonId,
         _sources: &[PersonId],
     ) -> Result<(), LibraryError> {
-        // TODO: implement local merge (#185)
+        // TODO: implement local merge (#196)
         Ok(())
     }
 
