@@ -252,17 +252,6 @@ impl MediaRepository {
         Ok(rows.into_iter().map(|(id,)| MediaId::new(id)).collect())
     }
 
-    /// Return the `original_filename` column for `id`, or `None` if no row exists.
-    pub async fn original_filename(&self, id: &MediaId) -> Result<Option<String>, LibraryError> {
-        let row: Option<String> =
-            sqlx::query_scalar("SELECT original_filename FROM media WHERE id = ?")
-                .bind(id.as_str())
-                .fetch_optional(self.db.pool())
-                .await
-                .map_err(LibraryError::Db)?;
-        Ok(row)
-    }
-
     /// Return the `relative_path` column for `id`, or `None` if no row exists.
     ///
     /// Used by backends to construct the absolute original-file path.

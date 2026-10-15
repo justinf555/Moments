@@ -120,10 +120,6 @@ impl MediaService {
 
     // ── Delegating methods ──────────────────────────────────────────
 
-    pub async fn media_exists(&self, id: &MediaId) -> Result<bool, LibraryError> {
-        self.repo.exists(id).await
-    }
-
     /// Check if an asset with this content hash already exists (dedup).
     pub async fn exists_by_content_hash(&self, hash: &str) -> Result<bool, LibraryError> {
         self.repo.exists_by_content_hash(hash).await

@@ -133,15 +133,6 @@ impl FacesService {
         Ok(())
     }
 
-    pub async fn merge_people(
-        &self,
-        _target: &PersonId,
-        _sources: &[PersonId],
-    ) -> Result<(), LibraryError> {
-        // TODO: implement local merge (#196)
-        Ok(())
-    }
-
     /// Return the on-disk path of a person's face thumbnail, if it has
     /// been downloaded. Returns `None` when the file is missing — UI
     /// callers fall back to rendering the person's initials.

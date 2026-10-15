@@ -61,15 +61,6 @@ impl EditingService {
             .record(&Mutation::AssetEditsCleared { id: id.clone() })
             .await
     }
-
-    pub async fn render_and_save(&self, _id: &MediaId) -> Result<(), LibraryError> {
-        // Local backend applies edits on the fly during viewing.
-        Ok(())
-    }
-
-    pub async fn has_pending_edits(&self, id: &MediaId) -> Result<bool, LibraryError> {
-        self.repo.has_pending_edits(id).await
-    }
 }
 #[cfg(test)]
 mod tests {

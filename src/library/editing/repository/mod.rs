@@ -81,33 +81,6 @@ impl EditingRepository {
             .map_err(LibraryError::Db)?;
         Ok(())
     }
-
-    /// Mark the edit as rendered (uploaded to server).
-    pub async fn mark_edit_rendered(&self, id: &MediaId) -> Result<(), LibraryError> {
-        let id_str = id.as_str();
-        let now = chrono::Utc::now().timestamp();
-        sqlx::query("UPDATE edits SET rendered_at = ? WHERE media_id = ?")
-            .bind(now)
-            .bind(id_str)
-            .execute(self.db.pool())
-            .await
-            .map_err(LibraryError::Db)?;
-        Ok(())
-    }
-
-    /// Check whether an asset has edits that haven't been rendered yet.
-    pub async fn has_pending_edits(&self, id: &MediaId) -> Result<bool, LibraryError> {
-        let id_str = id.as_str();
-        let row: Option<(i64,)> = sqlx::query_as(
-            "SELECT 1 FROM edits WHERE media_id = ? AND (rendered_at IS NULL OR updated_at > rendered_at)",
-        )
-        .bind(id_str)
-        .fetch_optional(self.db.pool())
-        .await
-        .map_err(LibraryError::Db)?;
-
-        Ok(row.is_some())
-    }
 }
 #[cfg(test)]
 mod tests {
@@ -149,27 +122,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn upsert_overwrites_and_clears_rendered() {
-        let dir = tempfile::tempdir().unwrap();
-        let (repo, media) = test_repo(dir.path()).await;
-        let id = MediaId::new("abc123".to_string());
-        media.insert(&test_record(id.clone())).await.unwrap();
-
-        let state = EditState::default();
-        repo.upsert_edit_state(&id, &state).await.unwrap();
-        repo.mark_edit_rendered(&id).await.unwrap();
-
-        // Verify rendered
-        assert!(!repo.has_pending_edits(&id).await.unwrap());
-
-        // Update should clear rendered_at
-        let mut updated = EditState::default();
-        updated.exposure.contrast = 0.2;
-        repo.upsert_edit_state(&id, &updated).await.unwrap();
-        assert!(repo.has_pending_edits(&id).await.unwrap());
-    }
-
-    #[tokio::test]
     async fn delete_removes_edit_state() {
         let dir = tempfile::tempdir().unwrap();
         let (repo, media) = test_repo(dir.path()).await;
@@ -182,13 +134,5 @@ mod tests {
 
         repo.delete_edit_state(&id).await.unwrap();
         assert!(repo.get_edit_state(&id).await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn has_pending_edits_returns_false_when_no_edits() {
-        let dir = tempfile::tempdir().unwrap();
-        let (repo, _media) = test_repo(dir.path()).await;
-        let id = MediaId::new("abc123".to_string());
-        assert!(!repo.has_pending_edits(&id).await.unwrap());
     }
 }

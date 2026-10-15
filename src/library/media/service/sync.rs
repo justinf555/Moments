@@ -181,14 +181,6 @@ impl MediaService {
         Ok(())
     }
 
-    /// Sync-only: stack ids whose heartbeat lags the checkpoint.
-    pub async fn ids_with_stale_stack_heartbeat(
-        &self,
-        checkpoint: i64,
-    ) -> Result<Vec<String>, LibraryError> {
-        self.repo.ids_with_stale_stack_heartbeat(checkpoint).await
-    }
-
     /// Sync-only: delete stale stacks. Returns the removed stack ids
     /// for logging. Members are rejoined to the un-stacked timeline
     /// in the same transaction as the row delete. Emits
