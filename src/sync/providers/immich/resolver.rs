@@ -14,8 +14,7 @@ use async_trait::async_trait;
 use tracing::{debug, instrument};
 
 use crate::library::error::LibraryError;
-use crate::library::media::sharded_original_path;
-use crate::library::media::MediaId;
+use crate::library::media::{sharded_original_path, MediaId};
 use crate::library::resolver::OriginalResolver;
 
 use super::client::ImmichClient;

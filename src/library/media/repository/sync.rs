@@ -7,9 +7,7 @@
 use super::MediaRepository;
 use crate::library::db::id_placeholders;
 use crate::library::error::LibraryError;
-use crate::library::media::model::MediaId;
-use crate::library::media::model::MediaRecord;
-use crate::library::media::model::Stack;
+use crate::library::media::model::{MediaId, MediaRecord, Stack};
 
 impl MediaRepository {
     /// Return the local `MediaId`s of every member of a stack

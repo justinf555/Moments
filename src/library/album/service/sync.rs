@@ -24,7 +24,7 @@ impl AlbumService {
         self.repo
             .upsert(id, name, created_at, updated_at, external_id)
             .await?;
-        let album_id = AlbumId::from_raw(id.to_string());
+        let album_id = AlbumId::new(id.to_string());
         if existed {
             self.emit(AlbumEvent::AlbumUpdated(album_id));
         } else {

@@ -1,13 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Justin F
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use super::model::MediaCursor;
-use super::model::MediaFilter;
-use super::model::MediaId;
-use super::model::MediaItem;
-use super::model::MediaRecord;
-use super::model::MediaType;
-use crate::library::db::{id_placeholders, Database, LibraryStats};
+use super::model::{
+    LibraryStats, MediaCursor, MediaFilter, MediaId, MediaItem, MediaRecord, MediaType,
+};
+use crate::library::db::{id_placeholders, Database};
 use crate::library::error::LibraryError;
 
 mod sync;
@@ -643,7 +640,7 @@ mod tests {
         let items = repo
             .list(
                 MediaFilter::Person {
-                    person_id: PersonId::from_raw("p1".to_string()),
+                    person_id: PersonId::new("p1".to_string()),
                 },
                 None,
                 50,

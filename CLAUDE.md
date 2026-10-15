@@ -86,7 +86,7 @@ The full picture is in `ARCHITECTURE.md`. The rules that matter when changing co
 
 - SQLite via `sqlx` with **runtime-checked** queries (`sqlx::query`, no `query!` macros, no `.sqlx/` snapshot). `SQLX_OFFLINE=true` in the manifests is a leftover and currently has no effect.
 - **Every schema change is a new numbered migration** in `src/library/db/migrations/` (embedded via `sqlx::migrate!`). No ad-hoc `CREATE TABLE IF NOT EXISTS` in code.
-- `MediaId` is a UUID v4 as 32 lowercase hex chars (`MediaId::generate()` locally, `MediaId::new()` from DB/sync). Deduplication uses `content_hash` (SHA-1, matching Immich), never the ID.
+- `MediaId` is a UUID v4 as 32 lowercase hex chars (`MediaId::generate()` locally, `MediaId::new()` from DB/sync). `AlbumId` follows the same `generate()` / `new()` pattern; `PersonId` only has `new()` (people come from Immich). Deduplication uses `content_hash` (SHA-1, matching Immich), never the ID.
 
 ## GTK / GObject conventions
 

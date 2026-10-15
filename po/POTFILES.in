@@ -9,7 +9,7 @@ src/application/actions.rs
 src/application/import.rs
 src/application/load.rs
 src/application/open.rs
-src/library/error/mod.rs
+src/library/error.rs
 src/renderer/error.rs
 src/ui/album_grid/album_grid.blp
 src/ui/album_grid/card/mod.rs

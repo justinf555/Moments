@@ -4,13 +4,12 @@
 //! Operations used only by Immich sync: pull upserts (no outbox
 //! recording), external-id lookups and the `last_seen_at` heartbeat.
 
+use tracing::instrument;
+
 use super::MediaService;
 use crate::library::error::LibraryError;
 use crate::library::media::event::MediaEvent;
-use crate::library::media::model::MediaId;
-use crate::library::media::model::MediaRecord;
-use crate::library::media::model::Stack;
-use tracing::instrument;
+use crate::library::media::model::{MediaId, MediaRecord, Stack};
 
 impl MediaService {
     /// Insert or replace a media record from the sync stream.

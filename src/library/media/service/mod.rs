@@ -8,14 +8,10 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use super::event::MediaEvent;
-use super::model::MediaCursor;
-use super::model::MediaFilter;
-use super::model::MediaId;
-use super::model::MediaItem;
-use super::model::MediaRecord;
+use super::model::{LibraryStats, MediaCursor, MediaFilter, MediaId, MediaItem, MediaRecord};
 use super::repository::MediaRepository;
 use crate::library::config::LocalStorageMode;
-use crate::library::db::{Database, LibraryStats};
+use crate::library::db::Database;
 use crate::library::error::LibraryError;
 use crate::library::event_emitter::EventEmitter;
 use crate::library::mutation::Mutation;

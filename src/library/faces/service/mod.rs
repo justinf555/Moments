@@ -161,7 +161,7 @@ mod tests {
         let thumb_root = tempfile::tempdir().unwrap();
         let people_dir = thumb_root.path().join("people");
         std::fs::create_dir_all(&people_dir).unwrap();
-        let person_id = PersonId::from_raw("person-uuid".to_string());
+        let person_id = PersonId::new("person-uuid".to_string());
         let thumb_file = people_dir.join("person-uuid.jpg");
         std::fs::write(&thumb_file, b"jpeg bytes").unwrap();
 
@@ -174,7 +174,7 @@ mod tests {
     #[tokio::test]
     async fn person_thumbnail_path_returns_none_when_absent() {
         let thumb_root = tempfile::tempdir().unwrap();
-        let person_id = PersonId::from_raw("never-downloaded".to_string());
+        let person_id = PersonId::new("never-downloaded".to_string());
 
         let (_dir, svc) = make_service(thumb_root.path().to_path_buf()).await;
         assert!(svc.person_thumbnail_path(&person_id).is_none());

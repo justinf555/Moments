@@ -37,7 +37,7 @@ impl FacesService {
                 external_id,
             )
             .await?;
-        let person_id = PersonId::from_raw(id.to_string());
+        let person_id = PersonId::new(id.to_string());
         if existed {
             self.emit(FacesEvent::PersonUpdated(person_id));
         } else {
@@ -72,10 +72,10 @@ impl FacesService {
         };
         if prev_person_id != new_person_id {
             if let Some(p) = prev_person_id {
-                self.emit(FacesEvent::PersonMediaChanged(PersonId::from_raw(p)));
+                self.emit(FacesEvent::PersonMediaChanged(PersonId::new(p)));
             }
             if let Some(p) = new_person_id {
-                self.emit(FacesEvent::PersonMediaChanged(PersonId::from_raw(p)));
+                self.emit(FacesEvent::PersonMediaChanged(PersonId::new(p)));
             }
         }
         Ok(())
@@ -84,9 +84,7 @@ impl FacesService {
     /// Delete a person by ID (sync stream delete).
     pub async fn delete_person_by_id(&self, id: &str) -> Result<(), LibraryError> {
         self.repo.delete_person(id).await?;
-        self.emit(FacesEvent::PersonRemoved(PersonId::from_raw(
-            id.to_string(),
-        )));
+        self.emit(FacesEvent::PersonRemoved(PersonId::new(id.to_string())));
         Ok(())
     }
 
@@ -96,7 +94,7 @@ impl FacesService {
     pub async fn delete_asset_face(&self, id: &str) -> Result<(), LibraryError> {
         let deleted_person_id = self.repo.delete_asset_face(id).await?;
         if let Some(p) = deleted_person_id {
-            self.emit(FacesEvent::PersonMediaChanged(PersonId::from_raw(p)));
+            self.emit(FacesEvent::PersonMediaChanged(PersonId::new(p)));
         }
         Ok(())
     }
@@ -141,7 +139,7 @@ impl FacesService {
             .delete_people_with_stale_heartbeat(checkpoint)
             .await?;
         for id in &removed_ids {
-            self.emit(FacesEvent::PersonRemoved(PersonId::from_raw(id.clone())));
+            self.emit(FacesEvent::PersonRemoved(PersonId::new(id.clone())));
         }
         Ok(removed_ids)
     }

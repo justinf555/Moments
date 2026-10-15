@@ -68,7 +68,7 @@ impl FacesRepository {
         Ok(rows
             .into_iter()
             .map(|r| Person {
-                id: PersonId::from_raw(r.id),
+                id: PersonId::new(r.id),
                 name: r.name,
                 face_count: r.face_count as u32,
                 is_hidden: r.is_hidden,
@@ -86,7 +86,7 @@ impl FacesRepository {
                 .map_err(LibraryError::Db)?;
 
         Ok(row.map(|r| Person {
-            id: PersonId::from_raw(r.id),
+            id: PersonId::new(r.id),
             name: r.name,
             face_count: r.face_count as u32,
             is_hidden: r.is_hidden,
@@ -122,8 +122,7 @@ mod tests {
     use super::*;
     use crate::library::db::test_helpers::{open_test_db, record_with_taken_at, test_record};
     use crate::library::media::repository::MediaRepository;
-    use crate::library::media::MediaFilter;
-    use crate::library::media::MediaId;
+    use crate::library::media::{MediaFilter, MediaId};
     use tempfile::tempdir;
 
     /// Media ids in `person_id`'s grid, via the live `MediaFilter::Person`
@@ -132,7 +131,7 @@ mod tests {
         media
             .list(
                 MediaFilter::Person {
-                    person_id: PersonId::from_raw(person_id.to_string()),
+                    person_id: PersonId::new(person_id.to_string()),
                 },
                 None,
                 u32::MAX,

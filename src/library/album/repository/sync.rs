@@ -5,8 +5,7 @@
 //! and the `last_seen_at` heartbeat.
 
 use super::AlbumRepository;
-use crate::library::album::model::Album;
-use crate::library::album::model::AlbumId;
+use crate::library::album::model::{Album, AlbumId};
 use crate::library::error::LibraryError;
 use crate::library::media::MediaId;
 
@@ -49,7 +48,7 @@ impl AlbumRepository {
 
     /// Fetch a single album by raw ID string, including media count and cover.
     pub async fn get_by_raw_id(&self, id: &str) -> Result<Option<Album>, LibraryError> {
-        self.get(&AlbumId::from_raw(id.to_string())).await
+        self.get(&AlbumId::new(id.to_string())).await
     }
 
     /// Look up the local [`AlbumId`] for a given `external_id`.
@@ -67,7 +66,7 @@ impl AlbumRepository {
             .fetch_optional(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
-        Ok(row.map(AlbumId::from_raw))
+        Ok(row.map(AlbumId::new))
     }
 
     /// Sync-only: insert one membership row from the Immich pull stream.
@@ -138,10 +137,7 @@ impl AlbumRepository {
             return Ok(Vec::new());
         }
 
-        let ids: Vec<AlbumId> = rows
-            .into_iter()
-            .map(|(id,)| AlbumId::from_raw(id))
-            .collect();
+        let ids: Vec<AlbumId> = rows.into_iter().map(|(id,)| AlbumId::new(id)).collect();
 
         // Cascade-delete membership rows first, then the album rows
         // themselves. Mirrors the manual cascade in `delete()` —
@@ -290,7 +286,7 @@ mod tests {
     async fn bump_last_seen_at_missing_id_is_noop() {
         let dir = tempdir().unwrap();
         let (repo, _media, _db) = test_repo(dir.path()).await;
-        let id = AlbumId::from_raw("nonexistent".to_string());
+        let id = AlbumId::new("nonexistent".to_string());
         repo.bump_last_seen_at(&id, 12345).await.unwrap();
     }
 

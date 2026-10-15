@@ -86,7 +86,7 @@ impl AlbumRepository {
 
     /// Create a new album with the given name. Returns the new album's ID.
     pub async fn create(&self, name: &str) -> Result<AlbumId, LibraryError> {
-        let id = AlbumId::new();
+        let id = AlbumId::generate();
         let now = chrono::Utc::now().timestamp();
         sqlx::query("INSERT INTO albums (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)")
             .bind(id.as_str())
@@ -246,7 +246,7 @@ impl AlbumRepository {
             .map_err(LibraryError::Db)?;
         Ok(rows
             .into_iter()
-            .map(|(aid, cnt)| (AlbumId::from_raw(aid), cnt as usize))
+            .map(|(aid, cnt)| (AlbumId::new(aid), cnt as usize))
             .collect())
     }
 
@@ -277,7 +277,7 @@ impl AlbumRepository {
 /// Convert an `AlbumRow` into an `Album`.
 fn album_from_row(r: AlbumRow) -> Album {
     Album {
-        id: AlbumId::from_raw(r.id),
+        id: AlbumId::new(r.id),
         name: r.name,
         created_at: r.created_at,
         updated_at: r.updated_at,
@@ -291,8 +291,7 @@ mod tests {
     use super::*;
     use crate::library::db::test_helpers::*;
     use crate::library::media::repository::MediaRepository;
-    use crate::library::media::MediaFilter;
-    use crate::library::media::{MediaCursor, MediaId};
+    use crate::library::media::{MediaCursor, MediaFilter, MediaId};
     use tempfile::tempdir;
 
     /// Create an `AlbumRepository` backed by a test database.
@@ -321,7 +320,7 @@ mod tests {
     async fn get_album_returns_none_for_missing() {
         let dir = tempdir().unwrap();
         let (repo, _media, _db) = test_repo(dir.path()).await;
-        let id = AlbumId::from_raw("nonexistent".to_string());
+        let id = AlbumId::new("nonexistent".to_string());
         assert!(repo.get(&id).await.unwrap().is_none());
     }
 

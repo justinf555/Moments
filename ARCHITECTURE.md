@@ -59,10 +59,10 @@ src/
                         mod.rs (app-facing) + sync.rs (Immich-only); thumbnail/ has no
                         sync code and keeps single repository.rs / service.rs
     metadata/exif.rs, video_meta.rs   EXIF and GStreamer metadata extraction
-    bundle/             On-disk Moments.library bundle + library.toml manifest
-    config/             LibraryConfig (Local managed/referenced | Immich)
+    bundle.rs           On-disk Moments.library bundle + library.toml manifest
+    config.rs           LibraryConfig (Local managed/referenced | Immich)
     db/                 Database (SqlitePool), migrations/
-    error/              LibraryError
+    error.rs            LibraryError
     event_emitter.rs    EventEmitter<T>: per-service fan-out over tokio mpsc
     mutation.rs         Mutation enum (what changed), outbox row encoding
     purge_trash.rs      Hourly trash auto-purge task (started by application/)

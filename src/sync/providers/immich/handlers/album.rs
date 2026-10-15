@@ -39,7 +39,7 @@ impl SyncEntityHandler for AlbumHandler {
         // server-origin album.
         let local_id = match ctx.library.albums().id_by_external_id(&external_id).await? {
             Some(existing) => existing,
-            None => AlbumId::new(),
+            None => AlbumId::generate(),
         };
 
         ctx.library

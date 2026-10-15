@@ -10,8 +10,10 @@ impl PersonId {
         &self.0
     }
 
-    pub(crate) fn from_raw(s: String) -> Self {
-        Self(s)
+    /// Wrap an existing ID string (from database or sync stream). People
+    /// only come from Immich, so there is no `generate()`.
+    pub fn new(id: String) -> Self {
+        Self(id)
     }
 }
 
@@ -36,28 +38,28 @@ mod tests {
 
     #[test]
     fn person_id_display() {
-        let id = PersonId::from_raw("abc-123".to_string());
+        let id = PersonId::new("abc-123".to_string());
         assert_eq!(format!("{id}"), "abc-123");
     }
 
     #[test]
     fn person_id_as_str() {
-        let id = PersonId::from_raw("abc-123".to_string());
+        let id = PersonId::new("abc-123".to_string());
         assert_eq!(id.as_str(), "abc-123");
     }
 
     #[test]
     fn person_id_equality() {
-        let a = PersonId::from_raw("same".to_string());
-        let b = PersonId::from_raw("same".to_string());
-        let c = PersonId::from_raw("different".to_string());
+        let a = PersonId::new("same".to_string());
+        let b = PersonId::new("same".to_string());
+        let c = PersonId::new("different".to_string());
         assert_eq!(a, b);
         assert_ne!(a, c);
     }
 
     #[test]
     fn person_id_clone() {
-        let id = PersonId::from_raw("test".to_string());
+        let id = PersonId::new("test".to_string());
         let cloned = id.clone();
         assert_eq!(id, cloned);
     }
@@ -66,9 +68,9 @@ mod tests {
     fn person_id_hash() {
         use std::collections::HashSet;
         let mut set = HashSet::new();
-        set.insert(PersonId::from_raw("a".to_string()));
-        set.insert(PersonId::from_raw("a".to_string()));
-        set.insert(PersonId::from_raw("b".to_string()));
+        set.insert(PersonId::new("a".to_string()));
+        set.insert(PersonId::new("a".to_string()));
+        set.insert(PersonId::new("b".to_string()));
         assert_eq!(set.len(), 2);
     }
 }
