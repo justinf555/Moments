@@ -8,10 +8,10 @@ use tracing::instrument;
 
 use super::error::ImportError;
 use crate::library::config::LocalStorageMode;
+use crate::library::media::sharded_original_relative;
 use crate::library::media::{MediaId, MediaRecord, MediaService, MediaType};
 use crate::library::metadata::exif::ExifInfo;
 use crate::library::metadata::{MediaMetadataRecord, MetadataService};
-use crate::library::thumbnail::sharded_original_relative;
 
 /// Input parameters for the persist step.
 pub struct PersistParams<'a> {

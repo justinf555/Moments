@@ -3,9 +3,11 @@
 
 pub mod event;
 mod model;
+mod paths;
 pub mod repository;
 mod service;
 
 pub use event::MediaEvent;
 pub use model::{MediaCursor, MediaFilter, MediaId, MediaItem, MediaRecord, MediaType, Stack};
+pub use paths::{sharded_original_path, sharded_original_relative};
 pub use service::MediaService;

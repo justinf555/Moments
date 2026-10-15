@@ -102,8 +102,11 @@ impl MediaService {
         }
         let mut paths = Vec::new();
         for id in ids {
-            if let Ok(Some(rel)) = self.repo.relative_path(id).await {
-                paths.push((id.clone(), self.originals_dir.join(&rel)));
+            match self.repo.relative_path(id).await {
+                Ok(Some(rel)) => paths.push((id.clone(), self.originals_dir.join(&rel))),
+                Ok(None) => {}
+                // The file is left behind as an orphan; deletion itself goes ahead.
+                Err(e) => warn!(%id, "could not look up original path for deletion: {e}"),
             }
         }
         paths

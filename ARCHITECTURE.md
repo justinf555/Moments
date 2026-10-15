@@ -51,7 +51,9 @@ src/
     keyring.rs          Immich session token in the system keyring
 
   library/              Library façade + feature services
-    mod.rs              Library struct, Library::open, cross-service operations
+    mod.rs              Library struct, Library::open, service accessors
+    delete.rs           Permanent delete: DB rows, then original + thumbnail files
+    edit_sync.rs        Pixel edit save/revert: rendered sibling, XMP, stack/tag mutations
     album/  faces/  editing/  media/  metadata/  thumbnail/
                         model.rs, repository.rs, service.rs, event.rs (when it emits)
     metadata/exif.rs, video_meta.rs   EXIF and GStreamer metadata extraction

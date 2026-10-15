@@ -5,8 +5,9 @@ use async_trait::async_trait;
 use tracing::{debug, instrument};
 
 use crate::library::error::LibraryError;
+use crate::library::media::sharded_original_relative;
 use crate::library::media::{MediaId, MediaRecord, MediaType};
-use crate::library::thumbnail::{sharded_original_relative, sharded_thumbnail_path};
+use crate::library::thumbnail::sharded_thumbnail_path;
 
 use super::{CounterKind, HandlerResult, SyncContext, SyncEntityHandler};
 use crate::sync::providers::immich::types::*;
