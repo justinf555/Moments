@@ -41,12 +41,6 @@ impl MomentsApplication {
             _ => None,
         };
 
-        // Store backend type for preferences dialog.
-        if let Some((ref server_url, _)) = immich_info {
-            self.imp().is_immich.set(true);
-            *self.imp().immich_server_url.borrow_mut() = Some(server_url.clone());
-        }
-
         // Extract paths and mode for the ImportClient before the factory
         // consumes the bundle and config.
         let originals_dir = bundle.originals.clone();
@@ -123,6 +117,13 @@ impl MomentsApplication {
 
                         // Store library on the application.
                         *app.imp().library.borrow_mut() = Some(Arc::clone(&library));
+
+                        // Store the backend type for the preferences dialog,
+                        // only once the library has actually opened.
+                        if let Some((ref server_url, _)) = immich_info {
+                            app.imp().is_immich.set(true);
+                            *app.imp().immich_server_url.borrow_mut() = Some(server_url.clone());
+                        }
 
                         // Create the import client (GObject singleton).
                         let sync_thumbnails_dir = thumbnails_dir.clone();

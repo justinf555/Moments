@@ -98,10 +98,11 @@ mod imp {
         fn shutdown(&self) {
             info!("application shutting down");
 
-            // Release every holder of the Arc<Library> (and the SqlitePool
-            // it wraps) before drop(tokio) in main() shuts the runtime down.
-            // The purge task and sync engine hold their own references, so
-            // stop them before dropping the clients.
+            // Drop the app's references to the Arc<Library> (and the
+            // SqlitePool it wraps). The purge task and sync engine hold their
+            // own: abort() and shutdown() only signal them, and their
+            // references go when the runtime drops the tasks, at the latest
+            // when drop(tokio) in main() shuts it down.
             if let Some(handle) = self.purge_handle.borrow_mut().take() {
                 handle.abort();
             }
