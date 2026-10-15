@@ -21,10 +21,10 @@ Both backends share the same SQLite schema, services and UI. What differs is inj
      │                                   ImportClient, SyncClient  (GObject singletons)
      │  async calls run on Tokio; results come back via glib::idle_add_once
      ▼
- Library services       src/library/<feature>/service.rs
+ Library services       src/library/<feature>/service/   (mod.rs core, sync.rs Immich-only)
      │  business logic; each service emits typed events
      ▼
- Repositories           src/library/<feature>/repository.rs   (thin sqlx wrappers)
+ Repositories           src/library/<feature>/repository/   (thin sqlx wrappers)
      ▼
  Database               src/library/db/  (SqlitePool, WAL, numbered migrations)
 
@@ -55,7 +55,9 @@ src/
     delete.rs           Permanent delete: DB rows, then original + thumbnail files
     edit_sync.rs        Pixel edit save/revert: rendered sibling, XMP, stack/tag mutations
     album/  faces/  editing/  media/  metadata/  thumbnail/
-                        model.rs, repository.rs, service.rs, event.rs (when it emits)
+                        model.rs, event.rs (when it emits), repository/ and service/:
+                        mod.rs (app-facing) + sync.rs (Immich-only); thumbnail/ has no
+                        sync code and keeps single repository.rs / service.rs
     metadata/exif.rs, video_meta.rs   EXIF and GStreamer metadata extraction
     bundle/             On-disk Moments.library bundle + library.toml manifest
     config/             LibraryConfig (Local managed/referenced | Immich)
