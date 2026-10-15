@@ -318,8 +318,8 @@ impl MediaRepository {
                 "COALESCE(m.taken_at, 0)",
             ),
             // Issue #680: faces hidden or soft-deleted server-side don't
-            // put their asset in the person's grid — see
-            // `FacesRepository::list_media_for_person`.
+            // put their asset in the person's grid. Keep this in step with
+            // `FacesRepository::update_face_count`, which counts the same faces.
             MediaFilter::Person { .. } => (
                 " AND m.is_trashed = 0 AND m.id IN (SELECT DISTINCT asset_id FROM asset_faces
                    WHERE person_id = ? AND is_visible = 1 AND deleted_at IS NULL)",
@@ -599,9 +599,8 @@ mod tests {
         (repo, db)
     }
 
-    /// Issue #680: the person grid is the other half of
-    /// `FacesRepository::list_media_for_person` — a face hidden or
-    /// soft-deleted server-side must not put its asset here either.
+    /// Issue #680: a face hidden or soft-deleted server-side must not
+    /// put its asset in the person grid.
     #[tokio::test]
     async fn person_filter_excludes_hidden_and_soft_deleted_faces() {
         use crate::library::faces::PersonId;

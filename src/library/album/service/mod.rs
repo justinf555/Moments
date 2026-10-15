@@ -13,7 +13,7 @@ use super::repository::AlbumRepository;
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
 use crate::library::event_emitter::EventEmitter;
-use crate::library::media::{MediaCursor, MediaId, MediaItem};
+use crate::library::media::MediaId;
 use crate::library::mutation::Mutation;
 use crate::library::recorder::MutationRecorder;
 
@@ -173,15 +173,6 @@ impl AlbumService {
             warn!(error = %e, "failed to record AlbumMediaRemoved mutation");
         }
         Ok(())
-    }
-
-    pub async fn list_album_media(
-        &self,
-        album_id: &AlbumId,
-        cursor: Option<&MediaCursor>,
-        limit: u32,
-    ) -> Result<Vec<MediaItem>, LibraryError> {
-        self.repo.list_media(album_id, cursor, limit).await
     }
 
     pub async fn albums_containing_media(

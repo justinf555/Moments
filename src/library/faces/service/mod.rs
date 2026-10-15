@@ -12,7 +12,6 @@ use super::repository::FacesRepository;
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
 use crate::library::event_emitter::EventEmitter;
-use crate::library::media::MediaId;
 use crate::library::mutation::Mutation;
 use crate::library::recorder::MutationRecorder;
 
@@ -73,14 +72,6 @@ impl FacesService {
 
     pub async fn get_person(&self, person_id: &PersonId) -> Result<Option<Person>, LibraryError> {
         self.repo.get_person(person_id.as_str()).await
-    }
-
-    pub async fn list_media_for_person(
-        &self,
-        person_id: &PersonId,
-    ) -> Result<Vec<MediaId>, LibraryError> {
-        let ids = self.repo.list_media_for_person(person_id.as_str()).await?;
-        Ok(ids.into_iter().map(MediaId::new).collect())
     }
 
     /// Rename a person.

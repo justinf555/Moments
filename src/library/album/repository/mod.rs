@@ -6,8 +6,7 @@ use std::collections::HashMap;
 use super::model::{Album, AlbumId};
 use crate::library::db::{id_placeholders, Database};
 use crate::library::error::LibraryError;
-use crate::library::media::repository::MediaRow;
-use crate::library::media::{MediaCursor, MediaId, MediaItem};
+use crate::library::media::MediaId;
 
 mod sync;
 
@@ -219,65 +218,6 @@ impl AlbumRepository {
         Ok(())
     }
 
-    /// List media in an album with keyset pagination.
-    pub async fn list_media(
-        &self,
-        album_id: &AlbumId,
-        cursor: Option<&MediaCursor>,
-        limit: u32,
-    ) -> Result<Vec<MediaItem>, LibraryError> {
-        let rows = match cursor {
-            None => sqlx::query_as::<_, MediaRow>(
-                "SELECT m.id, m.taken_at, m.imported_at, m.original_filename,
-                            m.width, m.height, m.orientation, m.media_type, m.is_favorite,
-                            m.is_trashed, m.trashed_at, m.duration_ms, m.stack_id, m.is_moments_render
-                     FROM media m
-                     JOIN album_media am ON m.id = am.media_id
-                     LEFT JOIN stacks s ON m.stack_id = s.id
-                     LEFT JOIN media render ON render.stack_id = s.id AND render.is_moments_render = 1
-                     WHERE am.album_id = ? AND m.is_trashed = 0
-                       AND (s.id IS NULL AND m.is_moments_render = 0
-                            OR (render.id IS NULL AND s.primary_asset_id = m.id)
-                            OR (render.id IS NOT NULL AND m.is_moments_render = 0))
-                     ORDER BY COALESCE(m.taken_at, 0) DESC, m.id DESC
-                     LIMIT ?",
-            )
-            .bind(album_id.as_str())
-            .bind(limit as i64)
-            .fetch_all(self.db.pool())
-            .await
-            .map_err(LibraryError::Db)?,
-            Some(cur) => sqlx::query_as::<_, MediaRow>(
-                "SELECT m.id, m.taken_at, m.imported_at, m.original_filename,
-                            m.width, m.height, m.orientation, m.media_type, m.is_favorite,
-                            m.is_trashed, m.trashed_at, m.duration_ms, m.stack_id, m.is_moments_render
-                     FROM media m
-                     JOIN album_media am ON m.id = am.media_id
-                     LEFT JOIN stacks s ON m.stack_id = s.id
-                     LEFT JOIN media render ON render.stack_id = s.id AND render.is_moments_render = 1
-                     WHERE am.album_id = ?
-                       AND (COALESCE(m.taken_at, 0) < ?
-                            OR (COALESCE(m.taken_at, 0) = ? AND m.id < ?))
-                       AND m.is_trashed = 0
-                       AND (s.id IS NULL AND m.is_moments_render = 0
-                            OR (render.id IS NULL AND s.primary_asset_id = m.id)
-                            OR (render.id IS NOT NULL AND m.is_moments_render = 0))
-                     ORDER BY COALESCE(m.taken_at, 0) DESC, m.id DESC
-                     LIMIT ?",
-            )
-            .bind(album_id.as_str())
-            .bind(cur.sort_key)
-            .bind(cur.sort_key)
-            .bind(cur.id.as_str())
-            .bind(limit as i64)
-            .fetch_all(self.db.pool())
-            .await
-            .map_err(LibraryError::Db)?,
-        };
-
-        Ok(rows.into_iter().map(MediaRow::into_item).collect())
-    }
-
     /// For each album containing at least one of `media_ids`, return the
     /// count of how many are present.
     pub async fn containing_media(
@@ -351,6 +291,7 @@ mod tests {
     use super::*;
     use crate::library::db::test_helpers::*;
     use crate::library::media::repository::MediaRepository;
+    use crate::library::media::MediaFilter;
     use crate::library::media::{MediaCursor, MediaId};
     use tempfile::tempdir;
 
@@ -455,7 +396,16 @@ mod tests {
         repo.add_media(&album_id, &[id_a.clone(), id_b.clone()])
             .await
             .unwrap();
-        let items = repo.list_media(&album_id, None, 50).await.unwrap();
+        let items = media
+            .list(
+                MediaFilter::Album {
+                    album_id: album_id.clone(),
+                },
+                None,
+                50,
+            )
+            .await
+            .unwrap();
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].id, id_b);
         assert_eq!(items[1].id, id_a);
@@ -474,7 +424,20 @@ mod tests {
         repo.add_media(&album_id, std::slice::from_ref(&media_id))
             .await
             .unwrap();
-        assert_eq!(repo.list_media(&album_id, None, 50).await.unwrap().len(), 1);
+        assert_eq!(
+            media
+                .list(
+                    MediaFilter::Album {
+                        album_id: album_id.clone()
+                    },
+                    None,
+                    50
+                )
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -496,7 +459,16 @@ mod tests {
             .await
             .unwrap();
         repo.remove_media(&album_id, &[id_a]).await.unwrap();
-        let items = repo.list_media(&album_id, None, 50).await.unwrap();
+        let items = media
+            .list(
+                MediaFilter::Album {
+                    album_id: album_id.clone(),
+                },
+                None,
+                50,
+            )
+            .await
+            .unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].id, id_b);
     }
@@ -537,7 +509,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_album_media_excludes_trashed() {
+    async fn album_filter_excludes_trashed() {
         let dir = tempdir().unwrap();
         let (repo, media, _db) = test_repo(dir.path()).await;
         let album_id = repo.create("Trash Test").await.unwrap();
@@ -547,15 +519,21 @@ mod tests {
             .await
             .unwrap();
         media.trash(&[media_id]).await.unwrap();
-        assert!(repo
-            .list_media(&album_id, None, 50)
+        assert!(media
+            .list(
+                MediaFilter::Album {
+                    album_id: album_id.clone()
+                },
+                None,
+                50
+            )
             .await
             .unwrap()
             .is_empty());
     }
 
     #[tokio::test]
-    async fn list_album_media_cursor_pagination() {
+    async fn album_filter_cursor_pagination() {
         let dir = tempdir().unwrap();
         let (repo, media, _db) = test_repo(dir.path()).await;
         let album_id = repo.create("Paging").await.unwrap();
@@ -574,14 +552,32 @@ mod tests {
                 .unwrap();
         }
         repo.add_media(&album_id, &ids).await.unwrap();
-        let page1 = repo.list_media(&album_id, None, 3).await.unwrap();
+        let page1 = media
+            .list(
+                MediaFilter::Album {
+                    album_id: album_id.clone(),
+                },
+                None,
+                3,
+            )
+            .await
+            .unwrap();
         assert_eq!(page1.len(), 3);
         let last = &page1[2];
         let cursor = MediaCursor {
             sort_key: last.taken_at.unwrap_or(0),
             id: last.id.clone(),
         };
-        let page2 = repo.list_media(&album_id, Some(&cursor), 3).await.unwrap();
+        let page2 = media
+            .list(
+                MediaFilter::Album {
+                    album_id: album_id.clone(),
+                },
+                Some(&cursor),
+                3,
+            )
+            .await
+            .unwrap();
         assert_eq!(page2.len(), 2);
     }
 
@@ -696,8 +692,14 @@ mod tests {
             .await
             .unwrap();
         media.delete_permanently(&[media_id]).await.unwrap();
-        assert!(repo
-            .list_media(&album_id, None, 50)
+        assert!(media
+            .list(
+                MediaFilter::Album {
+                    album_id: album_id.clone()
+                },
+                None,
+                50
+            )
             .await
             .unwrap()
             .is_empty());

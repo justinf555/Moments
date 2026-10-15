@@ -140,7 +140,8 @@ impl FacesRepository {
     /// Recount faces for a person and update the denormalised face_count.
     ///
     /// Issue #680: counts only faces that are visible and not
-    /// soft-deleted server-side, matching `list_media_for_person`.
+    /// soft-deleted server-side, matching the `MediaFilter::Person` filter
+    /// in `MediaRepository::list`.
     pub async fn update_face_count(&self, person_id: &str) -> Result<(), LibraryError> {
         sqlx::query(
             "UPDATE people SET face_count = (
@@ -264,7 +265,7 @@ impl FacesRepository {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{face_row, test_repo};
+    use super::super::tests::{face_row, person_media, test_repo};
     use super::*;
     use crate::library::db::test_helpers::test_record;
     use crate::library::media::MediaId;
@@ -316,15 +317,15 @@ mod tests {
         repo.upsert_asset_face(&face).await.unwrap();
         repo.update_face_count("p1").await.unwrap();
 
-        let media = repo.list_media_for_person("p1").await.unwrap();
-        assert_eq!(media, vec!["m1"]);
+        let ids = person_media(&media, "p1").await;
+        assert_eq!(ids, vec!["m1"]);
 
         let deleted_person = repo.delete_asset_face("f1").await.unwrap();
         assert_eq!(deleted_person, Some("p1".to_string()));
         repo.update_face_count("p1").await.unwrap();
 
-        let media = repo.list_media_for_person("p1").await.unwrap();
-        assert!(media.is_empty());
+        let ids = person_media(&media, "p1").await;
+        assert!(ids.is_empty());
 
         let people = repo.list_people().await.unwrap();
         assert_eq!(people[0].face_count, 0);
@@ -394,8 +395,8 @@ mod tests {
         repo.delete_person("p1").await.unwrap();
 
         // Face still exists but with no person.
-        let media = repo.list_media_for_person("p1").await.unwrap();
-        assert!(media.is_empty());
+        let ids = person_media(&media, "p1").await;
+        assert!(ids.is_empty());
     }
 
     #[tokio::test]

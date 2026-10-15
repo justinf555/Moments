@@ -93,36 +93,6 @@ impl FacesRepository {
         }))
     }
 
-    /// List media IDs for all assets containing a specific person.
-    ///
-    /// Issue #680: faces hidden (`is_visible = 0`) or soft-deleted
-    /// (`deleted_at` set) on the server don't put their asset in the
-    /// person's grid. The rows stay — Immich can reverse either state —
-    /// so this is a filter, not a delete.
-    pub async fn list_media_for_person(
-        &self,
-        person_id: &str,
-    ) -> Result<Vec<String>, LibraryError> {
-        let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT DISTINCT af.asset_id FROM asset_faces af
-             INNER JOIN media m ON m.id = af.asset_id
-             LEFT JOIN stacks s ON m.stack_id = s.id
-             LEFT JOIN media render ON render.stack_id = s.id AND render.is_moments_render = 1
-             WHERE af.person_id = ? AND m.is_trashed = 0
-               AND af.is_visible = 1 AND af.deleted_at IS NULL
-               AND (s.id IS NULL AND m.is_moments_render = 0
-                    OR (render.id IS NULL AND s.primary_asset_id = m.id)
-                    OR (render.id IS NOT NULL AND m.is_moments_render = 0))
-             ORDER BY COALESCE(m.taken_at, m.imported_at) DESC",
-        )
-        .bind(person_id)
-        .fetch_all(self.db.pool())
-        .await
-        .map_err(LibraryError::Db)?;
-
-        Ok(rows.into_iter().map(|r| r.0).collect())
-    }
-
     // ── Write queries ───────────────────────────────────────────────
 
     /// Rename a person.
@@ -152,8 +122,27 @@ mod tests {
     use super::*;
     use crate::library::db::test_helpers::{open_test_db, record_with_taken_at, test_record};
     use crate::library::media::repository::MediaRepository;
+    use crate::library::media::MediaFilter;
     use crate::library::media::MediaId;
     use tempfile::tempdir;
+
+    /// Media ids in `person_id`'s grid, via the live `MediaFilter::Person`
+    /// query the people grid uses.
+    pub(super) async fn person_media(media: &MediaRepository, person_id: &str) -> Vec<String> {
+        media
+            .list(
+                MediaFilter::Person {
+                    person_id: PersonId::from_raw(person_id.to_string()),
+                },
+                None,
+                u32::MAX,
+            )
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.id.as_str().to_string())
+            .collect()
+    }
 
     pub(super) async fn test_repo(
         dir: &std::path::Path,
@@ -318,8 +307,8 @@ mod tests {
         .unwrap();
         repo.update_face_count("p1").await.unwrap();
 
-        let media = repo.list_media_for_person("p1").await.unwrap();
-        assert_eq!(media, vec!["m1"], "only the visible, live face counts");
+        let ids = person_media(&media, "p1").await;
+        assert_eq!(ids, vec!["m1"], "only the visible, live face counts");
 
         let people = repo.list_people().await.unwrap();
         assert_eq!(people[0].face_count, 1);
@@ -345,7 +334,7 @@ mod tests {
             .await
             .unwrap();
         repo.update_face_count("p1").await.unwrap();
-        assert_eq!(repo.list_media_for_person("p1").await.unwrap(), vec!["m1"]);
+        assert_eq!(person_media(&media, "p1").await, vec!["m1"]);
 
         repo.upsert_asset_face(&AssetFaceRow {
             is_visible: false,
@@ -354,7 +343,7 @@ mod tests {
         .await
         .unwrap();
         repo.update_face_count("p1").await.unwrap();
-        assert!(repo.list_media_for_person("p1").await.unwrap().is_empty());
+        assert!(person_media(&media, "p1").await.is_empty());
         assert_eq!(repo.list_people().await.unwrap()[0].face_count, 0);
 
         let surviving: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM asset_faces WHERE id = 'f1'")
@@ -367,7 +356,7 @@ mod tests {
             .await
             .unwrap();
         repo.update_face_count("p1").await.unwrap();
-        assert_eq!(repo.list_media_for_person("p1").await.unwrap(), vec!["m1"]);
+        assert_eq!(person_media(&media, "p1").await, vec!["m1"]);
         assert_eq!(repo.list_people().await.unwrap()[0].face_count, 1);
     }
 
@@ -397,12 +386,12 @@ mod tests {
         .unwrap();
         repo.update_face_count("p1").await.unwrap();
 
-        assert_eq!(repo.list_media_for_person("p1").await.unwrap(), vec!["m1"]);
+        assert_eq!(person_media(&media, "p1").await, vec!["m1"]);
         assert_eq!(repo.list_people().await.unwrap()[0].face_count, 1);
     }
 
     #[tokio::test]
-    async fn list_media_for_person_excludes_trashed() {
+    async fn person_filter_excludes_trashed() {
         let dir = tempdir().unwrap();
         let (repo, media, _db) = test_repo(dir.path()).await;
 
@@ -423,7 +412,7 @@ mod tests {
         repo.upsert_asset_face(&face1).await.unwrap();
         repo.upsert_asset_face(&face2).await.unwrap();
 
-        let media = repo.list_media_for_person("p1").await.unwrap();
-        assert_eq!(media, vec!["m1"]); // m2 is trashed
+        let ids = person_media(&media, "p1").await;
+        assert_eq!(ids, vec!["m1"]); // m2 is trashed
     }
 }
