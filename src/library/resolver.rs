@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 
+use super::config::LocalStorageMode;
 use super::error::LibraryError;
 use super::media::MediaId;
 
@@ -35,11 +36,11 @@ pub trait OriginalResolver: Send + Sync {
 /// Local filesystem resolver — returns the path directly, no network.
 pub struct LocalResolver {
     originals_dir: PathBuf,
-    mode: super::config::LocalStorageMode,
+    mode: LocalStorageMode,
 }
 
 impl LocalResolver {
-    pub fn new(originals_dir: PathBuf, mode: super::config::LocalStorageMode) -> Self {
+    pub fn new(originals_dir: PathBuf, mode: LocalStorageMode) -> Self {
         Self {
             originals_dir,
             mode,
@@ -57,10 +58,12 @@ impl OriginalResolver for LocalResolver {
         _external_id: Option<&str>,
     ) -> Result<Option<PathBuf>, LibraryError> {
         let path = match self.mode {
-            super::config::LocalStorageMode::Referenced => PathBuf::from(relative_path),
-            super::config::LocalStorageMode::Managed => self.originals_dir.join(relative_path),
+            LocalStorageMode::Referenced => PathBuf::from(relative_path),
+            LocalStorageMode::Managed => self.originals_dir.join(relative_path),
         };
-        if path.exists() {
+        // A failed existence check (e.g. permission denied) is treated as
+        // missing, matching the old `Path::exists` behaviour.
+        if tokio::fs::try_exists(&path).await.unwrap_or(false) {
             Ok(Some(path))
         } else {
             Ok(None)
@@ -84,10 +87,7 @@ mod tests {
         let photo_path = photo_dir.join("photo.jpg");
         std::fs::write(&photo_path, b"jpeg data").unwrap();
 
-        let resolver = LocalResolver::new(
-            originals.clone(),
-            super::super::config::LocalStorageMode::Managed,
-        );
+        let resolver = LocalResolver::new(originals.clone(), super::LocalStorageMode::Managed);
         let id = super::super::media::MediaId::new("test-id".to_string());
 
         let result = resolver
@@ -100,10 +100,8 @@ mod tests {
     #[tokio::test]
     async fn managed_mode_returns_none_for_missing() {
         let dir = tempfile::tempdir().unwrap();
-        let resolver = LocalResolver::new(
-            dir.path().to_path_buf(),
-            super::super::config::LocalStorageMode::Managed,
-        );
+        let resolver =
+            LocalResolver::new(dir.path().to_path_buf(), super::LocalStorageMode::Managed);
         let id = super::super::media::MediaId::new("test-id".to_string());
 
         let result = resolver
@@ -121,7 +119,7 @@ mod tests {
 
         let resolver = LocalResolver::new(
             dir.path().to_path_buf(),
-            super::super::config::LocalStorageMode::Referenced,
+            super::LocalStorageMode::Referenced,
         );
         let id = super::super::media::MediaId::new("test-id".to_string());
 
@@ -137,7 +135,7 @@ mod tests {
     async fn referenced_mode_returns_none_for_missing() {
         let resolver = LocalResolver::new(
             std::path::PathBuf::from("/unused"),
-            super::super::config::LocalStorageMode::Referenced,
+            super::LocalStorageMode::Referenced,
         );
         let id = super::super::media::MediaId::new("test-id".to_string());
 
@@ -155,10 +153,8 @@ mod tests {
         let photo = dir.path().join("photo.jpg");
         std::fs::write(&photo, b"data").unwrap();
 
-        let resolver = LocalResolver::new(
-            dir.path().to_path_buf(),
-            super::super::config::LocalStorageMode::Managed,
-        );
+        let resolver =
+            LocalResolver::new(dir.path().to_path_buf(), super::LocalStorageMode::Managed);
 
         let id1 = super::super::media::MediaId::new("id-a".to_string());
         let id2 = super::super::media::MediaId::new("id-b".to_string());

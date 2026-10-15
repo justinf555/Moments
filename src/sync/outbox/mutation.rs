@@ -148,7 +148,7 @@ impl OutboxMutation {
                 let p = json();
                 let name = p["name"].as_str().unwrap_or("").to_string();
                 Some(Self::AlbumCreated {
-                    id: AlbumId::from_raw(row.entity_id.clone()),
+                    id: AlbumId::new(row.entity_id.clone()),
                     name,
                 })
             }
@@ -156,7 +156,7 @@ impl OutboxMutation {
                 let p = json();
                 let name = p["name"].as_str().unwrap_or("").to_string();
                 Some(Self::AlbumRenamed {
-                    id: AlbumId::from_raw(row.entity_id.clone()),
+                    id: AlbumId::new(row.entity_id.clone()),
                     name,
                 })
             }
@@ -164,7 +164,7 @@ impl OutboxMutation {
                 let p = json();
                 let external_id = p["external_id"].as_str().map(String::from);
                 Some(Self::AlbumDeleted {
-                    id: AlbumId::from_raw(row.entity_id.clone()),
+                    id: AlbumId::new(row.entity_id.clone()),
                     external_id,
                 })
             }
@@ -179,7 +179,7 @@ impl OutboxMutation {
                     })
                     .unwrap_or_default();
                 Some(Self::AlbumMediaAdded {
-                    album_id: AlbumId::from_raw(row.entity_id.clone()),
+                    album_id: AlbumId::new(row.entity_id.clone()),
                     media_ids,
                 })
             }
@@ -194,7 +194,7 @@ impl OutboxMutation {
                     })
                     .unwrap_or_default();
                 Some(Self::AlbumMediaRemoved {
-                    album_id: AlbumId::from_raw(row.entity_id.clone()),
+                    album_id: AlbumId::new(row.entity_id.clone()),
                     media_ids,
                 })
             }
@@ -230,7 +230,7 @@ impl OutboxMutation {
                 let p = json();
                 let name = p["name"].as_str().unwrap_or("").to_string();
                 Some(Self::PersonRenamed {
-                    id: PersonId::from_raw(row.entity_id.clone()),
+                    id: PersonId::new(row.entity_id.clone()),
                     name,
                 })
             }
@@ -238,7 +238,7 @@ impl OutboxMutation {
                 let p = json();
                 let hidden = p["hidden"].as_bool().unwrap_or(false);
                 Some(Self::PersonHidden {
-                    id: PersonId::from_raw(row.entity_id.clone()),
+                    id: PersonId::new(row.entity_id.clone()),
                     hidden,
                 })
             }
@@ -370,31 +370,31 @@ mod tests {
                 items: vec![(MediaId::new("id5".into()), Some("ext-5".into()))],
             },
             Mutation::AlbumCreated {
-                id: AlbumId::from_raw("a1".into()),
+                id: AlbumId::new("a1".into()),
                 name: "Vacation".into(),
             },
             Mutation::AlbumRenamed {
-                id: AlbumId::from_raw("a2".into()),
+                id: AlbumId::new("a2".into()),
                 name: "Trip".into(),
             },
             Mutation::AlbumDeleted {
-                id: AlbumId::from_raw("a3".into()),
+                id: AlbumId::new("a3".into()),
                 external_id: Some("ext-a3".into()),
             },
             Mutation::AlbumMediaAdded {
-                album_id: AlbumId::from_raw("a4".into()),
+                album_id: AlbumId::new("a4".into()),
                 media_ids: vec![MediaId::new("m1".into()), MediaId::new("m2".into())],
             },
             Mutation::AlbumMediaRemoved {
-                album_id: AlbumId::from_raw("a5".into()),
+                album_id: AlbumId::new("a5".into()),
                 media_ids: vec![MediaId::new("m3".into())],
             },
             Mutation::PersonRenamed {
-                id: PersonId::from_raw("p1".into()),
+                id: PersonId::new("p1".into()),
                 name: "Alice".into(),
             },
             Mutation::PersonHidden {
-                id: PersonId::from_raw("p2".into()),
+                id: PersonId::new("p2".into()),
                 hidden: true,
             },
             Mutation::AssetEditsApplied {

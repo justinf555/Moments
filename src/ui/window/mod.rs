@@ -410,7 +410,7 @@ impl MomentsWindow {
                 if !coord.has_route(id) {
                     use crate::library::album::AlbumId;
                     use crate::library::media::MediaFilter;
-                    let album_id = AlbumId::from_raw(album_id_str.to_owned());
+                    let album_id = AlbumId::new(album_id_str.to_owned());
                     let filter = MediaFilter::Album { album_id };
                     let mc = crate::application::MomentsApplication::default()
                         .media_client_v2()

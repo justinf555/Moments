@@ -375,7 +375,7 @@ mod tests {
 
     fn test_person(id: &str, name: &str) -> Person {
         Person {
-            id: PersonId::from_raw(id.to_string()),
+            id: PersonId::new(id.to_string()),
             name: name.to_string(),
             face_count: 0,
             is_hidden: false,

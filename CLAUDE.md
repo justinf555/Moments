@@ -72,8 +72,9 @@ Details: `docs/design-release-channels.md`, `docs/dev-environment.md`.
 The full picture is in `ARCHITECTURE.md`. The rules that matter when changing code:
 
 - **Layering:** `ui/` → `client/` (GObject singletons) → `library/` services → repositories → `library/db`. Widgets get clients from `MomentsApplication::default()` accessors (`media_client_v2()`, `album_client_v2()`, `people_client()`, `import_client()`, `sync_client()`) and **never import `Library` or call services directly**. Using `library` *model* types (`MediaId`, `AlbumId`, `MediaFilter`, …) in `ui/` is fine.
-- **Library features** (`album`, `faces`, `editing`, `media`, `metadata`, `thumbnail`) each split into `model.rs` / `repository.rs` / `service.rs` (+ `event.rs` where the service emits). Business logic goes in services; repositories are thin `sqlx` wrappers.
-- **Events:** each service owns a typed `EventEmitter<T>` (`src/event_emitter.rs`). Clients subscribe on Tokio and patch their `ListStore`s on the GTK thread via `glib::idle_add_once`. Where a service emits an event for a change, the client's **event listener owns the model patch** — the command path must not repeat it (see #589). Widgets connect to client GObject signals in `realize` and disconnect in `unrealize`.
+- **Library features** (`album`, `faces`, `editing`, `media`, `metadata`, `thumbnail`) each split into `model.rs` / `repository` / `service` (+ `event.rs` where the service emits). Business logic goes in services; repositories are thin `sqlx` wrappers.
+- **Sync code lives in `sync.rs`.** A feature with Immich-only code (pull upserts, `*_no_record` writes, external-id lookups, `last_seen_at` heartbeats) has `repository/{mod.rs, sync.rs}` and `service/{mod.rs, sync.rs}`; `mod.rs` holds everything the app itself uses. A feature with no sync code (`thumbnail`) keeps single `repository.rs` / `service.rs`. Don't split these files further by size.
+- **Events:** each service owns a typed `EventEmitter<T>` (`src/library/event_emitter.rs`). Clients subscribe on Tokio and patch their `ListStore`s on the GTK thread via `glib::idle_add_once`. Where a service emits an event for a change, the client's **event listener owns the model patch** — the command path must not repeat it (see #589). Widgets connect to client GObject signals in `realize` and disconnect in `unrealize`.
 - **Commands** flow UI → client method → service on Tokio → service emits. No command bus.
 - **Errors** reach the user via `crate::client::show_error_toast(&err)` (safe from Tokio threads).
 - **Two executors:** GTK main context for widgets only; the Tokio runtime (`tokio_handle()`) for all I/O. Never block the GTK thread.
@@ -85,7 +86,7 @@ The full picture is in `ARCHITECTURE.md`. The rules that matter when changing co
 
 - SQLite via `sqlx` with **runtime-checked** queries (`sqlx::query`, no `query!` macros, no `.sqlx/` snapshot). `SQLX_OFFLINE=true` in the manifests is a leftover and currently has no effect.
 - **Every schema change is a new numbered migration** in `src/library/db/migrations/` (embedded via `sqlx::migrate!`). No ad-hoc `CREATE TABLE IF NOT EXISTS` in code.
-- `MediaId` is a UUID v4 as 32 lowercase hex chars (`MediaId::generate()` locally, `MediaId::new()` from DB/sync). Deduplication uses `content_hash` (SHA-1, matching Immich), never the ID.
+- `MediaId` is a UUID v4 as 32 lowercase hex chars (`MediaId::generate()` locally, `MediaId::new()` from DB/sync). `AlbumId` follows the same `generate()` / `new()` pattern; `PersonId` only has `new()` (people come from Immich). Deduplication uses `content_hash` (SHA-1, matching Immich), never the ID.
 
 ## GTK / GObject conventions
 

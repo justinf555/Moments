@@ -12,7 +12,7 @@ for git-archaeology readers.
 
 ## What replaced it
 
-### Per-service `EventEmitter<T>` channels (`src/event_emitter.rs`)
+### Per-service `EventEmitter<T>` channels (`src/library/event_emitter.rs`)
 
 Each library service owns its own typed event emitter:
 

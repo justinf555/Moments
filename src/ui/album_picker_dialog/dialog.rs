@@ -49,7 +49,7 @@ pub fn present(
         .album_snapshot()
         .into_iter()
         .map(|obj| {
-            let aid = AlbumId::from_raw(obj.id());
+            let aid = AlbumId::new(obj.id());
             let already = membership.get(&aid).copied().unwrap_or(0);
             AlbumEntry {
                 id: aid,

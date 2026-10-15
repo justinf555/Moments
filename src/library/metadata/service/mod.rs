@@ -7,6 +7,8 @@ use crate::library::db::Database;
 use crate::library::error::LibraryError;
 use crate::library::media::MediaId;
 
+mod sync;
+
 /// Media metadata (EXIF detail) service.
 #[derive(Clone)]
 pub struct MetadataService {
@@ -25,11 +27,6 @@ impl MetadataService {
         record: &MediaMetadataRecord,
     ) -> Result<(), LibraryError> {
         self.repo.insert(record).await
-    }
-
-    /// Insert or replace metadata from the sync stream.
-    pub async fn upsert_metadata(&self, record: &MediaMetadataRecord) -> Result<(), LibraryError> {
-        self.repo.upsert(record).await
     }
 
     pub async fn media_metadata(

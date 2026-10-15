@@ -111,7 +111,7 @@ mod tests {
         let (_dir, db) = open_db().await;
         let writer = QueueWriterOutbox::new(db.clone());
 
-        let album_id = crate::library::album::AlbumId::new();
+        let album_id = crate::library::album::AlbumId::generate();
         writer
             .record(&Mutation::AlbumCreated {
                 id: album_id.clone(),
@@ -258,7 +258,7 @@ mod tests {
     async fn queue_writer_enqueues_album_renamed() {
         let (_dir, db) = open_db().await;
         let writer = QueueWriterOutbox::new(db.clone());
-        let album_id = crate::library::album::AlbumId::from_raw("album-1".to_string());
+        let album_id = crate::library::album::AlbumId::new("album-1".to_string());
 
         writer
             .record(&Mutation::AlbumRenamed {
@@ -284,7 +284,7 @@ mod tests {
     async fn queue_writer_enqueues_album_deleted() {
         let (_dir, db) = open_db().await;
         let writer = QueueWriterOutbox::new(db.clone());
-        let album_id = crate::library::album::AlbumId::from_raw("album-del".to_string());
+        let album_id = crate::library::album::AlbumId::new("album-del".to_string());
 
         writer
             .record(&Mutation::AlbumDeleted {
@@ -312,7 +312,7 @@ mod tests {
     async fn queue_writer_enqueues_album_media_added() {
         let (_dir, db) = open_db().await;
         let writer = QueueWriterOutbox::new(db.clone());
-        let album_id = crate::library::album::AlbumId::from_raw("album-x".to_string());
+        let album_id = crate::library::album::AlbumId::new("album-x".to_string());
 
         writer
             .record(&Mutation::AlbumMediaAdded {
@@ -344,7 +344,7 @@ mod tests {
     async fn queue_writer_enqueues_album_media_removed() {
         let (_dir, db) = open_db().await;
         let writer = QueueWriterOutbox::new(db.clone());
-        let album_id = crate::library::album::AlbumId::from_raw("album-y".to_string());
+        let album_id = crate::library::album::AlbumId::new("album-y".to_string());
 
         writer
             .record(&Mutation::AlbumMediaRemoved {
@@ -369,7 +369,7 @@ mod tests {
     async fn queue_writer_enqueues_person_renamed() {
         let (_dir, db) = open_db().await;
         let writer = QueueWriterOutbox::new(db.clone());
-        let person_id = crate::library::faces::PersonId::from_raw("person-1".to_string());
+        let person_id = crate::library::faces::PersonId::new("person-1".to_string());
 
         writer
             .record(&Mutation::PersonRenamed {
@@ -397,7 +397,7 @@ mod tests {
     async fn queue_writer_enqueues_person_hidden() {
         let (_dir, db) = open_db().await;
         let writer = QueueWriterOutbox::new(db.clone());
-        let person_id = crate::library::faces::PersonId::from_raw("person-2".to_string());
+        let person_id = crate::library::faces::PersonId::new("person-2".to_string());
 
         writer
             .record(&Mutation::PersonHidden {
@@ -423,7 +423,7 @@ mod tests {
     async fn queue_writer_enqueues_person_unhidden() {
         let (_dir, db) = open_db().await;
         let writer = QueueWriterOutbox::new(db.clone());
-        let person_id = crate::library::faces::PersonId::from_raw("person-3".to_string());
+        let person_id = crate::library::faces::PersonId::new("person-3".to_string());
 
         writer
             .record(&Mutation::PersonHidden {

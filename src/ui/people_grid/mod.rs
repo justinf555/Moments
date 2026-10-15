@@ -405,7 +405,7 @@ mod tests {
     fn person(name: &str, is_hidden: bool) -> PersonItemObject {
         PersonItemObject::new(
             &Person {
-                id: PersonId::from_raw("p1".to_string()),
+                id: PersonId::new("p1".to_string()),
                 name: name.to_string(),
                 face_count: 0,
                 is_hidden,

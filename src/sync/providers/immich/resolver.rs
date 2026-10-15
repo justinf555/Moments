@@ -14,9 +14,8 @@ use async_trait::async_trait;
 use tracing::{debug, instrument};
 
 use crate::library::error::LibraryError;
-use crate::library::media::MediaId;
+use crate::library::media::{sharded_original_path, MediaId};
 use crate::library::resolver::OriginalResolver;
-use crate::library::thumbnail::sharded_original_path;
 
 use super::client::ImmichClient;
 
@@ -88,7 +87,7 @@ impl OriginalResolver for CachedResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::library::thumbnail::sharded_original_path;
+    use crate::library::media::sharded_original_path;
 
     fn make_resolver(originals_dir: PathBuf) -> CachedResolver {
         let client = Arc::new(ImmichClient::new("https://test.example.com", "fake-token").unwrap());

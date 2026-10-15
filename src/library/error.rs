@@ -14,9 +14,6 @@ pub enum LibraryError {
     #[error("Bundle error: {0}")]
     Bundle(String),
 
-    #[error("Backend not supported")]
-    BackendNotSupported,
-
     #[error("unknown backend type '{0}' in library.toml")]
     InvalidBackend(String),
 
@@ -25,9 +22,6 @@ pub enum LibraryError {
 
     #[error("runtime error: {0}")]
     Runtime(String),
-
-    #[error("thumbnail error: {0}")]
-    Thumbnail(String),
 
     #[error("render error: {0}")]
     Render(#[from] crate::renderer::error::RenderError),
@@ -68,12 +62,6 @@ mod tests {
         let err = LibraryError::Bundle("corrupt header".to_string());
         assert!(err.to_string().contains("Bundle error"));
         assert!(err.to_string().contains("corrupt header"));
-    }
-
-    #[test]
-    fn backend_not_supported_message() {
-        let err = LibraryError::BackendNotSupported;
-        assert!(err.to_string().contains("Backend not supported"));
     }
 
     #[test]

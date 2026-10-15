@@ -698,7 +698,7 @@ mod tests {
 
     fn test_album(id: &str, name: &str) -> Album {
         Album {
-            id: AlbumId::from_raw(id.to_string()),
+            id: AlbumId::new(id.to_string()),
             name: name.to_string(),
             created_at: 1000,
             updated_at: 2000,
@@ -815,7 +815,7 @@ mod tests {
 
         client.insert_into_models(test_album("a1", "Old Name"));
 
-        let id = AlbumId::from_raw("a1".to_string());
+        let id = AlbumId::new("a1".to_string());
         client.update_in_models(&id, |item| {
             item.set_name("New Name".to_string());
         });
@@ -832,7 +832,7 @@ mod tests {
         let store = client.create_model();
         client.insert_into_models(test_album("a1", "Alpha"));
 
-        let id = AlbumId::from_raw("missing".to_string());
+        let id = AlbumId::new("missing".to_string());
         client.update_in_models(&id, |item| {
             item.set_name("Should Not Happen".to_string());
         });
@@ -853,7 +853,7 @@ mod tests {
         client.insert_into_models(test_album("b2", "Beta"));
         assert_eq!(store1.n_items(), 2);
 
-        let id = AlbumId::from_raw("a1".to_string());
+        let id = AlbumId::new("a1".to_string());
         client.remove_from_models(&id);
 
         assert_eq!(store1.n_items(), 1);
@@ -871,7 +871,7 @@ mod tests {
 
         assert_eq!(client.imp().models.borrow().len(), 2);
 
-        let id = AlbumId::from_raw("any".to_string());
+        let id = AlbumId::new("any".to_string());
         client.remove_from_models(&id);
 
         // Dead ref should have been pruned.
@@ -886,7 +886,7 @@ mod tests {
         let store = client.create_model();
         client.insert_into_models(test_album("a1", "Alpha"));
 
-        let id = AlbumId::from_raw("a1".to_string());
+        let id = AlbumId::new("a1".to_string());
         client.update_in_models(&id, |item| {
             item.set_media_count(5);
             item.set_updated_at(3000);

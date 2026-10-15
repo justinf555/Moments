@@ -126,8 +126,6 @@ pub struct Bundle {
     pub originals: PathBuf,
     /// `<bundle>/thumbnails/` — generated thumbnails (created when thumbnail generation runs).
     pub thumbnails: PathBuf,
-    /// `<bundle>/faces/` — face recognition data (created when face detection runs).
-    pub faces: PathBuf,
     /// `<bundle>/database/` — local SQLite store (created when database is initialised).
     pub database: PathBuf,
 }
@@ -143,7 +141,6 @@ impl Bundle {
         Self {
             originals: path.join("originals"),
             thumbnails: path.join("thumbnails"),
-            faces: path.join("faces"),
             database: path.join("database"),
             path: path.to_path_buf(),
         }
@@ -184,8 +181,11 @@ impl Bundle {
     /// Open an existing library bundle at `path`.
     ///
     /// Reads and parses `library.toml`, then returns the bundle alongside the
-    /// [`LibraryConfig`] stored in the manifest so that
-    /// [`super::factory::LibraryFactory`] can construct the correct backend.
+    /// [`LibraryConfig`] stored in the manifest so the application can set up
+    /// the matching backend.
+    ///
+    /// Refuses a manifest whose `version` is newer than [`BUNDLE_VERSION`]:
+    /// it was written by a newer Moments whose layout this build can't know.
     #[instrument(fields(path = %path.display()))]
     pub fn open(path: &Path) -> Result<(Self, LibraryConfig), LibraryError> {
         if !path.is_dir() {
@@ -209,6 +209,13 @@ impl Bundle {
             backend = %manifest.library.backend,
             "manifest loaded"
         );
+
+        if manifest.library.version > BUNDLE_VERSION {
+            return Err(LibraryError::Bundle(format!(
+                "library.toml is version {}, but this version of Moments supports up to {BUNDLE_VERSION}",
+                manifest.library.version
+            )));
+        }
 
         let config = LibraryConfig::from_manifest(&manifest)?;
 
@@ -255,7 +262,6 @@ mod tests {
 
         assert!(!bundle.originals.exists());
         assert!(!bundle.thumbnails.exists());
-        assert!(!bundle.faces.exists());
         assert!(!bundle.database.exists());
     }
 
@@ -336,6 +342,23 @@ mod tests {
                 mode: LocalStorageMode::Managed
             }
         ));
+    }
+
+    #[test]
+    fn open_rejects_newer_bundle_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle_path = dir.path().join("Test.library");
+
+        fs::create_dir_all(&bundle_path).unwrap();
+        let manifest = format!(
+            "[library]\nversion = {}\nbackend = \"local\"\n",
+            BUNDLE_VERSION + 1
+        );
+        fs::write(bundle_path.join(MANIFEST_FILE), manifest).unwrap();
+
+        let err = Bundle::open(&bundle_path).unwrap_err();
+        assert!(matches!(err, LibraryError::Bundle(_)));
+        assert!(err.to_string().contains("supports up to"));
     }
 
     #[test]

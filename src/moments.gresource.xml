@@ -30,7 +30,7 @@
     <file preprocess="xml-stripblanks">ui/people_grid/cell.ui</file>
     <file preprocess="xml-stripblanks">ui/sidebar/sidebar.ui</file>
     <file preprocess="xml-stripblanks">ui/widgets/activity_indicator/activity_indicator.ui</file>
-    <file preprocess="xml-stripblanks">shortcuts-dialog.ui</file>
+    <file preprocess="xml-stripblanks">ui/shortcuts_dialog/shortcuts_dialog.ui</file>
     <file>style.css</file>
   </gresource>
 </gresources>

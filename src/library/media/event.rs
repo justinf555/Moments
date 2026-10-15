@@ -14,7 +14,7 @@ use super::model::MediaId;
 /// Single-item callers emit `vec![id]`. Consumers should loop over the vec
 /// when patching models.
 ///
-/// [`EventEmitter`]: crate::event_emitter::EventEmitter
+/// [`EventEmitter`]: crate::library::event_emitter::EventEmitter
 #[derive(Debug, Clone)]
 pub enum MediaEvent {
     /// Media rows were inserted — local imports (`insert_media`) or new

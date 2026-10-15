@@ -145,13 +145,7 @@ fn setup_context_menu(
         let aid = album_id_str.clone();
         let aname = album_name.clone();
         open_action.connect_activate(move |_, _| {
-            super::actions::open_album_drilldown(
-                &s,
-                &tc,
-                &nav,
-                AlbumId::from_raw(aid.clone()),
-                &aname,
-            );
+            super::actions::open_album_drilldown(&s, &tc, &nav, AlbumId::new(aid.clone()), &aname);
         });
     }
     action_group.add_action(&open_action);
@@ -169,7 +163,7 @@ fn setup_context_menu(
             if let Some(bin) = bin_weak.upgrade() {
                 if let Some(win) = bin.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
                     album_dialogs::show_rename_album_dialog(&win, &aname, move |new_name| {
-                        ac.rename_album(AlbumId::from_raw(aid.clone()), new_name);
+                        ac.rename_album(AlbumId::new(aid.clone()), new_name);
                     });
                 }
             }
@@ -185,7 +179,7 @@ fn setup_context_menu(
         let aid = album_id_str.clone();
         pin_action.connect_activate(move |_, _| {
             tracing::debug!(album_id = %aid, "pin action activated");
-            ac.pin_album(AlbumId::from_raw(aid.clone()));
+            ac.pin_album(AlbumId::new(aid.clone()));
         });
     }
     action_group.add_action(&pin_action);
@@ -203,7 +197,7 @@ fn setup_context_menu(
             if let Some(bin) = bin_weak.upgrade() {
                 if let Some(win) = bin.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
                     album_dialogs::show_delete_album_dialog(&win, &aname, move || {
-                        ac.delete_album(vec![AlbumId::from_raw(aid.clone())]);
+                        ac.delete_album(vec![AlbumId::new(aid.clone())]);
                     });
                 }
             }

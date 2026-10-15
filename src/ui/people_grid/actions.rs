@@ -35,7 +35,7 @@ pub(super) fn wire_activation(
             return;
         };
 
-        let person_id = PersonId::from_raw(obj.id());
+        let person_id = PersonId::new(obj.id());
         let name = obj.name();
         debug!(person = %name, id = %obj.id(), "person activated");
 
@@ -217,7 +217,7 @@ fn wire_rename_button(
                 return;
             }
             debug!(person_id = %pid, name = %new_name, "renaming person");
-            pc.rename_person(PersonId::from_raw(pid.clone()), new_name);
+            pc.rename_person(PersonId::new(pid.clone()), new_name);
         });
         dialog.present(
             gv_ref
@@ -247,6 +247,6 @@ fn wire_hide_button(
         }
         let action = if new_hidden { "hiding" } else { "unhiding" };
         debug!(person_id = %pid, action, "toggling person visibility");
-        pc.set_person_hidden(PersonId::from_raw(pid.clone()), new_hidden);
+        pc.set_person_hidden(PersonId::new(pid.clone()), new_hidden);
     });
 }
