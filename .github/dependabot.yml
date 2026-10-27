@@ -4,8 +4,8 @@
 # Dependency updates (#725). Two tiers, by how well CI covers a crate:
 #
 #   auto    patch/minor bumps of crates the unit and integration tests
-#           exercise, and GitHub Actions bumps other than the secret-bearing
-#           ones in `manual-actions`. Auto-merged by
+#           exercise, and GitHub Actions bumps other than third-party
+#           actions with a secret or write token (`manual-actions`). Auto-merged by
 #           .github/workflows/dependabot-auto-merge.yml once Build & test
 #           passes.
 #   manual  everything else: the network stack (CI makes no real TLS or
@@ -119,18 +119,15 @@ updates:
     commit-message:
       prefix: chore(ci)
     groups:
-      # Actions that run with a secret or a write-capable token. A compromised
-      # release of one of these could exfiltrate the secret or push with the
-      # token, so no auto-merge: review the PR and merge by hand. Listed first
-      # so they leave the `actions` catch-all below.
+      # Rule: third-party actions that run with a secret or a write-scoped
+      # token are merged by hand, since a compromised release could leak the
+      # secret or push with the token. GitHub's own actions/* auto-merge via
+      # the `actions` catch-all below. Listed first so these leave it.
       manual-actions:
         patterns:
           - anthropics/claude-code-action   # CLAUDE_CODE_OAUTH_TOKEN, id-token: write
           - dependabot/fetch-metadata       # contents + pull-requests: write (auto-merge job)
           - marocchino/sticky-pull-request-comment  # pull-requests: write
-          - actions/cache                   # bundle job env holds the Flatpak GPG key
-          - actions/upload-artifact         # bundle job env holds the Flatpak GPG key
-          - actions/download-artifact       # release/nightly publish jobs: contents: write
       actions:
         patterns:
           - "*"
