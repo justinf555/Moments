@@ -1,0 +1,80 @@
+# SPDX-FileCopyrightText: 2026 Justin F
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# A throwaway Immich server for testing Moments' Immich backend, run with
+# `podman compose` (make immich-up). Adapted from Immich's own
+# docker-compose.yml, with these changes:
+#
+#   - The server and machine learning follow Immich's `release` tag, and
+#     `make immich-up` pulls before starting, so a new Immich release that
+#     breaks Moments shows up here first. IMMICH_VERSION=v2.x.y pins one
+#     release, e.g. to bisect a failure.
+#   - Named volumes instead of bind-mounted ./library and ./postgres, so
+#     nothing lands in the checkout. `make immich-reset` deletes them.
+#   - The settings from Immich's example.env are inline, and the credentials
+#     are fixed test values. Never expose this server beyond localhost.
+#   - restart: always is dropped; it's started on demand.
+#
+# Redis (Valkey) and Postgres are copied from the latest release's compose
+# file. Immich occasionally changes the Postgres image it needs, so
+# dev/immich/check-upstream.sh (run by `make immich-up`) warns when these
+# differ from upstream; copy the new lines in when it does.
+
+name: moments-immich
+
+x-immich-env: &immich-env
+  DB_PASSWORD: postgres
+  DB_USERNAME: postgres
+  DB_DATABASE_NAME: immich
+
+services:
+  immich-server:
+    container_name: moments-immich-server
+    image: ghcr.io/immich-app/immich-server:${IMMICH_VERSION:-release}
+    volumes:
+      - library:/data
+      - /etc/localtime:/etc/localtime:ro
+    environment: *immich-env
+    ports:
+      - '127.0.0.1:2283:2283'
+    depends_on:
+      - redis
+      - database
+    healthcheck:
+      disable: false
+
+  # Face detection and recognition (People) and smart search. The largest
+  # image by far; the server works without it, minus those features.
+  immich-machine-learning:
+    container_name: moments-immich-machine-learning
+    image: ghcr.io/immich-app/immich-machine-learning:${IMMICH_VERSION:-release}
+    volumes:
+      - model-cache:/cache
+    environment: *immich-env
+    healthcheck:
+      disable: false
+
+  redis:
+    container_name: moments-immich-redis
+    image: docker.io/valkey/valkey:9@sha256:c123e3715db63d06d4ad6964884037aa0d5d4d703939b9929954112889708e1d
+    healthcheck:
+      test: redis-cli ping | grep -q PONG || exit 1
+
+  database:
+    container_name: moments-immich-postgres
+    image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0@sha256:bcf63357191b76a916ae5eb93464d65c07511da41e3bf7a8416db519b40b1c23
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_DB: immich
+      POSTGRES_INITDB_ARGS: '--data-checksums'
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    shm_size: 128mb
+    healthcheck:
+      disable: false
+
+volumes:
+  library:
+  postgres:
+  model-cache:

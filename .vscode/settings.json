@@ -8,7 +8,9 @@
     "flatpak-build-dev",
     "flatpak-bundle-build",
     "flatpak-bundle-repo",
-    "_build"
+    "_build",
+    "_build-native",
+    "_install"
   ],
   // Hidden from the explorer and from VS Code's file searches (including the
   // ones extensions run at startup, which otherwise crawl gigabytes of build
@@ -20,7 +22,9 @@
     "**/flatpak-build-dev": true,
     "**/flatpak-bundle-build": true,
     "**/flatpak-bundle-repo": true,
-    "**/_build": true
+    "**/_build": true,
+    "**/_build-native": true,
+    "**/_install": true
   },
   "search.followSymlinks": false,
   // The Makefile configures meson (_build for config.rs, the dev build in
@@ -38,13 +42,17 @@
     "**/flatpak-build-dev/**": true,
     "**/flatpak-bundle-build/**": true,
     "**/flatpak-bundle-repo/**": true,
-    "**/_build/**": true
+    "**/_build/**": true,
+    "**/_build-native/**": true,
+    "**/_install/**": true
   },
-  // rust-analyzer runs the toolbox's cargo, `make check`/`lint` the SDK's.
-  // Separate target dirs stop each from invalidating the other's build.
+  // rust-analyzer runs the toolbox's or dev container's cargo, `make check`/
+  // `lint` the SDK's (natively in the dev container). Separate target dirs
+  // stop each from invalidating the other's build.
   "rust-analyzer.cargo.targetDir": true,
   // Run/Run Test buttons: cargo inside the GNOME SDK (as `make test`), not
-  // the toolbox's cargo against the toolbox's GTK.
+  // the toolbox's cargo against the toolbox's GTK. In the dev container the
+  // script runs the native cargo instead.
   "rust-analyzer.runnables.command": "${workspaceFolder}/scripts/sdk-cargo.sh",
   "C_Cpp.default.configurationProvider": "mesonbuild.mesonbuild"
 }

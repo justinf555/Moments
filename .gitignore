@@ -6,7 +6,11 @@ src/config.rs
 
 # Meson build directories
 _build/
+_build-native/
 build/
+
+# Native dev-container install prefix (make native-build)
+_install/
 
 # Flatpak builder cache
 .flatpak-builder/

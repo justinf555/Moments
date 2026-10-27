@@ -1,0 +1,117 @@
+# SPDX-FileCopyrightText: 2026 Justin F
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Moments local development environment: native GNOME 50 GTK, libadwaita and
+# GStreamer, plus rustup-managed Rust. The app builds and runs here, in a window
+# on the host Wayland session, without Flatpak. CI, the release and nightly
+# bundles and Flathub still build with Flatpak; see docs/dev-environment.md.
+#
+# Fedora 44 because it ships GNOME 50: GTK 4.22 and libadwaita 1.9, which is
+# what the crate features in Cargo.toml need (gtk4 `gnome_50`, libadwaita
+# `v1_9`) and what the org.gnome.Platform//50 runtime ships. When the runtime
+# moves to GNOME 51, move this image to the Fedora release that ships it.
+FROM registry.fedoraproject.org/fedora:44
+
+# What each group is for:
+#   - Tools: git and gh for the PR workflow, sudo for ad-hoc installs.
+#   - Build: gcc and pkgconf for the -sys crates; meson, ninja,
+#     blueprint-compiler, glib2-devel (glib-compile-resources/-schemas) and
+#     gettext (msgfmt) for the meson build that generates src/config.rs, the
+#     gresource bundle and the GSettings schema.
+#   - Libraries: the -devel packages behind gtk4, libadwaita, gstreamer(-app,
+#     -video), libheif-rs and libsecret.
+#   - Media: GStreamer plugins for video playback. The patent-encumbered
+#     codecs come from RPM Fusion in the next layer.
+#   - Checks: desktop-file-utils and appstream, so meson's validation tests run.
+#   - Debugging: lldb for CodeLLDB (rust-lldb pretty-printers come with rustup).
+#   - Display: fonts and the icon theme so widgets don't render as tofu or
+#     missing-icon squares; Mesa's GL and Vulkan drivers because GTK 4.22
+#     renders with Vulkan by default and falls back to GL. libglvnd-gles is
+#     GL's libGLESv2: on a GPU Mesa can't drive (the proprietary NVIDIA driver)
+#     GTK falls back to GL and segfaults without it.
+#
+# One dnf call so the repo metadata downloads once; openh264's mirror is often
+# slow enough to stall the build. No weak deps keeps out the hundreds of MB that
+# gtk4-devel would otherwise pull in.
+RUN dnf install -y --setopt=install_weak_deps=False --disablerepo=fedora-cisco-openh264 \
+        git gh openssh-clients sudo which procps-ng findutils tar make curl \
+        gcc pkgconf-pkg-config \
+        meson ninja-build blueprint-compiler glib2-devel gettext \
+        gtk4-devel libadwaita-devel \
+        gstreamer1-devel gstreamer1-plugins-base-devel \
+        libheif-devel libsecret-devel \
+        gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugin-libav \
+        desktop-file-utils appstream \
+        lldb \
+        adwaita-sans-fonts adwaita-mono-fonts google-noto-emoji-fonts \
+        adwaita-icon-theme hicolor-icon-theme \
+        mesa-dri-drivers mesa-vulkan-drivers vulkan-loader libglvnd-gles \
+    && dnf clean all
+
+# Codecs Fedora leaves out for patent reasons and the Flatpak runtime has, from
+# RPM Fusion Free: without them iPhone HEIC photos fail to decode (Fedora's
+# libheif has no HEVC decoder) and H.264/HEVC videos don't play.
+#   - libheif-freeworld: libheif's HEVC decoder plugin (libde265).
+#   - ffmpeg replaces ffmpeg-free, so gstreamer1-plugin-libav decodes H.264/HEVC.
+# A separate layer, so the package layer above stays cached when this changes.
+RUN dnf install -y --setopt=install_weak_deps=False \
+        "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
+    && dnf install -y --setopt=install_weak_deps=False libheif-freeworld \
+    && dnf swap -y --setopt=install_weak_deps=False ffmpeg-free ffmpeg --allowerasing \
+    && dnf clean all
+
+# UID 1000 so that rootless Podman's --userns=keep-id maps it onto the host user:
+# files written in the workspace stay owned by them, and the host's Wayland and
+# D-Bus sockets (mode 0700 under /run/user/1000) accept the connection.
+#
+# The directories that named volumes are mounted over are created here so the
+# volumes start out owned by vscode rather than root. Likewise /run/user/1000:
+# the host's sockets are bind-mounted into it at their host paths, and without
+# this Podman would create it root-owned and 0755, which GLib warns about.
+RUN useradd -m -u 1000 -s /bin/bash vscode \
+    && echo 'vscode ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/vscode \
+    && install -d -m 0700 -o vscode -g vscode /run/user/1000 \
+    && mkdir -p /home/vscode/.config/gh /home/vscode/.config/glib-2.0 \
+        /home/vscode/.cargo/registry /home/vscode/.cargo/git \
+        /home/vscode/.cache/cargo-target /home/vscode/.local/share \
+    && chown -R vscode:vscode /home/vscode/.config /home/vscode/.cargo \
+        /home/vscode/.cache /home/vscode/.local \
+    && install -d -o vscode -g vscode /usr/local/rustup
+
+# Rust from rustup rather than Fedora's rust package, to get rust-analyzer and
+# rust-src from the same toolchain, and to pin the version.
+#
+# RUST_VERSION matches the rustc in CI's org.freedesktop.Sdk.Extension.rust-stable
+# (`/usr/lib/sdk/rust-stable/bin/rustc --version` in org.gnome.Sdk//50). A newer
+# stable brings new clippy lints, so `make lint` would fail here on code CI
+# accepts, or the other way round. Bump it when the extension updates.
+#
+# RUSTUP_HOME is outside $HOME on purpose: the toolchain belongs to the image.
+# In a volume, it would survive rebuilds and hide whatever toolchain a rebuilt
+# image installs. CARGO_HOME stays at ~/.cargo so that only its registry/ and
+# git/ download caches go in volumes.
+#
+# CARGO_TARGET_DIR is a volume (see devcontainer.json), so the build cache
+# survives rebuilds and stays out of the checkout's target/, which SDK builds
+# from the host or a toolbox still use.
+#
+# MOMENTS_DEVCONTAINER switches the Makefile's cargo targets from the Flatpak
+# SDK to the native toolchain, and scripts/sdk-cargo.sh to plain cargo.
+ARG RUST_VERSION=1.98.0
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_TARGET_DIR=/home/vscode/.cache/cargo-target \
+    PATH=/home/vscode/.cargo/bin:$PATH \
+    MOMENTS_DEVCONTAINER=1
+USER vscode
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --no-modify-path --profile minimal --default-toolchain $RUST_VERSION \
+            --component rustfmt,clippy,rust-analyzer,rust-src \
+    && rustc --version && cargo --version
+
+# The keyfile backend keeps GSettings writes in ~/.config/glib-2.0/settings
+# inside the container (a volume, so they survive rebuilds). With dconf, the
+# app would write into the host user's dconf database over the shared session
+# bus.
+ENV GSETTINGS_BACKEND=keyfile
+
+WORKDIR /home/vscode

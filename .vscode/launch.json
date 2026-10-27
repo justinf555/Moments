@@ -2,6 +2,26 @@
   "version": "0.2.0",
   "configurations": [
     {
+      // Dev container only (.devcontainer/). `make native-build` installs into
+      // _install/; the env matches NATIVE_ENV in the Makefile, keep them in step.
+      // Run without debugging (Ctrl+F5) uses the same configuration.
+      "name": "Debug Moments (native, dev container)",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/_install/bin/moments",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "XDG_DATA_DIRS": "${workspaceFolder}/_install/share:/usr/local/share:/usr/share",
+        "GDK_DEBUG": "no-portals",
+        "RUST_LOG": "moments=debug"
+      },
+      "sourceLanguages": ["rust"],
+      // Rootless Podman's seccomp filter blocks the personality() call lldb uses
+      // to turn ASLR off, so it warns on every launch; keep ASLR on instead.
+      "initCommands": ["settings set target.disable-aslr false"],
+      "preLaunchTask": "native-build"
+    },
+    {
       "name": "Debug Moments (Flatpak dev build)",
       "type": "cppdbg",
       "request": "launch",
