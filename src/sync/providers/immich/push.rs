@@ -256,8 +256,7 @@ impl PushManager {
                     warn!(id = %id, "no external_id for deleted asset, skipping push");
                     return Ok(());
                 };
-                let missing = self
-                    .client
+                self.client
                     .delete_with_body_if_exists(
                         "/assets",
                         &serde_json::json!({
@@ -266,9 +265,6 @@ impl PushManager {
                         }),
                     )
                     .await?;
-                if missing {
-                    debug!(id = %id, external_id = %external_id, "asset already gone on server (404); treating delete as done");
-                }
                 Ok(())
             }
 
@@ -300,13 +296,9 @@ impl PushManager {
                     warn!(id = %id, "no external_id for deleted album, skipping push");
                     return Ok(());
                 };
-                let missing = self
-                    .client
+                self.client
                     .delete_no_content_if_exists(&format!("/albums/{external_id}"))
                     .await?;
-                if missing {
-                    debug!(id = %id, external_id = %external_id, "album already gone on server (404); treating delete as done");
-                }
                 Ok(())
             }
 
@@ -339,7 +331,8 @@ impl PushManager {
                     )
                     .await?;
                 if missing {
-                    debug!(album_id = %album_id, external_id = %external_id, "album already gone on server (404); treating membership removal as done");
+                    // The album itself is gone server-side; nothing to heartbeat.
+                    return Ok(());
                 }
                 self.bump_album_heartbeat(album_id.as_str()).await
             }
@@ -1088,6 +1081,60 @@ mod tests {
         pm.push_entry(&album_delete_entry())
             .await
             .expect("404 on album delete means already gone");
+    }
+
+    #[tokio::test]
+    async fn push_asset_delete_treats_404_as_success() {
+        let (_dir, db) = setup_push_db().await;
+        let url = serve_status("404 Not Found").await;
+        let pm = make_push_manager_at(db, &url).await;
+        let entry = OutboxEntry {
+            id: 1,
+            entity_type: "asset".into(),
+            entity_id: "local-asset".into(),
+            action: "delete".into(),
+            payload: Some(r#"{"external_id":"ext-asset"}"#.into()),
+            attempts: 0,
+        };
+        pm.push_entry(&entry)
+            .await
+            .expect("404 on asset delete means already gone");
+    }
+
+    #[tokio::test]
+    async fn push_album_media_removed_404_succeeds_and_skips_heartbeat() {
+        let (_dir, db) = setup_push_db().await;
+        let now = chrono::Utc::now().timestamp();
+        sqlx::query(
+            "INSERT INTO albums (id, name, created_at, updated_at, external_id) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind("local-album")
+        .bind("Gone")
+        .bind(now)
+        .bind(now)
+        .bind("ext-album")
+        .execute(db.pool())
+        .await
+        .unwrap();
+        let url = serve_status("404 Not Found").await;
+        let pm = make_push_manager_at(db.clone(), &url).await;
+        let entry = OutboxEntry {
+            id: 1,
+            entity_type: "album".into(),
+            entity_id: "local-album".into(),
+            action: "remove_media".into(),
+            payload: Some(r#"{"media_ids":[]}"#.into()),
+            attempts: 0,
+        };
+        pm.push_entry(&entry)
+            .await
+            .expect("404 on membership removal means album already gone");
+        let (seen,): (i64,) =
+            sqlx::query_as("SELECT last_seen_at FROM albums WHERE id = 'local-album'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(seen, 0, "heartbeat must be skipped for a gone album");
     }
 
     #[tokio::test]

@@ -242,6 +242,7 @@ impl ImmichClient {
         })?;
         let status = resp.status();
         if status == reqwest::StatusCode::NOT_FOUND {
+            debug!("{method} {path} returned 404; resource already gone, treating as done");
             return Ok(true);
         }
         if !status.is_success() {
