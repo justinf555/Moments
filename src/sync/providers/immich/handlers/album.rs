@@ -104,7 +104,10 @@ impl SyncEntityHandler for AlbumDeleteHandler {
             }
         };
 
-        ctx.library.albums().delete_album(&local_id).await?;
+        ctx.library
+            .albums()
+            .delete_album_from_sync(&local_id)
+            .await?;
         Ok(HandlerResult {
             audit_action: "delete",
             counter: CounterKind::Deletes,
