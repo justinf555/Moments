@@ -87,14 +87,28 @@ impl MomentsApplication {
                         Arc::new(crate::sync::outbox::NoOpRecorder)
                     };
 
+                // Originals in use (viewer, export), shared by the media
+                // client and the Immich cache so eviction skips them.
+                let original_pins = Arc::new(crate::library::resolver::OriginalPins::default());
+                let settings = app.settings();
+                let cache_limit = super::originals_cache::limit_from_settings(&settings);
+
+                // Keep the concrete Immich resolver to enable eviction and
+                // follow the limit setting once the library is open.
+                let cached_resolver = immich_client.as_ref().map(|client| {
+                    Arc::new(
+                        crate::sync::providers::immich::resolver::CachedResolver::new(
+                            Arc::new(client.clone()),
+                            originals_dir.clone(),
+                            Arc::clone(&cache_limit),
+                            Arc::clone(&original_pins),
+                        ),
+                    )
+                });
+
                 let resolver: Arc<dyn crate::library::resolver::OriginalResolver> =
-                    if let Some(ref client) = immich_client {
-                        Arc::new(
-                            crate::sync::providers::immich::resolver::CachedResolver::new(
-                                Arc::new(client.clone()),
-                                originals_dir.clone(),
-                            ),
-                        )
+                    if let Some(ref cached) = cached_resolver {
+                        Arc::clone(cached) as _
                     } else {
                         Arc::new(crate::library::resolver::LocalResolver::new(
                             originals_dir.clone(),
@@ -173,14 +187,27 @@ impl MomentsApplication {
                         {
                             let media_client_v2 = crate::client::MediaClientV2::new();
                             media_client_v2.configure(Arc::clone(&library), tokio.clone());
+                            media_client_v2.set_original_pins(Arc::clone(&original_pins));
                             *app.imp().media_client_v2.borrow_mut() = Some(media_client_v2);
+                        }
+
+                        // Immich originals cache: enable eviction, trim to
+                        // the limit once now, and follow the setting.
+                        if let Some(ref cached) = cached_resolver {
+                            super::originals_cache::start(
+                                &settings,
+                                cached,
+                                &library,
+                                db_for_sync.clone(),
+                                Arc::clone(&cache_limit),
+                                &tokio,
+                            );
                         }
 
                         // Wire the shell: builds sidebar, registers views,
                         // and switches to the content page. Components react
                         // to mutations via per-service event channels and
                         // GObject signals on the client singletons.
-                        let settings = app.settings();
                         window.setup(settings.clone());
 
                         // Start periodic trash purge task.

@@ -75,6 +75,8 @@ pub fn build_viewer_menu_popover(
 
     // Hide unimplemented menu items for v0.3.0.
     // See: #534 (Share), #535 (Export), #536 (Wallpaper), #537 (Show in Files)
+    // TODO(#535): hold an OriginalPin (see library/resolver.rs OriginalPins) while
+    // exporting, or the cached original can be evicted mid-copy.
     share.set_visible(false);
     export_original.set_visible(false);
     if let Some(ref btn) = set_wallpaper {
