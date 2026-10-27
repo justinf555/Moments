@@ -46,7 +46,7 @@ toml = "0.8"
 # XMP read-back robustness — embedded edits in rendered JPEGs need to
 # survive Immich's media pipeline rewriting attributes/whitespace.
 # Encode is still hand-rolled for deterministic output.
-quick-xml = "0.41"
+quick-xml = "0.42"
 
 # Image processing
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "tiff"] }
