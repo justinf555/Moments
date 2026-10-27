@@ -4,6 +4,8 @@
 //! Queries used only by Immich sync: pull upserts, external-id lookups
 //! and the `last_seen_at` heartbeat.
 
+use sqlx::SqliteConnection;
+
 use super::EditingRepository;
 use crate::library::error::LibraryError;
 use crate::library::media::MediaId;
@@ -31,17 +33,18 @@ impl EditingRepository {
     }
 
     /// Stamp (or clear, with `None`) the rendered sibling pointer on
-    /// an existing edit row. Called by the Phase C save flow once the
-    /// rendered media row has been inserted, and by revert to clear.
-    pub async fn set_server_rendered_asset_id(
+    /// an existing edit row, on the caller's transaction. Called by the
+    /// Phase C save flow once the rendered media row has been inserted.
+    pub async fn set_server_rendered_asset_id_in_tx(
         &self,
+        conn: &mut SqliteConnection,
         id: &MediaId,
         rendered: Option<&MediaId>,
     ) -> Result<(), LibraryError> {
         sqlx::query("UPDATE edits SET server_rendered_asset_id = ? WHERE media_id = ?")
             .bind(rendered.map(|r| r.as_str()))
             .bind(id.as_str())
-            .execute(self.db.pool())
+            .execute(&mut *conn)
             .await
             .map_err(LibraryError::Db)?;
         Ok(())

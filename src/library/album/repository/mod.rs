@@ -3,6 +3,8 @@
 
 use std::collections::HashMap;
 
+use sqlx::SqliteConnection;
+
 use super::model::{Album, AlbumId};
 use crate::library::db::{id_placeholders, Database};
 use crate::library::error::LibraryError;
@@ -62,7 +64,20 @@ impl AlbumRepository {
     }
 
     /// Create a new album with the given name. Returns the new album's ID.
+    #[cfg(test)]
     pub async fn create(&self, name: &str) -> Result<AlbumId, LibraryError> {
+        let mut tx = self.db.begin().await?;
+        let id = self.create_in_tx(&mut tx, name).await?;
+        tx.commit().await.map_err(LibraryError::Db)?;
+        Ok(id)
+    }
+
+    /// [`Self::create`] on the caller's transaction.
+    pub async fn create_in_tx(
+        &self,
+        conn: &mut SqliteConnection,
+        name: &str,
+    ) -> Result<AlbumId, LibraryError> {
         let id = AlbumId::generate();
         let now = chrono::Utc::now().timestamp();
         sqlx::query("INSERT INTO albums (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)")
@@ -70,20 +85,33 @@ impl AlbumRepository {
             .bind(name)
             .bind(now)
             .bind(now)
-            .execute(self.db.pool())
+            .execute(&mut *conn)
             .await
             .map_err(LibraryError::Db)?;
         Ok(id)
     }
 
     /// Rename an existing album.
+    #[cfg(test)]
     pub async fn rename(&self, id: &AlbumId, name: &str) -> Result<(), LibraryError> {
+        let mut tx = self.db.begin().await?;
+        self.rename_in_tx(&mut tx, id, name).await?;
+        tx.commit().await.map_err(LibraryError::Db)
+    }
+
+    /// [`Self::rename`] on the caller's transaction.
+    pub async fn rename_in_tx(
+        &self,
+        conn: &mut SqliteConnection,
+        id: &AlbumId,
+        name: &str,
+    ) -> Result<(), LibraryError> {
         let now = chrono::Utc::now().timestamp();
         sqlx::query("UPDATE albums SET name = ?, updated_at = ? WHERE id = ?")
             .bind(name)
             .bind(now)
             .bind(id.as_str())
-            .execute(self.db.pool())
+            .execute(&mut *conn)
             .await
             .map_err(LibraryError::Db)?;
         Ok(())
@@ -100,12 +128,16 @@ impl AlbumRepository {
         Ok(())
     }
 
-    /// Look up the external_id for an album.
-    pub async fn external_id(&self, id: &AlbumId) -> Result<Option<String>, LibraryError> {
+    /// Look up the external_id for an album, on the caller's transaction.
+    pub async fn external_id_in_tx(
+        &self,
+        conn: &mut SqliteConnection,
+        id: &AlbumId,
+    ) -> Result<Option<String>, LibraryError> {
         let row: Option<(Option<String>,)> =
             sqlx::query_as("SELECT external_id FROM albums WHERE id = ?")
                 .bind(id.as_str())
-                .fetch_optional(self.db.pool())
+                .fetch_optional(&mut *conn)
                 .await
                 .map_err(LibraryError::Db)?;
         Ok(row.and_then(|(eid,)| eid))
@@ -113,24 +145,46 @@ impl AlbumRepository {
 
     /// Delete an album and all its media associations.
     pub async fn delete(&self, id: &AlbumId) -> Result<(), LibraryError> {
-        let mut tx = self.db.pool().begin().await.map_err(LibraryError::Db)?;
+        let mut tx = self.db.begin().await?;
+        self.delete_in_tx(&mut tx, id).await?;
+        tx.commit().await.map_err(LibraryError::Db)
+    }
+
+    /// [`Self::delete`] on the caller's transaction.
+    pub async fn delete_in_tx(
+        &self,
+        conn: &mut SqliteConnection,
+        id: &AlbumId,
+    ) -> Result<(), LibraryError> {
         sqlx::query("DELETE FROM album_media WHERE album_id = ?")
             .bind(id.as_str())
-            .execute(&mut *tx)
+            .execute(&mut *conn)
             .await
             .map_err(LibraryError::Db)?;
         sqlx::query("DELETE FROM albums WHERE id = ?")
             .bind(id.as_str())
-            .execute(&mut *tx)
+            .execute(&mut *conn)
             .await
             .map_err(LibraryError::Db)?;
-        tx.commit().await.map_err(LibraryError::Db)?;
         Ok(())
     }
 
     /// Add media items to an album. Duplicates are silently ignored.
+    #[cfg(test)]
     pub async fn add_media(
         &self,
+        album_id: &AlbumId,
+        media_ids: &[MediaId],
+    ) -> Result<(), LibraryError> {
+        let mut tx = self.db.begin().await?;
+        self.add_media_in_tx(&mut tx, album_id, media_ids).await?;
+        tx.commit().await.map_err(LibraryError::Db)
+    }
+
+    /// [`Self::add_media`] on the caller's transaction.
+    pub async fn add_media_in_tx(
+        &self,
+        conn: &mut SqliteConnection,
         album_id: &AlbumId,
         media_ids: &[MediaId],
     ) -> Result<(), LibraryError> {
@@ -150,23 +204,34 @@ impl AlbumRepository {
                 .bind(media_id.as_str())
                 .bind(now);
         }
-        query
-            .execute(self.db.pool())
-            .await
-            .map_err(LibraryError::Db)?;
+        query.execute(&mut *conn).await.map_err(LibraryError::Db)?;
 
         sqlx::query("UPDATE albums SET updated_at = ? WHERE id = ?")
             .bind(now)
             .bind(album_id.as_str())
-            .execute(self.db.pool())
+            .execute(&mut *conn)
             .await
             .map_err(LibraryError::Db)?;
         Ok(())
     }
 
     /// Remove media items from an album.
+    #[cfg(test)]
     pub async fn remove_media(
         &self,
+        album_id: &AlbumId,
+        media_ids: &[MediaId],
+    ) -> Result<(), LibraryError> {
+        let mut tx = self.db.begin().await?;
+        self.remove_media_in_tx(&mut tx, album_id, media_ids)
+            .await?;
+        tx.commit().await.map_err(LibraryError::Db)
+    }
+
+    /// [`Self::remove_media`] on the caller's transaction.
+    pub async fn remove_media_in_tx(
+        &self,
+        conn: &mut SqliteConnection,
         album_id: &AlbumId,
         media_ids: &[MediaId],
     ) -> Result<(), LibraryError> {
@@ -181,15 +246,12 @@ impl AlbumRepository {
         for media_id in media_ids {
             query = query.bind(media_id.as_str());
         }
-        query
-            .execute(self.db.pool())
-            .await
-            .map_err(LibraryError::Db)?;
+        query.execute(&mut *conn).await.map_err(LibraryError::Db)?;
         let now = chrono::Utc::now().timestamp();
         sqlx::query("UPDATE albums SET updated_at = ? WHERE id = ?")
             .bind(now)
             .bind(album_id.as_str())
-            .execute(self.db.pool())
+            .execute(&mut *conn)
             .await
             .map_err(LibraryError::Db)?;
         Ok(())

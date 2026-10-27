@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
-use tracing::warn;
 
 use super::event::AlbumEvent;
 use super::model::{Album, AlbumId};
@@ -28,6 +27,7 @@ mod sync;
 /// [`subscribe`]: AlbumService::subscribe
 #[derive(Clone)]
 pub struct AlbumService {
+    db: Database,
     repo: AlbumRepository,
     recorder: Arc<dyn MutationRecorder>,
     events: EventEmitter<AlbumEvent>,
@@ -36,7 +36,8 @@ pub struct AlbumService {
 impl AlbumService {
     pub fn new(db: Database, recorder: Arc<dyn MutationRecorder>) -> Self {
         Self {
-            repo: AlbumRepository::new(db),
+            repo: AlbumRepository::new(db.clone()),
+            db,
             recorder,
             events: EventEmitter::new(),
         }
@@ -80,17 +81,18 @@ impl AlbumService {
     }
 
     pub async fn create_album(&self, name: &str) -> Result<AlbumId, LibraryError> {
-        let id = self.repo.create(name).await?;
-        if let Err(e) = self
-            .recorder
-            .record(&Mutation::AlbumCreated {
-                id: id.clone(),
-                name: name.to_string(),
-            })
-            .await
-        {
-            warn!(error = %e, "failed to record AlbumCreated mutation");
-        }
+        let mut tx = self.db.begin().await?;
+        let id = self.repo.create_in_tx(&mut tx, name).await?;
+        self.recorder
+            .record(
+                &mut tx,
+                &Mutation::AlbumCreated {
+                    id: id.clone(),
+                    name: name.to_string(),
+                },
+            )
+            .await?;
+        tx.commit().await?;
         Ok(id)
     }
 
@@ -99,34 +101,38 @@ impl AlbumService {
     }
 
     pub async fn rename_album(&self, id: &AlbumId, name: &str) -> Result<(), LibraryError> {
-        self.repo.rename(id, name).await?;
-        if let Err(e) = self
-            .recorder
-            .record(&Mutation::AlbumRenamed {
-                id: id.clone(),
-                name: name.to_string(),
-            })
-            .await
-        {
-            warn!(error = %e, "failed to record AlbumRenamed mutation");
-        }
+        let mut tx = self.db.begin().await?;
+        self.repo.rename_in_tx(&mut tx, id, name).await?;
+        self.recorder
+            .record(
+                &mut tx,
+                &Mutation::AlbumRenamed {
+                    id: id.clone(),
+                    name: name.to_string(),
+                },
+            )
+            .await?;
+        tx.commit().await?;
         Ok(())
     }
 
     pub async fn delete_album(&self, id: &AlbumId) -> Result<(), LibraryError> {
-        let external_id = self.repo.external_id(id).await.unwrap_or(None);
-        self.repo.delete(id).await?;
+        let mut tx = self.db.begin().await?;
+        // Read the external_id inside the transaction, before the row
+        // goes: the push handler needs it to delete the server album.
+        let external_id = self.repo.external_id_in_tx(&mut tx, id).await?;
+        self.repo.delete_in_tx(&mut tx, id).await?;
+        self.recorder
+            .record(
+                &mut tx,
+                &Mutation::AlbumDeleted {
+                    id: id.clone(),
+                    external_id,
+                },
+            )
+            .await?;
+        tx.commit().await?;
         self.emit(AlbumEvent::AlbumRemoved(id.clone()));
-        if let Err(e) = self
-            .recorder
-            .record(&Mutation::AlbumDeleted {
-                id: id.clone(),
-                external_id,
-            })
-            .await
-        {
-            warn!(error = %e, "failed to record AlbumDeleted mutation");
-        }
         Ok(())
     }
 
@@ -135,22 +141,25 @@ impl AlbumService {
         album_id: &AlbumId,
         media_ids: &[MediaId],
     ) -> Result<(), LibraryError> {
-        self.repo.add_media(album_id, media_ids).await?;
+        let mut tx = self.db.begin().await?;
+        self.repo
+            .add_media_in_tx(&mut tx, album_id, media_ids)
+            .await?;
+        self.recorder
+            .record(
+                &mut tx,
+                &Mutation::AlbumMediaAdded {
+                    album_id: album_id.clone(),
+                    media_ids: media_ids.to_vec(),
+                },
+            )
+            .await?;
+        tx.commit().await?;
         // Emit both for now: AlbumUpdated preserves the existing
         // AlbumClientV2 refresh path; AlbumMediaChanged is the targeted
         // signal for album-filtered media grids (consumed in a later PR).
         self.emit(AlbumEvent::AlbumUpdated(album_id.clone()));
         self.emit(AlbumEvent::AlbumMediaChanged(album_id.clone()));
-        if let Err(e) = self
-            .recorder
-            .record(&Mutation::AlbumMediaAdded {
-                album_id: album_id.clone(),
-                media_ids: media_ids.to_vec(),
-            })
-            .await
-        {
-            warn!(error = %e, "failed to record AlbumMediaAdded mutation");
-        }
         Ok(())
     }
 
@@ -159,19 +168,22 @@ impl AlbumService {
         album_id: &AlbumId,
         media_ids: &[MediaId],
     ) -> Result<(), LibraryError> {
-        self.repo.remove_media(album_id, media_ids).await?;
+        let mut tx = self.db.begin().await?;
+        self.repo
+            .remove_media_in_tx(&mut tx, album_id, media_ids)
+            .await?;
+        self.recorder
+            .record(
+                &mut tx,
+                &Mutation::AlbumMediaRemoved {
+                    album_id: album_id.clone(),
+                    media_ids: media_ids.to_vec(),
+                },
+            )
+            .await?;
+        tx.commit().await?;
         self.emit(AlbumEvent::AlbumUpdated(album_id.clone()));
         self.emit(AlbumEvent::AlbumMediaChanged(album_id.clone()));
-        if let Err(e) = self
-            .recorder
-            .record(&Mutation::AlbumMediaRemoved {
-                album_id: album_id.clone(),
-                media_ids: media_ids.to_vec(),
-            })
-            .await
-        {
-            warn!(error = %e, "failed to record AlbumMediaRemoved mutation");
-        }
         Ok(())
     }
 
@@ -202,5 +214,82 @@ mod tests {
         let db = open_test_db(dir.path()).await;
         let recorder: Arc<dyn MutationRecorder> = Arc::new(NoOpRecorder);
         (dir, AlbumService::new(db, recorder))
+    }
+
+    // ── Transactional outbox (#655) ─────────────────────────────────
+
+    use crate::library::media::repository::MediaRepository;
+    use crate::library::recorder::tests::{outbox_count, FailingRecorder};
+
+    async fn drain(rx: &mut mpsc::UnboundedReceiver<AlbumEvent>) -> Vec<AlbumEvent> {
+        let mut events = Vec::new();
+        while let Ok(Some(e)) =
+            tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv()).await
+        {
+            events.push(e);
+        }
+        events
+    }
+
+    #[tokio::test]
+    async fn recorder_failure_rolls_back_album_writes() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let media_id = MediaId::new("m1".to_string());
+        MediaRepository::new(db.clone())
+            .insert(&crate::library::db::test_helpers::test_record(
+                media_id.clone(),
+            ))
+            .await
+            .unwrap();
+        // An existing album, created through a working service.
+        let ok = AlbumService::new(db.clone(), Arc::new(NoOpRecorder));
+        let album = ok.create_album("Before").await.unwrap();
+
+        let svc = AlbumService::new(db.clone(), Arc::new(FailingRecorder::always(db.clone())));
+        let mut rx = svc.subscribe();
+
+        assert!(svc.create_album("Ghost").await.is_err());
+        assert!(svc.rename_album(&album, "After").await.is_err());
+        assert!(svc
+            .add_to_album(&album, std::slice::from_ref(&media_id))
+            .await
+            .is_err());
+        assert!(svc.delete_album(&album).await.is_err());
+
+        let albums = svc.list_albums().await.unwrap();
+        assert_eq!(albums.len(), 1, "create must roll back, delete too");
+        assert_eq!(albums[0].name, "Before", "rename must roll back");
+        assert_eq!(albums[0].media_count, 0, "add-media must roll back");
+        assert_eq!(outbox_count(&db).await, 0);
+        assert!(drain(&mut rx).await.is_empty(), "no event for a rollback");
+    }
+
+    #[tokio::test]
+    async fn recorder_failure_rolls_back_remove_from_album() {
+        let dir = tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let media_id = MediaId::new("m1".to_string());
+        MediaRepository::new(db.clone())
+            .insert(&crate::library::db::test_helpers::test_record(
+                media_id.clone(),
+            ))
+            .await
+            .unwrap();
+        let ok = AlbumService::new(db.clone(), Arc::new(NoOpRecorder));
+        let album = ok.create_album("Keep").await.unwrap();
+        ok.add_to_album(&album, std::slice::from_ref(&media_id))
+            .await
+            .unwrap();
+
+        let svc = AlbumService::new(db.clone(), Arc::new(FailingRecorder::always(db.clone())));
+        assert!(svc
+            .remove_from_album(&album, std::slice::from_ref(&media_id))
+            .await
+            .is_err());
+
+        let got = svc.get_album(&album).await.unwrap().unwrap();
+        assert_eq!(got.media_count, 1);
+        assert_eq!(outbox_count(&db).await, 0);
     }
 }

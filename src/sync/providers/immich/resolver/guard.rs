@@ -71,7 +71,7 @@ mod tests {
     use crate::library::mutation::Mutation;
     use crate::library::resolver::LocalResolver;
 
-    async fn open_library(dir: &std::path::Path) -> (Arc<Library>, OutboxRepository) {
+    async fn open_library(dir: &std::path::Path) -> (Arc<Library>, OutboxRepository, Database) {
         let bundle = Bundle::create(
             &dir.join("Test.library"),
             &LibraryConfig::Local {
@@ -90,7 +90,7 @@ mod tests {
         )
         .await
         .unwrap();
-        (Arc::new(library), OutboxRepository::new(db))
+        (Arc::new(library), OutboxRepository::new(db.clone()), db)
     }
 
     /// A media row at its own sharded path (`relative_path` is unique).
@@ -103,7 +103,7 @@ mod tests {
     #[tokio::test]
     async fn only_uploaded_assets_without_pending_work_are_evictable() {
         let dir = tempfile::tempdir().unwrap();
-        let (library, outbox) = open_library(dir.path()).await;
+        let (library, outbox, db) = open_library(dir.path()).await;
         let guard = LibraryEvictionGuard::new(Arc::downgrade(&library), outbox.clone());
 
         // Synced from Immich: evictable.
@@ -131,7 +131,9 @@ mod tests {
             ids: vec![busy.clone()],
         }
         .to_outbox_rows();
-        outbox.insert(&rows[0]).await.unwrap();
+        let mut tx = db.begin().await.unwrap();
+        outbox.insert_in_tx(&mut tx, &rows[0]).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(!guard.may_evict(&busy).await);
 
         // No media row at all (orphan or mid-import copy): keep.
@@ -145,7 +147,7 @@ mod tests {
     #[tokio::test]
     async fn dropped_library_blocks_eviction() {
         let dir = tempfile::tempdir().unwrap();
-        let (library, outbox) = open_library(dir.path()).await;
+        let (library, outbox, _db) = open_library(dir.path()).await;
         let guard = LibraryEvictionGuard::new(Arc::downgrade(&library), outbox);
         drop(library);
         assert!(

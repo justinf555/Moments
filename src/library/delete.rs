@@ -36,7 +36,11 @@ impl Library {
     }
 
     /// Best-effort removal of original files and thumbnails from disk.
-    async fn cleanup_files(&self, ids: &[MediaId], original_paths: &[(MediaId, PathBuf)]) {
+    pub(super) async fn cleanup_files(
+        &self,
+        ids: &[MediaId],
+        original_paths: &[(MediaId, PathBuf)],
+    ) {
         for (id, path) in original_paths {
             if let Err(e) = tokio::fs::remove_file(path).await {
                 debug!(id = %id, path = %path.display(), "original not on disk or already removed: {e}");

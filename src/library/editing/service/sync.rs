@@ -5,6 +5,7 @@
 //! recording), external-id lookups and the `last_seen_at` heartbeat.
 
 use super::EditingService;
+use crate::library::db::Tx;
 use crate::library::editing::model::EditState;
 use crate::library::error::LibraryError;
 use crate::library::media::MediaId;
@@ -13,7 +14,8 @@ impl EditingService {
     // ── Phase C orchestration helpers ─────────────────────────────────
     //
     // These bypass the recorder because the caller — `Library::save_pixel_edit` /
-    // `Library::revert_edit` — emits its own mutation sequence
+    // `Library::revert_edit` — runs them on its own transaction and
+    // records its own mutation sequence
     // (StackCreated + AssetTaggedMomentsEdit, or AssetEditsCleared +
     // the rendered-asset cleanup). Recording AssetEditsApplied here as
     // well would race those.
@@ -25,23 +27,36 @@ impl EditingService {
         self.repo.server_rendered_asset_id(id).await
     }
 
-    pub async fn set_server_rendered_asset_id(
+    /// Stamp the rendered sibling pointer on the caller's transaction.
+    pub(crate) async fn set_server_rendered_asset_id_in_tx(
         &self,
+        tx: &mut Tx,
         id: &MediaId,
         rendered: Option<&MediaId>,
     ) -> Result<(), LibraryError> {
-        self.repo.set_server_rendered_asset_id(id, rendered).await
+        self.repo
+            .set_server_rendered_asset_id_in_tx(tx, id, rendered)
+            .await
     }
 
-    pub async fn upsert_edit_state_no_record(
+    /// Upsert the edit state on the caller's transaction, recording
+    /// nothing.
+    pub(crate) async fn upsert_edit_state_no_record_in_tx(
         &self,
+        tx: &mut Tx,
         id: &MediaId,
         state: &EditState,
     ) -> Result<(), LibraryError> {
-        self.repo.upsert_edit_state(id, state).await
+        self.repo.upsert_edit_state_in_tx(tx, id, state).await
     }
 
-    pub async fn delete_edit_state_no_record(&self, id: &MediaId) -> Result<(), LibraryError> {
-        self.repo.delete_edit_state(id).await
+    /// Delete the edit state on the caller's transaction, recording
+    /// nothing.
+    pub(crate) async fn delete_edit_state_no_record_in_tx(
+        &self,
+        tx: &mut Tx,
+        id: &MediaId,
+    ) -> Result<(), LibraryError> {
+        self.repo.delete_edit_state_in_tx(tx, id).await
     }
 }

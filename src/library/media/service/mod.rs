@@ -11,7 +11,7 @@ use super::event::MediaEvent;
 use super::model::{LibraryStats, MediaCursor, MediaFilter, MediaId, MediaItem, MediaRecord};
 use super::repository::MediaRepository;
 use crate::library::config::LocalStorageMode;
-use crate::library::db::Database;
+use crate::library::db::{Database, Tx};
 use crate::library::error::LibraryError;
 use crate::library::event_emitter::EventEmitter;
 use crate::library::mutation::Mutation;
@@ -32,6 +32,7 @@ mod sync;
 /// [`subscribe`]: MediaService::subscribe
 #[derive(Clone)]
 pub struct MediaService {
+    db: Database,
     repo: MediaRepository,
     originals_dir: PathBuf,
     mode: LocalStorageMode,
@@ -49,7 +50,8 @@ impl MediaService {
         resolver: Arc<dyn OriginalResolver>,
     ) -> Self {
         Self {
-            repo: MediaRepository::new(db),
+            repo: MediaRepository::new(db.clone()),
+            db,
             originals_dir,
             mode,
             recorder,
@@ -67,6 +69,17 @@ impl MediaService {
     /// Broadcast an event to every live subscriber.
     fn emit(&self, event: MediaEvent) {
         self.events.emit(event);
+    }
+
+    /// Broadcast the events an `_in_tx` method returned, once the
+    /// caller's transaction has committed.
+    ///
+    /// `_in_tx` methods never emit themselves: an event for a write that
+    /// is later rolled back would desync the client models (#655).
+    pub(crate) fn emit_committed(&self, events: Vec<MediaEvent>) {
+        for event in events {
+            self.emit(event);
+        }
     }
 
     /// Filesystem directory holding originals for the local library
@@ -160,25 +173,41 @@ impl MediaService {
         record: &MediaRecord,
         taken_at_offset_minutes: Option<i64>,
     ) -> Result<(), LibraryError> {
-        self.repo
-            .insert_with_taken_at_offset(record, taken_at_offset_minutes)
+        let mut tx = self.db.begin().await?;
+        let events = self
+            .insert_media_in_tx(&mut tx, record, taken_at_offset_minutes)
             .await?;
-        self.emit(MediaEvent::Added(vec![record.id.clone()]));
+        tx.commit().await?;
+        self.emit_committed(events);
+        Ok(())
+    }
+
+    /// Insert a media row and record `AssetImported` on the caller's
+    /// transaction. Returns the events to emit once it commits (see
+    /// [`Self::emit_committed`]).
+    pub(crate) async fn insert_media_in_tx(
+        &self,
+        tx: &mut Tx,
+        record: &MediaRecord,
+        taken_at_offset_minutes: Option<i64>,
+    ) -> Result<Vec<MediaEvent>, LibraryError> {
+        self.repo
+            .insert_in_tx(tx, record, taken_at_offset_minutes)
+            .await?;
         let file_path = match self.mode {
             LocalStorageMode::Managed => self.originals_dir.join(&record.relative_path),
             LocalStorageMode::Referenced => PathBuf::from(&record.relative_path),
         };
-        if let Err(e) = self
-            .recorder
-            .record(&Mutation::AssetImported {
-                id: record.id.clone(),
-                file_path,
-            })
-            .await
-        {
-            warn!(id = %record.id, error = %e, "failed to record AssetImported mutation");
-        }
-        Ok(())
+        self.recorder
+            .record(
+                tx,
+                &Mutation::AssetImported {
+                    id: record.id.clone(),
+                    file_path,
+                },
+            )
+            .await?;
+        Ok(vec![MediaEvent::Added(vec![record.id.clone()])])
     }
 
     pub async fn list_media(
@@ -191,64 +220,70 @@ impl MediaService {
     }
 
     pub async fn set_favorite(&self, ids: &[MediaId], favorite: bool) -> Result<(), LibraryError> {
-        self.repo.set_favorite(ids, favorite).await?;
+        let mut tx = self.db.begin().await?;
+        self.repo.set_favorite_in_tx(&mut tx, ids, favorite).await?;
+        self.recorder
+            .record(
+                &mut tx,
+                &Mutation::AssetFavorited {
+                    ids: ids.to_vec(),
+                    favorite,
+                },
+            )
+            .await?;
+        tx.commit().await?;
         self.emit(MediaEvent::Updated(ids.to_vec()));
-        if let Err(e) = self
-            .recorder
-            .record(&Mutation::AssetFavorited {
-                ids: ids.to_vec(),
-                favorite,
-            })
-            .await
-        {
-            warn!(error = %e, "failed to record AssetFavorited mutation");
-        }
         Ok(())
     }
 
     pub async fn trash(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
-        self.repo.trash(ids).await?;
+        let mut tx = self.db.begin().await?;
+        self.repo.trash_in_tx(&mut tx, ids).await?;
+        self.recorder
+            .record(&mut tx, &Mutation::AssetTrashed { ids: ids.to_vec() })
+            .await?;
+        tx.commit().await?;
         self.emit(MediaEvent::Updated(ids.to_vec()));
-        if let Err(e) = self
-            .recorder
-            .record(&Mutation::AssetTrashed { ids: ids.to_vec() })
-            .await
-        {
-            warn!(error = %e, "failed to record AssetTrashed mutation");
-        }
         Ok(())
     }
 
     pub async fn restore(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
-        self.repo.restore(ids).await?;
+        let mut tx = self.db.begin().await?;
+        self.repo.restore_in_tx(&mut tx, ids).await?;
+        self.recorder
+            .record(&mut tx, &Mutation::AssetRestored { ids: ids.to_vec() })
+            .await?;
+        tx.commit().await?;
         self.emit(MediaEvent::Updated(ids.to_vec()));
-        if let Err(e) = self
-            .recorder
-            .record(&Mutation::AssetRestored { ids: ids.to_vec() })
-            .await
-        {
-            warn!(error = %e, "failed to record AssetRestored mutation");
-        }
         Ok(())
     }
 
     pub async fn delete_permanently(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
-        // Capture external_ids before the DB delete removes the rows.
-        let ext_map = self.repo.external_ids(ids).await.unwrap_or_default();
+        let mut tx = self.db.begin().await?;
+        let events = self.delete_permanently_in_tx(&mut tx, ids).await?;
+        tx.commit().await?;
+        self.emit_committed(events);
+        Ok(())
+    }
+
+    /// Delete media rows and record `AssetDeleted` on the caller's
+    /// transaction. Returns the events to emit once it commits (see
+    /// [`Self::emit_committed`]). Files are not touched — see
+    /// [`crate::library::Library::delete_permanently`].
+    pub(crate) async fn delete_permanently_in_tx(
+        &self,
+        tx: &mut Tx,
+        ids: &[MediaId],
+    ) -> Result<Vec<MediaEvent>, LibraryError> {
+        // Capture external_ids before the delete removes the rows; the
+        // push handler needs them to delete the asset on the server.
+        let ext_map = self.repo.external_ids_in_tx(tx, ids).await?;
         // Issue #224: capture siblings whose stack_id will be SET NULL
         // by the FK cascade so we can emit `MediaEvent::Updated` for
         // them after the delete — otherwise the live grid stays
         // out of sync until restart.
-        let freed_siblings = self
-            .repo
-            .siblings_freed_by_deletion(ids)
-            .await
-            .unwrap_or_default();
-        self.repo.delete_permanently(ids).await?;
-        self.emit(MediaEvent::Removed(ids.to_vec()));
-        if !freed_siblings.is_empty() {
-            self.emit(MediaEvent::Updated(freed_siblings));
-        }
+        let freed_siblings = self.repo.siblings_freed_by_deletion_in_tx(tx, ids).await?;
+        self.repo.delete_permanently_in_tx(tx, ids).await?;
         let items: Vec<(MediaId, Option<String>)> = ids
             .iter()
             .map(|id| {
@@ -259,14 +294,14 @@ impl MediaService {
                 (id.clone(), ext)
             })
             .collect();
-        if let Err(e) = self
-            .recorder
-            .record(&Mutation::AssetDeleted { items })
-            .await
-        {
-            warn!(error = %e, "failed to record AssetDeleted mutation");
+        self.recorder
+            .record(tx, &Mutation::AssetDeleted { items })
+            .await?;
+        let mut events = vec![MediaEvent::Removed(ids.to_vec())];
+        if !freed_siblings.is_empty() {
+            events.push(MediaEvent::Updated(freed_siblings));
         }
-        Ok(())
+        Ok(events)
     }
 
     pub async fn expired_trash(&self, max_age_secs: i64) -> Result<Vec<MediaId>, LibraryError> {
@@ -394,5 +429,118 @@ mod tests {
             saw_updated_sibling,
             "expected Updated for sibling whose stack_id was cleared by cascade; got {events:?}"
         );
+    }
+
+    // ── Transactional outbox (#655) ─────────────────────────────────
+
+    use crate::library::recorder::tests::{outbox_count, FailingRecorder};
+
+    /// A service whose recorder writes its outbox rows and then fails,
+    /// and a pre-inserted row to mutate.
+    async fn failing_service() -> (tempfile::TempDir, MediaService, Database, MediaId) {
+        let dir = tempfile::tempdir().unwrap();
+        let originals = dir.path().join("originals");
+        std::fs::create_dir_all(&originals).unwrap();
+        let db = open_test_db(dir.path()).await;
+        let id = MediaId::new("victim".to_string());
+        MediaRepository::new(db.clone())
+            .insert(&record_with_taken_at(id.clone(), "a/victim.jpg", Some(1)))
+            .await
+            .unwrap();
+        let svc = MediaService::new(
+            db.clone(),
+            originals.clone(),
+            LocalStorageMode::Managed,
+            Arc::new(FailingRecorder::always(db.clone())),
+            Arc::new(LocalResolver::new(originals, LocalStorageMode::Managed)),
+        );
+        (dir, svc, db, id)
+    }
+
+    #[tokio::test]
+    async fn recorder_failure_rolls_back_trash_and_favorite() {
+        let (_dir, svc, db, id) = failing_service().await;
+        let mut rx = svc.subscribe();
+        let ids = std::slice::from_ref(&id);
+
+        assert!(svc.trash(ids).await.is_err());
+        assert!(svc.set_favorite(ids, true).await.is_err());
+
+        let item = svc.get_media_item(&id).await.unwrap().unwrap();
+        assert!(!item.is_trashed, "trash must roll back");
+        assert!(!item.is_favorite, "favourite must roll back");
+        assert_eq!(outbox_count(&db).await, 0);
+        assert!(drain(&mut rx).await.is_empty(), "no event for a rollback");
+    }
+
+    #[tokio::test]
+    async fn recorder_failure_rolls_back_restore() {
+        let (_dir, svc, db, id) = failing_service().await;
+        MediaRepository::new(db.clone())
+            .trash(std::slice::from_ref(&id))
+            .await
+            .unwrap();
+        let mut rx = svc.subscribe();
+
+        assert!(svc.restore(std::slice::from_ref(&id)).await.is_err());
+
+        let item = svc.get_media_item(&id).await.unwrap().unwrap();
+        assert!(item.is_trashed, "restore must roll back");
+        assert_eq!(outbox_count(&db).await, 0);
+        assert!(drain(&mut rx).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn recorder_failure_rolls_back_insert_and_delete() {
+        let (_dir, svc, db, id) = failing_service().await;
+        let mut rx = svc.subscribe();
+
+        let new_id = MediaId::new("fresh".to_string());
+        assert!(svc
+            .insert_media(&record_with_taken_at(
+                new_id.clone(),
+                "a/fresh.jpg",
+                Some(2)
+            ))
+            .await
+            .is_err());
+        assert!(svc.get_media_item(&new_id).await.unwrap().is_none());
+
+        assert!(svc
+            .delete_permanently(std::slice::from_ref(&id))
+            .await
+            .is_err());
+        assert!(svc.get_media_item(&id).await.unwrap().is_some());
+
+        assert_eq!(outbox_count(&db).await, 0);
+        assert!(drain(&mut rx).await.is_empty());
+    }
+
+    /// With a working outbox the write, its row and the event all land.
+    #[tokio::test]
+    async fn trash_commits_write_and_outbox_row_together() {
+        let dir = tempfile::tempdir().unwrap();
+        let originals = dir.path().join("originals");
+        let db = open_test_db(dir.path()).await;
+        let id = MediaId::new("ok".to_string());
+        MediaRepository::new(db.clone())
+            .insert(&record_with_taken_at(id.clone(), "a/ok.jpg", Some(1)))
+            .await
+            .unwrap();
+        let svc = MediaService::new(
+            db.clone(),
+            originals.clone(),
+            LocalStorageMode::Managed,
+            Arc::new(crate::sync::outbox::QueueWriterOutbox::new(db.clone())),
+            Arc::new(LocalResolver::new(originals, LocalStorageMode::Managed)),
+        );
+        let mut rx = svc.subscribe();
+
+        svc.trash(std::slice::from_ref(&id)).await.unwrap();
+
+        assert!(svc.get_media_item(&id).await.unwrap().unwrap().is_trashed);
+        assert_eq!(outbox_count(&db).await, 1);
+        let events = drain(&mut rx).await;
+        assert!(matches!(events.as_slice(), [MediaEvent::Updated(ids)] if ids == &[id]));
     }
 }

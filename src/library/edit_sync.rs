@@ -4,11 +4,33 @@
 //! Saving and reverting pixel edits for Immich: the rendered sibling
 //! asset, its XMP recovery block, and the stack/tag mutation sequence.
 //! See `docs/design-immich-edit-sync.md` (Phase C).
+//!
+//! Atomicity (#709): every database write of a save or a revert —
+//! including the outbox rows — runs in one transaction, and events are
+//! emitted only after it commits. The rendered file is written before
+//! the transaction and removed again if it fails; files of a replaced
+//! render are removed only after the commit. A leftover file with no row
+//! is harmless; a row with no file is not.
 
+use std::path::PathBuf;
+
+use tracing::warn;
+
+use super::db::Tx;
 use super::editing;
 use super::error::LibraryError;
-use super::media::MediaId;
+use super::media::{MediaEvent, MediaId, MediaRecord};
+use super::mutation::Mutation;
 use super::Library;
+
+/// Side effects of a committed save/revert transaction that must wait
+/// for the commit: events to emit and replaced render files to remove.
+#[derive(Default)]
+struct Committed {
+    events: Vec<MediaEvent>,
+    deleted_ids: Vec<MediaId>,
+    deleted_paths: Vec<(MediaId, PathBuf)>,
+}
 
 impl Library {
     /// Save a pixel-adjustment edit: persist the edit state, write the
@@ -27,14 +49,17 @@ impl Library {
     /// (no `external_id`) — Phase D recovery depends on that id being
     /// stable, and saving an edit before the original is on the
     /// server would lose recoverability.
+    ///
+    /// Atomic (#709): on error the library is left exactly as it was —
+    /// the previous render (if any) and its outbox state untouched, no
+    /// new row, no new outbox entry, and the new render file removed.
     pub async fn save_pixel_edit(
         &self,
         original_id: &MediaId,
         state: &editing::EditState,
         rendered_bytes: Vec<u8>,
     ) -> Result<(), LibraryError> {
-        use crate::library::media::{MediaRecord, MediaType};
-        use crate::library::mutation::Mutation;
+        use crate::library::media::MediaType;
         use crate::renderer::xmp;
 
         // Look up the original — we need its external_id and content
@@ -78,7 +103,8 @@ impl Library {
 
         // Allocate the rendered MediaId and write the file under the
         // standard sharded originals layout, creating the two-level
-        // shard directories as needed.
+        // shard directories as needed. The file goes first: if the
+        // transaction below fails we remove it again.
         let rendered_id = MediaId::generate();
         let relative_path = crate::library::media::sharded_original_relative(&rendered_id);
         let abs_path = self.media.originals_dir().join(&relative_path);
@@ -91,23 +117,6 @@ impl Library {
             .await
             .map_err(LibraryError::Io)?;
 
-        // If we're replacing an existing rendered sibling, enqueue its
-        // revert sequence BEFORE the new upload so the order in the
-        // outbox is sensible: untag → remove from stack → delete →
-        // (then the new) import → stack → tag.
-        //
-        // `delete_permanently` records `AssetDeleted` (matching design
-        // §7.2 step 6c). The `_from_sync` variant skips the recorder,
-        // which would orphan the prior rendered asset on Immich
-        // forever — see Phase C code review item #1.
-        if let Some(prev_rendered) = self.editing.server_rendered_asset_id(original_id).await? {
-            self.enqueue_rendered_cleanup(&prev_rendered).await?;
-            self.delete_permanently(&[prev_rendered]).await?;
-        }
-
-        // Insert the rendered media row. `insert_media` records the
-        // AssetImported mutation; the push manager picks it up next
-        // drain cycle, uploads the file, and stamps external_id.
         let rendered_filename = format!(
             "{}-edit.jpg",
             std::path::Path::new(&original.original_filename)
@@ -135,30 +144,110 @@ impl Library {
             trashed_at: None,
             is_moments_render: true,
         };
-        self.media.insert_media(&rendered_record).await?;
+
+        let mut tx = self.db.begin().await?;
+        let result = self
+            .save_pixel_edit_in_tx(&mut tx, original_id, state, &rendered_record)
+            .await;
+        let committed = match result {
+            Ok(committed) => tx
+                .commit()
+                .await
+                .map(|()| committed)
+                .map_err(LibraryError::Db),
+            Err(e) => {
+                if let Err(rb) = tx.rollback().await {
+                    warn!(error = %rb, "save_pixel_edit: rollback failed");
+                }
+                Err(e)
+            }
+        };
+        match committed {
+            Ok(committed) => {
+                self.finish_committed(committed).await;
+                Ok(())
+            }
+            Err(e) => {
+                // No row points at the new render — remove its file.
+                if let Err(rm) = tokio::fs::remove_file(&abs_path).await {
+                    warn!(
+                        path = %abs_path.display(),
+                        error = %rm,
+                        "save_pixel_edit: could not remove render after failed save"
+                    );
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// The database half of [`Self::save_pixel_edit`] (steps 2–6), on
+    /// one transaction. Outbox order: prior-render cleanup → import →
+    /// stack → tag.
+    async fn save_pixel_edit_in_tx(
+        &self,
+        tx: &mut Tx,
+        original_id: &MediaId,
+        state: &editing::EditState,
+        rendered_record: &MediaRecord,
+    ) -> Result<Committed, LibraryError> {
+        let rendered_id = rendered_record.id.clone();
+        let mut committed = Committed::default();
+
+        // Lookups here and in the helpers (render pointer, stack id,
+        // file paths) read through the pool, not `tx`. That is safe:
+        // `BEGIN IMMEDIATE` holds the write lock, so committed state
+        // can't change under us, and each read happens before this
+        // transaction writes the row it reads.
+
+        // If we're replacing an existing rendered sibling, enqueue its
+        // revert sequence BEFORE the new upload so the order in the
+        // outbox is sensible: untag → remove from stack → delete →
+        // (then the new) import → stack → tag.
+        //
+        // `delete_permanently_in_tx` records `AssetDeleted` (matching
+        // design §7.2 step 6c). The `_no_record` sync path skips the
+        // recorder, which would orphan the prior rendered asset on
+        // Immich forever — see Phase C code review item #1.
+        if let Some(prev_rendered) = self.editing.server_rendered_asset_id(original_id).await? {
+            self.delete_rendered_in_tx(tx, &prev_rendered, &mut committed)
+                .await?;
+        }
+
+        // Insert the rendered media row and record AssetImported; the
+        // push manager picks it up next drain cycle, uploads the file,
+        // and stamps external_id.
+        committed.events.extend(
+            self.media
+                .insert_media_in_tx(tx, rendered_record, None)
+                .await?,
+        );
 
         // Persist the edit state and the rendered pointer.
         self.editing
-            .upsert_edit_state_no_record(original_id, state)
+            .upsert_edit_state_no_record_in_tx(tx, original_id, state)
             .await?;
         self.editing
-            .set_server_rendered_asset_id(original_id, Some(&rendered_id))
+            .set_server_rendered_asset_id_in_tx(tx, original_id, Some(&rendered_id))
             .await?;
 
         // Stack + tag mutations — these depend on the rendered asset
         // having a server-side external_id. The push handler retries
         // via the outbox backoff until AssetImported drains.
         self.recorder
-            .record(&Mutation::StackCreated {
-                rendered_asset_id: rendered_id.clone(),
-                original_asset_id: original_id.clone(),
-            })
+            .record(
+                tx,
+                &Mutation::StackCreated {
+                    rendered_asset_id: rendered_id.clone(),
+                    original_asset_id: original_id.clone(),
+                },
+            )
             .await?;
         self.recorder
-            .record(&Mutation::AssetTaggedMomentsEdit { id: rendered_id })
+            .record(tx, &Mutation::AssetTaggedMomentsEdit { id: rendered_id })
             .await?;
 
-        Ok(())
+        Ok(committed)
     }
 
     /// Revert any edit on `original_id`: clear local edit state, and
@@ -167,35 +256,92 @@ impl Library {
     ///
     /// Records `AssetEditsCleared` last so the geometric-only `/edits`
     /// state is also wiped (no-op if no such state was ever pushed).
+    ///
+    /// Atomic (#709): every write commits together; the rendered file
+    /// is removed only after the commit.
     pub async fn revert_edit(&self, original_id: &MediaId) -> Result<(), LibraryError> {
-        use crate::library::mutation::Mutation;
+        let mut tx = self.db.begin().await?;
+        let committed = self.revert_edit_in_tx(&mut tx, original_id).await?;
+        tx.commit().await?;
+        self.finish_committed(committed).await;
+        Ok(())
+    }
+
+    async fn revert_edit_in_tx(
+        &self,
+        tx: &mut Tx,
+        original_id: &MediaId,
+    ) -> Result<Committed, LibraryError> {
+        let mut committed = Committed::default();
         let prev_rendered = self.editing.server_rendered_asset_id(original_id).await?;
 
         if let Some(rendered) = prev_rendered.as_ref() {
-            self.enqueue_rendered_cleanup(rendered).await?;
+            self.enqueue_rendered_cleanup(tx, rendered).await?;
         }
-
         // Delete the local edits row; the render pointer lives on that
         // row, so it goes with it.
         self.editing
-            .delete_edit_state_no_record(original_id)
+            .delete_edit_state_no_record_in_tx(tx, original_id)
             .await?;
 
         if let Some(rendered) = prev_rendered {
-            // The local rendered media row + file go away too. This
-            // records AssetDeleted via `delete_permanently`'s normal
-            // path — the push handler removes it from Immich.
-            self.delete_permanently(&[rendered]).await?;
+            // The local rendered media row goes too, recording
+            // AssetDeleted so the push handler removes it from Immich.
+            // Its file is removed after the commit.
+            self.delete_media_in_tx(tx, &rendered, &mut committed)
+                .await?;
         }
 
         // Belt-and-braces: also clear any server-side /edits action
         // list (Phase B path). DELETE is idempotent on v2.7.5.
         self.recorder
-            .record(&Mutation::AssetEditsCleared {
-                id: original_id.clone(),
-            })
+            .record(
+                tx,
+                &Mutation::AssetEditsCleared {
+                    id: original_id.clone(),
+                },
+            )
             .await?;
+        Ok(committed)
+    }
+
+    /// Enqueue the cleanup tuple for a rendered sibling and delete its
+    /// row, deferring file removal to [`Self::finish_committed`].
+    async fn delete_rendered_in_tx(
+        &self,
+        tx: &mut Tx,
+        rendered_id: &MediaId,
+        committed: &mut Committed,
+    ) -> Result<(), LibraryError> {
+        self.enqueue_rendered_cleanup(tx, rendered_id).await?;
+        self.delete_media_in_tx(tx, rendered_id, committed).await
+    }
+
+    /// Delete one media row (recording `AssetDeleted`) on `tx`, and note
+    /// its files and events for after the commit.
+    async fn delete_media_in_tx(
+        &self,
+        tx: &mut Tx,
+        id: &MediaId,
+        committed: &mut Committed,
+    ) -> Result<(), LibraryError> {
+        let ids = std::slice::from_ref(id);
+        // Collected before the delete — afterwards the row is gone.
+        committed
+            .deleted_paths
+            .extend(self.media.collect_original_paths(ids).await);
+        committed
+            .events
+            .extend(self.media.delete_permanently_in_tx(tx, ids).await?);
+        committed.deleted_ids.push(id.clone());
         Ok(())
+    }
+
+    /// After a commit: emit the media events and remove deleted files.
+    async fn finish_committed(&self, committed: Committed) {
+        self.media.emit_committed(committed.events);
+        self.cleanup_files(&committed.deleted_ids, &committed.deleted_paths)
+            .await;
     }
 
     /// Helper: enqueue the StackMemberRemoved + AssetUntaggedMomentsEdit
@@ -204,21 +350,30 @@ impl Library {
     /// yet) the stack-remove step is skipped — the rendered's deletion
     /// alone is enough since Immich auto-deletes the stack at < 2
     /// members.
-    async fn enqueue_rendered_cleanup(&self, rendered_id: &MediaId) -> Result<(), LibraryError> {
-        use crate::library::mutation::Mutation;
+    async fn enqueue_rendered_cleanup(
+        &self,
+        tx: &mut Tx,
+        rendered_id: &MediaId,
+    ) -> Result<(), LibraryError> {
         let item = self.media.get_media_item(rendered_id).await?;
         if let Some(stack_id) = item.as_ref().and_then(|m| m.stack_id.clone()) {
             self.recorder
-                .record(&Mutation::StackMemberRemoved {
-                    stack_id,
-                    asset_id: rendered_id.clone(),
-                })
+                .record(
+                    tx,
+                    &Mutation::StackMemberRemoved {
+                        stack_id,
+                        asset_id: rendered_id.clone(),
+                    },
+                )
                 .await?;
         }
         self.recorder
-            .record(&Mutation::AssetUntaggedMomentsEdit {
-                id: rendered_id.clone(),
-            })
+            .record(
+                tx,
+                &Mutation::AssetUntaggedMomentsEdit {
+                    id: rendered_id.clone(),
+                },
+            )
             .await?;
         Ok(())
     }
@@ -391,5 +546,324 @@ mod tests {
             recorded.last(),
             Some(mutation::Mutation::AssetEditsCleared { id }) if id == &original_id
         ));
+    }
+
+    // ── Atomicity (#709) ────────────────────────────────────────────
+
+    use crate::library::db::Database;
+    use crate::library::media::MediaEvent;
+    use crate::library::recorder::tests::FailingRecorder;
+    use crate::library::recorder::MutationRecorder;
+    use crate::library::tests::open_test_library_with;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    /// Where a failure is injected.
+    #[derive(Debug, Clone, Copy)]
+    enum Fault {
+        /// The recorder fails after writing the rows for a mutation
+        /// whose outbox action is this.
+        Recorder(&'static str),
+        /// A trigger aborts this statement (a repository failure).
+        Sql(&'static str),
+    }
+
+    /// Everything a save/revert can change, for old-vs-new comparisons.
+    #[derive(Debug, PartialEq)]
+    struct Snapshot {
+        media: Vec<(String, Option<String>)>,
+        edit: Option<(String, Option<String>)>,
+        outbox: Vec<(String, String)>,
+        files: Vec<std::path::PathBuf>,
+    }
+
+    async fn snapshot(db: &Database, original: &MediaId, originals: &std::path::Path) -> Snapshot {
+        let media = sqlx::query_as("SELECT id, stack_id FROM media ORDER BY id")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        let edit = sqlx::query_as(
+            "SELECT edit_json, server_rendered_asset_id FROM edits WHERE media_id = ?",
+        )
+        .bind(original.as_str())
+        .fetch_optional(db.pool())
+        .await
+        .unwrap();
+        let outbox = sqlx::query_as("SELECT entity_id, action FROM sync_outbox ORDER BY id")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        let mut files = Vec::new();
+        let mut stack = vec![originals.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    files.push(path);
+                }
+            }
+        }
+        files.sort();
+        Snapshot {
+            media,
+            edit,
+            outbox,
+            files,
+        }
+    }
+
+    struct Fixture {
+        _dir: tempfile::TempDir,
+        library: Library,
+        db: Database,
+        originals: std::path::PathBuf,
+        original_id: MediaId,
+        /// The render from the first (successful) save.
+        rendered_id: MediaId,
+        /// While set, the recorder fails on `fail_action`.
+        armed: Arc<AtomicBool>,
+    }
+
+    /// A synced original with one committed pixel edit whose render is
+    /// stacked under it (so a cleanup records `StackMemberRemoved` too),
+    /// all recorded through a real outbox writer. The recorder fails
+    /// only once `armed` is set, on mutations whose outbox action is
+    /// `fail_action`.
+    async fn fixture(fail_action: Option<&'static str>) -> Fixture {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = fresh_bundle(dir.path());
+        let originals = bundle.originals.clone();
+        let armed = Arc::new(AtomicBool::new(false));
+        let armed_in = Arc::clone(&armed);
+        let (library, db) = open_test_library_with(bundle, move |db| {
+            Arc::new(FailingRecorder::new(db, move |m| {
+                armed_in.load(Ordering::SeqCst)
+                    && fail_action
+                        .is_some_and(|action| m.to_outbox_rows().iter().any(|r| r.action == action))
+            })) as Arc<dyn MutationRecorder>
+        })
+        .await;
+
+        let original_id = MediaId::new("orig".into());
+        let mut rec = crate::library::db::test_helpers::test_record(original_id.clone());
+        rec.relative_path = "orig.jpg".into();
+        rec.external_id = Some("immich-orig".into());
+        rec.content_hash = Some("hash-orig".into());
+        library.media().insert_media(&rec).await.unwrap();
+        std::fs::create_dir_all(&originals).unwrap();
+        std::fs::write(originals.join("orig.jpg"), b"original").unwrap();
+
+        let mut state = editing::EditState::default();
+        state.exposure.brightness = 0.5;
+        library
+            .save_pixel_edit(&original_id, &state, rendered_jpeg())
+            .await
+            .unwrap();
+        let rendered_id = library
+            .editing()
+            .server_rendered_asset_id(&original_id)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // As if StackCreated had drained: the render is the stack
+        // primary (Immich convention) and both rows point at it.
+        let media = library.media();
+        media
+            .ensure_stack_stub("stack-1", &rendered_id, 0)
+            .await
+            .unwrap();
+        media
+            .set_media_stack_id(&rendered_id, "stack-1")
+            .await
+            .unwrap();
+        media
+            .set_media_stack_id(&original_id, "stack-1")
+            .await
+            .unwrap();
+
+        Fixture {
+            _dir: dir,
+            library,
+            db,
+            originals,
+            original_id,
+            rendered_id,
+            armed,
+        }
+    }
+
+    impl Fixture {
+        async fn snapshot(&self) -> Snapshot {
+            snapshot(&self.db, &self.original_id, &self.originals).await
+        }
+
+        async fn inject(&self, fault: Fault) {
+            self.armed.store(true, Ordering::SeqCst);
+            if let Fault::Sql(trigger) = fault {
+                sqlx::query(trigger).execute(self.db.pool()).await.unwrap();
+            }
+        }
+    }
+
+    async fn drain_media(rx: &mut tokio::sync::mpsc::UnboundedReceiver<MediaEvent>) -> usize {
+        let mut n = 0;
+        while let Ok(Some(_)) =
+            tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv()).await
+        {
+            n += 1;
+        }
+        n
+    }
+
+    fn trigger(name: &str, when: &str) -> &'static str {
+        Box::leak(
+            format!("CREATE TRIGGER {name} {when} BEGIN SELECT RAISE(ABORT, 'injected'); END")
+                .into_boxed_str(),
+        )
+    }
+
+    /// Every step of a second save (which also replaces the first
+    /// render) can fail; each failure leaves the old state untouched,
+    /// removes the new render file and emits nothing.
+    #[tokio::test]
+    async fn save_pixel_edit_failure_at_any_step_leaves_old_state() {
+        let faults = [
+            Fault::Recorder("remove_member"),
+            Fault::Recorder("untag_moments_edit"),
+            Fault::Recorder("delete"),
+            Fault::Recorder("import"),
+            Fault::Recorder("create"),
+            Fault::Recorder("tag_moments_edit"),
+            Fault::Sql(trigger("fail_media_delete", "BEFORE DELETE ON media")),
+            Fault::Sql(trigger("fail_media_insert", "BEFORE INSERT ON media")),
+            Fault::Sql(trigger(
+                "fail_edit_upsert",
+                "BEFORE UPDATE OF edit_json ON edits",
+            )),
+            Fault::Sql(trigger(
+                "fail_render_pointer",
+                "BEFORE UPDATE OF server_rendered_asset_id ON edits \
+                 WHEN NEW.server_rendered_asset_id IS NOT NULL",
+            )),
+        ];
+        for fault in faults {
+            let action = match fault {
+                Fault::Recorder(a) => Some(a),
+                Fault::Sql(_) => None,
+            };
+            let fx = fixture(action).await;
+            let before = fx.snapshot().await;
+            let mut rx = fx.library.media().subscribe();
+            fx.inject(fault).await;
+
+            let mut state = editing::EditState::default();
+            state.exposure.brightness = -0.5;
+            let result = fx
+                .library
+                .save_pixel_edit(&fx.original_id, &state, rendered_jpeg())
+                .await;
+
+            assert!(result.is_err(), "{fault:?}: save must fail");
+            assert_eq!(fx.snapshot().await, before, "{fault:?}: old state kept");
+            assert_eq!(drain_media(&mut rx).await, 0, "{fault:?}: no events");
+        }
+    }
+
+    /// Every step of a revert can fail; each failure leaves the edit,
+    /// the render row and file, and the outbox as they were.
+    #[tokio::test]
+    async fn revert_edit_failure_at_any_step_leaves_old_state() {
+        let faults = [
+            Fault::Recorder("remove_member"),
+            Fault::Recorder("untag_moments_edit"),
+            Fault::Recorder("delete"),
+            Fault::Recorder("clear_edits"),
+            Fault::Sql(trigger("fail_edit_delete", "BEFORE DELETE ON edits")),
+            Fault::Sql(trigger("fail_media_delete", "BEFORE DELETE ON media")),
+        ];
+        for fault in faults {
+            let action = match fault {
+                Fault::Recorder(a) => Some(a),
+                Fault::Sql(_) => None,
+            };
+            let fx = fixture(action).await;
+            let before = fx.snapshot().await;
+            let mut rx = fx.library.media().subscribe();
+            fx.inject(fault).await;
+
+            let result = fx.library.revert_edit(&fx.original_id).await;
+
+            assert!(result.is_err(), "{fault:?}: revert must fail");
+            assert_eq!(fx.snapshot().await, before, "{fault:?}: old state kept");
+            assert_eq!(drain_media(&mut rx).await, 0, "{fault:?}: no events");
+        }
+    }
+
+    /// The happy path of a replacing save: the outbox order is cleanup →
+    /// import → stack → tag, the old render's row and file are gone and
+    /// the new ones are in place, and events fire after the commit.
+    #[tokio::test]
+    async fn save_pixel_edit_replacing_render_commits_in_outbox_order() {
+        let fx = fixture(None).await;
+        let before_outbox = fx.snapshot().await.outbox.len();
+        let old_file = fx
+            .originals
+            .join(crate::library::media::sharded_original_relative(
+                &fx.rendered_id,
+            ));
+        assert!(old_file.exists());
+        let mut rx = fx.library.media().subscribe();
+
+        let mut state = editing::EditState::default();
+        state.exposure.brightness = -0.5;
+        fx.library
+            .save_pixel_edit(&fx.original_id, &state, rendered_jpeg())
+            .await
+            .unwrap();
+
+        let new_id = fx
+            .library
+            .editing()
+            .server_rendered_asset_id(&fx.original_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(new_id, fx.rendered_id);
+        assert!(!old_file.exists(), "replaced render file removed");
+        assert!(fx
+            .originals
+            .join(crate::library::media::sharded_original_relative(&new_id))
+            .exists());
+        assert!(fx
+            .library
+            .media()
+            .get_media_item(&fx.rendered_id)
+            .await
+            .unwrap()
+            .is_none());
+
+        let after = fx.snapshot().await;
+        let new_rows: Vec<(&str, &str)> = after.outbox[before_outbox..]
+            .iter()
+            .map(|(id, action)| (id.as_str(), action.as_str()))
+            .collect();
+        let old = fx.rendered_id.as_str();
+        let new = new_id.as_str();
+        assert_eq!(
+            new_rows,
+            vec![
+                ("stack-1", "remove_member"),
+                (old, "untag_moments_edit"),
+                (old, "delete"),
+                (new, "import"),
+                (new, "create"),
+                (new, "tag_moments_edit"),
+            ]
+        );
+        // Removed(old), Updated(original freed from the stack), Added(new).
+        assert_eq!(drain_media(&mut rx).await, 3);
     }
 }

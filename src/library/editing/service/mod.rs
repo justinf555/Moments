@@ -16,6 +16,7 @@ mod sync;
 /// Non-destructive photo editing service.
 #[derive(Clone)]
 pub struct EditingService {
+    db: Database,
     repo: EditingRepository,
     recorder: Arc<dyn MutationRecorder>,
 }
@@ -23,7 +24,8 @@ pub struct EditingService {
 impl EditingService {
     pub fn new(db: Database, recorder: Arc<dyn MutationRecorder>) -> Self {
         Self {
-            repo: EditingRepository::new(db),
+            repo: EditingRepository::new(db.clone()),
+            db,
             recorder,
         }
     }
@@ -46,20 +48,28 @@ impl EditingService {
         id: &MediaId,
         state: &EditState,
     ) -> Result<(), LibraryError> {
-        self.repo.upsert_edit_state(id, state).await?;
+        let mut tx = self.db.begin().await?;
+        self.repo
+            .upsert_edit_state_in_tx(&mut tx, id, state)
+            .await?;
         let mutation = if state.is_identity() {
             Mutation::AssetEditsCleared { id: id.clone() }
         } else {
             Mutation::AssetEditsApplied { id: id.clone() }
         };
-        self.recorder.record(&mutation).await
+        self.recorder.record(&mut tx, &mutation).await?;
+        tx.commit().await?;
+        Ok(())
     }
 
     pub async fn revert_edits(&self, id: &MediaId) -> Result<(), LibraryError> {
-        self.repo.delete_edit_state(id).await?;
+        let mut tx = self.db.begin().await?;
+        self.repo.delete_edit_state_in_tx(&mut tx, id).await?;
         self.recorder
-            .record(&Mutation::AssetEditsCleared { id: id.clone() })
-            .await
+            .record(&mut tx, &Mutation::AssetEditsCleared { id: id.clone() })
+            .await?;
+        tx.commit().await?;
+        Ok(())
     }
 }
 #[cfg(test)]
@@ -85,7 +95,11 @@ mod tests {
 
     #[async_trait]
     impl MutationRecorder for CapturingRecorder {
-        async fn record(&self, mutation: &Mutation) -> Result<(), LibraryError> {
+        async fn record(
+            &self,
+            _tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+            mutation: &Mutation,
+        ) -> Result<(), LibraryError> {
             self.recorded.lock().unwrap().push(mutation.clone());
             Ok(())
         }
@@ -165,5 +179,35 @@ mod tests {
             recorded[1],
             Mutation::AssetEditsCleared { ref id } if id.as_str() == "photo-3"
         ));
+    }
+
+    // ── Transactional outbox (#655) ─────────────────────────────────
+
+    #[tokio::test]
+    async fn recorder_failure_rolls_back_save_and_revert() {
+        use crate::library::recorder::tests::{outbox_count, FailingRecorder};
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let id = MediaId::new("photo-4".into());
+        MediaRepository::new(db.clone())
+            .insert(&test_record(id.clone()))
+            .await
+            .unwrap();
+        let mut saved = EditState::default();
+        saved.exposure.brightness = 0.25;
+        EditingRepository::new(db.clone())
+            .upsert_edit_state(&id, &saved)
+            .await
+            .unwrap();
+
+        let svc = EditingService::new(db.clone(), Arc::new(FailingRecorder::always(db.clone())));
+        let mut next = EditState::default();
+        next.exposure.brightness = 0.75;
+        assert!(svc.save_edit_state(&id, &next).await.is_err());
+        assert!(svc.revert_edits(&id).await.is_err());
+
+        assert_eq!(svc.get_edit_state(&id).await.unwrap(), Some(saved));
+        assert_eq!(outbox_count(&db).await, 0);
     }
 }

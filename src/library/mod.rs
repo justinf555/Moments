@@ -45,6 +45,9 @@ use thumbnail::ThumbnailService;
 /// several services live on `Library` itself, in `delete.rs` and
 /// `edit_sync.rs`. The UI reaches all of this through the client layer.
 pub struct Library {
+    /// Shared database handle, used by cross-service operations that
+    /// need one transaction across several services (`edit_sync.rs`).
+    db: Database,
     albums: AlbumService,
     faces: FacesService,
     editing: EditingService,
@@ -92,10 +95,11 @@ impl Library {
             resolver,
         );
         let metadata = MetadataService::new(db.clone());
-        let thumbnails = ThumbnailService::new(db, bundle.thumbnails.clone());
+        let thumbnails = ThumbnailService::new(db.clone(), bundle.thumbnails.clone());
 
         debug!("library ready");
         Ok(Self {
+            db,
             albums,
             faces,
             editing,
@@ -182,6 +186,31 @@ mod tests {
         .await
         .unwrap();
         (library, recorder)
+    }
+
+    /// Open a library whose recorder is built from the library's own
+    /// database handle (e.g. a real or failing outbox writer). Returns
+    /// the handle too, for direct assertions on `sync_outbox`.
+    pub(super) async fn open_test_library_with(
+        bundle: Bundle,
+        make_recorder: impl FnOnce(Database) -> Arc<dyn MutationRecorder>,
+    ) -> (Library, Database) {
+        let db = Database::new();
+        let recorder = make_recorder(db.clone());
+        let originals = bundle.originals.clone();
+        let library = Library::open(
+            bundle,
+            LocalStorageMode::Managed,
+            db.clone(),
+            recorder,
+            Arc::new(resolver::LocalResolver::new(
+                originals,
+                LocalStorageMode::Managed,
+            )),
+        )
+        .await
+        .unwrap();
+        (library, db)
     }
 
     pub(super) fn fresh_bundle(dir: &std::path::Path) -> Bundle {
