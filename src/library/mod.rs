@@ -11,6 +11,7 @@ pub mod editing;
 pub mod error;
 pub mod event_emitter;
 pub mod faces;
+pub mod maintenance;
 pub mod media;
 pub mod metadata;
 pub mod mutation;
@@ -30,6 +31,7 @@ use db::Database;
 use editing::EditingService;
 use error::LibraryError;
 use faces::FacesService;
+use maintenance::MaintenanceService;
 use media::MediaService;
 use metadata::MetadataService;
 use recorder::MutationRecorder;
@@ -46,6 +48,7 @@ pub struct Library {
     albums: AlbumService,
     faces: FacesService,
     editing: EditingService,
+    maintenance: MaintenanceService,
     media: MediaService,
     metadata: MetadataService,
     thumbnails: ThumbnailService,
@@ -79,6 +82,8 @@ impl Library {
         let albums = AlbumService::new(db.clone(), Arc::clone(&recorder));
         let faces = FacesService::new(db.clone(), bundle.thumbnails.clone(), Arc::clone(&recorder));
         let editing = EditingService::new(db.clone(), Arc::clone(&recorder));
+        let maintenance =
+            MaintenanceService::new(db.clone(), bundle.originals.clone(), mode.clone());
         let media = MediaService::new(
             db.clone(),
             bundle.originals.clone(),
@@ -94,6 +99,7 @@ impl Library {
             albums,
             faces,
             editing,
+            maintenance,
             media,
             metadata,
             thumbnails,
@@ -125,6 +131,10 @@ impl Library {
 
     pub fn editing(&self) -> &EditingService {
         &self.editing
+    }
+
+    pub fn maintenance(&self) -> &MaintenanceService {
+        &self.maintenance
     }
 }
 

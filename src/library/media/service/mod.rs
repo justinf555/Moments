@@ -148,7 +148,20 @@ impl MediaService {
     }
 
     pub async fn insert_media(&self, record: &MediaRecord) -> Result<(), LibraryError> {
-        self.repo.insert(record).await?;
+        self.insert_media_with_taken_at_offset(record, None).await
+    }
+
+    /// [`Self::insert_media`], also recording the capture-time UTC offset
+    /// (minutes east of UTC) from the file's EXIF `OffsetTime*` tag.
+    /// Used by the local importer; see issue #677.
+    pub async fn insert_media_with_taken_at_offset(
+        &self,
+        record: &MediaRecord,
+        taken_at_offset_minutes: Option<i64>,
+    ) -> Result<(), LibraryError> {
+        self.repo
+            .insert_with_taken_at_offset(record, taken_at_offset_minutes)
+            .await?;
         self.emit(MediaEvent::Added(vec![record.id.clone()]));
         let file_path = match self.mode {
             LocalStorageMode::Managed => self.originals_dir.join(&record.relative_path),
