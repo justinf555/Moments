@@ -6,6 +6,7 @@ mod import;
 pub mod keyring;
 mod load;
 mod open;
+mod originals_cache;
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::path::PathBuf;

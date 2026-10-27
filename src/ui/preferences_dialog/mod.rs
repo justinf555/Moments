@@ -201,13 +201,13 @@ fn build_storage_group(
             0,
         );
         cache_row.set_title("Originals cache limit");
-        cache_row.set_subtitle("Maximum disk cache for downloaded originals (MB)");
+        cache_row.set_subtitle("Maximum disk cache for downloaded originals (MB, 0 for no limit)");
         cache_row.set_value(settings.uint("originals-cache-max-mb") as f64);
         let settings_cache = settings.clone();
         cache_row.connect_changed(move |row| {
             let mb = row.value() as u32;
+            // The application follows this key and trims the cache (#711).
             let _ = settings_cache.set_uint("originals-cache-max-mb", mb);
-            // TODO: Cache limit live-update will be restored with sync (phase 4).
         });
         group.add(&cache_row);
 

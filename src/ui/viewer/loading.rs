@@ -35,6 +35,10 @@ impl PhotoViewer {
             }
         };
 
+        // Pin before resolving so the Immich cache can't evict the file
+        // while it is decoded (or edited). Replaces the previous item's pin.
+        *imp.original_pin.borrow_mut() = Some(media_client.pin_original(&id));
+
         let weak = self.downgrade();
         media_client.original_path(&id, move |path| {
             let Some(path) = path else {

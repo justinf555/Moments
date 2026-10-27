@@ -7,7 +7,9 @@
 //! Local backends resolve a filesystem path directly; Immich backends
 //! check a local cache first and fetch from the server on miss.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 
@@ -31,6 +33,73 @@ pub trait OriginalResolver: Send + Sync {
         original_filename: Option<&str>,
         external_id: Option<&str>,
     ) -> Result<Option<PathBuf>, LibraryError>;
+}
+
+/// Registry of originals that are in use and must not be evicted from a
+/// resolver's cache (open in the viewer, being exported, mid-download).
+///
+/// Pins are reference-counted per [`MediaId`]: the same original can be
+/// pinned by several holders and stays pinned until every
+/// [`OriginalPin`] for it is dropped. Backends without a cache ignore it.
+#[derive(Debug, Default)]
+pub struct OriginalPins {
+    counts: Mutex<HashMap<MediaId, usize>>,
+}
+
+impl OriginalPins {
+    /// Pin `id` until the returned guard is dropped.
+    pub fn pin(self: &Arc<Self>, id: &MediaId) -> OriginalPin {
+        let mut counts = self.counts.lock().unwrap_or_else(|e| e.into_inner());
+        *counts.entry(id.clone()).or_insert(0) += 1;
+        OriginalPin {
+            pins: Arc::clone(self),
+            id: id.clone(),
+        }
+    }
+
+    /// Whether at least one live [`OriginalPin`] exists for `id`.
+    pub fn is_pinned(&self, id: &MediaId) -> bool {
+        self.counts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(id)
+    }
+
+    /// Run `f` only if `id` is not pinned, holding the registry lock so
+    /// no pin can be taken while it runs. Returns `None` when pinned.
+    ///
+    /// `f` must be short (one syscall, e.g. deleting a cached file).
+    pub fn run_if_unpinned<R>(&self, id: &MediaId, f: impl FnOnce() -> R) -> Option<R> {
+        let counts = self.counts.lock().unwrap_or_else(|e| e.into_inner());
+        if counts.contains_key(id) {
+            None
+        } else {
+            Some(f())
+        }
+    }
+
+    fn unpin(&self, id: &MediaId) {
+        let mut counts = self.counts.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = counts.get_mut(id) {
+            *count -= 1;
+            if *count == 0 {
+                counts.remove(id);
+            }
+        }
+    }
+}
+
+/// RAII guard returned by [`OriginalPins::pin`]; unpins on drop.
+#[derive(Debug)]
+pub struct OriginalPin {
+    pins: Arc<OriginalPins>,
+    id: MediaId,
+}
+
+impl Drop for OriginalPin {
+    fn drop(&mut self) {
+        self.pins.unpin(&self.id);
+    }
 }
 
 /// Local filesystem resolver — returns the path directly, no network.
@@ -74,6 +143,42 @@ impl OriginalResolver for LocalResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pin_is_reference_counted() {
+        let pins = Arc::new(OriginalPins::default());
+        let id = MediaId::new("aabb".to_string());
+        assert!(!pins.is_pinned(&id));
+
+        let first = pins.pin(&id);
+        let second = pins.pin(&id);
+        assert!(pins.is_pinned(&id));
+
+        drop(first);
+        assert!(pins.is_pinned(&id), "still pinned by the second guard");
+        drop(second);
+        assert!(!pins.is_pinned(&id));
+    }
+
+    #[test]
+    fn pins_are_per_id() {
+        let pins = Arc::new(OriginalPins::default());
+        let a = MediaId::new("aaaa".to_string());
+        let b = MediaId::new("bbbb".to_string());
+        let _pin = pins.pin(&a);
+        assert!(pins.is_pinned(&a));
+        assert!(!pins.is_pinned(&b));
+    }
+
+    #[test]
+    fn run_if_unpinned_skips_pinned_ids() {
+        let pins = Arc::new(OriginalPins::default());
+        let a = MediaId::new("aaaa".to_string());
+        let b = MediaId::new("bbbb".to_string());
+        let _pin = pins.pin(&a);
+        assert_eq!(pins.run_if_unpinned(&a, || 1), None);
+        assert_eq!(pins.run_if_unpinned(&b, || 2), Some(2));
+    }
 
     #[tokio::test]
     async fn managed_mode_joins_originals_dir() {

@@ -20,6 +20,7 @@ use crate::library::faces::{FacesEvent, PersonId};
 use crate::library::media::LibraryStats;
 use crate::library::media::{MediaCursor, MediaEvent, MediaFilter, MediaId, MediaItem};
 use crate::library::metadata::MediaMetadataRecord;
+use crate::library::resolver::{OriginalPin, OriginalPins};
 use crate::library::thumbnail::ThumbnailEvent;
 use crate::library::Library;
 
@@ -51,6 +52,10 @@ mod imp {
     pub struct MediaClientV2 {
         pub(super) deps: RefCell<Option<MediaDeps>>,
         pub(super) models: RefCell<Vec<TrackedMediaModel>>,
+        /// Originals in use, shared with the Immich resolver's cache so
+        /// it never evicts them. A private registry (no effect) until
+        /// [`super::MediaClientV2::set_original_pins`] is called.
+        pub(super) original_pins: RefCell<Arc<OriginalPins>>,
     }
 
     impl Default for MediaClientV2 {
@@ -58,6 +63,7 @@ mod imp {
             Self {
                 deps: RefCell::new(None),
                 models: RefCell::new(Vec::new()),
+                original_pins: RefCell::new(Arc::default()),
             }
         }
     }
@@ -268,6 +274,21 @@ impl MediaClientV2 {
     pub fn filter_for(&self, model: &gio::ListStore) -> Option<MediaFilter> {
         let models = self.imp().models.borrow();
         find_tracked(&models, model).map(|t| t.filter.clone())
+    }
+
+    // ── Originals in use ───────────────────────────────────────────────
+
+    /// Share the pin registry the original resolver checks before
+    /// evicting a cached file.
+    pub fn set_original_pins(&self, pins: Arc<OriginalPins>) {
+        *self.imp().original_pins.borrow_mut() = pins;
+    }
+
+    /// Keep `id`'s original out of cache eviction until the returned
+    /// guard is dropped. Take it **before** [`Self::original_path`] and
+    /// hold it for as long as the file is open (viewer, export).
+    pub fn pin_original(&self, id: &MediaId) -> OriginalPin {
+        self.imp().original_pins.borrow().pin(id)
     }
 
     // ── Read queries ───────────────────────────────────────────────────

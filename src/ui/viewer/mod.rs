@@ -71,6 +71,9 @@ mod imp {
         pub pending_load: RefCell<Option<MediaId>>,
         /// Cached metadata for the currently displayed item.
         pub current_metadata: RefCell<Option<MediaMetadataRecord>>,
+        /// Keeps the displayed item's original out of cache eviction
+        /// (Immich) while it is decoded or edited. Released on `hidden`.
+        pub original_pin: RefCell<Option<crate::library::resolver::OriginalPin>>,
     }
 
     #[glib::object_subclass]
@@ -292,6 +295,7 @@ impl PhotoViewer {
             move |_| {
                 let imp = viewer.imp();
                 imp.load_gen.set(imp.load_gen.get() + 1);
+                imp.original_pin.borrow_mut().take();
                 imp.picture.set_paintable(gdk::Paintable::NONE);
                 if imp.edit_toggle.is_active() {
                     imp.edit_toggle.set_active(false);

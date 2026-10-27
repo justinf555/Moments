@@ -52,6 +52,9 @@ mod imp {
         /// value captured at launch to discard stale results.
         pub load_gen: Cell<u64>,
         pub current_metadata: RefCell<Option<MediaMetadataRecord>>,
+        /// Keeps the playing video's original out of cache eviction
+        /// (Immich) while GStreamer reads it. Released on `hidden`.
+        pub original_pin: RefCell<Option<crate::library::resolver::OriginalPin>>,
     }
 
     #[glib::object_subclass]
@@ -183,6 +186,10 @@ impl VideoViewer {
             .media_client_v2()
             .expect("media client available");
 
+        // Pin before resolving so the Immich cache can't evict the file
+        // during playback. Replaces the previous video's pin.
+        *imp.original_pin.borrow_mut() = Some(mc.pin_original(&id));
+
         let weak = self.downgrade();
         mc.original_path(&id, move |path| {
             let Some(path) = path else {
@@ -306,6 +313,7 @@ impl VideoViewer {
                 let imp = viewer.imp();
                 imp.load_gen.set(imp.load_gen.get() + 1);
                 imp.video.set_file(None::<&gio::File>);
+                imp.original_pin.borrow_mut().take();
             }
         ));
 

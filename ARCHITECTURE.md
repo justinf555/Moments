@@ -67,7 +67,7 @@ src/
     mutation.rs         Mutation enum (what changed), outbox row encoding
     purge_trash.rs      Hourly trash auto-purge task (started by application/)
     recorder.rs         MutationRecorder trait
-    resolver.rs         OriginalResolver trait, LocalResolver
+    resolver.rs         OriginalResolver trait, LocalResolver, OriginalPins (in-use originals)
 
   client/               GObject bridge singletons
     media/  album/  people/  import/  sync/
@@ -83,8 +83,9 @@ src/
     mod.rs              SyncHandle::start/shutdown/set_interval
     outbox/             QueueWriterOutbox, NoOpRecorder, outbox repository
     state/              Sync checkpoints and audit
-    providers/immich/   client.rs (HTTP), pull.rs, push.rs, handlers/, resolver.rs
-                        (CachedResolver), types.rs (wire DTOs), edit_action.rs
+    providers/immich/   client.rs (HTTP), pull.rs, push.rs, handlers/, resolver/
+                        (CachedResolver, LRU cache eviction, eviction guard),
+                        types.rs (wire DTOs), edit_action.rs
 
   ui/                   One directory per widget: mod.rs + <widget>.blp
     window/             MomentsWindow: loading stack, toast overlay, NavigationSplitView
@@ -124,7 +125,7 @@ Injected per backend:
 | | Local | Immich |
 |---|---|---|
 | `MutationRecorder` | `NoOpRecorder`: nothing to push | `QueueWriterOutbox`: writes each change to the `sync_outbox` table |
-| `OriginalResolver` | `LocalResolver`: the file is already on disk | `CachedResolver`: downloads the original into a sharded cache on first use |
+| `OriginalResolver` | `LocalResolver`: the file is already on disk | `CachedResolver`: downloads the original into a sharded cache on first use, evicting least-recently-used, uploaded, unpinned files to stay under `originals-cache-max-mb` |
 
 ### Identity and queries
 
