@@ -151,8 +151,14 @@ async fn handle_asset(asset: SyncAssetV2, ctx: &SyncContext) -> Result<(), Libra
 
     // Issue #695: nothing lists hidden or locked assets, so don't fetch
     // (and leave on disk) a thumbnail of a photo the user locked away.
+    // An asset synced earlier may already have one cached: drop it. This
+    // runs for every non-listable delivery rather than only on a
+    // transition, so it also covers rows that read `timeline` before the
+    // migration-028 re-stream and is idempotent across retries. A later
+    // move back to the timeline finds no cached file and re-downloads.
     if !visibility.is_listable() {
-        debug!(?visibility, "not listable, skipping thumbnail download");
+        debug!(?visibility, "not listable, dropping any cached thumbnail");
+        ctx.library.thumbnails().remove_thumbnail(&media_id).await?;
         return Ok(());
     }
 
@@ -327,6 +333,7 @@ mod tests {
         )
         .unwrap();
         let originals = bundle.originals.clone();
+        let thumbnails_dir = bundle.thumbnails.clone();
         let db = Database::new();
         let library = Library::open(
             bundle,
@@ -341,7 +348,7 @@ mod tests {
             client: ImmichClient::new("http://127.0.0.1:9", "test-token").unwrap(),
             library: Arc::new(library),
             state: SyncStateRepository::new(db.clone()),
-            thumbnails_dir: dir.join("thumbnails"),
+            thumbnails_dir,
             db,
         }
     }
@@ -426,6 +433,49 @@ mod tests {
                 }
             }
             assert!(updated, "{wire:?}: expected MediaEvent::Updated");
+        }
+    }
+
+    /// Issue #695 review: an identical re-delivery (the forced re-stream)
+    /// emits no media event, and an asset that becomes locked or hidden
+    /// loses its cached thumbnail.
+    #[tokio::test]
+    async fn handler_drops_thumbnail_when_asset_leaves_timeline() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = test_ctx(dir.path()).await;
+
+        // Synced as a timeline asset; seed its cached thumbnail so later
+        // timeline pulls short-circuit instead of trying the network.
+        handle_asset(asset(Some("timeline")), &ctx).await.unwrap();
+        let id = ctx
+            .library
+            .media()
+            .id_by_external_id("immich-asset-1")
+            .await
+            .unwrap()
+            .unwrap();
+        let thumb = ctx.library.thumbnails().thumbnail_path(&id);
+        assert_eq!(thumb, sharded_thumbnail_path(&ctx.thumbnails_dir, &id));
+        std::fs::create_dir_all(thumb.parent().unwrap()).unwrap();
+        std::fs::write(&thumb, b"webp").unwrap();
+
+        // Identical re-delivery: no media event.
+        let mut rx = ctx.library.media().subscribe();
+        handle_asset(asset(Some("timeline")), &ctx).await.unwrap();
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
+        assert!(events.is_empty(), "expected no events; got {events:?}");
+        assert!(thumb.exists());
+
+        for wire in ["locked", "hidden"] {
+            // Back on the timeline with a cached thumbnail.
+            handle_asset(asset(Some("timeline")), &ctx).await.unwrap();
+            std::fs::write(&thumb, b"webp").unwrap();
+
+            handle_asset(asset(Some(wire)), &ctx).await.unwrap();
+            assert!(!thumb.exists(), "{wire}: thumbnail must be dropped");
         }
     }
 }

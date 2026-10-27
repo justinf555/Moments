@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use tokio::sync::mpsc;
+use tracing::{debug, instrument};
 
 use super::event::ThumbnailEvent;
 use super::model::ThumbnailStatus;
@@ -92,12 +93,67 @@ impl ThumbnailService {
     ) -> Result<Option<ThumbnailStatus>, LibraryError> {
         self.repo.status(id).await
     }
+
+    /// Drop the cached thumbnail for `id`: delete the file and the status
+    /// row. Idempotent; a thumbnail that was never cached is a no-op.
+    ///
+    /// Issue #695: an asset that becomes hidden or locked is no longer
+    /// listed, and the locked folder is a privacy feature, so its
+    /// thumbnail must not stay on disk. If it later returns to the
+    /// timeline, the sync handler finds no cached file and downloads it
+    /// again.
+    #[instrument(skip(self))]
+    pub async fn remove_thumbnail(&self, id: &MediaId) -> Result<(), LibraryError> {
+        let path = self.thumbnail_path(id);
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => debug!("removed cached thumbnail"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(LibraryError::Io(e)),
+        }
+        self.repo.delete(id).await
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::Path;
+
+    /// Issue #695: `remove_thumbnail` deletes the cached file and the
+    /// status row, and is a no-op when nothing is cached.
+    #[tokio::test]
+    async fn remove_thumbnail_deletes_file_and_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::new();
+        db.open(&dir.path().join("test.db")).await.unwrap();
+        let svc = ThumbnailService::new(db.clone(), dir.path().join("thumbnails"));
+
+        let id = MediaId::new("ab".repeat(16));
+        let media = crate::library::media::repository::MediaRepository::new(db);
+        media
+            .insert(&crate::library::db::test_helpers::record_with_taken_at(
+                id.clone(),
+                "a/photo.jpg",
+                None,
+            ))
+            .await
+            .unwrap();
+
+        // Never cached: no-op.
+        svc.remove_thumbnail(&id).await.unwrap();
+
+        let path = svc.thumbnail_path(&id);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"webp").unwrap();
+        svc.insert_thumbnail_pending(&id).await.unwrap();
+        svc.set_thumbnail_ready(&id, &path.to_string_lossy(), 1)
+            .await
+            .unwrap();
+
+        svc.remove_thumbnail(&id).await.unwrap();
+        assert!(!path.exists());
+        assert_eq!(svc.thumbnail_status(&id).await.unwrap(), None);
+    }
 
     #[test]
     fn sharded_path_normal_id() {

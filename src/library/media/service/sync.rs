@@ -10,12 +10,15 @@ use super::MediaService;
 use crate::library::error::LibraryError;
 use crate::library::media::event::MediaEvent;
 use crate::library::media::model::{MediaId, MediaRecord, MediaVisibility, Stack};
+use crate::library::media::repository::UpsertOutcome;
 
 impl MediaService {
     /// Insert or replace a media record from the sync stream.
     ///
-    /// Pre-queries existence so the emitted event distinguishes a new row
-    /// (`Added`) from a refreshed row (`Updated`).
+    /// Emits `Added` for a new row and `Updated` only when a stored value
+    /// actually changed; re-upserting an identical record emits nothing,
+    /// so a full re-stream doesn't flood clients with no-op re-fetches.
+    /// The `last_seen_at` heartbeat is bumped separately and never counts.
     ///
     /// Special case: when a locally-imported asset is uploaded to Immich
     /// and streamed back with the server's UUID as the `id`, the
@@ -35,17 +38,16 @@ impl MediaService {
         record: &MediaRecord,
         visibility: MediaVisibility,
     ) -> Result<(), LibraryError> {
-        let existed = self.repo.exists(&record.id).await?;
-        let replaced = self.repo.upsert_with_visibility(record, visibility).await?;
-        if let Some(old) = replaced {
-            self.emit(MediaEvent::Replaced {
+        match self.repo.upsert_with_visibility(record, visibility).await? {
+            UpsertOutcome::Replaced(old) => self.emit(MediaEvent::Replaced {
                 old,
                 new: record.id.clone(),
-            });
-        } else if existed {
-            self.emit(MediaEvent::Updated(vec![record.id.clone()]));
-        } else {
-            self.emit(MediaEvent::Added(vec![record.id.clone()]));
+            }),
+            UpsertOutcome::Updated => self.emit(MediaEvent::Updated(vec![record.id.clone()])),
+            UpsertOutcome::Inserted => self.emit(MediaEvent::Added(vec![record.id.clone()])),
+            // An identical re-delivery (e.g. the #695 re-stream) changes
+            // nothing a client could show, so it emits nothing.
+            UpsertOutcome::Unchanged => {}
         }
         Ok(())
     }
@@ -313,6 +315,10 @@ mod tests {
         let mut from_server =
             record_with_taken_at(local_id.clone(), "local/photo.jpg", Some(1_000));
         from_server.external_id = Some(server_id.clone());
+        // The server's copy differs from the local one (here: favourited
+        // remotely); an identical one would emit nothing (see
+        // `upsert_media_identical_record_emits_nothing`).
+        from_server.is_favorite = !local.is_favorite;
         svc.upsert_media(&from_server, MediaVisibility::Timeline)
             .await
             .unwrap();
@@ -415,20 +421,21 @@ mod tests {
         );
     }
 
-    /// Re-syncing an asset that already exists by id emits a single
-    /// `Updated` (no replacement happened).
+    /// Re-syncing an asset that already exists by id with a changed field
+    /// emits a single `Updated` (no replacement happened).
     #[tokio::test]
     async fn upsert_media_emits_updated_for_known_id() {
         let (_dir, svc) = make_service().await;
 
         let id = MediaId::new("known-id-dddddddddddddddddddddddddd".to_string());
-        let record = record_with_taken_at(id.clone(), "known/photo.jpg", Some(3_000));
+        let mut record = record_with_taken_at(id.clone(), "known/photo.jpg", Some(3_000));
         svc.upsert_media(&record, MediaVisibility::Timeline)
             .await
             .unwrap();
 
         let mut rx = svc.subscribe();
-        // Re-upsert the same id.
+        // Re-upsert the same id with a changed field.
+        record.taken_at = Some(3_600);
         svc.upsert_media(&record, MediaVisibility::Timeline)
             .await
             .unwrap();
@@ -436,6 +443,39 @@ mod tests {
         let events = drain(&mut rx).await;
         assert_eq!(events.len(), 1);
         assert!(matches!(&events[0], MediaEvent::Updated(ids) if ids == &[id]));
+    }
+
+    /// Issue #695 review: the forced re-stream re-delivers every asset.
+    /// Re-upserting an identical record (same visibility) must emit
+    /// nothing, and neither must the heartbeat bump that follows it.
+    #[tokio::test]
+    async fn upsert_media_identical_record_emits_nothing() {
+        let (_dir, svc) = make_service().await;
+
+        let id = MediaId::new("same-id-ffffffffffffffffffffffffffff".to_string());
+        let mut record = record_with_taken_at(id.clone(), "same/photo.jpg", Some(5_000));
+        record.external_id = Some("immich-same".to_string());
+        record.content_hash = Some("aGFzaA==".to_string());
+        svc.upsert_media(&record, MediaVisibility::Archive)
+            .await
+            .unwrap();
+        svc.bump_last_seen_at(&id, 100).await.unwrap();
+
+        let mut rx = svc.subscribe();
+        svc.upsert_media(&record, MediaVisibility::Archive)
+            .await
+            .unwrap();
+        svc.bump_last_seen_at(&id, 200).await.unwrap();
+        let events = drain(&mut rx).await;
+        assert!(events.is_empty(), "expected no events; got {events:?}");
+
+        // A visibility-only change is a real change.
+        svc.upsert_media(&record, MediaVisibility::Locked)
+            .await
+            .unwrap();
+        let events = drain(&mut rx).await;
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert!(matches!(&events[0], MediaEvent::Updated(ids) if ids == std::slice::from_ref(&id)));
     }
 
     /// Issue #695: a pull that changes an asset's visibility stores the

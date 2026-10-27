@@ -10,6 +10,8 @@ use crate::library::error::LibraryError;
 
 mod sync;
 
+pub use sync::UpsertOutcome;
+
 /// SQL predicate restricting `{alias}.visibility` to `admitted`.
 ///
 /// Issue #695: every query that lists media builds its visibility clause

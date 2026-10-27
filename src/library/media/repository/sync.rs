@@ -9,6 +9,20 @@ use crate::library::db::id_placeholders;
 use crate::library::error::LibraryError;
 use crate::library::media::model::{MediaId, MediaRecord, MediaVisibility, Stack};
 
+/// What [`MediaRepository::upsert_with_visibility`] did to the row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpsertOutcome {
+    /// No row had this id; one was inserted.
+    Inserted,
+    /// The row existed and at least one stored value changed.
+    Updated,
+    /// The row existed and already held every value; nothing was written.
+    Unchanged,
+    /// A local-keyed row carrying this id as its `external_id` was deleted
+    /// and replaced by this one (issue #610). Holds the removed id.
+    Replaced(MediaId),
+}
+
 impl MediaRepository {
     /// Return the local `MediaId`s of every member of a stack
     /// (regardless of whether each member is the primary). Used by
@@ -49,15 +63,22 @@ impl MediaRepository {
     /// `timeline` default for a new one). The Immich pull path, which
     /// knows the server's value, uses [`Self::upsert_with_visibility`].
     pub async fn upsert(&self, record: &MediaRecord) -> Result<Option<MediaId>, LibraryError> {
-        self.upsert_inner(record, None).await
+        Ok(match self.upsert_inner(record, None).await? {
+            UpsertOutcome::Replaced(old) => Some(old),
+            _ => None,
+        })
     }
 
     /// [`Self::upsert`], also writing the asset's `visibility`. Issue #695.
+    ///
+    /// Returns what happened to the row so the service can emit an event
+    /// only for a real change: the forced visibility re-stream re-delivers
+    /// every asset, and most of them arrive identical to what's stored.
     pub async fn upsert_with_visibility(
         &self,
         record: &MediaRecord,
         visibility: MediaVisibility,
-    ) -> Result<Option<MediaId>, LibraryError> {
+    ) -> Result<UpsertOutcome, LibraryError> {
         self.upsert_inner(record, Some(visibility)).await
     }
 
@@ -68,7 +89,7 @@ impl MediaRepository {
         &self,
         record: &MediaRecord,
         visibility: Option<MediaVisibility>,
-    ) -> Result<Option<MediaId>, LibraryError> {
+    ) -> Result<UpsertOutcome, LibraryError> {
         // Capture the existing row's locally-only fields so we can
         // preserve them across the INSERT OR REPLACE:
         //
@@ -87,28 +108,58 @@ impl MediaRepository {
         // `id_by_content_hash_pending_push`), so a plain `id = ?` lookup
         // is sufficient; the older `OR external_id = ?` arm was for the
         // local→server UUID swap that no longer happens.
-        let existing: Option<(i64, i64, String)> = sqlx::query_as(
-            "SELECT imported_at, is_moments_render, visibility FROM media WHERE id = ?",
+        //
+        // The last column says whether the stored row already holds every
+        // value this upsert would write (`IS` so NULLs compare equal).
+        // `imported_at` and `is_moments_render` are kept from the stored
+        // row, so they can't differ; `last_seen_at` and `stack_id` aren't
+        // written here at all. A `NULL` visibility bind means "keep the
+        // stored value", which is unchanged by definition.
+        let existing: Option<(i64, i64, String, bool)> = sqlx::query_as(
+            "SELECT imported_at, is_moments_render, visibility,
+                    (content_hash IS ? AND external_id IS ? AND relative_path IS ?
+                     AND original_filename IS ? AND file_size IS ? AND media_type IS ?
+                     AND taken_at IS ? AND width IS ? AND height IS ?
+                     AND orientation IS ? AND duration_ms IS ? AND is_favorite IS ?
+                     AND is_trashed IS ? AND trashed_at IS ?
+                     AND visibility IS COALESCE(?, visibility))
+             FROM media WHERE id = ?",
         )
+        .bind(&record.content_hash)
+        .bind(&record.external_id)
+        .bind(&record.relative_path)
+        .bind(&record.original_filename)
+        .bind(record.file_size)
+        .bind(record.media_type as i64)
+        .bind(record.taken_at)
+        .bind(record.width)
+        .bind(record.height)
+        .bind(record.orientation as i64)
+        .bind(record.duration_ms.map(|v| v as i64))
+        .bind(record.is_favorite as i64)
+        .bind(record.is_trashed as i64)
+        .bind(record.trashed_at)
+        .bind(visibility.map(|v| v.as_str()))
         .bind(record.id.as_str())
         .fetch_optional(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
         let imported_at = existing
             .as_ref()
-            .map(|(t, _, _)| *t)
+            .map(|(t, _, _, _)| *t)
             .unwrap_or(record.imported_at);
         let is_moments_render = existing
             .as_ref()
-            .map(|(_, r, _)| *r != 0)
+            .map(|(_, r, _, _)| *r != 0)
             .unwrap_or(record.is_moments_render);
         // Issue #695: an explicit value wins; otherwise keep what's stored.
         let visibility = visibility.unwrap_or_else(|| {
             existing
                 .as_ref()
-                .map(|(_, _, v)| MediaVisibility::parse_or_hidden(v))
+                .map(|(_, _, v, _)| MediaVisibility::parse_or_hidden(v))
                 .unwrap_or_default()
         });
+        let unchanged = existing.as_ref().is_some_and(|(_, _, _, same)| *same);
 
         // Atomic delete-and-return so the replaced-id observation can
         // never disagree with the row that was actually removed. SQLite
@@ -120,7 +171,39 @@ impl MediaRepository {
                 .fetch_optional(self.db.pool())
                 .await
                 .map_err(LibraryError::Db)?;
+        if let Some(old) = replaced {
+            // Fall through to the insert: the server-keyed row is new.
+            return self
+                .write_row(record, imported_at, is_moments_render, visibility)
+                .await
+                .map(|()| UpsertOutcome::Replaced(MediaId::new(old)));
+        }
 
+        // Issue #695 review: an identical re-delivery (the forced
+        // visibility re-stream sends every asset again) writes nothing.
+        // Skipping the `INSERT OR REPLACE` also keeps `stack_id` and
+        // `last_seen_at`, which the replace would otherwise reset.
+        if unchanged {
+            return Ok(UpsertOutcome::Unchanged);
+        }
+
+        self.write_row(record, imported_at, is_moments_render, visibility)
+            .await?;
+        Ok(if existing.is_some() {
+            UpsertOutcome::Updated
+        } else {
+            UpsertOutcome::Inserted
+        })
+    }
+
+    /// The `INSERT OR REPLACE` half of [`Self::upsert_inner`].
+    async fn write_row(
+        &self,
+        record: &MediaRecord,
+        imported_at: i64,
+        is_moments_render: bool,
+        visibility: MediaVisibility,
+    ) -> Result<(), LibraryError> {
         sqlx::query(
             "INSERT OR REPLACE INTO media (id, content_hash, external_id, relative_path,
                                            original_filename, file_size, imported_at,
@@ -151,8 +234,7 @@ impl MediaRepository {
         .execute(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
-
-        Ok(replaced.map(MediaId::new))
+        Ok(())
     }
 
     /// Look up a locally-imported row by `content_hash` that has not yet
@@ -565,6 +647,68 @@ mod tests {
         assert!(replaced.is_none(), "same-id upsert returns None");
         let item = repo.get(&id).await.unwrap().unwrap();
         assert_eq!(item.original_filename, "updated.jpg");
+    }
+
+    /// Issue #695 review: `upsert_with_visibility` reports whether the row
+    /// changed, writes nothing for an identical record (so `stack_id` and
+    /// the `last_seen_at` heartbeat survive), and treats a visibility-only
+    /// or single-field change as an update.
+    #[tokio::test]
+    async fn upsert_with_visibility_reports_outcome() {
+        let dir = tempdir().unwrap();
+        let (repo, db) = test_repo(dir.path()).await;
+        let id = MediaId::new("o".repeat(32));
+        let mut rec = test_record(id.clone());
+        rec.external_id = Some("immich-o".to_string());
+        rec.content_hash = Some("aGFzaA==".to_string());
+
+        let tl = MediaVisibility::Timeline;
+        assert_eq!(
+            repo.upsert_with_visibility(&rec, tl).await.unwrap(),
+            UpsertOutcome::Inserted
+        );
+        repo.bump_last_seen_at(&id, 1_234).await.unwrap();
+
+        assert_eq!(
+            repo.upsert_with_visibility(&rec, tl).await.unwrap(),
+            UpsertOutcome::Unchanged
+        );
+        let seen: i64 = sqlx::query_scalar("SELECT last_seen_at FROM media WHERE id = ?")
+            .bind(id.as_str())
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(seen, 1_234, "unchanged upsert must not rewrite the row");
+
+        assert_eq!(
+            repo.upsert_with_visibility(&rec, MediaVisibility::Hidden)
+                .await
+                .unwrap(),
+            UpsertOutcome::Updated
+        );
+        assert_eq!(stored_visibility(&db, &id).await, "hidden");
+
+        rec.trashed_at = Some(99);
+        assert_eq!(
+            repo.upsert_with_visibility(&rec, MediaVisibility::Hidden)
+                .await
+                .unwrap(),
+            UpsertOutcome::Updated
+        );
+        // NULL → NULL compares equal; Some → None is a change.
+        rec.trashed_at = None;
+        assert_eq!(
+            repo.upsert_with_visibility(&rec, MediaVisibility::Hidden)
+                .await
+                .unwrap(),
+            UpsertOutcome::Updated
+        );
+        assert_eq!(
+            repo.upsert_with_visibility(&rec, MediaVisibility::Hidden)
+                .await
+                .unwrap(),
+            UpsertOutcome::Unchanged
+        );
     }
 
     /// Round-trip a locally-imported asset that gets uploaded to Immich

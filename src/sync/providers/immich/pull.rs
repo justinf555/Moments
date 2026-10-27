@@ -499,8 +499,10 @@ const RESTREAM_ACK_TYPES: &[&str] = &["AssetV2"];
 ///
 /// Rows synced before the migration read `visibility = 'timeline'`; the
 /// re-delivered `AssetV2` lines go through the normal upsert, which writes
-/// the real value and emits `MediaEvent::Updated`, so the re-stream is
-/// idempotent. It isn't a `SyncResetV1`: no orphan sweep runs.
+/// the real value and emits `MediaEvent::Updated` only for rows that
+/// actually changed (identical re-deliveries write and emit nothing), so
+/// the re-stream is idempotent. It isn't a `SyncResetV1`: no orphan sweep
+/// runs.
 ///
 /// `delete_acks` performs `DELETE /sync/ack` (a parameter so the
 /// lifecycle is testable without a server). If it fails the flag stays
