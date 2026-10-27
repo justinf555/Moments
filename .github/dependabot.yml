@@ -1,0 +1,121 @@
+# SPDX-FileCopyrightText: 2026 Justin F
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Dependency updates (#725). Two tiers, by how well CI covers a crate:
+#
+#   auto    patch/minor bumps of crates the unit and integration tests
+#           exercise, and every GitHub Actions bump. Auto-merged by
+#           .github/workflows/dependabot-auto-merge.yml once Build & test
+#           passes.
+#   manual  everything else: the network stack (CI makes no real TLS or
+#           Immich calls), media decoding (no fixture files), GTK/GNOME
+#           bindings, sqlx minors, and any major bump. Opened as a PR and
+#           checked locally in the dev container before merging.
+#
+# Groups match in order and a dependency joins the first one that fits, so
+# `manual` (pattern "*") catches whatever the auto groups leave behind,
+# including majors of auto-tier crates. Group names are what the auto-merge
+# workflow keys on; rename them in both places.
+#
+# Security updates still open immediately. Advisories against auto-tier
+# crates are batched into `security-auto` and auto-merged the same way;
+# the rest open as individual PRs for review.
+#
+# Some patterns name transitive crates (syn, rustls-webpki, hyper, glib,
+# ...). Version updates only touch direct dependencies, so those only match
+# security updates.
+
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      auto:
+        update-types: [minor, patch]
+        patterns:
+          - serde
+          - serde_json
+          - thiserror
+          - tracing
+          - tracing-subscriber
+          - syn
+          - quote
+          - proc-macro2
+          - tokio
+          - tokio-util
+          - futures-util
+          - async-trait
+          - uuid
+          - chrono
+          - toml
+          - sha1
+          - base64
+          - lru
+          - quick-xml
+          - tempfile
+      # sqlx minors can change query behaviour and migrations; patch only.
+      auto-sqlx:
+        update-types: [patch]
+        patterns:
+          - sqlx
+      manual:
+        patterns:
+          - reqwest
+          - rustls*
+          - webpki*
+          - hyper*
+          - image
+          - libheif-rs
+          - rawler
+          - kamadak-exif
+          - gstreamer*
+          - gtk4
+          - libadwaita
+          - glib*
+          - gio*
+          - libsecret
+          - gettext-rs
+          - dhat
+          # Catch-all: sqlx minors, majors of anything, and new crates.
+          - "*"
+      security-auto:
+        applies-to: security-updates
+        update-types: [minor, patch]
+        patterns:
+          - serde
+          - serde_json
+          - thiserror
+          - tracing
+          - tracing-subscriber
+          - syn
+          - quote
+          - proc-macro2
+          - tokio
+          - tokio-util
+          - futures-util
+          - async-trait
+          - uuid
+          - chrono
+          - toml
+          - sha1
+          - base64
+          - lru
+          - quick-xml
+          - tempfile
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore(ci)
+    groups:
+      actions:
+        patterns:
+          - "*"
