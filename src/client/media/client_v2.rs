@@ -6,20 +6,18 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use gtk::gdk;
-use gtk::gio;
-use gtk::glib;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
+use gtk::{gdk, gio, glib};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 use super::model::MediaItemObject;
 use crate::library::album::{AlbumEvent, AlbumId};
-use crate::library::db::LibraryStats;
 use crate::library::editing::EditState;
 use crate::library::error::LibraryError;
 use crate::library::faces::{FacesEvent, PersonId};
+use crate::library::media::LibraryStats;
 use crate::library::media::{MediaCursor, MediaEvent, MediaFilter, MediaId, MediaItem};
 use crate::library::metadata::MediaMetadataRecord;
 use crate::library::thumbnail::ThumbnailEvent;

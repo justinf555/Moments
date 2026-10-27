@@ -154,7 +154,7 @@ fn wire_batch_delete(
                     .item(i)
                     .and_then(|o| o.downcast::<AlbumItemObject>().ok())
                 {
-                    ids.push(AlbumId::from_raw(obj.id()));
+                    ids.push(AlbumId::new(obj.id()));
                 }
             }
         }

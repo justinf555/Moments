@@ -7,7 +7,6 @@ gnome = import('gnome')
 blueprints = custom_target(
   'blueprints',
   input: files(
-    'shortcuts-dialog.blp',
     'ui/window/window.blp',
     'ui/import_dialog/import_dialog.blp',
     'ui/setup_window/setup_window.blp',
@@ -35,6 +34,7 @@ blueprints = custom_target(
     'ui/people_grid/cell.blp',
     'ui/sidebar/sidebar.blp',
     'ui/widgets/activity_indicator/activity_indicator.blp',
+    'ui/shortcuts_dialog/shortcuts_dialog.blp',
   ),
   output: '.',
   command: [

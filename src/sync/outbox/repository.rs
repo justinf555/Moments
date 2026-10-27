@@ -299,7 +299,7 @@ mod tests {
         let repo = OutboxRepository::new(db.clone());
 
         let rows = Mutation::AlbumCreated {
-            id: crate::library::album::AlbumId::from_raw("a1".to_string()),
+            id: crate::library::album::AlbumId::new("a1".to_string()),
             name: "Vacation".to_string(),
         }
         .to_outbox_rows();

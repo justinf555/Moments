@@ -18,7 +18,7 @@ pub enum LocalStorageMode {
 ///
 /// Created during onboarding and written into `library.toml`. On subsequent
 /// launches, [`super::bundle::Bundle::open`] reads it back from the manifest
-/// so [`super::factory::LibraryFactory`] can construct the correct backend.
+/// so the application can set up the matching backend.
 #[derive(Clone)]
 pub enum LibraryConfig {
     /// Local filesystem backend.

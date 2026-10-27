@@ -180,8 +180,7 @@ mod imp {
                         let album_client = crate::application::MomentsApplication::default()
                             .album_client_v2()
                             .expect("album client v2 available");
-                        album_client
-                            .unpin_album(crate::library::album::AlbumId::from_raw(obj.id()));
+                        album_client.unpin_album(crate::library::album::AlbumId::new(obj.id()));
                     }
                 });
             }

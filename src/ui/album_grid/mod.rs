@@ -301,7 +301,7 @@ impl AlbumGridView {
                 };
                 let album_id_str = item.id();
                 let album_name = item.name();
-                let album_id = AlbumId::from_raw(album_id_str.clone());
+                let album_id = AlbumId::new(album_id_str.clone());
 
                 debug!(album_id = %album_id_str, name = %album_name, "album activated");
 

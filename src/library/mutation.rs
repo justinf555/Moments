@@ -121,9 +121,8 @@ pub enum Mutation {
 /// One row in the `sync_outbox` table.
 ///
 /// Multi-ID mutations (e.g. `AssetTrashed { ids: [a, b] }`) expand into
-/// multiple rows — one per entity. The Mutation type owns both the
-/// serialization ([`Mutation::to_outbox_rows`]) and deserialization
-/// ([`Mutation::from_outbox_row`]) so the format is defined in one place.
+/// multiple rows — one per entity. [`Mutation::to_outbox_rows`] writes the
+/// rows; reading them back lives in `crate::sync::outbox::OutboxMutation`.
 #[derive(Debug, Clone)]
 pub struct OutboxRow {
     pub entity_type: String,
@@ -357,7 +356,7 @@ mod tests {
     #[test]
     fn mutation_clone_is_independent() {
         let original = Mutation::AlbumCreated {
-            id: AlbumId::from_raw("album-1".to_string()),
+            id: AlbumId::new("album-1".to_string()),
             name: "Photos".to_string(),
         };
         let cloned = original.clone();
@@ -390,31 +389,31 @@ mod tests {
                 items: vec![(MediaId::new("id5".to_string()), Some("ext-5".to_string()))],
             },
             Mutation::AlbumCreated {
-                id: AlbumId::from_raw("a1".to_string()),
+                id: AlbumId::new("a1".to_string()),
                 name: "Album".to_string(),
             },
             Mutation::AlbumRenamed {
-                id: AlbumId::from_raw("a2".to_string()),
+                id: AlbumId::new("a2".to_string()),
                 name: "Renamed".to_string(),
             },
             Mutation::AlbumDeleted {
-                id: AlbumId::from_raw("a3".to_string()),
+                id: AlbumId::new("a3".to_string()),
                 external_id: Some("ext-a3".to_string()),
             },
             Mutation::AlbumMediaAdded {
-                album_id: AlbumId::from_raw("a4".to_string()),
+                album_id: AlbumId::new("a4".to_string()),
                 media_ids: vec![MediaId::new("m1".to_string())],
             },
             Mutation::AlbumMediaRemoved {
-                album_id: AlbumId::from_raw("a5".to_string()),
+                album_id: AlbumId::new("a5".to_string()),
                 media_ids: vec![MediaId::new("m2".to_string())],
             },
             Mutation::PersonRenamed {
-                id: PersonId::from_raw("p1".to_string()),
+                id: PersonId::new("p1".to_string()),
                 name: "Alice".to_string(),
             },
             Mutation::PersonHidden {
-                id: PersonId::from_raw("p2".to_string()),
+                id: PersonId::new("p2".to_string()),
                 hidden: true,
             },
             Mutation::AssetEditsApplied {
