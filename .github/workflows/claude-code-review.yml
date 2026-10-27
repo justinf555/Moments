@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   claude-review:
+    if: github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -27,7 +28,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Run Claude Code Review
         uses: anthropics/claude-code-action@v1
@@ -51,7 +52,52 @@ jobs:
             3. **Error handling** — Are errors propagated or silently swallowed?
             4. **Architecture** — Does it follow the layered architecture and event flow described in CLAUDE.md and ARCHITECTURE.md?
             5. **Regressions** — Could this break existing functionality?
+            6. **Scale and performance** — Assume libraries of 50k+ assets, slow storage
+               (HDD, NAS), and Immich libraries that re-stream every asset. Look for
+               per-item events reaching the GTK thread, N+1 queries, work that blocks
+               first open or the GTK thread, and unbounded memory.
+            7. **Privacy and data integrity** — Hidden, locked or trashed content must
+               leave no trace where it is not meant to be (thumbnails, caches, counts,
+               covers). Nothing destructive without a guard. A crash mid-operation must
+               not lose or corrupt data.
+            8. **Database migrations** — If the PR adds a migration under
+               src/library/db/migrations/, check it is safe on a fresh database and on an
+               upgraded one. Run `gh pr list --state open --json number,headRefName` and
+               `gh pr diff <n> --name-only` for the other open PRs to confirm the
+               migration number does not collide with another open PR, and say so
+               explicitly either way.
+            9. **Tests** — Which new code paths have tests and which do not. List any
+               test-plan items in the PR body that only the maintainer can run.
 
-            Provide inline comments for specific issues.
-            Use a top-level summary comment for the overall assessment.
+            How to review:
+
+            - Read the PR body first. Its "Decisions" (or equivalent) section lists known
+              limitations and deliberate choices. Do not restate them; comment only where
+              you disagree or think the author underrated the risk. State in one line
+              that you read them.
+            - You cannot build or run tests in this job (no GNOME toolchain). Say so once,
+              in a single clause, without apologising, and spend the effort on reading the
+              tests and the diff. You have full history, so diff against main locally.
+            - Write for an agent that will act on your comment. Every point names the
+              file and function (path:line where possible), says what to change, and
+              carries exactly one tag:
+              [blocking], [should-fix], [nit],
+              [maintainer-decision] (a judgment call only the maintainer can make; say
+              what the choice is), or
+              [needs-live-server] (needs a real Immich instance to verify).
+              Be concrete.
+
+            Post a single top-level summary comment (no inline comments) with this
+            structure, in this order, omitting empty sections:
+
+            - A one-line verdict: `Approve`, `Approve after should-fix items`, or
+              `Request changes`
+            - `### Blocking`
+            - `### Should fix`
+            - `### Nits`
+            - `### Maintainer decisions`
+            - `### Needs live server`
+            - `### Checked and OK` (a short bullet list of what you verified, so
+              silence is not ambiguous)
+
             Be concise — flag real issues, not style preferences.
