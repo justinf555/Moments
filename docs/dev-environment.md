@@ -183,7 +183,8 @@ Dependabot (`.github/dependabot.yml`) opens grouped PRs every Monday for Cargo c
 
 | Tier | Updates | Merge |
 |---|---|---|
-| Auto | patch/minor of `serde`, `serde_json`, `thiserror`, `tracing*`, proc-macro crates, `tokio*`, `futures-util`, `async-trait`, `uuid`, `chrono`, `toml`, `sha1`, `base64`, `lru`, `quick-xml`, `tempfile`; `sqlx` patch only; all GitHub Actions | Auto-merged by `dependabot-auto-merge.yml` |
+| Auto | patch/minor of `serde`, `serde_json`, `thiserror`, `tracing*`, proc-macro crates, `tokio*`, `futures-util`, `async-trait`, `uuid`, `chrono`, `toml`, `sha1`, `base64`, `lru`, `quick-xml`, `tempfile`; `sqlx` patch only; GitHub Actions that see no secret or write token (`actions/checkout`, `crate-ci/typos`, `fsfe/reuse-action`, `flatpak/flatpak-github-actions`, `dtolnay/rust-toolchain`) | Auto-merged by `dependabot-auto-merge.yml` |
+| Manual (actions) | `anthropics/claude-code-action`, `dependabot/fetch-metadata`, `marocchino/sticky-pull-request-comment`, `actions/cache`, `actions/upload-artifact`, `actions/download-artifact`: they run with a secret (Claude OAuth token, Flatpak GPG key) or a write-capable token, so a compromised release could leak or abuse it. Dependabot group `manual-actions` | Review the PR, then merge by hand |
 | Manual | `reqwest`, `rustls*`, `webpki*`, `hyper*`, `image`, `libheif-rs`, `rawler`, `kamadak-exif`, `gstreamer*`, `gtk4`, `libadwaita`, `glib`/`gio`, `libsecret`, `gettext-rs`, `dhat`, `sqlx` minors, any major bump, anything unlisted | Local check in the dev container, then merge by hand |
 
 ### Cutting a release

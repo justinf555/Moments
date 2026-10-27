@@ -34,6 +34,8 @@ jobs:
         # Group names and update types must match .github/dependabot.yml.
         # GitHub Actions are pinned to major tags (`@v4`), so every action
         # update is a major one; the `actions` group merges on any type.
+        # `manual-actions` (actions that run with secrets or a write token)
+        # is deliberately absent: those are merged by hand.
         if: >-
           (steps.meta.outputs.dependency-group == 'auto'
             && (steps.meta.outputs.update-type == 'version-update:semver-patch'
