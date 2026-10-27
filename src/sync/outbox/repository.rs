@@ -135,6 +135,22 @@ impl OutboxRepository {
         info!(rows = n, "cleared dead-letter outbox entries");
         Ok(n)
     }
+
+    /// Whether any entry for `entity_id` has not been pushed yet
+    /// (pending, failed or dead-letter). The originals cache uses this to
+    /// keep a local file that an upload may still need.
+    #[instrument(skip(self))]
+    pub async fn has_unfinished(&self, entity_id: &str) -> Result<bool, LibraryError> {
+        let (exists,): (i64,) = sqlx::query_as(
+            "SELECT EXISTS(SELECT 1 FROM sync_outbox WHERE entity_id = ? AND status != ?)",
+        )
+        .bind(entity_id)
+        .bind(OutboxStatus::Done as i64)
+        .fetch_one(self.db.pool())
+        .await
+        .map_err(LibraryError::Db)?;
+        Ok(exists != 0)
+    }
 }
 
 #[cfg(test)]
@@ -313,5 +329,21 @@ mod tests {
 
         let payload: serde_json::Value = serde_json::from_str(row.0.as_deref().unwrap()).unwrap();
         assert_eq!(payload["name"], "Vacation");
+    }
+
+    #[tokio::test]
+    async fn has_unfinished_ignores_done_entries() {
+        let (_dir, db) = open_db().await;
+        let repo = OutboxRepository::new(db.clone());
+        insert_with_status(&db, "pending", OutboxStatus::Pending).await;
+        insert_with_status(&db, "failed", OutboxStatus::Failed).await;
+        insert_with_status(&db, "dead", OutboxStatus::DeadLetter).await;
+        insert_with_status(&db, "done", OutboxStatus::Done).await;
+
+        assert!(repo.has_unfinished("pending").await.unwrap());
+        assert!(repo.has_unfinished("failed").await.unwrap());
+        assert!(repo.has_unfinished("dead").await.unwrap());
+        assert!(!repo.has_unfinished("done").await.unwrap());
+        assert!(!repo.has_unfinished("absent").await.unwrap());
     }
 }

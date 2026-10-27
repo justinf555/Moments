@@ -102,6 +102,7 @@ The full picture is in `ARCHITECTURE.md`. The rules that matter when changing co
 - GTK list virtualisation recycles cells — never assume a widget's grid position is stable.
 - Only use icons that exist in the Adwaita theme of the **GNOME 50 runtime**. `find /usr/share/icons/Adwaita -name "<icon>.svg"` on the host/container is a hint only; its theme version can differ.
 - Access shared state through `MomentsApplication::default()`, never by walking the widget tree (`.root().application()`).
+- **Unit tests that construct a GObject, `gio::ListStore` or texture must start with `crate::client::test_support::ensure_gobject_types();`** (the helper lives in `client` but applies to `ui` tests too; register any new GObject type in it) — parallel test threads can deadlock GLib type registration (#728); the app never does, as every GObject is made on the GTK thread.
 
 ## Logging
 

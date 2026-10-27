@@ -426,17 +426,20 @@ mod tests {
 
     #[test]
     fn named_visible_person_always_passes() {
+        crate::client::test_support::ensure_gobject_types();
         assert!(person_passes(&person("Alice", false), false, false));
     }
 
     #[test]
     fn unnamed_person_passes_only_when_included() {
+        crate::client::test_support::ensure_gobject_types();
         assert!(!person_passes(&person("", false), false, false));
         assert!(person_passes(&person("", false), false, true));
     }
 
     #[test]
     fn hidden_person_passes_only_when_included() {
+        crate::client::test_support::ensure_gobject_types();
         assert!(!person_passes(&person("Alice", true), false, false));
         assert!(person_passes(&person("Alice", true), true, false));
     }
@@ -445,6 +448,7 @@ mod tests {
     /// trips the other.
     #[test]
     fn hidden_and_unnamed_needs_both_filters_off() {
+        crate::client::test_support::ensure_gobject_types();
         assert!(!person_passes(&person("", true), true, false));
         assert!(!person_passes(&person("", true), false, true));
         assert!(person_passes(&person("", true), true, true));
@@ -454,6 +458,7 @@ mod tests {
 
     #[test]
     fn only_an_explicit_never_starts_unnamed_hidden() {
+        crate::client::test_support::ensure_gobject_types();
         assert!(unnamed_visible_initially(unnamed::AUTO));
         assert!(unnamed_visible_initially(unnamed::ALWAYS));
         assert!(!unnamed_visible_initially(unnamed::NEVER));
@@ -470,16 +475,19 @@ mod tests {
     /// empty and looks broken.
     #[test]
     fn fresh_library_of_unnamed_people_resolves_to_showing_them() {
+        crate::client::test_support::ensure_gobject_types();
         assert!(!any_named(&store_of(&["", "", ""])));
     }
 
     #[test]
     fn one_named_person_is_enough_to_hide_the_rest() {
+        crate::client::test_support::ensure_gobject_types();
         assert!(any_named(&store_of(&["", "Alice", ""])));
     }
 
     #[test]
     fn empty_store_has_nobody_named() {
+        crate::client::test_support::ensure_gobject_types();
         assert!(!any_named(&store_of(&[])));
     }
 
@@ -487,6 +495,7 @@ mod tests {
 
     #[test]
     fn turning_a_toggle_on_admits_more_items() {
+        crate::client::test_support::ensure_gobject_types();
         assert_eq!(filter_change(true), gtk::FilterChange::LessStrict);
         assert_eq!(filter_change(false), gtk::FilterChange::MoreStrict);
     }

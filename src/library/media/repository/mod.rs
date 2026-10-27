@@ -488,35 +488,11 @@ impl MediaRepository {
     // ── Write queries ────────────────────────────────────────────────
 
     /// Persist a newly imported media asset record.
+    ///
+    /// Leaves `taken_at_offset_minutes` NULL; the local importer uses
+    /// [`Self::insert_with_taken_at_offset`] to record it.
     pub async fn insert(&self, record: &MediaRecord) -> Result<(), LibraryError> {
-        sqlx::query(
-            "INSERT INTO media (id, content_hash, external_id, relative_path,
-                                original_filename, file_size, imported_at, media_type,
-                                taken_at, width, height, orientation, duration_ms,
-                                is_favorite, is_trashed, trashed_at, is_moments_render)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(record.id.as_str())
-        .bind(&record.content_hash)
-        .bind(&record.external_id)
-        .bind(&record.relative_path)
-        .bind(&record.original_filename)
-        .bind(record.file_size)
-        .bind(record.imported_at)
-        .bind(record.media_type as i64)
-        .bind(record.taken_at)
-        .bind(record.width)
-        .bind(record.height)
-        .bind(record.orientation as i64)
-        .bind(record.duration_ms.map(|v| v as i64))
-        .bind(record.is_favorite as i64)
-        .bind(record.is_trashed as i64)
-        .bind(record.trashed_at)
-        .bind(record.is_moments_render as i64)
-        .execute(self.db.pool())
-        .await
-        .map_err(LibraryError::Db)?;
-        Ok(())
+        self.insert_with_taken_at_offset(record, None).await
     }
 
     /// Set or clear the favourite flag on one or more assets.
@@ -631,6 +607,170 @@ impl MediaRepository {
         Ok(())
     }
 }
+
+// ── Capture-time offset (#677) ───────────────────────────────────────
+
+/// A local row the #677 backfill still has to examine.
+#[derive(Debug, Clone)]
+pub struct TakenAtOffsetCandidate {
+    pub id: MediaId,
+    /// `relative_path` column: relative to `originals/` in Managed mode,
+    /// absolute in Referenced mode.
+    pub relative_path: String,
+    /// The `taken_at` value as currently stored.
+    pub taken_at: i64,
+}
+
+/// One row update produced by the #677 backfill.
+#[derive(Debug, Clone)]
+pub struct TakenAtOffsetRepair {
+    pub id: MediaId,
+    /// The `taken_at` the decision was based on. The update only applies
+    /// while the row still holds this value, so a stale decision is a no-op.
+    pub expected_taken_at: i64,
+    /// The `taken_at` to store (equal to `expected_taken_at` when only
+    /// the offset is being recorded).
+    pub taken_at: i64,
+    /// Offset in minutes east of UTC, from the file's `OffsetTime*` tag.
+    pub offset_minutes: i64,
+}
+
+impl MediaRepository {
+    /// Persist a newly imported media asset record together with the
+    /// capture-time UTC offset read from its EXIF `OffsetTime*` tag.
+    ///
+    /// Written in the same statement as the row, so a local import is
+    /// never visible to the #677 backfill with a NULL offset.
+    ///
+    /// The local importer (`importer/persistence.rs`, via
+    /// `MediaService::insert_media_with_taken_at_offset`) is the only
+    /// caller that passes an offset; every other path (sync, edit renders,
+    /// tests) goes through [`Self::insert`], which leaves it NULL.
+    pub async fn insert_with_taken_at_offset(
+        &self,
+        record: &MediaRecord,
+        taken_at_offset_minutes: Option<i64>,
+    ) -> Result<(), LibraryError> {
+        sqlx::query(
+            "INSERT INTO media (id, content_hash, external_id, relative_path,
+                                original_filename, file_size, imported_at, media_type,
+                                taken_at, width, height, orientation, duration_ms,
+                                is_favorite, is_trashed, trashed_at, is_moments_render,
+                                taken_at_offset_minutes)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(record.id.as_str())
+        .bind(&record.content_hash)
+        .bind(&record.external_id)
+        .bind(&record.relative_path)
+        .bind(&record.original_filename)
+        .bind(record.file_size)
+        .bind(record.imported_at)
+        .bind(record.media_type as i64)
+        .bind(record.taken_at)
+        .bind(record.width)
+        .bind(record.height)
+        .bind(record.orientation as i64)
+        .bind(record.duration_ms.map(|v| v as i64))
+        .bind(record.is_favorite as i64)
+        .bind(record.is_trashed as i64)
+        .bind(record.trashed_at)
+        .bind(record.is_moments_render as i64)
+        .bind(taken_at_offset_minutes)
+        .execute(self.db.pool())
+        .await
+        .map_err(LibraryError::Db)?;
+        Ok(())
+    }
+
+    /// Return `(taken_at, taken_at_offset_minutes)` for `id`, or `None`
+    /// if no such row exists.
+    pub async fn taken_at_with_offset(
+        &self,
+        id: &MediaId,
+    ) -> Result<Option<(Option<i64>, Option<i64>)>, LibraryError> {
+        sqlx::query_as("SELECT taken_at, taken_at_offset_minutes FROM media WHERE id = ?")
+            .bind(id.as_str())
+            .fetch_optional(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)
+    }
+
+    /// Local-origin image rows that have a `taken_at` but no recorded
+    /// offset: the rows the #677 backfill has to examine.
+    ///
+    /// `external_id IS NULL` excludes every row that came from (or was
+    /// matched to) an Immich asset. Those carry the server's
+    /// `localDateTime` and were never shifted.
+    ///
+    /// `is_moments_render = 0` excludes edit renders: a render copies
+    /// `taken_at` from its source row and its re-encoded JPEG carries no
+    /// capture EXIF, so it follows the source rather than being repaired
+    /// on its own. (Renders are only created for Immich-backed originals,
+    /// but one whose upload hasn't drained yet still has no external id.)
+    pub async fn taken_at_offset_candidates(
+        &self,
+    ) -> Result<Vec<TakenAtOffsetCandidate>, LibraryError> {
+        let rows: Vec<(String, String, i64)> = sqlx::query_as(
+            "SELECT id, relative_path, taken_at FROM media
+             WHERE external_id IS NULL
+               AND taken_at IS NOT NULL
+               AND taken_at_offset_minutes IS NULL
+               AND is_moments_render = 0
+               AND media_type = ?
+             ORDER BY id",
+        )
+        .bind(MediaType::Image as i64)
+        .fetch_all(self.db.pool())
+        .await
+        .map_err(LibraryError::Db)?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, relative_path, taken_at)| TakenAtOffsetCandidate {
+                id: MediaId::new(id),
+                relative_path,
+                taken_at,
+            })
+            .collect())
+    }
+
+    /// Apply a batch of #677 repairs in one transaction.
+    ///
+    /// Each update is a compare-and-set: it only touches a row whose
+    /// offset is still NULL and whose `taken_at` still holds the value the
+    /// repair was computed from. Re-applying a batch, or a batch computed
+    /// before a crash, therefore never shifts a row twice. Returns the ids
+    /// that were actually updated.
+    pub async fn apply_taken_at_offset_repairs(
+        &self,
+        repairs: &[TakenAtOffsetRepair],
+    ) -> Result<Vec<MediaId>, LibraryError> {
+        if repairs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut updated = Vec::new();
+        let mut tx = self.db.pool().begin().await.map_err(LibraryError::Db)?;
+        for repair in repairs {
+            let result = sqlx::query(
+                "UPDATE media SET taken_at = ?, taken_at_offset_minutes = ?
+                 WHERE id = ? AND taken_at = ? AND taken_at_offset_minutes IS NULL",
+            )
+            .bind(repair.taken_at)
+            .bind(repair.offset_minutes)
+            .bind(repair.id.as_str())
+            .bind(repair.expected_taken_at)
+            .execute(&mut *tx)
+            .await
+            .map_err(LibraryError::Db)?;
+            if result.rows_affected() > 0 {
+                updated.push(repair.id.clone());
+            }
+        }
+        tx.commit().await.map_err(LibraryError::Db)?;
+        Ok(updated)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

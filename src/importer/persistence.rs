@@ -96,26 +96,32 @@ pub async fn persist(params: PersistParams<'_>) -> Result<PersistResult, ImportE
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
+    // The offset is stored beside `taken_at`, never applied to it (#549),
+    // and written in the same insert so the #677 backfill skips this row.
+    let taken_at_offset_minutes = exif.captured_at_tz;
     media
-        .insert_media(&MediaRecord {
-            id: media_id.clone(),
-            content_hash: content_hash.map(|s| s.to_string()),
-            external_id: None,
-            relative_path,
-            original_filename,
-            file_size,
-            imported_at,
-            media_type,
-            taken_at: exif.captured_at,
-            width: exif.width.map(|w| w as i64),
-            height: exif.height.map(|h| h as i64),
-            orientation: exif.orientation.unwrap_or(1),
-            duration_ms,
-            is_favorite: false,
-            is_trashed: false,
-            trashed_at: None,
-            is_moments_render: false,
-        })
+        .insert_media_with_taken_at_offset(
+            &MediaRecord {
+                id: media_id.clone(),
+                content_hash: content_hash.map(|s| s.to_string()),
+                external_id: None,
+                relative_path,
+                original_filename,
+                file_size,
+                imported_at,
+                media_type,
+                taken_at: exif.captured_at,
+                width: exif.width.map(|w| w as i64),
+                height: exif.height.map(|h| h as i64),
+                orientation: exif.orientation.unwrap_or(1),
+                duration_ms,
+                is_favorite: false,
+                is_trashed: false,
+                trashed_at: None,
+                is_moments_render: false,
+            },
+            taken_at_offset_minutes,
+        )
         .await?;
 
     // ── Persist metadata record ───────────────────────────────────────

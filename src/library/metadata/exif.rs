@@ -23,9 +23,9 @@ pub struct ExifInfo {
     /// into `media.taken_at`, so both import paths agree. Issue #549.
     pub captured_at: Option<i64>,
     /// UTC offset of the capture timezone, in minutes east of UTC, from
-    /// the `OffsetTimeOriginal` / `OffsetTime` tags. Recorded for future
-    /// use (it is not currently persisted) and intentionally *not* applied
-    /// to [`Self::captured_at`].
+    /// the `OffsetTimeOriginal` / `OffsetTime` tags. Persisted as
+    /// `media.taken_at_offset_minutes` (#677) and intentionally *not*
+    /// applied to [`Self::captured_at`].
     pub captured_at_tz: Option<i64>,
     pub width: Option<u32>,
     pub height: Option<u32>,

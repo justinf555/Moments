@@ -390,6 +390,7 @@ mod tests {
 
     #[test]
     fn find_by_id_returns_matching_item() {
+        crate::client::test_support::ensure_gobject_types();
         let store = gio::ListStore::new::<PersonItemObject>();
         add_person(&store, test_person("p1", "Alice"));
         add_person(&store, test_person("p2", "Bob"));
@@ -401,6 +402,7 @@ mod tests {
 
     #[test]
     fn find_by_id_returns_none_for_missing() {
+        crate::client::test_support::ensure_gobject_types();
         let store = gio::ListStore::new::<PersonItemObject>();
         add_person(&store, test_person("p1", "Alice"));
 
@@ -409,6 +411,7 @@ mod tests {
 
     #[test]
     fn find_by_id_empty_store() {
+        crate::client::test_support::ensure_gobject_types();
         let store = gio::ListStore::new::<PersonItemObject>();
         assert!(find_by_id(&store, "any").is_none());
     }
@@ -417,6 +420,7 @@ mod tests {
 
     #[test]
     fn create_model_tracks_weak_ref() {
+        crate::client::test_support::ensure_gobject_types();
         let client = PeopleClientV2::new();
         let store = client.create_model();
 
@@ -431,6 +435,7 @@ mod tests {
 
     #[test]
     fn insert_into_models_adds_to_all_stores() {
+        crate::client::test_support::ensure_gobject_types();
         let client = PeopleClientV2::new();
         let store1 = client.create_model();
         let store2 = client.create_model();
@@ -445,6 +450,7 @@ mod tests {
 
     #[test]
     fn insert_into_models_skips_dead_refs() {
+        crate::client::test_support::ensure_gobject_types();
         let client = PeopleClientV2::new();
         let live = client.create_model();
         let dead = client.create_model();
@@ -456,6 +462,7 @@ mod tests {
 
     #[test]
     fn insert_into_models_is_idempotent() {
+        crate::client::test_support::ensure_gobject_types();
         let client = PeopleClientV2::new();
         let store = client.create_model();
 
@@ -473,6 +480,7 @@ mod tests {
 
     #[test]
     fn update_in_models_patches_all_stores() {
+        crate::client::test_support::ensure_gobject_types();
         let client = PeopleClientV2::new();
         let store1 = client.create_model();
         let store2 = client.create_model();
@@ -492,6 +500,7 @@ mod tests {
 
     #[test]
     fn update_in_models_no_match_is_noop() {
+        crate::client::test_support::ensure_gobject_types();
         let client = PeopleClientV2::new();
         let store = client.create_model();
         add_person(&store, test_person("p1", "Alice"));
@@ -506,6 +515,7 @@ mod tests {
 
     #[test]
     fn update_in_models_skips_dead_refs() {
+        crate::client::test_support::ensure_gobject_types();
         let client = PeopleClientV2::new();
         let live = client.create_model();
         let dead = client.create_model();
@@ -523,6 +533,7 @@ mod tests {
 
     #[test]
     fn update_in_models_patches_hidden_state() {
+        crate::client::test_support::ensure_gobject_types();
         let client = PeopleClientV2::new();
         let store = client.create_model();
         add_person(&store, test_person("p1", "Alice"));
@@ -539,6 +550,7 @@ mod tests {
 
     #[test]
     fn remove_from_models_removes_from_all_stores() {
+        crate::client::test_support::ensure_gobject_types();
         let client = PeopleClientV2::new();
         let store1 = client.create_model();
         let store2 = client.create_model();
@@ -558,6 +570,7 @@ mod tests {
 
     #[test]
     fn remove_from_models_prunes_dead_refs() {
+        crate::client::test_support::ensure_gobject_types();
         let client = PeopleClientV2::new();
         let _live = client.create_model();
         let dead = client.create_model();

@@ -257,14 +257,15 @@ impl PushManager {
                     return Ok(());
                 };
                 self.client
-                    .delete_with_body(
+                    .delete_with_body_if_exists(
                         "/assets",
                         &serde_json::json!({
                             "ids": [external_id],
                             "force": true,
                         }),
                     )
-                    .await
+                    .await?;
+                Ok(())
             }
 
             // ── Album mutations ─────────────────────────────────────
@@ -296,8 +297,9 @@ impl PushManager {
                     return Ok(());
                 };
                 self.client
-                    .delete_no_content(&format!("/albums/{external_id}"))
-                    .await
+                    .delete_no_content_if_exists(&format!("/albums/{external_id}"))
+                    .await?;
+                Ok(())
             }
 
             OutboxMutation::AlbumMediaAdded {
@@ -321,12 +323,17 @@ impl PushManager {
             } => {
                 let external_id = self.lookup_album_external_id(album_id.as_str()).await?;
                 let external_media_ids = self.resolve_media_external_ids_list(&media_ids).await?;
-                self.client
-                    .delete_with_body(
+                let missing = self
+                    .client
+                    .delete_with_body_if_exists(
                         &format!("/albums/{external_id}/assets"),
                         &serde_json::json!({ "ids": external_media_ids }),
                     )
                     .await?;
+                if missing {
+                    // The album itself is gone server-side; nothing to heartbeat.
+                    return Ok(());
+                }
                 self.bump_album_heartbeat(album_id.as_str()).await
             }
 
@@ -1022,6 +1029,128 @@ mod tests {
             interval_rx: tokio::sync::Mutex::new(interval_rx),
             moments_edit_tag: tokio::sync::Mutex::new(None),
         }
+    }
+
+    /// Serve one canned HTTP response per connection on a loopback port.
+    /// Returns the base URL.
+    async fn serve_status(status_line: &'static str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    let _ = sock.read(&mut buf).await;
+                    let resp = format!(
+                        "HTTP/1.1 {status_line}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    async fn make_push_manager_at(db: Database, base_url: &str) -> PushManager {
+        let mut pm = make_push_manager(db).await;
+        pm.client = ImmichClient::new(base_url, "fake-token").unwrap();
+        pm
+    }
+
+    fn album_delete_entry() -> OutboxEntry {
+        OutboxEntry {
+            id: 1,
+            entity_type: "album".into(),
+            entity_id: "local-album".into(),
+            action: "delete".into(),
+            payload: Some(r#"{"external_id":"ext-album"}"#.into()),
+            attempts: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn push_album_delete_treats_404_as_success() {
+        let (_dir, db) = setup_push_db().await;
+        let url = serve_status("404 Not Found").await;
+        let pm = make_push_manager_at(db, &url).await;
+        pm.push_entry(&album_delete_entry())
+            .await
+            .expect("404 on album delete means already gone");
+    }
+
+    #[tokio::test]
+    async fn push_asset_delete_treats_404_as_success() {
+        let (_dir, db) = setup_push_db().await;
+        let url = serve_status("404 Not Found").await;
+        let pm = make_push_manager_at(db, &url).await;
+        let entry = OutboxEntry {
+            id: 1,
+            entity_type: "asset".into(),
+            entity_id: "local-asset".into(),
+            action: "delete".into(),
+            payload: Some(r#"{"external_id":"ext-asset"}"#.into()),
+            attempts: 0,
+        };
+        pm.push_entry(&entry)
+            .await
+            .expect("404 on asset delete means already gone");
+    }
+
+    #[tokio::test]
+    async fn push_album_media_removed_404_succeeds_and_skips_heartbeat() {
+        let (_dir, db) = setup_push_db().await;
+        let now = chrono::Utc::now().timestamp();
+        sqlx::query(
+            "INSERT INTO albums (id, name, created_at, updated_at, external_id) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind("local-album")
+        .bind("Gone")
+        .bind(now)
+        .bind(now)
+        .bind("ext-album")
+        .execute(db.pool())
+        .await
+        .unwrap();
+        let url = serve_status("404 Not Found").await;
+        let pm = make_push_manager_at(db.clone(), &url).await;
+        let entry = OutboxEntry {
+            id: 1,
+            entity_type: "album".into(),
+            entity_id: "local-album".into(),
+            action: "remove_media".into(),
+            payload: Some(r#"{"media_ids":[]}"#.into()),
+            attempts: 0,
+        };
+        pm.push_entry(&entry)
+            .await
+            .expect("404 on membership removal means album already gone");
+        let (seen,): (i64,) =
+            sqlx::query_as("SELECT last_seen_at FROM albums WHERE id = 'local-album'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(seen, 0, "heartbeat must be skipped for a gone album");
+    }
+
+    #[tokio::test]
+    async fn push_album_delete_still_fails_on_server_error() {
+        let (_dir, db) = setup_push_db().await;
+        let url = serve_status("500 Internal Server Error").await;
+        let pm = make_push_manager_at(db, &url).await;
+        assert!(pm.push_entry(&album_delete_entry()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn push_album_delete_succeeds_on_204() {
+        let (_dir, db) = setup_push_db().await;
+        let url = serve_status("204 No Content").await;
+        let pm = make_push_manager_at(db, &url).await;
+        pm.push_entry(&album_delete_entry()).await.unwrap();
     }
 
     #[tokio::test]
