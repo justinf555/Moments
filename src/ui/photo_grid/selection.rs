@@ -138,6 +138,7 @@ mod tests {
 
     #[test]
     fn new_is_empty() {
+        crate::client::test_support::ensure_gobject_types();
         let s = SelectionState::new();
         assert!(s.is_empty());
         assert_eq!(s.len(), 0);
@@ -146,6 +147,7 @@ mod tests {
 
     #[test]
     fn insert_returns_true_then_false() {
+        crate::client::test_support::ensure_gobject_types();
         let s = SelectionState::new();
         let a = id("a");
         assert!(s.insert(a.clone()));
@@ -155,6 +157,7 @@ mod tests {
 
     #[test]
     fn remove_returns_true_on_hit_false_on_miss() {
+        crate::client::test_support::ensure_gobject_types();
         let s = SelectionState::new();
         let a = id("a");
         s.insert(a.clone());
@@ -165,6 +168,7 @@ mod tests {
 
     #[test]
     fn clear_empties() {
+        crate::client::test_support::ensure_gobject_types();
         let s = SelectionState::new();
         s.insert(id("a"));
         s.insert(id("b"));
@@ -174,6 +178,7 @@ mod tests {
 
     #[test]
     fn contains_reflects_membership() {
+        crate::client::test_support::ensure_gobject_types();
         let s = SelectionState::new();
         let a = id("a");
         let b = id("b");
@@ -184,6 +189,7 @@ mod tests {
 
     #[test]
     fn ids_returns_all() {
+        crate::client::test_support::ensure_gobject_types();
         let s = SelectionState::new();
         s.insert(id("a"));
         s.insert(id("b"));
@@ -195,6 +201,7 @@ mod tests {
 
     #[test]
     fn changed_fires_only_on_real_mutations() {
+        crate::client::test_support::ensure_gobject_types();
         let s = SelectionState::new();
         let counter = count_changes(&s);
         let a = id("a");

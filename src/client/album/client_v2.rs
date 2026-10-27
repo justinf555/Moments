@@ -712,6 +712,7 @@ mod tests {
 
     #[test]
     fn signal_album_deleted_exists() {
+        crate::client::test_support::ensure_gobject_types();
         let client = AlbumClientV2::new();
         let _handler = client.connect_closure(
             "album-deleted",
@@ -725,6 +726,7 @@ mod tests {
 
     #[test]
     fn find_by_id_returns_matching_item() {
+        crate::client::test_support::ensure_gobject_types();
         let store = gio::ListStore::new::<AlbumItemObject>();
         store.append(&AlbumItemObject::new(test_album("a1", "Alpha")));
         store.append(&AlbumItemObject::new(test_album("b2", "Beta")));
@@ -736,6 +738,7 @@ mod tests {
 
     #[test]
     fn find_by_id_returns_none_for_missing() {
+        crate::client::test_support::ensure_gobject_types();
         let store = gio::ListStore::new::<AlbumItemObject>();
         store.append(&AlbumItemObject::new(test_album("a1", "Alpha")));
 
@@ -744,6 +747,7 @@ mod tests {
 
     #[test]
     fn find_by_id_empty_store() {
+        crate::client::test_support::ensure_gobject_types();
         let store = gio::ListStore::new::<AlbumItemObject>();
         assert!(find_by_id(&store, "any").is_none());
     }
@@ -752,6 +756,7 @@ mod tests {
 
     #[test]
     fn create_model_tracks_weak_ref() {
+        crate::client::test_support::ensure_gobject_types();
         let client = AlbumClientV2::new();
         let store = client.create_model();
 
@@ -766,6 +771,7 @@ mod tests {
 
     #[test]
     fn insert_into_models_adds_to_all_stores() {
+        crate::client::test_support::ensure_gobject_types();
         let client = AlbumClientV2::new();
         let store1 = client.create_model();
         let store2 = client.create_model();
@@ -780,6 +786,7 @@ mod tests {
 
     #[test]
     fn insert_into_models_skips_dead_refs() {
+        crate::client::test_support::ensure_gobject_types();
         let client = AlbumClientV2::new();
         let _live = client.create_model();
         let dead = client.create_model();
@@ -792,6 +799,7 @@ mod tests {
 
     #[test]
     fn insert_into_models_is_idempotent() {
+        crate::client::test_support::ensure_gobject_types();
         let client = AlbumClientV2::new();
         let store = client.create_model();
 
@@ -809,6 +817,7 @@ mod tests {
 
     #[test]
     fn update_in_models_patches_all_stores() {
+        crate::client::test_support::ensure_gobject_types();
         let client = AlbumClientV2::new();
         let store1 = client.create_model();
         let store2 = client.create_model();
@@ -828,6 +837,7 @@ mod tests {
 
     #[test]
     fn update_in_models_no_match_is_noop() {
+        crate::client::test_support::ensure_gobject_types();
         let client = AlbumClientV2::new();
         let store = client.create_model();
         client.insert_into_models(test_album("a1", "Alpha"));
@@ -845,6 +855,7 @@ mod tests {
 
     #[test]
     fn remove_from_models_removes_from_all_stores() {
+        crate::client::test_support::ensure_gobject_types();
         let client = AlbumClientV2::new();
         let store1 = client.create_model();
         let store2 = client.create_model();
@@ -864,6 +875,7 @@ mod tests {
 
     #[test]
     fn remove_from_models_prunes_dead_refs() {
+        crate::client::test_support::ensure_gobject_types();
         let client = AlbumClientV2::new();
         let _live = client.create_model();
         let dead = client.create_model();
@@ -882,6 +894,7 @@ mod tests {
 
     #[test]
     fn update_in_models_patches_metadata_fields() {
+        crate::client::test_support::ensure_gobject_types();
         let client = AlbumClientV2::new();
         let store = client.create_model();
         client.insert_into_models(test_album("a1", "Alpha"));
@@ -905,6 +918,7 @@ mod tests {
 
     #[test]
     fn texture_from_rgba_creates_valid_texture() {
+        crate::client::test_support::ensure_gobject_types();
         // 2x2 red RGBA pixels.
         let pixels = vec![
             255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255,
