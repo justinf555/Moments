@@ -8,6 +8,8 @@ use std::sync::Once;
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 
+use crate::ui::photo_grid::selection::SelectionState;
+
 use super::{
     AlbumClientV2, AlbumItemObject, ImportClient, MediaClientV2, MediaItemObject, PeopleClientV2,
     PersonItemObject, SyncClient,
@@ -45,5 +47,6 @@ pub(crate) fn ensure_gobject_types() {
         register::<MediaClientV2>();
         register::<SyncClient>();
         register::<ImportClient>();
+        register::<SelectionState>();
     });
 }
