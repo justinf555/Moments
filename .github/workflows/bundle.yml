@@ -53,7 +53,7 @@ jobs:
       GPG_KEY_ID: ${{ secrets.FLATPAK_GPG_KEY_ID }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
           # `make bundle CHANNEL=nightly` derives its version suffix from
@@ -73,7 +73,7 @@ jobs:
       # cache, they don't write it.
       - name: Restore flatpak-builder state
         id: cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .flatpak-builder
           key: flatpak-bundle-${{ inputs.channel }}-${{ hashFiles('build-aux/io.github.justinf555.Moments.*.json', 'Cargo.lock') }}
@@ -130,7 +130,7 @@ jobs:
         if: >-
           github.event_name != 'workflow_dispatch'
           && steps.cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: .flatpak-builder
           key: ${{ steps.cache.outputs.cache-primary-key }}
@@ -141,7 +141,7 @@ jobs:
           GNUPGHOME: ${{ steps.gpg.outputs.homedir }}
         run: gpg --armor --export "${{ steps.gpg.outputs.key_id }}" > moments-releases.asc
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: flatpak-bundle-${{ inputs.channel }}
           path: |
