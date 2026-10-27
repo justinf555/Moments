@@ -117,9 +117,19 @@ impl MomentsApplication {
                     };
 
                 let db_for_sync = db.clone();
+                let is_local = immich_client.is_none();
                 let open_result = tokio
                     .spawn(async move {
-                        Library::open(bundle, storage_mode, db, recorder, resolver).await
+                        let library =
+                            Library::open(bundle, storage_mode, db, recorder, resolver).await?;
+                        // One-shot repairs (#677) run here, before any
+                        // client loads a grid, so the first page already
+                        // reads the repaired rows and needs no re-sort.
+                        // Immich rows were never affected.
+                        if is_local {
+                            library.maintenance().run_pending_local().await;
+                        }
+                        Ok(library)
                     })
                     .await
                     .map_err(|e| crate::library::error::LibraryError::Runtime(e.to_string()));
