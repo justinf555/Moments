@@ -18,7 +18,7 @@ mod common;
 use gtk::prelude::*;
 
 use moments::client::MediaItemObject;
-use moments::library::media::{MediaId, MediaItem, MediaType};
+use moments::library::media::{MediaId, MediaItem, MediaType, MediaVisibility};
 
 /// Create a test MediaItem with the given ID and sensible defaults.
 fn test_item(id: &str) -> MediaItem {
@@ -37,6 +37,7 @@ fn test_item(id: &str) -> MediaItem {
         duration_ms: None,
         stack_id: None,
         is_moments_render: false,
+        visibility: MediaVisibility::Timeline,
     }
 }
 

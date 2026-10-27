@@ -30,6 +30,14 @@ pub(crate) struct SyncAckRequest {
     pub acks: Vec<String>,
 }
 
+/// Body of `DELETE /sync/ack`: drop the server-side checkpoints for these
+/// entity types, so the next stream re-sends them from the start.
+/// Issue #695.
+#[derive(Debug, Serialize)]
+pub(crate) struct SyncAckDeleteRequest {
+    pub types: Vec<String>,
+}
+
 // ── Asset types ─────────────────────────────────────────────────────────────
 
 /// Asset entity emitted on the `AssetsV2` sync stream.
@@ -86,6 +94,14 @@ pub(crate) struct SyncAssetV2 {
     #[allow(dead_code)] // wired into Phase A for the contract; consumed in Phase D
     #[serde(rename = "isEdited", default)]
     pub is_edited: Option<bool>,
+    /// Immich's `AssetVisibility`: `"timeline"`, `"archive"`, `"hidden"`
+    /// or `"locked"` (lowercase on the wire, unlike `type`'s `"IMAGE"`).
+    /// Kept as the raw string, like `type`; the handler maps it with
+    /// `MediaVisibility::parse_or_hidden`, so an unknown value is never
+    /// listed. Absent or `null` (a server that pre-dates the field) means
+    /// timeline. Issue #695.
+    #[serde(default)]
+    pub visibility: Option<String>,
 }
 
 /// Stack entity emitted on the `StacksV1` sync stream. Carries the
@@ -471,6 +487,29 @@ mod tests {
         let asset: SyncAssetV2 = serde_json::from_value(json).unwrap();
         assert!(asset.stack_id.is_none());
         assert!(asset.is_edited.is_none());
+        assert!(asset.visibility.is_none());
+    }
+
+    /// Issue #695: `AssetV2` carries `visibility` as a lowercase string.
+    #[test]
+    fn deserialize_sync_asset_v2_visibility() {
+        for value in ["timeline", "archive", "hidden", "locked"] {
+            let json = serde_json::json!({
+                "id": "asset-vis",
+                "originalFileName": "v.jpg",
+                "fileCreatedAt": null,
+                "localDateTime": null,
+                "type": "IMAGE",
+                "deletedAt": null,
+                "isFavorite": false,
+                "width": null,
+                "height": null,
+                "duration": null,
+                "visibility": value
+            });
+            let asset: SyncAssetV2 = serde_json::from_value(json).unwrap();
+            assert_eq!(asset.visibility.as_deref(), Some(value));
+        }
     }
 
     /// Issue #224: `StackV1` events carry the stack's primary asset id.

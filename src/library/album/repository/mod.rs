@@ -6,7 +6,8 @@ use std::collections::HashMap;
 use super::model::{Album, AlbumId};
 use crate::library::db::{id_placeholders, Database};
 use crate::library::error::LibraryError;
-use crate::library::media::MediaId;
+use crate::library::media::repository::visibility_predicate;
+use crate::library::media::{MediaId, MediaVisibility};
 
 mod sync;
 
@@ -39,47 +40,23 @@ impl AlbumRepository {
 
     /// List all albums, ordered by most recently updated first.
     pub async fn list(&self) -> Result<Vec<Album>, LibraryError> {
-        let rows: Vec<AlbumRow> = sqlx::query_as(
-            "SELECT a.id, a.name, a.created_at, a.updated_at,
-                    COUNT(am.media_id) as media_count,
-                    (SELECT am2.media_id FROM album_media am2
-                     JOIN media m ON m.id = am2.media_id AND m.is_trashed = 0
-                     WHERE am2.album_id = a.id
-                     ORDER BY am2.added_at DESC LIMIT 1) as cover_media_id,
-                    a.is_pinned
-             FROM albums a
-             LEFT JOIN album_media am ON a.id = am.album_id
-                 LEFT JOIN media m2 ON am.media_id = m2.id AND m2.is_trashed = 0
-             GROUP BY a.id
-             ORDER BY a.updated_at DESC",
-        )
-        .fetch_all(self.db.pool())
-        .await
-        .map_err(LibraryError::Db)?;
+        let sql = album_select_sql("", "ORDER BY a.updated_at DESC");
+        let rows: Vec<AlbumRow> = sqlx::query_as(&sql)
+            .fetch_all(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
 
         Ok(rows.into_iter().map(album_from_row).collect())
     }
 
     /// Fetch a single album by ID, including media count and cover.
     pub async fn get(&self, id: &AlbumId) -> Result<Option<Album>, LibraryError> {
-        let row: Option<AlbumRow> = sqlx::query_as(
-            "SELECT a.id, a.name, a.created_at, a.updated_at,
-                    COUNT(am.media_id) as media_count,
-                    (SELECT am2.media_id FROM album_media am2
-                     JOIN media m ON m.id = am2.media_id AND m.is_trashed = 0
-                     WHERE am2.album_id = a.id
-                     ORDER BY am2.added_at DESC LIMIT 1) as cover_media_id,
-                    a.is_pinned
-             FROM albums a
-             LEFT JOIN album_media am ON a.id = am.album_id
-                 LEFT JOIN media m2 ON am.media_id = m2.id AND m2.is_trashed = 0
-             WHERE a.id = ?
-             GROUP BY a.id",
-        )
-        .bind(id.as_str())
-        .fetch_optional(self.db.pool())
-        .await
-        .map_err(LibraryError::Db)?;
+        let sql = album_select_sql("WHERE a.id = ?", "");
+        let row: Option<AlbumRow> = sqlx::query_as(&sql)
+            .bind(id.as_str())
+            .fetch_optional(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
 
         Ok(row.map(album_from_row))
     }
@@ -228,12 +205,13 @@ impl AlbumRepository {
             return Ok(HashMap::new());
         }
         let placeholders = id_placeholders(media_ids.len());
+        let listable = listable("m");
         let sql = format!(
             "SELECT am.album_id, COUNT(*) as cnt \
              FROM album_media am \
              JOIN media m ON am.media_id = m.id \
              WHERE am.media_id IN ({placeholders}) \
-               AND m.is_trashed = 0 \
+               AND m.is_trashed = 0 AND {listable} \
              GROUP BY am.album_id"
         );
         let mut query = sqlx::query_as::<_, (String, i64)>(&sql);
@@ -256,22 +234,54 @@ impl AlbumRepository {
         album_id: &AlbumId,
         limit: u32,
     ) -> Result<Vec<MediaId>, LibraryError> {
-        let rows: Vec<(String,)> = sqlx::query_as(
+        let sql = format!(
             "SELECT am.media_id
              FROM album_media am
              JOIN media m ON am.media_id = m.id
-             WHERE am.album_id = ? AND m.is_trashed = 0
+             WHERE am.album_id = ? AND m.is_trashed = 0 AND {}
              ORDER BY am.added_at DESC
              LIMIT ?",
-        )
-        .bind(album_id.as_str())
-        .bind(limit as i64)
-        .fetch_all(self.db.pool())
-        .await
-        .map_err(LibraryError::Db)?;
+            listable("m")
+        );
+        let rows: Vec<(String,)> = sqlx::query_as(&sql)
+            .bind(album_id.as_str())
+            .bind(limit as i64)
+            .fetch_all(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
 
         Ok(rows.into_iter().map(|(id,)| MediaId::new(id)).collect())
     }
+}
+
+/// Issue #695: hidden and locked media never count towards an album or
+/// become its cover. Same predicate as the album grid's
+/// `MediaFilter::Album` listing.
+fn listable(alias: &str) -> String {
+    visibility_predicate(alias, MediaVisibility::LISTABLE)
+}
+
+/// `SELECT` for album rows with their media count and cover. The count
+/// and cover only consider media the album grid can show (not trashed,
+/// not hidden or locked), so the card agrees with the grid.
+fn album_select_sql(where_clause: &str, order_clause: &str) -> String {
+    let cover = listable("m");
+    let counted = listable("m2");
+    format!(
+        "SELECT a.id, a.name, a.created_at, a.updated_at,
+                COUNT(m2.id) as media_count,
+                (SELECT am2.media_id FROM album_media am2
+                 JOIN media m ON m.id = am2.media_id AND m.is_trashed = 0 AND {cover}
+                 WHERE am2.album_id = a.id
+                 ORDER BY am2.added_at DESC LIMIT 1) as cover_media_id,
+                a.is_pinned
+         FROM albums a
+         LEFT JOIN album_media am ON a.id = am.album_id
+             LEFT JOIN media m2 ON am.media_id = m2.id AND m2.is_trashed = 0 AND {counted}
+         {where_clause}
+         GROUP BY a.id
+         {order_clause}"
+    )
 }
 
 /// Convert an `AlbumRow` into an `Album`.
@@ -489,6 +499,76 @@ mod tests {
             .unwrap();
         repo.add_media(&album_id, &[id_a, id_b]).await.unwrap();
         assert_eq!(repo.list().await.unwrap()[0].media_count, 2);
+    }
+
+    /// Issue #695: hidden and locked media never count towards an album
+    /// or become its cover, even when added most recently; archived media
+    /// does (it's in the album grid). Trashed media isn't counted either,
+    /// so the card's count matches the grid.
+    #[tokio::test]
+    async fn album_count_and_cover_exclude_hidden_and_locked() {
+        let dir = tempdir().unwrap();
+        let (repo, media, db) = test_repo(dir.path()).await;
+        let album_id = repo.create("Vis").await.unwrap();
+
+        let mut ids = Vec::new();
+        for (n, vis) in [
+            MediaVisibility::Timeline,
+            MediaVisibility::Archive,
+            MediaVisibility::Hidden,
+            MediaVisibility::Locked,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let id = MediaId::new(vis.as_str().to_string());
+            media
+                .upsert_with_visibility(
+                    &record_with_taken_at(id.clone(), &format!("v/{n}.jpg"), Some(1000)),
+                    vis,
+                )
+                .await
+                .unwrap();
+            ids.push(id);
+        }
+        let trashed = MediaId::new("trashed".to_string());
+        media
+            .insert(&record_with_taken_at(
+                trashed.clone(),
+                "v/t.jpg",
+                Some(1000),
+            ))
+            .await
+            .unwrap();
+        media.trash(std::slice::from_ref(&trashed)).await.unwrap();
+
+        let mut all = ids.clone();
+        all.push(trashed);
+        repo.add_media(&album_id, &all).await.unwrap();
+        // Order the additions: timeline oldest … locked newest.
+        for (n, id) in ids.iter().enumerate() {
+            sqlx::query("UPDATE album_media SET added_at = ? WHERE media_id = ?")
+                .bind(n as i64)
+                .bind(id.as_str())
+                .execute(db.pool())
+                .await
+                .unwrap();
+        }
+
+        let album = repo.get(&album_id).await.unwrap().unwrap();
+        assert_eq!(album.media_count, 2, "timeline + archive");
+        assert_eq!(
+            album.cover_media_id.as_ref().map(|i| i.as_str()),
+            Some("archive")
+        );
+        assert_eq!(repo.list().await.unwrap()[0].media_count, 2);
+
+        let covers = repo.cover_media_ids(&album_id, 10).await.unwrap();
+        let covers: Vec<&str> = covers.iter().map(|i| i.as_str()).collect();
+        assert_eq!(covers, ["archive", "timeline"]);
+
+        let containing = repo.containing_media(&ids).await.unwrap();
+        assert_eq!(containing.get(&album_id), Some(&2));
     }
 
     #[tokio::test]

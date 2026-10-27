@@ -7,7 +7,7 @@
 use super::MediaRepository;
 use crate::library::db::id_placeholders;
 use crate::library::error::LibraryError;
-use crate::library::media::model::{MediaId, MediaRecord, Stack};
+use crate::library::media::model::{MediaId, MediaRecord, MediaVisibility, Stack};
 
 impl MediaRepository {
     /// Return the local `MediaId`s of every member of a stack
@@ -44,7 +44,31 @@ impl MediaRepository {
     /// retroactively rewriting "when this asset entered my library" to
     /// the server's `file_created_at` (the photo's capture time), which
     /// would silently move assets out of the Recent Imports view (issue #614).
+    ///
+    /// `visibility` is preserved from the existing row (or left at the
+    /// `timeline` default for a new one). The Immich pull path, which
+    /// knows the server's value, uses [`Self::upsert_with_visibility`].
     pub async fn upsert(&self, record: &MediaRecord) -> Result<Option<MediaId>, LibraryError> {
+        self.upsert_inner(record, None).await
+    }
+
+    /// [`Self::upsert`], also writing the asset's `visibility`. Issue #695.
+    pub async fn upsert_with_visibility(
+        &self,
+        record: &MediaRecord,
+        visibility: MediaVisibility,
+    ) -> Result<Option<MediaId>, LibraryError> {
+        self.upsert_inner(record, Some(visibility)).await
+    }
+
+    /// Shared body of the two upserts. `None` keeps the stored visibility:
+    /// `INSERT OR REPLACE` would otherwise reset it to the column default,
+    /// silently putting a locked asset back in the timeline.
+    async fn upsert_inner(
+        &self,
+        record: &MediaRecord,
+        visibility: Option<MediaVisibility>,
+    ) -> Result<Option<MediaId>, LibraryError> {
         // Capture the existing row's locally-only fields so we can
         // preserve them across the INSERT OR REPLACE:
         //
@@ -63,16 +87,28 @@ impl MediaRepository {
         // `id_by_content_hash_pending_push`), so a plain `id = ?` lookup
         // is sufficient; the older `OR external_id = ?` arm was for the
         // local→server UUID swap that no longer happens.
-        let existing: Option<(i64, i64)> =
-            sqlx::query_as("SELECT imported_at, is_moments_render FROM media WHERE id = ?")
-                .bind(record.id.as_str())
-                .fetch_optional(self.db.pool())
-                .await
-                .map_err(LibraryError::Db)?;
-        let imported_at = existing.map(|(t, _)| t).unwrap_or(record.imported_at);
+        let existing: Option<(i64, i64, String)> = sqlx::query_as(
+            "SELECT imported_at, is_moments_render, visibility FROM media WHERE id = ?",
+        )
+        .bind(record.id.as_str())
+        .fetch_optional(self.db.pool())
+        .await
+        .map_err(LibraryError::Db)?;
+        let imported_at = existing
+            .as_ref()
+            .map(|(t, _, _)| *t)
+            .unwrap_or(record.imported_at);
         let is_moments_render = existing
-            .map(|(_, r)| r != 0)
+            .as_ref()
+            .map(|(_, r, _)| *r != 0)
             .unwrap_or(record.is_moments_render);
+        // Issue #695: an explicit value wins; otherwise keep what's stored.
+        let visibility = visibility.unwrap_or_else(|| {
+            existing
+                .as_ref()
+                .map(|(_, _, v)| MediaVisibility::parse_or_hidden(v))
+                .unwrap_or_default()
+        });
 
         // Atomic delete-and-return so the replaced-id observation can
         // never disagree with the row that was actually removed. SQLite
@@ -90,8 +126,9 @@ impl MediaRepository {
                                            original_filename, file_size, imported_at,
                                            media_type, taken_at, width, height,
                                            orientation, duration_ms, is_favorite,
-                                           is_trashed, trashed_at, is_moments_render)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                           is_trashed, trashed_at, is_moments_render,
+                                           visibility)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(record.id.as_str())
         .bind(&record.content_hash)
@@ -110,6 +147,7 @@ impl MediaRepository {
         .bind(record.is_trashed as i64)
         .bind(record.trashed_at)
         .bind(is_moments_render as i64)
+        .bind(visibility.as_str())
         .execute(self.db.pool())
         .await
         .map_err(LibraryError::Db)?;
@@ -419,6 +457,69 @@ mod tests {
     use crate::library::db::test_helpers::*;
     use crate::library::media::model::MediaFilter;
     use tempfile::tempdir;
+
+    async fn stored_visibility(db: &crate::library::db::Database, id: &MediaId) -> String {
+        sqlx::query_scalar("SELECT visibility FROM media WHERE id = ?")
+            .bind(id.as_str())
+            .fetch_one(db.pool())
+            .await
+            .unwrap()
+    }
+
+    /// Issue #695: the pull upsert writes the server's visibility, and a
+    /// later upsert with a different value overwrites it.
+    #[tokio::test]
+    async fn upsert_with_visibility_stores_and_overwrites() {
+        let dir = tempdir().unwrap();
+        let (repo, db) = test_repo(dir.path()).await;
+        let id = MediaId::new("v".repeat(32));
+        let rec = test_record(id.clone());
+
+        repo.upsert_with_visibility(&rec, MediaVisibility::Locked)
+            .await
+            .unwrap();
+        assert_eq!(stored_visibility(&db, &id).await, "locked");
+
+        repo.upsert_with_visibility(&rec, MediaVisibility::Archive)
+            .await
+            .unwrap();
+        assert_eq!(stored_visibility(&db, &id).await, "archive");
+    }
+
+    /// Issue #695: `INSERT OR REPLACE` would reset an omitted column to its
+    /// default. A plain `upsert` must keep a locked row locked rather than
+    /// silently returning it to the timeline.
+    #[tokio::test]
+    async fn plain_upsert_preserves_existing_visibility() {
+        let dir = tempdir().unwrap();
+        let (repo, db) = test_repo(dir.path()).await;
+        let id = MediaId::new("w".repeat(32));
+        let rec = test_record(id.clone());
+
+        repo.upsert_with_visibility(&rec, MediaVisibility::Locked)
+            .await
+            .unwrap();
+        repo.upsert(&rec).await.unwrap();
+        assert_eq!(stored_visibility(&db, &id).await, "locked");
+
+        // A brand-new row through the plain path gets the default.
+        let fresh = MediaId::new("x".repeat(32));
+        repo.upsert(&test_record(fresh.clone())).await.unwrap();
+        assert_eq!(stored_visibility(&db, &fresh).await, "timeline");
+    }
+
+    /// Local imports go through `insert`, which doesn't name the column:
+    /// the migration default must make them timeline assets.
+    #[tokio::test]
+    async fn local_insert_defaults_to_timeline() {
+        let dir = tempdir().unwrap();
+        let (repo, db) = test_repo(dir.path()).await;
+        let id = MediaId::new("y".repeat(32));
+        repo.insert(&test_record(id.clone())).await.unwrap();
+        assert_eq!(stored_visibility(&db, &id).await, "timeline");
+        let item = repo.get(&id).await.unwrap().unwrap();
+        assert_eq!(item.visibility, MediaVisibility::Timeline);
+    }
 
     /// Phase C blocker #2: `upsert` is used by the pull-side
     /// `AssetHandler`, which constructs the record with

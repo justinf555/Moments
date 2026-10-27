@@ -267,7 +267,7 @@ impl MediaService {
 mod tests {
     use super::*;
     use crate::library::db::test_helpers::{open_test_db, record_with_taken_at};
-    use crate::library::media::model::Stack;
+    use crate::library::media::model::{MediaVisibility, Stack};
     use crate::library::media::MediaId;
     use crate::library::resolver::LocalResolver;
     use crate::sync::outbox::NoOpRecorder;
@@ -318,7 +318,9 @@ mod tests {
         // SHA-1 base64 of "abc" — same value the importer would compute
         // for an identical file.
         server_row.content_hash = Some("qZk+NkcGgWq6PiVxeFDCbJzQ2J0=".to_string());
-        svc.upsert_media(&server_row).await.unwrap();
+        svc.upsert_media(&server_row, MediaVisibility::Timeline)
+            .await
+            .unwrap();
 
         let dup = svc
             .exists_by_content_hash("qZk+NkcGgWq6PiVxeFDCbJzQ2J0=")

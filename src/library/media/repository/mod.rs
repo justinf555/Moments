@@ -3,11 +3,27 @@
 
 use super::model::{
     LibraryStats, MediaCursor, MediaFilter, MediaId, MediaItem, MediaRecord, MediaType,
+    MediaVisibility,
 };
 use crate::library::db::{id_placeholders, Database};
 use crate::library::error::LibraryError;
 
 mod sync;
+
+/// SQL predicate restricting `{alias}.visibility` to `admitted`.
+///
+/// Issue #695: every query that lists media builds its visibility clause
+/// here, from [`MediaFilter::admitted_visibilities`] or
+/// [`MediaVisibility::LISTABLE`], so list, count and in-memory matching
+/// share one definition. The values are compile-time constants, so they
+/// are inlined rather than bound.
+pub(crate) fn visibility_predicate(alias: &str, admitted: &[MediaVisibility]) -> String {
+    let values: Vec<String> = admitted
+        .iter()
+        .map(|v| format!("'{}'", v.as_str()))
+        .collect();
+    format!("{alias}.visibility IN ({})", values.join(", "))
+}
 
 /// Internal row type for `list_media` — maps SQLite columns to Rust types.
 ///
@@ -29,6 +45,7 @@ pub(crate) struct MediaRow {
     duration_ms: Option<i64>,
     stack_id: Option<String>,
     is_moments_render: i64,
+    visibility: String,
 }
 
 impl MediaRow {
@@ -52,6 +69,7 @@ impl MediaRow {
             duration_ms: self.duration_ms.map(|v| v as u64),
             stack_id: self.stack_id,
             is_moments_render: self.is_moments_render != 0,
+            visibility: MediaVisibility::parse_or_hidden(&self.visibility),
         }
     }
 }
@@ -156,11 +174,15 @@ impl MediaRepository {
     }
 
     /// Fetch a single media item by ID.
+    ///
+    /// Not a listing, so no visibility filter: callers that already hold
+    /// an id (editor, viewer, sync) get the row whatever its visibility.
     pub async fn get(&self, id: &MediaId) -> Result<Option<MediaItem>, LibraryError> {
         let row: Option<MediaRow> = sqlx::query_as(
             "SELECT id, taken_at, imported_at, original_filename,
                     width, height, orientation, media_type, is_favorite,
-                    is_trashed, trashed_at, duration_ms, stack_id, is_moments_render
+                    is_trashed, trashed_at, duration_ms, stack_id, is_moments_render,
+                    visibility
              FROM media WHERE id = ?",
         )
         .bind(id.as_str())
@@ -182,19 +204,27 @@ impl MediaRepository {
     /// the same way it treats deleted rows — removed from any tracked
     /// grid model. This keeps the grid in sync with stack membership
     /// changes without a separate event channel.
+    ///
+    /// Issue #695: hidden and locked rows are absent too, for the same
+    /// reason — a pull that locks an asset emits `Updated`, and the
+    /// missing row drops it from every tracked grid. Archived rows are
+    /// returned; [`MediaFilter::matches`] keeps them out of the timeline.
     pub async fn get_many(&self, ids: &[MediaId]) -> Result<Vec<MediaItem>, LibraryError> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
         let placeholders = id_placeholders(ids.len());
+        let visibility = visibility_predicate("m", MediaVisibility::LISTABLE);
         let sql = format!(
             "SELECT m.id, m.taken_at, m.imported_at, m.original_filename,
                     m.width, m.height, m.orientation, m.media_type, m.is_favorite,
-                    m.is_trashed, m.trashed_at, m.duration_ms, m.stack_id, m.is_moments_render
+                    m.is_trashed, m.trashed_at, m.duration_ms, m.stack_id, m.is_moments_render,
+                    m.visibility
              FROM media m
              LEFT JOIN stacks s ON m.stack_id = s.id
              LEFT JOIN media render ON render.stack_id = s.id AND render.is_moments_render = 1
              WHERE m.id IN ({placeholders})
+               AND {visibility}
                AND (s.id IS NULL AND m.is_moments_render = 0
                     OR (render.id IS NULL AND s.primary_asset_id = m.id)
                     OR (render.id IS NOT NULL AND m.is_moments_render = 0))"
@@ -324,6 +354,13 @@ impl MediaRepository {
             ),
         };
 
+        // Issue #695: archived, hidden and locked assets stay out of the
+        // views that don't admit them. Same source as `MediaFilter::matches`.
+        let filter_clause = format!(
+            "{filter_clause} AND {}",
+            visibility_predicate("m", filter.admitted_visibilities())
+        );
+
         let extra_bind: Option<String> = match &filter {
             MediaFilter::RecentImports { since } => Some(since.to_string()),
             MediaFilter::Album { album_id } => Some(album_id.as_str().to_owned()),
@@ -333,7 +370,8 @@ impl MediaRepository {
 
         let columns = "m.id, m.taken_at, m.imported_at, m.original_filename,
                         m.width, m.height, m.orientation, m.media_type, m.is_favorite,
-                        m.is_trashed, m.trashed_at, m.duration_ms, m.stack_id, m.is_moments_render";
+                        m.is_trashed, m.trashed_at, m.duration_ms, m.stack_id, m.is_moments_render,
+                        m.visibility";
 
         let rows = match cursor {
             None => {
@@ -401,18 +439,26 @@ impl MediaRepository {
     }
 
     /// Return aggregate library statistics for the preferences overview.
+    ///
+    /// Issue #695: hidden and locked rows are excluded throughout, so the
+    /// photo/video counts and the sidebar trash badge (`trashed_count`)
+    /// agree with what the grids can actually show. Archived rows are
+    /// counted: they are still part of the library.
     pub async fn library_stats(&self) -> Result<LibraryStats, LibraryError> {
-        let row: (i64, i64, i64, i64) = sqlx::query_as(
+        let sql = format!(
             "SELECT
                 COUNT(CASE WHEN media_type = 0 AND is_trashed = 0 THEN 1 END),
                 COUNT(CASE WHEN media_type = 1 AND is_trashed = 0 THEN 1 END),
                 COALESCE(SUM(CASE WHEN is_trashed = 0 THEN file_size ELSE 0 END), 0),
                 COUNT(CASE WHEN is_trashed = 1 THEN 1 END)
-             FROM media",
-        )
-        .fetch_one(self.db.pool())
-        .await
-        .map_err(LibraryError::Db)?;
+             FROM media m
+             WHERE {}",
+            visibility_predicate("m", MediaVisibility::LISTABLE)
+        );
+        let row: (i64, i64, i64, i64) = sqlx::query_as(&sql)
+            .fetch_one(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
 
         let album_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM albums")
             .fetch_one(self.db.pool())
@@ -650,6 +696,163 @@ mod tests {
 
         let ids: Vec<&str> = items.iter().map(|i| i.id.as_str()).collect();
         assert_eq!(ids, vec!["m1"]);
+    }
+
+    /// Issue #695: seed one asset per visibility. Each is a favourite, in
+    /// album `a1`, has a visible face of person `p1`, and was imported
+    /// after `since = 0`, so it qualifies for every filter except on
+    /// visibility. Returns the ids in `[timeline, archive, hidden, locked]`
+    /// order.
+    async fn seed_one_per_visibility(repo: &MediaRepository, db: &Database) -> Vec<MediaId> {
+        sqlx::query(
+            "INSERT INTO albums (id, name, created_at, updated_at) VALUES ('a1', 'A', 0, 0)",
+        )
+        .execute(db.pool())
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO people (id, name) VALUES ('p1', 'Alice')")
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        let mut ids = Vec::new();
+        for (n, visibility) in [
+            MediaVisibility::Timeline,
+            MediaVisibility::Archive,
+            MediaVisibility::Hidden,
+            MediaVisibility::Locked,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let id = MediaId::new(visibility.as_str().to_string());
+            let mut rec =
+                record_with_taken_at(id.clone(), &format!("v/{n}.jpg"), Some(1000 + n as i64));
+            rec.is_favorite = true;
+            repo.upsert_with_visibility(&rec, visibility).await.unwrap();
+            sqlx::query(
+                "INSERT INTO album_media (album_id, media_id, added_at) VALUES ('a1', ?, 0)",
+            )
+            .bind(id.as_str())
+            .execute(db.pool())
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO asset_faces (id, asset_id, person_id, is_visible)
+                 VALUES (?, ?, 'p1', 1)",
+            )
+            .bind(format!("f-{}", id.as_str()))
+            .bind(id.as_str())
+            .execute(db.pool())
+            .await
+            .unwrap();
+            ids.push(id);
+        }
+        ids
+    }
+
+    async fn listed(repo: &MediaRepository, filter: MediaFilter) -> Vec<String> {
+        let mut ids: Vec<String> = repo
+            .list(filter, None, 50)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|i| i.id.as_str().to_owned())
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    /// Issue #695: the main views list only timeline assets; albums and
+    /// people also list archived ones; hidden and locked appear nowhere.
+    #[tokio::test]
+    async fn list_filters_by_visibility() {
+        use crate::library::album::AlbumId;
+        use crate::library::faces::PersonId;
+
+        let dir = tempdir().unwrap();
+        let (repo, db) = test_repo(dir.path()).await;
+        seed_one_per_visibility(&repo, &db).await;
+
+        for filter in [
+            MediaFilter::All,
+            MediaFilter::Favorites,
+            MediaFilter::RecentImports { since: 0 },
+        ] {
+            assert_eq!(
+                listed(&repo, filter.clone()).await,
+                ["timeline"],
+                "{filter:?}"
+            );
+        }
+        for filter in [
+            MediaFilter::Album {
+                album_id: AlbumId::new("a1".to_string()),
+            },
+            MediaFilter::Person {
+                person_id: PersonId::new("p1".to_string()),
+            },
+        ] {
+            assert_eq!(
+                listed(&repo, filter.clone()).await,
+                ["archive", "timeline"],
+                "{filter:?}"
+            );
+        }
+    }
+
+    /// Issue #695: the trash, the trash badge count and the photo count
+    /// agree with the grids: hidden and locked rows are never counted.
+    #[tokio::test]
+    async fn trash_and_stats_exclude_hidden_and_locked() {
+        let dir = tempdir().unwrap();
+        let (repo, db) = test_repo(dir.path()).await;
+        let ids = seed_one_per_visibility(&repo, &db).await;
+
+        let stats = repo.library_stats().await.unwrap();
+        assert_eq!(stats.photo_count, 2, "timeline + archive");
+
+        repo.trash(&ids).await.unwrap();
+        assert_eq!(
+            listed(&repo, MediaFilter::Trashed).await,
+            ["archive", "timeline"]
+        );
+        let stats = repo.library_stats().await.unwrap();
+        assert_eq!(stats.trashed_count, 2);
+        assert_eq!(stats.photo_count, 0);
+    }
+
+    /// Issue #695: `get_many` drives the client's patch-on-`Updated`
+    /// path, so it must omit hidden and locked rows (dropping them from
+    /// every open grid) while returning archived ones for
+    /// `MediaFilter::matches` to judge.
+    #[tokio::test]
+    async fn get_many_omits_hidden_and_locked() {
+        let dir = tempdir().unwrap();
+        let (repo, db) = test_repo(dir.path()).await;
+        let ids = seed_one_per_visibility(&repo, &db).await;
+
+        let items = repo.get_many(&ids).await.unwrap();
+        let mut got: Vec<(&str, MediaVisibility)> = items
+            .iter()
+            .map(|i| (i.id.as_str(), i.visibility))
+            .collect();
+        got.sort_by_key(|(id, _)| *id);
+        assert_eq!(
+            got,
+            [
+                ("archive", MediaVisibility::Archive),
+                ("timeline", MediaVisibility::Timeline)
+            ]
+        );
+    }
+
+    #[test]
+    fn visibility_predicate_renders_in_clause() {
+        assert_eq!(
+            visibility_predicate("m", MediaVisibility::LISTABLE),
+            "m.visibility IN ('timeline', 'archive')"
+        );
     }
 
     #[tokio::test]
