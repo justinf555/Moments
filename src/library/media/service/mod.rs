@@ -153,7 +153,8 @@ impl MediaService {
 
     /// [`Self::insert_media`], also recording the capture-time UTC offset
     /// (minutes east of UTC) from the file's EXIF `OffsetTime*` tag.
-    /// Used by the local importer; see issue #677.
+    /// The local importer is the only caller that passes an offset; every
+    /// other path uses [`Self::insert_media`]. See issue #677.
     pub async fn insert_media_with_taken_at_offset(
         &self,
         record: &MediaRecord,

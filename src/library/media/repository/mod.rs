@@ -593,6 +593,11 @@ impl MediaRepository {
     ///
     /// Written in the same statement as the row, so a local import is
     /// never visible to the #677 backfill with a NULL offset.
+    ///
+    /// The local importer (`importer/persistence.rs`, via
+    /// `MediaService::insert_media_with_taken_at_offset`) is the only
+    /// caller that passes an offset; every other path (sync, edit renders,
+    /// tests) goes through [`Self::insert`], which leaves it NULL.
     pub async fn insert_with_taken_at_offset(
         &self,
         record: &MediaRecord,
@@ -649,6 +654,12 @@ impl MediaRepository {
     /// `external_id IS NULL` excludes every row that came from (or was
     /// matched to) an Immich asset. Those carry the server's
     /// `localDateTime` and were never shifted.
+    ///
+    /// `is_moments_render = 0` excludes edit renders: a render copies
+    /// `taken_at` from its source row and its re-encoded JPEG carries no
+    /// capture EXIF, so it follows the source rather than being repaired
+    /// on its own. (Renders are only created for Immich-backed originals,
+    /// but one whose upload hasn't drained yet still has no external id.)
     pub async fn taken_at_offset_candidates(
         &self,
     ) -> Result<Vec<TakenAtOffsetCandidate>, LibraryError> {
@@ -657,6 +668,7 @@ impl MediaRepository {
              WHERE external_id IS NULL
                AND taken_at IS NOT NULL
                AND taken_at_offset_minutes IS NULL
+               AND is_moments_render = 0
                AND media_type = ?
              ORDER BY id",
         )

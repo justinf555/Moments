@@ -20,6 +20,10 @@ use crate::library::metadata::exif::extract_exif;
 /// one transaction each.
 const BATCH_SIZE: usize = 256;
 
+/// Log an `info!` progress line each time this many more candidates have
+/// been examined, so a long first open on a large library is visible.
+const PROGRESS_EVERY: usize = 1000;
+
 /// One-shot library repairs, run on Tokio when a library is opened.
 ///
 /// Every task is recorded in `library_maintenance` once it completes, so
@@ -83,17 +87,29 @@ impl MaintenanceService {
         }
 
         let candidates = self.media.taken_at_offset_candidates().await?;
+        let total = candidates.len();
         let mut summary = TakenAtBackfillSummary {
-            scanned: candidates.len(),
+            scanned: total,
             ..Default::default()
         };
-        info!(
-            candidates = candidates.len(),
-            "running capture-time backfill (#677)"
-        );
+        // The window shows only its "Loading Library…" spinner while this
+        // runs, so the log is the one place the cost is visible.
+        info!(candidates = total, "running capture-time backfill (#677)");
+        let started = std::time::Instant::now();
 
+        let mut processed = 0;
         for batch in candidates.chunks(BATCH_SIZE) {
             self.backfill_batch(batch, &mut summary).await?;
+            let before = processed;
+            processed += batch.len();
+            if processed / PROGRESS_EVERY > before / PROGRESS_EVERY {
+                info!(
+                    processed,
+                    total,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "capture-time backfill progress"
+                );
+            }
         }
 
         self.repo
@@ -106,8 +122,18 @@ impl MaintenanceService {
             unexplained = summary.unexplained,
             no_offset_tag = summary.no_offset_tag,
             unreachable = summary.unreachable,
+            elapsed_ms = started.elapsed().as_millis() as u64,
             "capture-time backfill complete"
         );
+        if summary.unreachable > 0 {
+            // The marker is written regardless (a deliberate choice, #677),
+            // so these rows keep their pre-#675 `taken_at`.
+            warn!(
+                unreachable = summary.unreachable,
+                "capture-time backfill could not read some originals \
+                 (e.g. an unmounted drive); those rows will not be retried"
+            );
+        }
         Ok(Some(summary))
     }
 
@@ -190,6 +216,11 @@ enum Probe {
 }
 
 /// Blocking: read the capture fields from the original at `path`.
+///
+/// `extract_exif` reads only the metadata for JPEG (it stops at the
+/// start of scan) and HEIF (it seeks to the `Exif` item); TIFF-based
+/// files, including CR2/NEF/ARW/DNG raws, are read whole by
+/// `kamadak-exif`, which dominates the pass on raw-heavy libraries.
 fn probe(path: &std::path::Path) -> Probe {
     if !path.try_exists().unwrap_or(false) {
         return Probe::Unreachable;
@@ -455,6 +486,32 @@ mod tests {
         let id = MediaId::generate();
         let mut record = record_with_taken_at(id.clone(), "a.jpg", Some(SHIFTED));
         record.external_id = Some("immich-asset-uuid".to_string());
+        fx.media.insert(&record).await.unwrap();
+
+        let summary = fx
+            .service(LocalStorageMode::Managed)
+            .backfill_taken_at_offsets()
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(summary.scanned, 0);
+        assert_eq!(fx.taken_at(&id).await, (Some(SHIFTED), None));
+    }
+
+    #[tokio::test]
+    async fn moments_renders_are_untouched() {
+        // A render copies its source's `taken_at`; it is never repaired
+        // on its own, even before its upload stamps an external id.
+        let fx = Fixture::new().await;
+        std::fs::write(
+            fx.originals.join("a-edit.jpg"),
+            jpeg_with_exif(WALL_EXIF, Some("+11:00")),
+        )
+        .unwrap();
+        let id = MediaId::generate();
+        let mut record = record_with_taken_at(id.clone(), "a-edit.jpg", Some(SHIFTED));
+        record.is_moments_render = true;
         fx.media.insert(&record).await.unwrap();
 
         let summary = fx
