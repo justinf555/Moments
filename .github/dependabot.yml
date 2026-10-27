@@ -37,6 +37,7 @@ updates:
     groups:
       auto:
         update-types: [minor, patch]
+        # Keep in sync with the "security-auto" group below (and the table in docs/dev-environment.md).
         patterns:
           - serde
           - serde_json
@@ -86,6 +87,7 @@ updates:
       security-auto:
         applies-to: security-updates
         update-types: [minor, patch]
+        # Keep in sync with the "auto" group above (and the table in docs/dev-environment.md).
         patterns:
           - serde
           - serde_json
