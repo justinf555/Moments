@@ -173,8 +173,19 @@ See `docs/design-release-channels.md` for the design. In short:
 | `nightly.yml` | push to `main`, daily cron | Builds the nightly bundle and edits the rolling `nightly` release in place, so the URL never 404s. Skips the build when nothing new has landed. |
 | `claude-code-review.yml` | PR opened / updated | Automated review comment |
 | `claude.yml` | issue and PR comments, reviews, issue opened or assigned | Responds when Claude is mentioned |
+| `dependabot-auto-merge.yml` | Dependabot PRs | Turns on auto-merge (squash) for auto-tier dependency PRs; see below |
 
 Signing happens when the `FLATPAK_GPG_PRIVATE_KEY` / `FLATPAK_GPG_KEY_ID` repo secrets exist. The CI signing key must have no passphrase, because ostree signs non-interactively.
+
+### Dependency updates
+
+Dependabot (`.github/dependabot.yml`) opens grouped PRs every Monday for Cargo crates and GitHub Actions, and security PRs as soon as an advisory lands. PRs are tiered by how much of the crate CI actually exercises: CI makes no real network calls and has no media fixtures, so those crates need a human. Auto-tier PRs merge themselves once Build & test passes. Manual-tier PRs are checked locally in the dev container (`make test-all`, then `make run-native` against the test Immich server or real media, whichever the update touches) before merging.
+
+| Tier | Updates | Merge |
+|---|---|---|
+| Auto | patch/minor of `serde`, `serde_json`, `thiserror`, `tracing*`, proc-macro crates, `tokio*`, `futures-util`, `async-trait`, `uuid`, `chrono`, `toml`, `sha1`, `base64`, `lru`, `quick-xml`, `tempfile`; `sqlx` patch only; GitHub's own `actions/*`, plus third-party actions that see no secret or write token (`crate-ci/typos`, `fsfe/reuse-action`, `flatpak/flatpak-github-actions`, `dtolnay/rust-toolchain`) | Auto-merged by `dependabot-auto-merge.yml` |
+| Manual (actions) | `anthropics/claude-code-action`, `dependabot/fetch-metadata`, `marocchino/sticky-pull-request-comment`: third-party actions that run with a secret (Claude OAuth token) or a write-scoped token, so a compromised release could leak or abuse it. Dependabot group `manual-actions` | Review the PR, then merge by hand |
+| Manual | `reqwest`, `rustls*`, `webpki*`, `hyper*`, `image`, `libheif-rs`, `rawler`, `kamadak-exif`, `gstreamer*`, `gtk4`, `libadwaita`, `glib`/`gio`, `libsecret`, `gettext-rs`, `dhat`, `sqlx` minors, any major bump, anything unlisted | Local check in the dev container, then merge by hand |
 
 ### Cutting a release
 

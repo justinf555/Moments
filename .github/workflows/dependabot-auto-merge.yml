@@ -1,0 +1,53 @@
+# SPDX-FileCopyrightText: 2026 Justin F
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: Dependabot auto-merge
+
+# Turns on auto-merge for Dependabot PRs in the auto tier (see
+# .github/dependabot.yml). The merge itself still waits for the `main`
+# ruleset's required Build & test check. Manual-tier PRs are left alone.
+#
+# `pull_request`, not `pull_request_target`: nothing from the PR is checked
+# out or run, and Dependabot PRs get the elevated token below on this event.
+# Needs the repo setting "Allow auto-merge" (allow_auto_merge) turned on.
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    name: Enable auto-merge
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.repository == 'justinf555/Moments'
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Enable auto-merge (auto tier only)
+        # Group names and update types must match .github/dependabot.yml.
+        # GitHub Actions are pinned to major tags (`@v4`), so every action
+        # update is a major one; the `actions` group merges on any type.
+        # `manual-actions` (actions that run with secrets or a write token)
+        # is deliberately absent: those are merged by hand.
+        if: >-
+          (steps.meta.outputs.dependency-group == 'auto'
+            && (steps.meta.outputs.update-type == 'version-update:semver-patch'
+              || steps.meta.outputs.update-type == 'version-update:semver-minor'))
+          || (steps.meta.outputs.dependency-group == 'security-auto'
+            && (steps.meta.outputs.update-type == 'version-update:semver-patch'
+              || steps.meta.outputs.update-type == 'version-update:semver-minor'))
+          || (steps.meta.outputs.dependency-group == 'auto-sqlx'
+            && steps.meta.outputs.update-type == 'version-update:semver-patch')
+          || (steps.meta.outputs.dependency-group == 'actions'
+            && steps.meta.outputs.package-ecosystem == 'github_actions')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$PR_URL"

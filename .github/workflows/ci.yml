@@ -46,9 +46,17 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
-          printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
-          scripts/check-ai-attribution.sh "$BASE_SHA..$HEAD_SHA" "$RUNNER_TEMP/pr-body.md"
+          # Dependabot can't fill in the PR template, so its PRs skip the
+          # description check. Commits are still checked, including any a
+          # maintainer pushes onto the PR.
+          if [[ "$PR_AUTHOR" == "dependabot[bot]" ]]; then
+            scripts/check-ai-attribution.sh "$BASE_SHA..$HEAD_SHA"
+          else
+            printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
+            scripts/check-ai-attribution.sh "$BASE_SHA..$HEAD_SHA" "$RUNNER_TEMP/pr-body.md"
+          fi
 
   build-and-test:
     name: Build & test
