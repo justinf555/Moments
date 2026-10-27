@@ -10,7 +10,7 @@ mod service;
 pub use event::MediaEvent;
 pub use model::{
     LibraryStats, MediaCursor, MediaFilter, MediaId, MediaItem, MediaRecord, MediaType,
-    ServerStats, Stack,
+    MediaVisibility, ServerStats, Stack,
 };
 pub use paths::{sharded_original_path, sharded_original_relative};
 pub use service::MediaService;

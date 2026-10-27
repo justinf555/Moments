@@ -62,6 +62,17 @@ impl ThumbnailRepository {
         Ok(())
     }
 
+    /// Delete the thumbnail row for `id`, if any. Issue #695: used when an
+    /// asset becomes hidden or locked and its cached thumbnail is dropped.
+    pub async fn delete(&self, id: &MediaId) -> Result<(), LibraryError> {
+        sqlx::query("DELETE FROM thumbnails WHERE media_id = ?")
+            .bind(id.as_str())
+            .execute(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
+        Ok(())
+    }
+
     /// Return the stored [`ThumbnailStatus`] for `id`, or `None` if no row exists.
     pub async fn status(&self, id: &MediaId) -> Result<Option<ThumbnailStatus>, LibraryError> {
         let id_str = id.as_str();

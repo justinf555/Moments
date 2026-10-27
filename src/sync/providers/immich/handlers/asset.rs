@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use async_trait::async_trait;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 
 use crate::library::error::LibraryError;
 use crate::library::media::sharded_original_relative;
-use crate::library::media::{MediaId, MediaRecord, MediaType};
+use crate::library::media::{MediaId, MediaRecord, MediaType, MediaVisibility};
 use crate::library::thumbnail::sharded_thumbnail_path;
 
 use super::{CounterKind, HandlerResult, SyncContext, SyncEntityHandler};
@@ -53,6 +53,8 @@ async fn handle_asset(asset: SyncAssetV2, ctx: &SyncContext) -> Result<(), Libra
     // overwrites with the photo's capture date, silently moving assets
     // out of the Recent Imports view as soon as they round-tripped.
     let imported_at = chrono::Utc::now().timestamp();
+
+    let visibility = media_visibility(asset.visibility.as_deref());
 
     let is_trashed = asset.deleted_at.is_some();
     let trashed_at = parse_datetime(&asset.deleted_at);
@@ -122,7 +124,12 @@ async fn handle_asset(asset: SyncAssetV2, ctx: &SyncContext) -> Result<(), Libra
     };
 
     let server_id = record.external_id.clone().expect("external_id set above");
-    ctx.library.media().upsert_media(&record).await?;
+    // Issue #695: a visibility change on an existing row rides the
+    // service's `Updated` event, which drops or restores it in open grids.
+    ctx.library
+        .media()
+        .upsert_media(&record, visibility)
+        .await?;
 
     // Issue #628: bump heartbeat after the upsert so reset-cycle
     // orphan sweeps see this asset as "still alive on the server".
@@ -142,6 +149,19 @@ async fn handle_asset(asset: SyncAssetV2, ctx: &SyncContext) -> Result<(), Libra
     // delete a stub that hasn't yet seen its real StackV1.
     apply_stack_membership(asset.stack_id.as_deref(), &media_id, ctx, now).await?;
 
+    // Issue #695: nothing lists hidden or locked assets, so don't fetch
+    // (and leave on disk) a thumbnail of a photo the user locked away.
+    // An asset synced earlier may already have one cached: drop it. This
+    // runs for every non-listable delivery rather than only on a
+    // transition, so it also covers rows that read `timeline` before the
+    // migration-028 re-stream and is idempotent across retries. A later
+    // move back to the timeline finds no cached file and re-downloads.
+    if !visibility.is_listable() {
+        debug!(?visibility, "not listable, dropping any cached thumbnail");
+        ctx.library.thumbnails().remove_thumbnail(&media_id).await?;
+        return Ok(());
+    }
+
     if let Err(e) = download_thumbnail(
         &ctx.client,
         &ctx.library,
@@ -155,6 +175,24 @@ async fn handle_asset(asset: SyncAssetV2, ctx: &SyncContext) -> Result<(), Libra
     }
 
     Ok(())
+}
+
+/// Map `AssetV2.visibility` to [`MediaVisibility`]. Issue #695.
+///
+/// Absent (a server that pre-dates the field) means timeline. A value we
+/// don't recognise is treated as hidden: it may be a new privacy tier, so
+/// it must not land in the timeline.
+fn media_visibility(raw: Option<&str>) -> MediaVisibility {
+    match raw {
+        None => MediaVisibility::Timeline,
+        Some(s) => MediaVisibility::parse(s).unwrap_or_else(|| {
+            warn!(
+                visibility = s,
+                "unknown asset visibility, treating as hidden"
+            );
+            MediaVisibility::Hidden
+        }),
+    }
 }
 
 /// Bind or clear the asset's `media.stack_id` pointer based on
@@ -267,4 +305,177 @@ async fn download_thumbnail(
         .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::library::bundle::Bundle;
+    use crate::library::config::{LibraryConfig, LocalStorageMode};
+    use crate::library::db::Database;
+    use crate::library::media::MediaEvent;
+    use crate::library::resolver::LocalResolver;
+    use crate::library::Library;
+    use crate::sync::outbox::NoOpRecorder;
+    use crate::sync::providers::immich::client::ImmichClient;
+    use crate::sync::state::SyncStateRepository;
+
+    /// A `SyncContext` over a real on-disk library. The client points at
+    /// a closed local port; these tests never reach the network.
+    async fn test_ctx(dir: &std::path::Path) -> SyncContext {
+        let bundle = Bundle::create(
+            &dir.join("Test.library"),
+            &LibraryConfig::Local {
+                mode: LocalStorageMode::Managed,
+            },
+        )
+        .unwrap();
+        let originals = bundle.originals.clone();
+        let thumbnails_dir = bundle.thumbnails.clone();
+        let db = Database::new();
+        let library = Library::open(
+            bundle,
+            LocalStorageMode::Managed,
+            db.clone(),
+            Arc::new(NoOpRecorder),
+            Arc::new(LocalResolver::new(originals, LocalStorageMode::Managed)),
+        )
+        .await
+        .unwrap();
+        SyncContext {
+            client: ImmichClient::new("http://127.0.0.1:9", "test-token").unwrap(),
+            library: Arc::new(library),
+            state: SyncStateRepository::new(db.clone()),
+            thumbnails_dir,
+            db,
+        }
+    }
+
+    fn asset(visibility: Option<&str>) -> SyncAssetV2 {
+        serde_json::from_value(serde_json::json!({
+            "id": "immich-asset-1",
+            "originalFileName": "IMG_0001.jpg",
+            "fileCreatedAt": "2024-06-15T10:30:00.000Z",
+            "localDateTime": null,
+            "type": "IMAGE",
+            "deletedAt": null,
+            "isFavorite": false,
+            "width": 4032,
+            "height": 3024,
+            "duration": null,
+            "visibility": visibility
+        }))
+        .unwrap()
+    }
+
+    async fn stored_visibility(ctx: &SyncContext) -> String {
+        sqlx::query_scalar("SELECT visibility FROM media WHERE external_id = 'immich-asset-1'")
+            .fetch_one(ctx.db.pool())
+            .await
+            .unwrap()
+    }
+
+    #[test]
+    fn media_visibility_maps_wire_values() {
+        assert_eq!(media_visibility(None), MediaVisibility::Timeline);
+        assert_eq!(
+            media_visibility(Some("timeline")),
+            MediaVisibility::Timeline
+        );
+        assert_eq!(media_visibility(Some("archive")), MediaVisibility::Archive);
+        assert_eq!(media_visibility(Some("hidden")), MediaVisibility::Hidden);
+        assert_eq!(media_visibility(Some("locked")), MediaVisibility::Locked);
+        assert_eq!(media_visibility(Some("vault")), MediaVisibility::Hidden);
+    }
+
+    /// Issue #695: the handler stores the server's visibility, and a
+    /// change on a later pull updates the row and emits `Updated`.
+    #[tokio::test]
+    async fn handler_stores_visibility_and_emits_on_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = test_ctx(dir.path()).await;
+
+        // Locked: stored, and no thumbnail fetched.
+        handle_asset(asset(Some("locked")), &ctx).await.unwrap();
+        assert_eq!(stored_visibility(&ctx).await, "locked");
+        let id = ctx
+            .library
+            .media()
+            .id_by_external_id("immich-asset-1")
+            .await
+            .unwrap()
+            .unwrap();
+        let thumb = sharded_thumbnail_path(&ctx.thumbnails_dir, &id);
+        assert!(!thumb.exists());
+
+        // Seed the thumbnail cache so the listable pulls below
+        // short-circuit instead of downloading.
+        std::fs::create_dir_all(thumb.parent().unwrap()).unwrap();
+        std::fs::write(&thumb, b"webp").unwrap();
+
+        for (wire, stored) in [
+            (Some("archive"), "archive"),
+            (Some("timeline"), "timeline"),
+            (Some("hidden"), "hidden"),
+            // A server without the field: the timeline default.
+            (None, "timeline"),
+        ] {
+            let mut rx = ctx.library.media().subscribe();
+            handle_asset(asset(wire), &ctx).await.unwrap();
+            assert_eq!(stored_visibility(&ctx).await, stored, "{wire:?}");
+
+            let mut updated = false;
+            while let Ok(event) = rx.try_recv() {
+                if matches!(&event, MediaEvent::Updated(ids) if ids.contains(&id)) {
+                    updated = true;
+                }
+            }
+            assert!(updated, "{wire:?}: expected MediaEvent::Updated");
+        }
+    }
+
+    /// Issue #695 review: an identical re-delivery (the forced re-stream)
+    /// emits no media event, and an asset that becomes locked or hidden
+    /// loses its cached thumbnail.
+    #[tokio::test]
+    async fn handler_drops_thumbnail_when_asset_leaves_timeline() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = test_ctx(dir.path()).await;
+
+        // Synced as a timeline asset; seed its cached thumbnail so later
+        // timeline pulls short-circuit instead of trying the network.
+        handle_asset(asset(Some("timeline")), &ctx).await.unwrap();
+        let id = ctx
+            .library
+            .media()
+            .id_by_external_id("immich-asset-1")
+            .await
+            .unwrap()
+            .unwrap();
+        let thumb = ctx.library.thumbnails().thumbnail_path(&id);
+        assert_eq!(thumb, sharded_thumbnail_path(&ctx.thumbnails_dir, &id));
+        std::fs::create_dir_all(thumb.parent().unwrap()).unwrap();
+        std::fs::write(&thumb, b"webp").unwrap();
+
+        // Identical re-delivery: no media event.
+        let mut rx = ctx.library.media().subscribe();
+        handle_asset(asset(Some("timeline")), &ctx).await.unwrap();
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
+        assert!(events.is_empty(), "expected no events; got {events:?}");
+        assert!(thumb.exists());
+
+        for wire in ["locked", "hidden"] {
+            // Back on the timeline with a cached thumbnail.
+            handle_asset(asset(Some("timeline")), &ctx).await.unwrap();
+            std::fs::write(&thumb, b"webp").unwrap();
+
+            handle_asset(asset(Some(wire)), &ctx).await.unwrap();
+            assert!(!thumb.exists(), "{wire}: thumbnail must be dropped");
+        }
+    }
 }

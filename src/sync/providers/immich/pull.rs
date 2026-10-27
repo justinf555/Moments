@@ -187,6 +187,15 @@ impl PullManager {
                 .collect(),
         };
 
+        // Issue #695: one-shot re-stream of every asset after migration 028.
+        let client = self.client.clone();
+        run_pending_asset_restream(&self.state, |types| async move {
+            client
+                .delete_with_body("/sync/ack", &SyncAckDeleteRequest { types })
+                .await
+        })
+        .await?;
+
         debug!("starting sync stream");
         let response = self.client.post_stream("/sync/stream", &request).await?;
 
@@ -477,9 +486,151 @@ impl PullManager {
     }
 }
 
+/// Pending action queued by migration 028 (issue #695).
+const RESTREAM_ASSETS_VISIBILITY: &str = "restream_assets_visibility";
+
+/// Ack types reset for the visibility re-stream. Only the asset upserts:
+/// `AssetDeleteV1` keeps its own checkpoint, and no other entity carries
+/// visibility.
+const RESTREAM_ACK_TYPES: &[&str] = &["AssetV2"];
+
+/// If migration 028 queued it, drop the server's `AssetV2` ack so the
+/// stream about to start re-delivers every asset once, then clear the flag.
+///
+/// Rows synced before the migration read `visibility = 'timeline'`; the
+/// re-delivered `AssetV2` lines go through the normal upsert, which writes
+/// the real value and emits `MediaEvent::Updated` only for rows that
+/// actually changed (identical re-deliveries write and emit nothing), so
+/// the re-stream is idempotent. It isn't a `SyncResetV1`: no orphan sweep
+/// runs.
+///
+/// `delete_acks` performs `DELETE /sync/ack` (a parameter so the
+/// lifecycle is testable without a server). If it fails the flag stays
+/// queued and the next cycle retries; the pull itself goes ahead.
+/// Returns `true` once the reset was sent and the flag cleared.
+async fn run_pending_asset_restream<F, Fut>(
+    state: &SyncStateRepository,
+    delete_acks: F,
+) -> Result<bool, LibraryError>
+where
+    F: FnOnce(Vec<String>) -> Fut,
+    Fut: std::future::Future<Output = Result<(), LibraryError>>,
+{
+    if !state.has_pending_action(RESTREAM_ASSETS_VISIBILITY).await? {
+        return Ok(false);
+    }
+    let types: Vec<String> = RESTREAM_ACK_TYPES.iter().map(|t| t.to_string()).collect();
+    info!(
+        ?types,
+        "resetting server sync acks to re-stream all assets for visibility (#695)"
+    );
+    match delete_acks(types).await {
+        Ok(()) => {
+            state
+                .clear_pending_action(RESTREAM_ASSETS_VISIBILITY)
+                .await?;
+            info!("asset re-stream queued; this pull re-delivers every asset once");
+            Ok(true)
+        }
+        Err(e) => {
+            warn!(error = %e, "could not reset asset sync ack; will retry next cycle");
+            Ok(false)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Visibility re-stream (issue #695) ──────────────────────────
+
+    async fn state_repo(dir: &std::path::Path) -> SyncStateRepository {
+        let db = crate::library::db::Database::new();
+        db.open(&dir.join("test.db")).await.unwrap();
+        SyncStateRepository::new(db)
+    }
+
+    /// A fresh library: migration 028 queues nothing (no server rows),
+    /// so no ack reset is sent.
+    #[tokio::test]
+    async fn restream_not_run_when_not_queued() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state_repo(dir.path()).await;
+        let ran = run_pending_asset_restream(&state, |_| async {
+            panic!("must not reset acks when nothing is queued")
+        })
+        .await
+        .unwrap();
+        assert!(!ran);
+    }
+
+    /// Queued → resets exactly the `AssetV2` ack once, then clears itself.
+    #[tokio::test]
+    async fn restream_resets_asset_ack_once_then_clears() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state_repo(dir.path()).await;
+        state
+            .queue_pending_action(RESTREAM_ASSETS_VISIBILITY)
+            .await
+            .unwrap();
+
+        let sent = std::sync::Mutex::new(Vec::new());
+        let ran = run_pending_asset_restream(&state, |types| {
+            sent.lock().unwrap().push(types);
+            async { Ok(()) }
+        })
+        .await
+        .unwrap();
+        assert!(ran);
+        assert_eq!(*sent.lock().unwrap(), vec![vec!["AssetV2".to_string()]]);
+        assert!(!state
+            .has_pending_action(RESTREAM_ASSETS_VISIBILITY)
+            .await
+            .unwrap());
+
+        // Second cycle: nothing left to do.
+        let ran = run_pending_asset_restream(&state, |_| async {
+            panic!("re-stream must run only once")
+        })
+        .await
+        .unwrap();
+        assert!(!ran);
+    }
+
+    /// A failed `DELETE /sync/ack` keeps the flag for the next cycle and
+    /// doesn't fail the pull.
+    #[tokio::test]
+    async fn restream_failure_keeps_flag_queued() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state_repo(dir.path()).await;
+        state
+            .queue_pending_action(RESTREAM_ASSETS_VISIBILITY)
+            .await
+            .unwrap();
+
+        let ran = run_pending_asset_restream(&state, |_| async {
+            Err(LibraryError::Immich("offline".to_string()))
+        })
+        .await
+        .unwrap();
+        assert!(!ran);
+        assert!(state
+            .has_pending_action(RESTREAM_ASSETS_VISIBILITY)
+            .await
+            .unwrap());
+    }
+
+    #[test]
+    fn sync_ack_delete_request_serializes() {
+        let body = SyncAckDeleteRequest {
+            types: vec!["AssetV2".to_string()],
+        };
+        assert_eq!(
+            serde_json::to_value(&body).unwrap(),
+            serde_json::json!({ "types": ["AssetV2"] })
+        );
+    }
 
     // ── SyncCounters ───────────────────────────────────────────────
 

@@ -6,7 +6,8 @@
 //! Both tables are owned by the Immich pull engine: checkpoints record
 //! the last server ack per entity type so a restart resumes mid-stream,
 //! and the audit log captures the start/finish of every entity record
-//! processed so post-mortems can attribute errors.
+//! processed so post-mortems can attribute errors. `sync_pending_actions`
+//! holds one-shot actions (queued by migrations) for the next pull.
 
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
@@ -49,6 +50,46 @@ impl SyncStateRepository {
     /// sync — the next pull starts from the beginning of the stream.
     pub async fn clear_checkpoints(&self) -> Result<(), LibraryError> {
         sqlx::query("DELETE FROM sync_checkpoints")
+            .execute(self.db.pool())
+            .await
+            .map_err(LibraryError::Db)?;
+        Ok(())
+    }
+
+    // ── Pending one-shot actions ────────────────────────────────────
+
+    /// `true` if `action` is queued in `sync_pending_actions`.
+    ///
+    /// Migrations queue these (e.g. migration 028 queues
+    /// `restream_assets_visibility`, issue #695); the pull engine runs
+    /// them before its next stream and clears them once they succeed.
+    pub async fn has_pending_action(&self, action: &str) -> Result<bool, LibraryError> {
+        let row: Option<(i64,)> =
+            sqlx::query_as("SELECT 1 FROM sync_pending_actions WHERE action = ?")
+                .bind(action)
+                .fetch_optional(self.db.pool())
+                .await
+                .map_err(LibraryError::Db)?;
+        Ok(row.is_some())
+    }
+
+    /// Queue `action`. Idempotent.
+    pub async fn queue_pending_action(&self, action: &str) -> Result<(), LibraryError> {
+        sqlx::query(
+            "INSERT OR IGNORE INTO sync_pending_actions (action, created_at) VALUES (?, ?)",
+        )
+        .bind(action)
+        .bind(chrono::Utc::now().timestamp())
+        .execute(self.db.pool())
+        .await
+        .map_err(LibraryError::Db)?;
+        Ok(())
+    }
+
+    /// Remove `action` from the queue. Missing row is a no-op.
+    pub async fn clear_pending_action(&self, action: &str) -> Result<(), LibraryError> {
+        sqlx::query("DELETE FROM sync_pending_actions WHERE action = ?")
+            .bind(action)
             .execute(self.db.pool())
             .await
             .map_err(LibraryError::Db)?;
@@ -167,6 +208,70 @@ mod tests {
         let db = Database::new();
         db.open(&dir.path().join("test.db")).await.unwrap();
         (dir, db)
+    }
+
+    #[tokio::test]
+    async fn pending_action_queue_and_clear() {
+        let (_dir, db) = open_db().await;
+        let repo = SyncStateRepository::new(db);
+        assert!(!repo.has_pending_action("x").await.unwrap());
+        repo.queue_pending_action("x").await.unwrap();
+        repo.queue_pending_action("x").await.unwrap(); // idempotent
+        assert!(repo.has_pending_action("x").await.unwrap());
+        repo.clear_pending_action("x").await.unwrap();
+        assert!(!repo.has_pending_action("x").await.unwrap());
+    }
+
+    /// Issue #695: migration 028 queues the asset re-stream only for a
+    /// library that already holds server rows (stale `visibility`), and
+    /// not for a fresh or local one.
+    #[tokio::test]
+    async fn migration_028_queues_restream_only_for_synced_libraries() {
+        use sqlx::sqlite::SqlitePoolOptions;
+        use std::borrow::Cow;
+
+        async fn migrate_with(media_external_id: Option<&str>) -> bool {
+            let pool = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect("sqlite::memory:")
+                .await
+                .unwrap();
+
+            // Schema as it was before #695.
+            let full = sqlx::migrate!("src/library/db/migrations");
+            let mut before = sqlx::migrate!("src/library/db/migrations");
+            before.migrations = Cow::Owned(
+                full.migrations
+                    .iter()
+                    .filter(|m| m.version < 28)
+                    .cloned()
+                    .collect(),
+            );
+            before.run(&pool).await.unwrap();
+
+            sqlx::query(
+                "INSERT INTO media (id, relative_path, original_filename, file_size,
+                                    imported_at, external_id)
+                 VALUES ('m1', 'a/m1.jpg', 'm1.jpg', 0, 0, ?)",
+            )
+            .bind(media_external_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+            full.run(&pool).await.unwrap();
+
+            let row: Option<(i64,)> = sqlx::query_as(
+                "SELECT 1 FROM sync_pending_actions WHERE action = 'restream_assets_visibility'",
+            )
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
+            row.is_some()
+        }
+
+        assert!(migrate_with(Some("immich-uuid")).await, "synced library");
+        assert!(!migrate_with(None).await, "local-only library");
     }
 
     #[tokio::test]

@@ -42,6 +42,85 @@ pub enum MediaType {
     Video = 1,
 }
 
+/// Where an asset is allowed to appear, stored in `media.visibility`.
+///
+/// Mirrors Immich's `AssetVisibility` (issue #695). Locally imported
+/// media is always [`MediaVisibility::Timeline`] (the column default),
+/// so only the Immich pull path ever writes anything else.
+///
+/// | Value      | All, Favourites, Recent Imports | Albums, People, Trash |
+/// |------------|---------------------------------|-----------------------|
+/// | `Timeline` | shown                           | shown                 |
+/// | `Archive`  | hidden                          | shown                 |
+/// | `Hidden`   | hidden                          | hidden                |
+/// | `Locked`   | hidden                          | hidden                |
+///
+/// `Locked` stays hidden everywhere until a locked-folder view (#464)
+/// exists. `Hidden` is Immich-internal (e.g. the motion half of a Live
+/// Photo, #45) and is never meant to be browsed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MediaVisibility {
+    /// Normal asset, shown in the timeline.
+    #[default]
+    Timeline,
+    /// Archived: out of the timeline, still in albums and people.
+    Archive,
+    /// Immich-internal asset, never listed.
+    Hidden,
+    /// Locked-folder asset (PIN-protected on the server), never listed.
+    Locked,
+}
+
+impl MediaVisibility {
+    /// Visibilities that may appear in *some* listing (albums, people,
+    /// trash). Anything outside this set is excluded from every query
+    /// that lists media.
+    pub const LISTABLE: &'static [MediaVisibility] =
+        &[MediaVisibility::Timeline, MediaVisibility::Archive];
+
+    /// Visibilities shown in the main timeline views.
+    pub const TIMELINE: &'static [MediaVisibility] = &[MediaVisibility::Timeline];
+
+    const ALL: [MediaVisibility; 4] = [
+        MediaVisibility::Timeline,
+        MediaVisibility::Archive,
+        MediaVisibility::Hidden,
+        MediaVisibility::Locked,
+    ];
+
+    /// The value stored in `media.visibility`. Identical to Immich's
+    /// wire value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MediaVisibility::Timeline => "timeline",
+            MediaVisibility::Archive => "archive",
+            MediaVisibility::Hidden => "hidden",
+            MediaVisibility::Locked => "locked",
+        }
+    }
+
+    /// Parse a stored or wire value, ignoring ASCII case. `None` for
+    /// anything unrecognised.
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|v| v.as_str().eq_ignore_ascii_case(s))
+    }
+
+    /// Parse, mapping unknown values to [`MediaVisibility::Hidden`].
+    ///
+    /// A value we don't understand may be a new privacy tier, so it is
+    /// treated as "never list" rather than "show in the timeline".
+    pub fn parse_or_hidden(s: &str) -> Self {
+        Self::parse(s).unwrap_or(MediaVisibility::Hidden)
+    }
+
+    /// `true` if this asset may appear in at least one listing.
+    pub fn is_listable(self) -> bool {
+        Self::LISTABLE.contains(&self)
+    }
+}
+
 /// The read model returned by [`super::service::MediaService::list_media`].
 ///
 /// Contains everything the photo grid needs to display a cell — id for
@@ -78,6 +157,8 @@ pub struct MediaItem {
     /// filter swaps these out for the original sibling so the user
     /// sees the editable artifact rather than the flat render.
     pub is_moments_render: bool,
+    /// Where the asset may appear. Issue #695.
+    pub visibility: MediaVisibility,
 }
 
 /// A stack of related assets on the Immich server (e.g. a panorama
@@ -133,6 +214,9 @@ impl MediaFilter {
     /// Returns `false` for `Album` — album membership requires a DB query
     /// and cannot be determined from the item alone.
     pub fn matches(&self, item: &MediaItem) -> bool {
+        if !self.admitted_visibilities().contains(&item.visibility) {
+            return false;
+        }
         match self {
             MediaFilter::All => !item.is_trashed,
             MediaFilter::Favorites => item.is_favorite && !item.is_trashed,
@@ -150,6 +234,26 @@ impl MediaFilter {
     /// requires a join and is never knowable from the [`MediaItem`] fields.
     pub fn supports_inline_match(&self) -> bool {
         !matches!(self, MediaFilter::Album { .. } | MediaFilter::Person { .. })
+    }
+
+    /// The asset visibilities this view admits. Issue #695.
+    ///
+    /// The single source of truth for visibility filtering: [`Self::matches`]
+    /// checks it in memory and `MediaRepository` turns the same slice into
+    /// its SQL predicate, so the two can't drift.
+    ///
+    /// The main views show only timeline assets. Albums, people and trash
+    /// also show archived ones (Immich's semantics). Hidden and locked
+    /// assets are in neither set.
+    pub fn admitted_visibilities(&self) -> &'static [MediaVisibility] {
+        match self {
+            MediaFilter::All | MediaFilter::Favorites | MediaFilter::RecentImports { .. } => {
+                MediaVisibility::TIMELINE
+            }
+            MediaFilter::Trashed | MediaFilter::Album { .. } | MediaFilter::Person { .. } => {
+                MediaVisibility::LISTABLE
+            }
+        }
     }
 }
 
@@ -272,5 +376,68 @@ mod tests {
     fn new_wraps_existing_string() {
         let id = MediaId::new("abc123".to_string());
         assert_eq!(id.as_str(), "abc123");
+    }
+
+    #[test]
+    fn visibility_round_trips_through_str() {
+        for v in MediaVisibility::ALL {
+            assert_eq!(MediaVisibility::parse(v.as_str()), Some(v));
+        }
+        assert_eq!(
+            MediaVisibility::parse("LOCKED"),
+            Some(MediaVisibility::Locked)
+        );
+    }
+
+    /// An unrecognised server value must never land in the timeline.
+    #[test]
+    fn unknown_visibility_maps_to_hidden() {
+        assert_eq!(MediaVisibility::parse("vault"), None);
+        assert_eq!(
+            MediaVisibility::parse_or_hidden("vault"),
+            MediaVisibility::Hidden
+        );
+        assert!(!MediaVisibility::parse_or_hidden("").is_listable());
+    }
+
+    fn item(visibility: MediaVisibility, is_favorite: bool, is_trashed: bool) -> MediaItem {
+        MediaItem {
+            id: MediaId::new("x".to_string()),
+            taken_at: None,
+            imported_at: 100,
+            original_filename: "x.jpg".to_string(),
+            width: None,
+            height: None,
+            orientation: 1,
+            media_type: MediaType::Image,
+            is_favorite,
+            is_trashed,
+            trashed_at: None,
+            duration_ms: None,
+            stack_id: None,
+            is_moments_render: false,
+            visibility,
+        }
+    }
+
+    /// Issue #695: the in-memory match (used by the client to patch open
+    /// grids) agrees with the visibility table on `MediaVisibility`.
+    #[test]
+    fn filter_matches_respects_visibility() {
+        use MediaVisibility::*;
+        let recent = MediaFilter::RecentImports { since: 0 };
+        for v in [Timeline, Archive, Hidden, Locked] {
+            let timeline = v == Timeline;
+            assert_eq!(MediaFilter::All.matches(&item(v, false, false)), timeline);
+            assert_eq!(
+                MediaFilter::Favorites.matches(&item(v, true, false)),
+                timeline
+            );
+            assert_eq!(recent.matches(&item(v, false, false)), timeline);
+            assert_eq!(
+                MediaFilter::Trashed.matches(&item(v, false, true)),
+                v.is_listable()
+            );
+        }
     }
 }
