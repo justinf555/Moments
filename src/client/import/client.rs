@@ -348,12 +348,14 @@ mod tests {
 
     #[test]
     fn new_client_has_idle_state() {
+        crate::client::test_support::ensure_gobject_types();
         let client = ImportClient::new();
         assert_eq!(client.state(), ImportState::Idle);
     }
 
     #[test]
     fn new_client_has_zero_counters() {
+        crate::client::test_support::ensure_gobject_types();
         let client = ImportClient::new();
         assert_eq!(client.current(), 0);
         assert_eq!(client.total(), 0);
@@ -367,6 +369,7 @@ mod tests {
 
     #[test]
     fn set_state_updates_value() {
+        crate::client::test_support::ensure_gobject_types();
         let client = ImportClient::new();
         client.set_state(ImportState::Running);
         assert_eq!(client.state(), ImportState::Running);
@@ -377,6 +380,7 @@ mod tests {
 
     #[test]
     fn set_counters_update_values() {
+        crate::client::test_support::ensure_gobject_types();
         let client = ImportClient::new();
         client.set_current(5);
         client.set_total(10);
@@ -395,6 +399,7 @@ mod tests {
 
     #[test]
     fn set_state_no_notify_on_same_value() {
+        crate::client::test_support::ensure_gobject_types();
         let client = ImportClient::new();
         let notified = std::rc::Rc::new(std::cell::Cell::new(false));
         let flag = notified.clone();
@@ -413,6 +418,7 @@ mod tests {
 
     #[test]
     fn gobject_property_reads_match_accessors() {
+        crate::client::test_support::ensure_gobject_types();
         let client = ImportClient::new();
         client.set_state(ImportState::Running);
         client.set_current(7);
@@ -435,6 +441,7 @@ mod tests {
 
     #[test]
     fn import_event_progress_wraps_data() {
+        crate::client::test_support::ensure_gobject_types();
         let p = ImportProgress {
             current: 3,
             total: 10,
@@ -449,6 +456,7 @@ mod tests {
 
     #[test]
     fn import_event_complete_wraps_summary() {
+        crate::client::test_support::ensure_gobject_types();
         let s = ImportSummary {
             imported: 5,
             skipped_duplicates: 2,

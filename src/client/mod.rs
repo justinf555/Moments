@@ -6,6 +6,8 @@ pub mod import;
 pub mod media;
 pub mod people;
 pub mod sync;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 pub use album::{AlbumClientV2, AlbumItemObject};
 pub use import::{ImportClient, ImportState};

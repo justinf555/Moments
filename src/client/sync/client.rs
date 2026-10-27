@@ -302,30 +302,35 @@ mod tests {
 
     #[test]
     fn new_client_has_idle_state() {
+        crate::client::test_support::ensure_gobject_types();
         let client = SyncClient::new();
         assert_eq!(client.state(), SyncState::Idle);
     }
 
     #[test]
     fn new_client_has_zero_items_processed() {
+        crate::client::test_support::ensure_gobject_types();
         let client = SyncClient::new();
         assert_eq!(client.items_processed(), 0);
     }
 
     #[test]
     fn new_client_has_zero_last_synced_at() {
+        crate::client::test_support::ensure_gobject_types();
         let client = SyncClient::new();
         assert_eq!(client.last_synced_at(), 0);
     }
 
     #[test]
     fn new_client_has_zero_errors() {
+        crate::client::test_support::ensure_gobject_types();
         let client = SyncClient::new();
         assert_eq!(client.errors(), 0);
     }
 
     #[test]
     fn new_client_has_empty_error_message() {
+        crate::client::test_support::ensure_gobject_types();
         let client = SyncClient::new();
         assert!(client.error_message().is_empty());
     }
@@ -334,6 +339,7 @@ mod tests {
 
     #[test]
     fn set_state_updates_value() {
+        crate::client::test_support::ensure_gobject_types();
         let client = SyncClient::new();
         client.set_state(SyncState::Syncing);
         assert_eq!(client.state(), SyncState::Syncing);
@@ -344,6 +350,7 @@ mod tests {
 
     #[test]
     fn set_items_processed_updates_value() {
+        crate::client::test_support::ensure_gobject_types();
         let client = SyncClient::new();
         client.set_items_processed(42);
         assert_eq!(client.items_processed(), 42);
@@ -351,6 +358,7 @@ mod tests {
 
     #[test]
     fn set_last_synced_at_updates_value() {
+        crate::client::test_support::ensure_gobject_types();
         let client = SyncClient::new();
         client.set_last_synced_at(1_700_000_000);
         assert_eq!(client.last_synced_at(), 1_700_000_000);
@@ -358,6 +366,7 @@ mod tests {
 
     #[test]
     fn set_error_message_updates_value() {
+        crate::client::test_support::ensure_gobject_types();
         let client = SyncClient::new();
         client.set_error_message("auth failed");
         assert_eq!(client.error_message(), "auth failed");
@@ -365,6 +374,7 @@ mod tests {
 
     #[test]
     fn set_state_no_notify_on_same_value() {
+        crate::client::test_support::ensure_gobject_types();
         let client = SyncClient::new();
         let notified = std::rc::Rc::new(std::cell::Cell::new(false));
         let flag = notified.clone();
@@ -383,6 +393,7 @@ mod tests {
 
     #[test]
     fn set_error_message_no_notify_on_same_value() {
+        crate::client::test_support::ensure_gobject_types();
         let client = SyncClient::new();
         client.set_error_message("err");
 
@@ -405,6 +416,7 @@ mod tests {
 
     #[test]
     fn gobject_property_reads_match_accessors() {
+        crate::client::test_support::ensure_gobject_types();
         let client = SyncClient::new();
         client.set_state(SyncState::Offline);
         client.set_items_processed(10);
@@ -432,18 +444,21 @@ mod tests {
 
     #[test]
     fn connectivity_error_detects_connectivity_variant() {
+        crate::client::test_support::ensure_gobject_types();
         let err = LibraryError::Connectivity("POST /sync/stream failed: connection refused".into());
         assert!(is_connectivity_error(&err));
     }
 
     #[test]
     fn connectivity_error_false_for_immich_variant() {
+        crate::client::test_support::ensure_gobject_types();
         let err = LibraryError::Immich("POST /sync/stream returned 401: Unauthorized".into());
         assert!(!is_connectivity_error(&err));
     }
 
     #[test]
     fn connectivity_error_false_for_other_variants() {
+        crate::client::test_support::ensure_gobject_types();
         let err = LibraryError::Runtime("task panicked".into());
         assert!(!is_connectivity_error(&err));
     }
