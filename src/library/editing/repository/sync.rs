@@ -22,10 +22,20 @@ impl EditingRepository {
         &self,
         id: &MediaId,
     ) -> Result<Option<MediaId>, LibraryError> {
+        let mut conn = self.db.acquire().await?;
+        self.server_rendered_asset_id_in_tx(&mut conn, id).await
+    }
+
+    /// [`Self::server_rendered_asset_id`] on the caller's transaction.
+    pub async fn server_rendered_asset_id_in_tx(
+        &self,
+        conn: &mut SqliteConnection,
+        id: &MediaId,
+    ) -> Result<Option<MediaId>, LibraryError> {
         let row: Option<(Option<String>,)> =
             sqlx::query_as("SELECT server_rendered_asset_id FROM edits WHERE media_id = ?")
                 .bind(id.as_str())
-                .fetch_optional(self.db.pool())
+                .fetch_optional(&mut *conn)
                 .await
                 .map_err(LibraryError::Db)?;
 

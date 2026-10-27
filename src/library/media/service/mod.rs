@@ -127,6 +127,28 @@ impl MediaService {
         paths
     }
 
+    /// [`Self::collect_original_paths`] on the caller's transaction.
+    ///
+    /// Unlike the pool variant a failed lookup propagates: inside a
+    /// transaction the caller can roll back instead of leaving files
+    /// behind silently.
+    pub(crate) async fn collect_original_paths_in_tx(
+        &self,
+        tx: &mut Tx,
+        ids: &[MediaId],
+    ) -> Result<Vec<(MediaId, PathBuf)>, LibraryError> {
+        if !matches!(self.mode, LocalStorageMode::Managed) {
+            return Ok(Vec::new());
+        }
+        let mut paths = Vec::new();
+        for id in ids {
+            if let Some(rel) = self.repo.relative_path_in_tx(tx, id).await? {
+                paths.push((id.clone(), self.originals_dir.join(&rel)));
+            }
+        }
+        Ok(paths)
+    }
+
     // ── Delegating methods ──────────────────────────────────────────
 
     /// Check if an asset with this content hash already exists (dedup).

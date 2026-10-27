@@ -27,6 +27,15 @@ impl EditingService {
         self.repo.server_rendered_asset_id(id).await
     }
 
+    /// [`Self::server_rendered_asset_id`] on the caller's transaction.
+    pub(crate) async fn server_rendered_asset_id_in_tx(
+        &self,
+        tx: &mut Tx,
+        id: &MediaId,
+    ) -> Result<Option<MediaId>, LibraryError> {
+        self.repo.server_rendered_asset_id_in_tx(tx, id).await
+    }
+
     /// Stamp the rendered sibling pointer on the caller's transaction.
     pub(crate) async fn set_server_rendered_asset_id_in_tx(
         &self,

@@ -295,10 +295,20 @@ impl MediaRepository {
     ///
     /// Used by backends to construct the absolute original-file path.
     pub async fn relative_path(&self, id: &MediaId) -> Result<Option<String>, LibraryError> {
+        let mut conn = self.db.acquire().await?;
+        self.relative_path_in_tx(&mut conn, id).await
+    }
+
+    /// [`Self::relative_path`] on the caller's transaction.
+    pub async fn relative_path_in_tx(
+        &self,
+        conn: &mut SqliteConnection,
+        id: &MediaId,
+    ) -> Result<Option<String>, LibraryError> {
         let row: Option<String> =
             sqlx::query_scalar("SELECT relative_path FROM media WHERE id = ?")
                 .bind(id.as_str())
-                .fetch_optional(self.db.pool())
+                .fetch_optional(&mut *conn)
                 .await
                 .map_err(LibraryError::Db)?;
         Ok(row)

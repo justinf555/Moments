@@ -92,9 +92,13 @@ impl Database {
     /// that reads before it writes can't fail with `SQLITE_BUSY` when it
     /// upgrades, and it waits on `busy_timeout` behind other writers.
     ///
-    /// While a transaction is open, every write in the same task must go
-    /// through it: a write on another pool connection would wait for this
-    /// one's lock until `busy_timeout` expires.
+    /// Rule: while a transaction is open, do **all** reads and writes
+    /// through it, never through the pool. A write on another pool
+    /// connection would wait for this one's lock until `busy_timeout`
+    /// expires; a read would need a second pooled connection, and with
+    /// several callers queued on `BEGIN IMMEDIATE` (each holding a
+    /// connection) the pool can run dry. Reads through the transaction
+    /// see committed state plus its own writes.
     pub(crate) async fn begin(&self) -> Result<Tx, LibraryError> {
         self.pool()
             .begin_with("BEGIN IMMEDIATE")

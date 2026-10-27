@@ -127,7 +127,7 @@ Injected per backend:
 | `MutationRecorder` | `NoOpRecorder`: nothing to push | `QueueWriterOutbox`: writes each change to the `sync_outbox` table |
 | `OriginalResolver` | `LocalResolver`: the file is already on disk | `CachedResolver`: downloads the original into a sharded cache on first use, evicting least-recently-used, uploaded, unpinned files to stay under `originals-cache-max-mb` |
 
-The outbox is transactional (#655): a service opens a transaction with `Database::begin()` (`BEGIN IMMEDIATE`), makes its write through the repository's `_in_tx` method, calls `recorder.record(&mut tx, …)` and commits. A recorder error propagates and rolls the write back, so a change and its outbox row land together or not at all. Events are emitted only after the commit. Cross-service operations do the same with one transaction: service `_in_tx` methods return their events for the caller to emit once it commits (`MediaService::emit_committed`), and `save_pixel_edit` / `revert_edit` remove files only after the commit (#709).
+The outbox is transactional (#655): a service opens a transaction with `Database::begin()` (`BEGIN IMMEDIATE`), makes its write through the repository's `_in_tx` method, calls `recorder.record(&mut tx, …)` and commits. A recorder error propagates and rolls the write back, so a change and its outbox row land together or not at all. Events are emitted only after the commit. While a transaction is open, all reads and writes go through it, never the pool. Cross-service operations do the same with one transaction: service `_in_tx` methods return their events for the caller to emit once it commits (`MediaService::emit_committed`), and `save_pixel_edit` / `revert_edit` remove files only after the commit (#709).
 
 ### Identity and queries
 

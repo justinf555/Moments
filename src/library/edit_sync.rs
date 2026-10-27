@@ -147,22 +147,9 @@ impl Library {
 
         let mut tx = self.db.begin().await?;
         let result = self
-            .save_pixel_edit_in_tx(&mut tx, original_id, state, &rendered_record)
+            .save_pixel_edit_in_tx(&mut tx, &original, state, &rendered_record)
             .await;
-        let committed = match result {
-            Ok(committed) => tx
-                .commit()
-                .await
-                .map(|()| committed)
-                .map_err(LibraryError::Db),
-            Err(e) => {
-                if let Err(rb) = tx.rollback().await {
-                    warn!(error = %rb, "save_pixel_edit: rollback failed");
-                }
-                Err(e)
-            }
-        };
-        match committed {
+        match finish_tx(tx, result, "save_pixel_edit").await {
             Ok(committed) => {
                 self.finish_committed(committed).await;
                 Ok(())
@@ -184,21 +171,31 @@ impl Library {
     /// The database half of [`Self::save_pixel_edit`] (steps 2–6), on
     /// one transaction. Outbox order: prior-render cleanup → import →
     /// stack → tag.
+    ///
+    /// Every read and write goes through `tx` (see [`Database::begin`]).
+    ///
+    /// [`Database::begin`]: crate::library::db::Database::begin
     async fn save_pixel_edit_in_tx(
         &self,
         tx: &mut Tx,
-        original_id: &MediaId,
+        original: &MediaRecord,
         state: &editing::EditState,
         rendered_record: &MediaRecord,
     ) -> Result<Committed, LibraryError> {
+        let original_id = &original.id;
         let rendered_id = rendered_record.id.clone();
         let mut committed = Committed::default();
 
-        // Lookups here and in the helpers (render pointer, stack id,
-        // file paths) read through the pool, not `tx`. That is safe:
-        // `BEGIN IMMEDIATE` holds the write lock, so committed state
-        // can't change under us, and each read happens before this
-        // transaction writes the row it reads.
+        // The XMP block and the StackCreated row were built from the
+        // original as read before the transaction. Re-check it under the
+        // write lock: if it was deleted, or its server id or hash changed
+        // in between, fail rather than queue rows for a stale original.
+        let expected = (original.external_id.clone(), original.content_hash.clone());
+        if self.media.sync_identity_in_tx(tx, original_id).await? != Some(expected) {
+            return Err(LibraryError::Runtime(format!(
+                "save_pixel_edit: original {original_id} was deleted or re-synced during the save"
+            )));
+        }
 
         // If we're replacing an existing rendered sibling, enqueue its
         // revert sequence BEFORE the new upload so the order in the
@@ -209,7 +206,11 @@ impl Library {
         // design §7.2 step 6c). The `_no_record` sync path skips the
         // recorder, which would orphan the prior rendered asset on
         // Immich forever — see Phase C code review item #1.
-        if let Some(prev_rendered) = self.editing.server_rendered_asset_id(original_id).await? {
+        if let Some(prev_rendered) = self
+            .editing
+            .server_rendered_asset_id_in_tx(tx, original_id)
+            .await?
+        {
             self.delete_rendered_in_tx(tx, &prev_rendered, &mut committed)
                 .await?;
         }
@@ -261,8 +262,8 @@ impl Library {
     /// is removed only after the commit.
     pub async fn revert_edit(&self, original_id: &MediaId) -> Result<(), LibraryError> {
         let mut tx = self.db.begin().await?;
-        let committed = self.revert_edit_in_tx(&mut tx, original_id).await?;
-        tx.commit().await?;
+        let result = self.revert_edit_in_tx(&mut tx, original_id).await;
+        let committed = finish_tx(tx, result, "revert_edit").await?;
         self.finish_committed(committed).await;
         Ok(())
     }
@@ -273,7 +274,10 @@ impl Library {
         original_id: &MediaId,
     ) -> Result<Committed, LibraryError> {
         let mut committed = Committed::default();
-        let prev_rendered = self.editing.server_rendered_asset_id(original_id).await?;
+        let prev_rendered = self
+            .editing
+            .server_rendered_asset_id_in_tx(tx, original_id)
+            .await?;
 
         if let Some(rendered) = prev_rendered.as_ref() {
             self.enqueue_rendered_cleanup(tx, rendered).await?;
@@ -329,7 +333,7 @@ impl Library {
         // Collected before the delete — afterwards the row is gone.
         committed
             .deleted_paths
-            .extend(self.media.collect_original_paths(ids).await);
+            .extend(self.media.collect_original_paths_in_tx(tx, ids).await?);
         committed
             .events
             .extend(self.media.delete_permanently_in_tx(tx, ids).await?);
@@ -355,8 +359,7 @@ impl Library {
         tx: &mut Tx,
         rendered_id: &MediaId,
     ) -> Result<(), LibraryError> {
-        let item = self.media.get_media_item(rendered_id).await?;
-        if let Some(stack_id) = item.as_ref().and_then(|m| m.stack_id.clone()) {
+        if let Some(stack_id) = self.media.stack_id_in_tx(tx, rendered_id).await? {
             self.recorder
                 .record(
                     tx,
@@ -376,6 +379,31 @@ impl Library {
             )
             .await?;
         Ok(())
+    }
+}
+
+/// Commit `tx` if `result` is `Ok`, otherwise roll it back explicitly
+/// (logging a rollback failure) and return the original error.
+///
+/// Both orchestrators end through here so they handle rollback the same
+/// way. Dropping an uncommitted `Tx` would also roll back; doing it
+/// explicitly makes the failure visible in the log.
+async fn finish_tx<T>(
+    tx: Tx,
+    result: Result<T, LibraryError>,
+    op: &'static str,
+) -> Result<T, LibraryError> {
+    match result {
+        Ok(value) => {
+            tx.commit().await?;
+            Ok(value)
+        }
+        Err(e) => {
+            if let Err(rb) = tx.rollback().await {
+                warn!(op, error = %rb, "rollback failed");
+            }
+            Err(e)
+        }
     }
 }
 
@@ -865,5 +893,44 @@ mod tests {
         );
         // Removed(old), Updated(original freed from the stack), Added(new).
         assert_eq!(drain_media(&mut rx).await, 3);
+    }
+
+    /// The original is re-checked inside the transaction: if it was
+    /// re-synced (or deleted) after `save_pixel_edit` read it, the save
+    /// fails and nothing is written.
+    #[tokio::test]
+    async fn save_pixel_edit_in_tx_rejects_stale_original() {
+        let fx = fixture(None).await;
+        let before = fx.snapshot().await;
+        let mut stale = fx
+            .library
+            .media()
+            .get_media_record(&fx.original_id)
+            .await
+            .unwrap()
+            .unwrap();
+        stale.external_id = Some("immich-old".into());
+        let mut rendered = crate::library::db::test_helpers::test_record(MediaId::generate());
+        rendered.is_moments_render = true;
+
+        let mut tx = fx.db.begin().await.unwrap();
+        let result = fx
+            .library
+            .save_pixel_edit_in_tx(&mut tx, &stale, &editing::EditState::default(), &rendered)
+            .await;
+        assert!(result.is_err());
+        tx.rollback().await.unwrap();
+
+        let mut gone = stale.clone();
+        gone.id = MediaId::new("deleted".into());
+        let mut tx = fx.db.begin().await.unwrap();
+        assert!(fx
+            .library
+            .save_pixel_edit_in_tx(&mut tx, &gone, &editing::EditState::default(), &rendered)
+            .await
+            .is_err());
+        tx.rollback().await.unwrap();
+
+        assert_eq!(fx.snapshot().await, before);
     }
 }
