@@ -80,7 +80,7 @@ thiserror = "2"
 chrono = "0.4"
 uuid = { version = "1", features = ["v4"] }
 rawler = "0.7.2"
-lru = "0.18"
+lru = "0.19"
 
 # Heap profiling — only pulled in with `--features dhat-heap`. Adds
 # `dhat::Alloc` as the global allocator while the feature is on.
