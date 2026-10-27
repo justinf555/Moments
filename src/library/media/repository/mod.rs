@@ -5,6 +5,8 @@ use super::model::{
     LibraryStats, MediaCursor, MediaFilter, MediaId, MediaItem, MediaRecord, MediaType,
     MediaVisibility,
 };
+use sqlx::SqliteConnection;
+
 use crate::library::db::{id_placeholders, Database};
 use crate::library::error::LibraryError;
 
@@ -257,6 +259,17 @@ impl MediaRepository {
         &self,
         deleted_ids: &[MediaId],
     ) -> Result<Vec<MediaId>, LibraryError> {
+        let mut conn = self.db.acquire().await?;
+        self.siblings_freed_by_deletion_in_tx(&mut conn, deleted_ids)
+            .await
+    }
+
+    /// [`Self::siblings_freed_by_deletion`] on the caller's transaction.
+    pub async fn siblings_freed_by_deletion_in_tx(
+        &self,
+        conn: &mut SqliteConnection,
+        deleted_ids: &[MediaId],
+    ) -> Result<Vec<MediaId>, LibraryError> {
         if deleted_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -274,10 +287,7 @@ impl MediaRepository {
         for id in deleted_ids {
             q = q.bind(id.as_str());
         }
-        let rows: Vec<(String,)> = q
-            .fetch_all(self.db.pool())
-            .await
-            .map_err(LibraryError::Db)?;
+        let rows: Vec<(String,)> = q.fetch_all(&mut *conn).await.map_err(LibraryError::Db)?;
         Ok(rows.into_iter().map(|(id,)| MediaId::new(id)).collect())
     }
 
@@ -285,10 +295,20 @@ impl MediaRepository {
     ///
     /// Used by backends to construct the absolute original-file path.
     pub async fn relative_path(&self, id: &MediaId) -> Result<Option<String>, LibraryError> {
+        let mut conn = self.db.acquire().await?;
+        self.relative_path_in_tx(&mut conn, id).await
+    }
+
+    /// [`Self::relative_path`] on the caller's transaction.
+    pub async fn relative_path_in_tx(
+        &self,
+        conn: &mut SqliteConnection,
+        id: &MediaId,
+    ) -> Result<Option<String>, LibraryError> {
         let row: Option<String> =
             sqlx::query_scalar("SELECT relative_path FROM media WHERE id = ?")
                 .bind(id.as_str())
-                .fetch_optional(self.db.pool())
+                .fetch_optional(&mut *conn)
                 .await
                 .map_err(LibraryError::Db)?;
         Ok(row)
@@ -496,7 +516,20 @@ impl MediaRepository {
     }
 
     /// Set or clear the favourite flag on one or more assets.
+    #[cfg(test)]
     pub async fn set_favorite(&self, ids: &[MediaId], favorite: bool) -> Result<(), LibraryError> {
+        let mut tx = self.db.begin().await?;
+        self.set_favorite_in_tx(&mut tx, ids, favorite).await?;
+        tx.commit().await.map_err(LibraryError::Db)
+    }
+
+    /// [`Self::set_favorite`] on the caller's transaction.
+    pub async fn set_favorite_in_tx(
+        &self,
+        conn: &mut SqliteConnection,
+        ids: &[MediaId],
+        favorite: bool,
+    ) -> Result<(), LibraryError> {
         if ids.is_empty() {
             return Ok(());
         }
@@ -508,10 +541,7 @@ impl MediaRepository {
         for id in ids {
             query = query.bind(id.as_str());
         }
-        query
-            .execute(self.db.pool())
-            .await
-            .map_err(LibraryError::Db)?;
+        query.execute(&mut *conn).await.map_err(LibraryError::Db)?;
         Ok(())
     }
 
@@ -519,8 +549,9 @@ impl MediaRepository {
     ///
     /// Returns `(local_id, external_id)` pairs. IDs without an external_id
     /// are omitted from the result.
-    pub async fn external_ids(
+    pub async fn external_ids_in_tx(
         &self,
+        conn: &mut SqliteConnection,
         ids: &[MediaId],
     ) -> Result<Vec<(String, String)>, LibraryError> {
         if ids.is_empty() {
@@ -534,14 +565,23 @@ impl MediaRepository {
         for id in ids {
             query = query.bind(id.as_str());
         }
-        query
-            .fetch_all(self.db.pool())
-            .await
-            .map_err(LibraryError::Db)
+        query.fetch_all(&mut *conn).await.map_err(LibraryError::Db)
     }
 
     /// Move assets to the trash (soft delete).
+    #[cfg(test)]
     pub async fn trash(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
+        let mut tx = self.db.begin().await?;
+        self.trash_in_tx(&mut tx, ids).await?;
+        tx.commit().await.map_err(LibraryError::Db)
+    }
+
+    /// [`Self::trash`] on the caller's transaction.
+    pub async fn trash_in_tx(
+        &self,
+        conn: &mut SqliteConnection,
+        ids: &[MediaId],
+    ) -> Result<(), LibraryError> {
         if ids.is_empty() {
             return Ok(());
         }
@@ -554,15 +594,24 @@ impl MediaRepository {
         for id in ids {
             query = query.bind(id.as_str());
         }
-        query
-            .execute(self.db.pool())
-            .await
-            .map_err(LibraryError::Db)?;
+        query.execute(&mut *conn).await.map_err(LibraryError::Db)?;
         Ok(())
     }
 
     /// Restore trashed assets back to the library.
+    #[cfg(test)]
     pub async fn restore(&self, ids: &[MediaId]) -> Result<(), LibraryError> {
+        let mut tx = self.db.begin().await?;
+        self.restore_in_tx(&mut tx, ids).await?;
+        tx.commit().await.map_err(LibraryError::Db)
+    }
+
+    /// [`Self::restore`] on the caller's transaction.
+    pub async fn restore_in_tx(
+        &self,
+        conn: &mut SqliteConnection,
+        ids: &[MediaId],
+    ) -> Result<(), LibraryError> {
         if ids.is_empty() {
             return Ok(());
         }
@@ -574,10 +623,7 @@ impl MediaRepository {
         for id in ids {
             query = query.bind(id.as_str());
         }
-        query
-            .execute(self.db.pool())
-            .await
-            .map_err(LibraryError::Db)?;
+        query.execute(&mut *conn).await.map_err(LibraryError::Db)?;
         Ok(())
     }
 
@@ -586,8 +632,21 @@ impl MediaRepository {
         if ids.is_empty() {
             return Ok(());
         }
+        let mut tx = self.db.begin().await?;
+        self.delete_permanently_in_tx(&mut tx, ids).await?;
+        tx.commit().await.map_err(LibraryError::Db)
+    }
+
+    /// [`Self::delete_permanently`] on the caller's transaction.
+    pub async fn delete_permanently_in_tx(
+        &self,
+        conn: &mut SqliteConnection,
+        ids: &[MediaId],
+    ) -> Result<(), LibraryError> {
+        if ids.is_empty() {
+            return Ok(());
+        }
         let placeholders = id_placeholders(ids.len());
-        let mut tx = self.db.pool().begin().await.map_err(LibraryError::Db)?;
         for (table, col) in [
             ("edits", "media_id"),
             ("asset_faces", "asset_id"),
@@ -601,9 +660,8 @@ impl MediaRepository {
             for id in ids {
                 query = query.bind(id.as_str());
             }
-            query.execute(&mut *tx).await.map_err(LibraryError::Db)?;
+            query.execute(&mut *conn).await.map_err(LibraryError::Db)?;
         }
-        tx.commit().await.map_err(LibraryError::Db)?;
         Ok(())
     }
 }
@@ -651,6 +709,18 @@ impl MediaRepository {
         record: &MediaRecord,
         taken_at_offset_minutes: Option<i64>,
     ) -> Result<(), LibraryError> {
+        let mut conn = self.db.acquire().await?;
+        self.insert_in_tx(&mut conn, record, taken_at_offset_minutes)
+            .await
+    }
+
+    /// [`Self::insert_with_taken_at_offset`] on the caller's transaction.
+    pub async fn insert_in_tx(
+        &self,
+        conn: &mut SqliteConnection,
+        record: &MediaRecord,
+        taken_at_offset_minutes: Option<i64>,
+    ) -> Result<(), LibraryError> {
         sqlx::query(
             "INSERT INTO media (id, content_hash, external_id, relative_path,
                                 original_filename, file_size, imported_at, media_type,
@@ -677,7 +747,7 @@ impl MediaRepository {
         .bind(record.trashed_at)
         .bind(record.is_moments_render as i64)
         .bind(taken_at_offset_minutes)
-        .execute(self.db.pool())
+        .execute(&mut *conn)
         .await
         .map_err(LibraryError::Db)?;
         Ok(())

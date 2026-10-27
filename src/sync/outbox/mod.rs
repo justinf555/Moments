@@ -13,6 +13,7 @@ pub use mutation::OutboxMutation;
 pub use repository::{OutboxCounts, OutboxRepository, OutboxStatus};
 
 use async_trait::async_trait;
+use sqlx::Sqlite;
 
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
@@ -26,7 +27,11 @@ pub struct NoOpRecorder;
 
 #[async_trait]
 impl MutationRecorder for NoOpRecorder {
-    async fn record(&self, _mutation: &Mutation) -> Result<(), LibraryError> {
+    async fn record(
+        &self,
+        _tx: &mut sqlx::Transaction<'_, Sqlite>,
+        _mutation: &Mutation,
+    ) -> Result<(), LibraryError> {
         Ok(())
     }
 }
@@ -34,6 +39,9 @@ impl MutationRecorder for NoOpRecorder {
 // ── QueueWriterOutbox ─────────────────────────────────────────────────
 
 /// Writes mutations to the `sync_outbox` table for later push to Immich.
+///
+/// Rows are inserted on the caller's transaction, so they commit (or roll
+/// back) together with the business write that produced them (#655).
 pub struct QueueWriterOutbox {
     repo: OutboxRepository,
 }
@@ -48,9 +56,13 @@ impl QueueWriterOutbox {
 
 #[async_trait]
 impl MutationRecorder for QueueWriterOutbox {
-    async fn record(&self, mutation: &Mutation) -> Result<(), LibraryError> {
+    async fn record(
+        &self,
+        tx: &mut sqlx::Transaction<'_, Sqlite>,
+        mutation: &Mutation,
+    ) -> Result<(), LibraryError> {
         for row in mutation.to_outbox_rows() {
-            self.repo.insert(&row).await?;
+            self.repo.insert_in_tx(tx, &row).await?;
         }
         Ok(())
     }
@@ -68,15 +80,82 @@ mod tests {
         (dir, db)
     }
 
+    /// Record `mutation` in its own transaction and commit it.
+    async fn record_committed(db: &Database, writer: &dyn MutationRecorder, mutation: &Mutation) {
+        let mut tx = db.begin().await.unwrap();
+        writer.record(&mut tx, mutation).await.unwrap();
+        tx.commit().await.unwrap();
+    }
+
+    async fn outbox_count(db: &Database) -> i64 {
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sync_outbox")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        n
+    }
+
     #[tokio::test]
     async fn noop_recorder_returns_ok() {
+        let (_dir, db) = open_db().await;
         let recorder = NoOpRecorder;
+        let mut tx = db.begin().await.unwrap();
         let result = recorder
-            .record(&Mutation::AssetTrashed {
-                ids: vec![MediaId::new("test".to_string())],
-            })
+            .record(
+                &mut tx,
+                &Mutation::AssetTrashed {
+                    ids: vec![MediaId::new("test".to_string())],
+                },
+            )
             .await;
         assert!(result.is_ok());
+        tx.commit().await.unwrap();
+        assert_eq!(outbox_count(&db).await, 0);
+    }
+
+    /// #655: the outbox rows belong to the caller's transaction — a
+    /// rollback discards them.
+    #[tokio::test]
+    async fn queue_writer_rows_roll_back_with_transaction() {
+        let (_dir, db) = open_db().await;
+        let writer = QueueWriterOutbox::new(db.clone());
+
+        let mut tx = db.begin().await.unwrap();
+        writer
+            .record(
+                &mut tx,
+                &Mutation::AssetTrashed {
+                    ids: vec![MediaId::new("a".to_string()), MediaId::new("b".to_string())],
+                },
+            )
+            .await
+            .unwrap();
+        tx.rollback().await.unwrap();
+
+        assert_eq!(outbox_count(&db).await, 0);
+    }
+
+    /// Dropping an uncommitted transaction (a task cancelled, or the
+    /// process dying, between `begin` and `commit`) leaves no outbox row.
+    #[tokio::test]
+    async fn queue_writer_rows_discarded_when_transaction_dropped() {
+        let (_dir, db) = open_db().await;
+        let writer = QueueWriterOutbox::new(db.clone());
+
+        {
+            let mut tx = db.begin().await.unwrap();
+            writer
+                .record(
+                    &mut tx,
+                    &Mutation::AssetTrashed {
+                        ids: vec![MediaId::new("a".to_string())],
+                    },
+                )
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(outbox_count(&db).await, 0);
     }
 
     #[tokio::test]
@@ -85,13 +164,15 @@ mod tests {
         let writer = QueueWriterOutbox::new(db.clone());
 
         let id = MediaId::new("abc123".to_string());
-        writer
-            .record(&Mutation::AssetFavorited {
+        record_committed(
+            &db,
+            &writer,
+            &Mutation::AssetFavorited {
                 ids: vec![id],
                 favorite: true,
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await;
 
         let row: (String, String, String, i64) = sqlx::query_as(
             "SELECT entity_type, entity_id, action, status FROM sync_outbox WHERE id = 1",
@@ -112,13 +193,15 @@ mod tests {
         let writer = QueueWriterOutbox::new(db.clone());
 
         let album_id = crate::library::album::AlbumId::generate();
-        writer
-            .record(&Mutation::AlbumCreated {
+        record_committed(
+            &db,
+            &writer,
+            &Mutation::AlbumCreated {
                 id: album_id.clone(),
                 name: "Vacation".to_string(),
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await;
 
         let row: (String, String, Option<String>) =
             sqlx::query_as("SELECT entity_type, action, payload FROM sync_outbox WHERE id = 1")
@@ -137,16 +220,18 @@ mod tests {
         let (_dir, db) = open_db().await;
         let writer = QueueWriterOutbox::new(db.clone());
 
-        writer
-            .record(&Mutation::AssetTrashed {
+        record_committed(
+            &db,
+            &writer,
+            &Mutation::AssetTrashed {
                 ids: vec![
                     MediaId::new("a".to_string()),
                     MediaId::new("b".to_string()),
                     MediaId::new("c".to_string()),
                 ],
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await;
 
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sync_outbox")
             .fetch_one(db.pool())
@@ -160,13 +245,15 @@ mod tests {
         let (_dir, db) = open_db().await;
         let writer = QueueWriterOutbox::new(db.clone());
 
-        writer
-            .record(&Mutation::AssetFavorited {
+        record_committed(
+            &db,
+            &writer,
+            &Mutation::AssetFavorited {
                 ids: vec![MediaId::new("x".to_string())],
                 favorite: false,
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await;
 
         let row: (String,) = sqlx::query_as("SELECT action FROM sync_outbox WHERE id = 1")
             .fetch_one(db.pool())
@@ -180,13 +267,15 @@ mod tests {
         let (_dir, db) = open_db().await;
         let writer = QueueWriterOutbox::new(db.clone());
 
-        writer
-            .record(&Mutation::AssetImported {
+        record_committed(
+            &db,
+            &writer,
+            &Mutation::AssetImported {
                 id: MediaId::new("img001".to_string()),
                 file_path: std::path::PathBuf::from("/photos/test.jpg"),
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await;
 
         let row: (String, String, String, Option<String>) = sqlx::query_as(
             "SELECT entity_type, entity_id, action, payload FROM sync_outbox WHERE id = 1",
@@ -207,15 +296,17 @@ mod tests {
         let (_dir, db) = open_db().await;
         let writer = QueueWriterOutbox::new(db.clone());
 
-        writer
-            .record(&Mutation::AssetRestored {
+        record_committed(
+            &db,
+            &writer,
+            &Mutation::AssetRestored {
                 ids: vec![
                     MediaId::new("r1".to_string()),
                     MediaId::new("r2".to_string()),
                 ],
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await;
 
         let rows: Vec<(String, String)> =
             sqlx::query_as("SELECT entity_id, action FROM sync_outbox ORDER BY id")
@@ -235,15 +326,17 @@ mod tests {
         let (_dir, db) = open_db().await;
         let writer = QueueWriterOutbox::new(db.clone());
 
-        writer
-            .record(&Mutation::AssetDeleted {
+        record_committed(
+            &db,
+            &writer,
+            &Mutation::AssetDeleted {
                 items: vec![(
                     MediaId::new("del1".to_string()),
                     Some("ext-del1".to_string()),
                 )],
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await;
 
         let row: (String, String) =
             sqlx::query_as("SELECT entity_type, action FROM sync_outbox WHERE id = 1")
@@ -260,13 +353,15 @@ mod tests {
         let writer = QueueWriterOutbox::new(db.clone());
         let album_id = crate::library::album::AlbumId::new("album-1".to_string());
 
-        writer
-            .record(&Mutation::AlbumRenamed {
+        record_committed(
+            &db,
+            &writer,
+            &Mutation::AlbumRenamed {
                 id: album_id,
                 name: "New Name".to_string(),
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await;
 
         let row: (String, String, Option<String>) =
             sqlx::query_as("SELECT entity_type, action, payload FROM sync_outbox WHERE id = 1")
@@ -286,13 +381,15 @@ mod tests {
         let writer = QueueWriterOutbox::new(db.clone());
         let album_id = crate::library::album::AlbumId::new("album-del".to_string());
 
-        writer
-            .record(&Mutation::AlbumDeleted {
+        record_committed(
+            &db,
+            &writer,
+            &Mutation::AlbumDeleted {
                 id: album_id,
                 external_id: Some("ext-del".to_string()),
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await;
 
         let row: (String, String, String, Option<String>) = sqlx::query_as(
             "SELECT entity_type, entity_id, action, payload FROM sync_outbox WHERE id = 1",
@@ -314,16 +411,18 @@ mod tests {
         let writer = QueueWriterOutbox::new(db.clone());
         let album_id = crate::library::album::AlbumId::new("album-x".to_string());
 
-        writer
-            .record(&Mutation::AlbumMediaAdded {
+        record_committed(
+            &db,
+            &writer,
+            &Mutation::AlbumMediaAdded {
                 album_id,
                 media_ids: vec![
                     MediaId::new("m1".to_string()),
                     MediaId::new("m2".to_string()),
                 ],
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await;
 
         let row: (String, String, Option<String>) =
             sqlx::query_as("SELECT entity_id, action, payload FROM sync_outbox WHERE id = 1")
@@ -346,13 +445,15 @@ mod tests {
         let writer = QueueWriterOutbox::new(db.clone());
         let album_id = crate::library::album::AlbumId::new("album-y".to_string());
 
-        writer
-            .record(&Mutation::AlbumMediaRemoved {
+        record_committed(
+            &db,
+            &writer,
+            &Mutation::AlbumMediaRemoved {
                 album_id,
                 media_ids: vec![MediaId::new("m3".to_string())],
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await;
 
         let row: (String, Option<String>) =
             sqlx::query_as("SELECT action, payload FROM sync_outbox WHERE id = 1")
@@ -371,13 +472,15 @@ mod tests {
         let writer = QueueWriterOutbox::new(db.clone());
         let person_id = crate::library::faces::PersonId::new("person-1".to_string());
 
-        writer
-            .record(&Mutation::PersonRenamed {
+        record_committed(
+            &db,
+            &writer,
+            &Mutation::PersonRenamed {
                 id: person_id,
                 name: "Alice".to_string(),
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await;
 
         let row: (String, String, String, Option<String>) = sqlx::query_as(
             "SELECT entity_type, entity_id, action, payload FROM sync_outbox WHERE id = 1",
@@ -399,13 +502,15 @@ mod tests {
         let writer = QueueWriterOutbox::new(db.clone());
         let person_id = crate::library::faces::PersonId::new("person-2".to_string());
 
-        writer
-            .record(&Mutation::PersonHidden {
+        record_committed(
+            &db,
+            &writer,
+            &Mutation::PersonHidden {
                 id: person_id,
                 hidden: true,
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await;
 
         let row: (String, String, Option<String>) =
             sqlx::query_as("SELECT entity_type, action, payload FROM sync_outbox WHERE id = 1")
@@ -425,13 +530,15 @@ mod tests {
         let writer = QueueWriterOutbox::new(db.clone());
         let person_id = crate::library::faces::PersonId::new("person-3".to_string());
 
-        writer
-            .record(&Mutation::PersonHidden {
+        record_committed(
+            &db,
+            &writer,
+            &Mutation::PersonHidden {
                 id: person_id,
                 hidden: false,
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await;
 
         let row: (Option<String>,) = sqlx::query_as("SELECT payload FROM sync_outbox WHERE id = 1")
             .fetch_one(db.pool())

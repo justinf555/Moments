@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Justin F
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use sqlx::SqliteConnection;
+
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
 
@@ -96,22 +98,48 @@ impl FacesRepository {
     // ── Write queries ───────────────────────────────────────────────
 
     /// Rename a person.
+    #[cfg(test)]
     pub async fn rename_person(&self, id: &str, name: &str) -> Result<(), LibraryError> {
+        let mut tx = self.db.begin().await?;
+        self.rename_person_in_tx(&mut tx, id, name).await?;
+        tx.commit().await.map_err(LibraryError::Db)
+    }
+
+    /// [`Self::rename_person`] on the caller's transaction.
+    pub async fn rename_person_in_tx(
+        &self,
+        conn: &mut SqliteConnection,
+        id: &str,
+        name: &str,
+    ) -> Result<(), LibraryError> {
         sqlx::query("UPDATE people SET name = ? WHERE id = ?")
             .bind(name)
             .bind(id)
-            .execute(self.db.pool())
+            .execute(&mut *conn)
             .await
             .map_err(LibraryError::Db)?;
         Ok(())
     }
 
     /// Set a person's hidden status.
+    #[cfg(test)]
     pub async fn set_person_hidden(&self, id: &str, hidden: bool) -> Result<(), LibraryError> {
+        let mut tx = self.db.begin().await?;
+        self.set_person_hidden_in_tx(&mut tx, id, hidden).await?;
+        tx.commit().await.map_err(LibraryError::Db)
+    }
+
+    /// [`Self::set_person_hidden`] on the caller's transaction.
+    pub async fn set_person_hidden_in_tx(
+        &self,
+        conn: &mut SqliteConnection,
+        id: &str,
+        hidden: bool,
+    ) -> Result<(), LibraryError> {
         sqlx::query("UPDATE people SET is_hidden = ? WHERE id = ?")
             .bind(hidden)
             .bind(id)
-            .execute(self.db.pool())
+            .execute(&mut *conn)
             .await
             .map_err(LibraryError::Db)?;
         Ok(())

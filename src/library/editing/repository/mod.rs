@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Justin F
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use sqlx::SqliteConnection;
+
 use crate::library::db::Database;
 use crate::library::error::LibraryError;
 use crate::library::media::MediaId;
@@ -48,6 +50,17 @@ impl EditingRepository {
         id: &MediaId,
         state: &EditState,
     ) -> Result<(), LibraryError> {
+        let mut conn = self.db.acquire().await?;
+        self.upsert_edit_state_in_tx(&mut conn, id, state).await
+    }
+
+    /// [`Self::upsert_edit_state`] on the caller's transaction.
+    pub async fn upsert_edit_state_in_tx(
+        &self,
+        conn: &mut SqliteConnection,
+        id: &MediaId,
+        state: &EditState,
+    ) -> Result<(), LibraryError> {
         let id_str = id.as_str();
         let json =
             serde_json::to_string(state).map_err(|e| LibraryError::Runtime(e.to_string()))?;
@@ -64,7 +77,7 @@ impl EditingRepository {
         .bind(id_str)
         .bind(&json)
         .bind(now)
-        .execute(self.db.pool())
+        .execute(&mut *conn)
         .await
         .map_err(LibraryError::Db)?;
 
@@ -73,10 +86,20 @@ impl EditingRepository {
 
     /// Delete the edit state for a media item (revert to original).
     pub async fn delete_edit_state(&self, id: &MediaId) -> Result<(), LibraryError> {
+        let mut conn = self.db.acquire().await?;
+        self.delete_edit_state_in_tx(&mut conn, id).await
+    }
+
+    /// [`Self::delete_edit_state`] on the caller's transaction.
+    pub async fn delete_edit_state_in_tx(
+        &self,
+        conn: &mut SqliteConnection,
+        id: &MediaId,
+    ) -> Result<(), LibraryError> {
         let id_str = id.as_str();
         sqlx::query("DELETE FROM edits WHERE media_id = ?")
             .bind(id_str)
-            .execute(self.db.pool())
+            .execute(&mut *conn)
             .await
             .map_err(LibraryError::Db)?;
         Ok(())

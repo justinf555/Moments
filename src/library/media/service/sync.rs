@@ -7,12 +7,32 @@
 use tracing::instrument;
 
 use super::MediaService;
+use crate::library::db::Tx;
 use crate::library::error::LibraryError;
 use crate::library::media::event::MediaEvent;
 use crate::library::media::model::{MediaId, MediaRecord, MediaVisibility, Stack};
 use crate::library::media::repository::UpsertOutcome;
 
 impl MediaService {
+    /// `(external_id, content_hash)` of `id` on the caller's
+    /// transaction; `None` if the row is gone. See `Library::save_pixel_edit`.
+    pub(crate) async fn sync_identity_in_tx(
+        &self,
+        tx: &mut Tx,
+        id: &MediaId,
+    ) -> Result<Option<(Option<String>, Option<String>)>, LibraryError> {
+        self.repo.sync_identity_in_tx(tx, id).await
+    }
+
+    /// The `stack_id` of `id` on the caller's transaction.
+    pub(crate) async fn stack_id_in_tx(
+        &self,
+        tx: &mut Tx,
+        id: &MediaId,
+    ) -> Result<Option<String>, LibraryError> {
+        self.repo.stack_id_in_tx(tx, id).await
+    }
+
     /// Insert or replace a media record from the sync stream.
     ///
     /// Emits `Added` for a new row and `Updated` only when a stored value

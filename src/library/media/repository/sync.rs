@@ -4,6 +4,8 @@
 //! Queries used only by Immich sync: pull upserts, external-id lookups
 //! and the `last_seen_at` heartbeat.
 
+use sqlx::SqliteConnection;
+
 use super::MediaRepository;
 use crate::library::db::id_placeholders;
 use crate::library::error::LibraryError;
@@ -24,6 +26,37 @@ pub enum UpsertOutcome {
 }
 
 impl MediaRepository {
+    /// `(external_id, content_hash)` for `id` on the caller's
+    /// transaction, or `None` if no row exists. Phase C save re-checks
+    /// the original with this inside its transaction (#709).
+    pub async fn sync_identity_in_tx(
+        &self,
+        conn: &mut SqliteConnection,
+        id: &MediaId,
+    ) -> Result<Option<(Option<String>, Option<String>)>, LibraryError> {
+        sqlx::query_as("SELECT external_id, content_hash FROM media WHERE id = ?")
+            .bind(id.as_str())
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(LibraryError::Db)
+    }
+
+    /// The `stack_id` of `id` on the caller's transaction (`None` when
+    /// the row is missing or not stacked).
+    pub async fn stack_id_in_tx(
+        &self,
+        conn: &mut SqliteConnection,
+        id: &MediaId,
+    ) -> Result<Option<String>, LibraryError> {
+        let row: Option<(Option<String>,)> =
+            sqlx::query_as("SELECT stack_id FROM media WHERE id = ?")
+                .bind(id.as_str())
+                .fetch_optional(&mut *conn)
+                .await
+                .map_err(LibraryError::Db)?;
+        Ok(row.and_then(|(s,)| s))
+    }
+
     /// Return the local `MediaId`s of every member of a stack
     /// (regardless of whether each member is the primary). Used by
     /// the service layer to fan out `MediaEvent::Updated` to all

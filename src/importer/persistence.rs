@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tracing::instrument;
+use tracing::{instrument, warn};
 
 use super::error::ImportError;
 use crate::library::config::LocalStorageMode;
@@ -99,7 +99,7 @@ pub async fn persist(params: PersistParams<'_>) -> Result<PersistResult, ImportE
     // The offset is stored beside `taken_at`, never applied to it (#549),
     // and written in the same insert so the #677 backfill skips this row.
     let taken_at_offset_minutes = exif.captured_at_tz;
-    media
+    let inserted = media
         .insert_media_with_taken_at_offset(
             &MediaRecord {
                 id: media_id.clone(),
@@ -122,7 +122,17 @@ pub async fn persist(params: PersistParams<'_>) -> Result<PersistResult, ImportE
             },
             taken_at_offset_minutes,
         )
-        .await?;
+        .await;
+    if let Err(e) = inserted {
+        // The insert (and its outbox row) rolled back, so nothing points
+        // at the managed copy: remove it rather than leave an orphan in
+        // `originals/`. Referenced originals belong to the user — never
+        // touch them.
+        if matches!(mode, LocalStorageMode::Managed) {
+            remove_orphan_copy(&thumbnail_source).await;
+        }
+        return Err(e.into());
+    }
 
     // ── Persist metadata record ───────────────────────────────────────
     metadata
@@ -143,4 +153,79 @@ pub async fn persist(params: PersistParams<'_>) -> Result<PersistResult, ImportE
         .await?;
 
     Ok(PersistResult { thumbnail_source })
+}
+
+/// Best-effort removal of a managed copy whose media row was never
+/// committed. A missing file is not an error.
+async fn remove_orphan_copy(path: &Path) {
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => warn!(
+            path = %path.display(),
+            error = %e,
+            "could not remove managed copy after failed insert"
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::library::db::test_helpers::open_test_db;
+    use crate::library::recorder::tests::FailingRecorder;
+    use crate::library::resolver::LocalResolver;
+    use std::sync::Arc;
+
+    /// Run `persist` for one source file against a service whose
+    /// recorder fails, so the media insert rolls back.
+    async fn persist_with_failing_insert(mode: LocalStorageMode) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let originals = dir.path().join("originals");
+        std::fs::create_dir_all(&originals).unwrap();
+        let source = dir.path().join("photo.jpg");
+        std::fs::write(&source, b"jpeg bytes").unwrap();
+        let db = open_test_db(dir.path()).await;
+        let media = MediaService::new(
+            db.clone(),
+            originals.clone(),
+            mode.clone(),
+            Arc::new(FailingRecorder::always(db.clone())),
+            Arc::new(LocalResolver::new(originals.clone(), mode.clone())),
+        );
+        let metadata = MetadataService::new(db);
+        let media_id = MediaId::generate();
+
+        let result = persist(PersistParams {
+            source: &source,
+            media_id: &media_id,
+            content_hash: None,
+            media_type: MediaType::Image,
+            exif: ExifInfo::default(),
+            duration_ms: None,
+            originals_dir: &originals,
+            mode: &mode,
+            media: &media,
+            metadata: &metadata,
+        })
+        .await;
+        assert!(matches!(result, Err(ImportError::Library(_))));
+        let copy = originals.join(sharded_original_relative(&media_id));
+        (dir, copy)
+    }
+
+    #[tokio::test]
+    async fn failed_insert_removes_managed_copy() {
+        let (_dir, copy) = persist_with_failing_insert(LocalStorageMode::Managed).await;
+        assert!(!copy.exists(), "orphaned managed copy must be removed");
+    }
+
+    #[tokio::test]
+    async fn failed_insert_keeps_referenced_original() {
+        let (dir, _copy) = persist_with_failing_insert(LocalStorageMode::Referenced).await;
+        assert!(
+            dir.path().join("photo.jpg").exists(),
+            "a referenced original belongs to the user"
+        );
+    }
 }

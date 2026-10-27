@@ -4,7 +4,6 @@
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
-use tracing::warn;
 
 use super::event::FacesEvent;
 use super::model::{Person, PersonId};
@@ -26,6 +25,7 @@ mod sync;
 /// [`subscribe`]: FacesService::subscribe
 #[derive(Clone)]
 pub struct FacesService {
+    db: Database,
     repo: FacesRepository,
     thumbnails_dir: std::path::PathBuf,
     recorder: Arc<dyn MutationRecorder>,
@@ -46,7 +46,8 @@ impl FacesService {
         recorder: Arc<dyn MutationRecorder>,
     ) -> Self {
         Self {
-            repo: FacesRepository::new(db),
+            repo: FacesRepository::new(db.clone()),
+            db,
             thumbnails_dir,
             recorder,
             events: EventEmitter::new(),
@@ -84,17 +85,20 @@ impl FacesService {
         person_id: &PersonId,
         name: &str,
     ) -> Result<(), LibraryError> {
-        self.repo.rename_person(person_id.as_str(), name).await?;
-        if let Err(e) = self
-            .recorder
-            .record(&Mutation::PersonRenamed {
-                id: person_id.clone(),
-                name: name.to_string(),
-            })
-            .await
-        {
-            warn!(error = %e, "failed to record PersonRenamed mutation");
-        }
+        let mut tx = self.db.begin().await?;
+        self.repo
+            .rename_person_in_tx(&mut tx, person_id.as_str(), name)
+            .await?;
+        self.recorder
+            .record(
+                &mut tx,
+                &Mutation::PersonRenamed {
+                    id: person_id.clone(),
+                    name: name.to_string(),
+                },
+            )
+            .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -108,19 +112,20 @@ impl FacesService {
         person_id: &PersonId,
         hidden: bool,
     ) -> Result<(), LibraryError> {
+        let mut tx = self.db.begin().await?;
         self.repo
-            .set_person_hidden(person_id.as_str(), hidden)
+            .set_person_hidden_in_tx(&mut tx, person_id.as_str(), hidden)
             .await?;
-        if let Err(e) = self
-            .recorder
-            .record(&Mutation::PersonHidden {
-                id: person_id.clone(),
-                hidden,
-            })
-            .await
-        {
-            warn!(error = %e, "failed to record PersonHidden mutation");
-        }
+        self.recorder
+            .record(
+                &mut tx,
+                &Mutation::PersonHidden {
+                    id: person_id.clone(),
+                    hidden,
+                },
+            )
+            .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -178,5 +183,32 @@ mod tests {
 
         let (_dir, svc) = make_service(thumb_root.path().to_path_buf()).await;
         assert!(svc.person_thumbnail_path(&person_id).is_none());
+    }
+
+    // ── Transactional outbox (#655) ─────────────────────────────────
+
+    use crate::library::recorder::tests::{outbox_count, FailingRecorder};
+
+    #[tokio::test]
+    async fn recorder_failure_rolls_back_person_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = open_test_db(dir.path()).await;
+        let svc = FacesService::new(
+            db.clone(),
+            dir.path().join("thumbnails"),
+            Arc::new(FailingRecorder::always(db.clone())),
+        );
+        svc.upsert_person("p1", "Alice", None, false, false, None, None, None)
+            .await
+            .unwrap();
+        let id = PersonId::new("p1".to_string());
+
+        assert!(svc.rename_person(&id, "Mallory").await.is_err());
+        assert!(svc.set_person_hidden(&id, true).await.is_err());
+
+        let person = svc.get_person(&id).await.unwrap().unwrap();
+        assert_eq!(person.name, "Alice", "rename must roll back");
+        assert!(!person.is_hidden, "hide must roll back");
+        assert_eq!(outbox_count(&db).await, 0);
     }
 }

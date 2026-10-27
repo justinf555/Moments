@@ -4,8 +4,9 @@
 use std::path::Path;
 use std::time::Duration;
 
+use sqlx::pool::PoolConnection;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
-use sqlx::SqlitePool;
+use sqlx::{Sqlite, SqlitePool};
 use tracing::{info, instrument};
 
 use super::error::LibraryError;
@@ -82,7 +83,41 @@ impl Database {
     pub(crate) fn pool(&self) -> &SqlitePool {
         self.pool.get().expect("database not opened")
     }
+
+    /// Begin a write transaction (`BEGIN IMMEDIATE`).
+    ///
+    /// Services use this to make a business write and its outbox row
+    /// (`MutationRecorder::record`) commit or roll back together (#655).
+    /// `IMMEDIATE` takes SQLite's write lock up front, so a transaction
+    /// that reads before it writes can't fail with `SQLITE_BUSY` when it
+    /// upgrades, and it waits on `busy_timeout` behind other writers.
+    ///
+    /// Rule: while a transaction is open, do **all** reads and writes
+    /// through it, never through the pool. A write on another pool
+    /// connection would wait for this one's lock until `busy_timeout`
+    /// expires; a read would need a second pooled connection, and with
+    /// several callers queued on `BEGIN IMMEDIATE` (each holding a
+    /// connection) the pool can run dry. Reads through the transaction
+    /// see committed state plus its own writes.
+    pub(crate) async fn begin(&self) -> Result<Tx, LibraryError> {
+        self.pool()
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(LibraryError::Db)
+    }
+
+    /// Check out a pooled connection for a single non-transactional
+    /// statement (used by the pool-based wrappers of `_in_tx` reads).
+    pub(crate) async fn acquire(&self) -> Result<PoolConnection<Sqlite>, LibraryError> {
+        self.pool().acquire().await.map_err(LibraryError::Db)
+    }
 }
+
+/// An open write transaction on the library database.
+///
+/// Repository `_in_tx` methods take `&mut SqliteConnection`; pass
+/// `&mut tx` (it derefs) so they run inside the caller's transaction.
+pub type Tx = sqlx::Transaction<'static, Sqlite>;
 
 /// Build a comma-separated list of `?` placeholders for an `IN (...)` clause.
 pub(crate) fn id_placeholders(count: usize) -> String {

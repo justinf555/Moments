@@ -3,6 +3,7 @@
 
 //! Outbox table persistence.
 
+use sqlx::SqliteConnection;
 use tracing::{debug, info, instrument};
 
 use crate::library::db::Database;
@@ -46,9 +47,19 @@ impl OutboxRepository {
         Self { db }
     }
 
-    /// Insert a single outbox row.
-    #[instrument(skip(self))]
-    pub async fn insert(&self, row: &OutboxRow) -> Result<(), LibraryError> {
+    /// Insert a single outbox row on the caller's transaction.
+    ///
+    /// There is deliberately no pool-based variant: an outbox row must
+    /// commit together with the business write it describes (#655), so
+    /// it is only ever written through [`MutationRecorder::record`].
+    ///
+    /// [`MutationRecorder::record`]: crate::library::recorder::MutationRecorder::record
+    #[instrument(skip(self, conn))]
+    pub async fn insert_in_tx(
+        &self,
+        conn: &mut SqliteConnection,
+        row: &OutboxRow,
+    ) -> Result<(), LibraryError> {
         let now = chrono::Utc::now().timestamp();
         sqlx::query(
             "INSERT INTO sync_outbox (entity_type, entity_id, action, payload, created_at)
@@ -59,7 +70,7 @@ impl OutboxRepository {
         .bind(&row.action)
         .bind(row.payload.as_deref())
         .bind(now)
-        .execute(self.db.pool())
+        .execute(&mut *conn)
         .await
         .map_err(LibraryError::Db)?;
 
@@ -177,7 +188,9 @@ mod tests {
         .to_outbox_rows();
 
         let before = chrono::Utc::now().timestamp();
-        repo.insert(&rows[0]).await.unwrap();
+        let mut tx = db.begin().await.unwrap();
+        repo.insert_in_tx(&mut tx, &rows[0]).await.unwrap();
+        tx.commit().await.unwrap();
         let after = chrono::Utc::now().timestamp();
 
         let row: (String, String, String, i64) = sqlx::query_as(
@@ -320,7 +333,9 @@ mod tests {
         }
         .to_outbox_rows();
 
-        repo.insert(&rows[0]).await.unwrap();
+        let mut tx = db.begin().await.unwrap();
+        repo.insert_in_tx(&mut tx, &rows[0]).await.unwrap();
+        tx.commit().await.unwrap();
 
         let row: (Option<String>,) = sqlx::query_as("SELECT payload FROM sync_outbox WHERE id = 1")
             .fetch_one(db.pool())
