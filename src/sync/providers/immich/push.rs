@@ -256,15 +256,20 @@ impl PushManager {
                     warn!(id = %id, "no external_id for deleted asset, skipping push");
                     return Ok(());
                 };
-                self.client
-                    .delete_with_body(
+                let missing = self
+                    .client
+                    .delete_with_body_if_exists(
                         "/assets",
                         &serde_json::json!({
                             "ids": [external_id],
                             "force": true,
                         }),
                     )
-                    .await
+                    .await?;
+                if missing {
+                    debug!(id = %id, external_id = %external_id, "asset already gone on server (404); treating delete as done");
+                }
+                Ok(())
             }
 
             // ── Album mutations ─────────────────────────────────────
@@ -295,9 +300,14 @@ impl PushManager {
                     warn!(id = %id, "no external_id for deleted album, skipping push");
                     return Ok(());
                 };
-                self.client
-                    .delete_no_content(&format!("/albums/{external_id}"))
-                    .await
+                let missing = self
+                    .client
+                    .delete_no_content_if_exists(&format!("/albums/{external_id}"))
+                    .await?;
+                if missing {
+                    debug!(id = %id, external_id = %external_id, "album already gone on server (404); treating delete as done");
+                }
+                Ok(())
             }
 
             OutboxMutation::AlbumMediaAdded {
@@ -321,12 +331,16 @@ impl PushManager {
             } => {
                 let external_id = self.lookup_album_external_id(album_id.as_str()).await?;
                 let external_media_ids = self.resolve_media_external_ids_list(&media_ids).await?;
-                self.client
-                    .delete_with_body(
+                let missing = self
+                    .client
+                    .delete_with_body_if_exists(
                         &format!("/albums/{external_id}/assets"),
                         &serde_json::json!({ "ids": external_media_ids }),
                     )
                     .await?;
+                if missing {
+                    debug!(album_id = %album_id, external_id = %external_id, "album already gone on server (404); treating membership removal as done");
+                }
                 self.bump_album_heartbeat(album_id.as_str()).await
             }
 
@@ -1022,6 +1036,74 @@ mod tests {
             interval_rx: tokio::sync::Mutex::new(interval_rx),
             moments_edit_tag: tokio::sync::Mutex::new(None),
         }
+    }
+
+    /// Serve one canned HTTP response per connection on a loopback port.
+    /// Returns the base URL.
+    async fn serve_status(status_line: &'static str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    let _ = sock.read(&mut buf).await;
+                    let resp = format!(
+                        "HTTP/1.1 {status_line}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    async fn make_push_manager_at(db: Database, base_url: &str) -> PushManager {
+        let mut pm = make_push_manager(db).await;
+        pm.client = ImmichClient::new(base_url, "fake-token").unwrap();
+        pm
+    }
+
+    fn album_delete_entry() -> OutboxEntry {
+        OutboxEntry {
+            id: 1,
+            entity_type: "album".into(),
+            entity_id: "local-album".into(),
+            action: "delete".into(),
+            payload: Some(r#"{"external_id":"ext-album"}"#.into()),
+            attempts: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn push_album_delete_treats_404_as_success() {
+        let (_dir, db) = setup_push_db().await;
+        let url = serve_status("404 Not Found").await;
+        let pm = make_push_manager_at(db, &url).await;
+        pm.push_entry(&album_delete_entry())
+            .await
+            .expect("404 on album delete means already gone");
+    }
+
+    #[tokio::test]
+    async fn push_album_delete_still_fails_on_server_error() {
+        let (_dir, db) = setup_push_db().await;
+        let url = serve_status("500 Internal Server Error").await;
+        let pm = make_push_manager_at(db, &url).await;
+        assert!(pm.push_entry(&album_delete_entry()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn push_album_delete_succeeds_on_204() {
+        let (_dir, db) = setup_push_db().await;
+        let url = serve_status("204 No Content").await;
+        let pm = make_push_manager_at(db, &url).await;
+        pm.push_entry(&album_delete_entry()).await.unwrap();
     }
 
     #[tokio::test]

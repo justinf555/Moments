@@ -225,6 +225,35 @@ impl ImmichClient {
         Ok(resp)
     }
 
+    /// Send a request, mapping HTTP 404 to `Ok(true)` and other success to
+    /// `Ok(false)`. Every other failure is an error as in [`Self::send`].
+    async fn send_tolerating_not_found(
+        &self,
+        request: reqwest::RequestBuilder,
+        method: &str,
+        path: &str,
+    ) -> Result<bool, LibraryError> {
+        let resp = request.send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() {
+                LibraryError::Connectivity(format!("{method} {path} failed: {e}"))
+            } else {
+                LibraryError::Immich(format!("{method} {path} failed: {e}"))
+            }
+        })?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(true);
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(LibraryError::Immich(format!(
+                "{method} {path} returned {status}: {}",
+                truncate_error_body(&body, 200),
+            )));
+        }
+        Ok(false)
+    }
+
     async fn send_json<T: serde::de::DeserializeOwned>(
         &self,
         request: reqwest::RequestBuilder,
@@ -288,6 +317,31 @@ impl ImmichClient {
     pub(crate) async fn delete_no_content(&self, path: &str) -> Result<(), LibraryError> {
         self.send_no_content(self.client.delete(self.url(path)), "DELETE", path)
             .await
+    }
+
+    /// `DELETE` that treats HTTP 404 as success: the resource is already
+    /// gone, which is what the caller wanted. Returns `true` when the
+    /// server reported the resource missing.
+    pub(crate) async fn delete_no_content_if_exists(
+        &self,
+        path: &str,
+    ) -> Result<bool, LibraryError> {
+        self.send_tolerating_not_found(self.client.delete(self.url(path)), "DELETE", path)
+            .await
+    }
+
+    /// Like [`Self::delete_no_content_if_exists`] but with a JSON body.
+    pub(crate) async fn delete_with_body_if_exists<B: serde::Serialize>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<bool, LibraryError> {
+        self.send_tolerating_not_found(
+            self.client.delete(self.url(path)).json(body),
+            "DELETE",
+            path,
+        )
+        .await
     }
 
     pub(crate) async fn delete_with_body<B: serde::Serialize>(

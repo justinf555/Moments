@@ -33,6 +33,16 @@ impl AlbumService {
         Ok(())
     }
 
+    /// Sync-only: delete an album because the server deleted it, and emit
+    /// [`AlbumEvent::AlbumRemoved`]. Unlike [`AlbumService::delete_album`]
+    /// this does **not** record an `AlbumDeleted` mutation, so the delete
+    /// is not pushed back to the server (#700).
+    pub async fn delete_album_from_sync(&self, id: &AlbumId) -> Result<(), LibraryError> {
+        self.repo.delete(id).await?;
+        self.emit(AlbumEvent::AlbumRemoved(id.clone()));
+        Ok(())
+    }
+
     /// Sync-only: insert one membership row from the Immich pull stream
     /// and emit [`AlbumEvent::AlbumMediaChanged`].
     ///
@@ -152,6 +162,43 @@ mod tests {
             AlbumEvent::AlbumUpdated(id) => assert_eq!(id, local_id),
             other => panic!("expected AlbumUpdated; got {other:?}"),
         }
+    }
+
+    /// Issue #700: a server-driven album delete must not record an
+    /// `AlbumDeleted` mutation (it would be pushed back), but must still
+    /// emit `AlbumRemoved` for the client's model patch (#589 / #693).
+    #[tokio::test]
+    async fn delete_album_from_sync_emits_removed_without_recording() {
+        use crate::library::recorder::tests::CapturingRecorder;
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::library::db::test_helpers::open_test_db(dir.path()).await;
+        let recorder = std::sync::Arc::new(CapturingRecorder::default());
+        let svc = AlbumService::new(db, recorder.clone());
+
+        let id = svc.create_album("Doomed").await.unwrap();
+        svc.upsert_album(id.as_str(), "Doomed", 0, 0, Some("immich-x"))
+            .await
+            .unwrap();
+        recorder.clear();
+        let mut rx = svc.subscribe();
+
+        svc.delete_album_from_sync(&id).await.unwrap();
+
+        assert!(
+            recorder.snapshot().is_empty(),
+            "sync delete must not record"
+        );
+        assert!(svc.list_albums().await.unwrap().is_empty());
+        match rx.try_recv().expect("expected AlbumRemoved") {
+            AlbumEvent::AlbumRemoved(r) => assert_eq!(r, id),
+            other => panic!("expected AlbumRemoved; got {other:?}"),
+        }
+
+        // Contrast: the user path does record.
+        let id2 = svc.create_album("User").await.unwrap();
+        recorder.clear();
+        svc.delete_album(&id2).await.unwrap();
+        assert_eq!(recorder.snapshot().len(), 1);
     }
 
     /// Issue #628: the orphan sweep at end-of-reset must emit
