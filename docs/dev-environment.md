@@ -1,19 +1,70 @@
 # Development Environment
 
 **Status:** Reference
-**Date:** 2026-10-14
+**Date:** 2026-10-27
 
 How to build, run, debug and package Moments. The short version of the rules lives in `CLAUDE.md`; this document has the details and the reasons behind them.
 
-## Everything runs in the Flatpak SDK
+## Native locally, Flatpak in CI
 
-Moments is built with Meson and packaged as a Flatpak against the GNOME 50 runtime. Every cargo-based target (`check`, `test`, `lint`, `fmt`, `coverage`, `audit`, …) runs inside `org.gnome.Sdk//50` with the `rust-stable` extension, so the toolchain and the GTK/libadwaita versions match what the app ships with.
+Moments is built with Meson and packaged as a Flatpak against the GNOME 50 runtime. There are two ways to work locally:
 
-Don't work around a Flatpak problem by running `cargo` against the host or container's own GTK. Those versions drift from the runtime, so a clean result there proves nothing.
+- **The dev container** (`.devcontainer/`, recommended). Fedora 44 ships GNOME 50, so the app builds and runs natively against the same GTK, libadwaita and GStreamer versions as the runtime. Run, Debug and rust-analyzer work as in any Rust project.
+- **The host or a toolbox.** Every cargo-based target (`check`, `test`, `lint`, `fmt`, `coverage`, `audit`, …) runs inside `org.gnome.Sdk//50` with the `rust-stable` extension.
+
+The Makefile picks the right one: inside the dev container (`MOMENTS_DEVCONTAINER=1`, set by its Containerfile) the cargo targets run natively; anywhere else they run in the SDK. Don't run `cargo` against a toolbox's or host's own GTK: their versions drift from the runtime, so a clean result there proves nothing.
+
+**Formal builds are always Flatpak.** CI's Build & test job (`build-aux/…ci.json`), the release and nightly bundles, and Flathub all build in the SDK, and CI is the authoritative check.
+
+**What the dev container doesn't test:** anything that only happens inside the sandbox, such as permissions and `finish-args`, portals (the file chooser, and the keyring going through the Secret portal), codecs, and the runtime's exact library versions. Before a release, and for any change to manifests, portals or the keyring, install a CI or nightly bundle (or run `make run-dev` from the host) and smoke-test it.
+
+## Dev container
+
+Open the repository in VS Code and choose **Reopen in Container**. The setup follows the gtk-widgets field guide's container, built for rootless Podman on an SELinux-enforcing Fedora host:
+
+- **Image:** Fedora 44 with rustup Rust (pinned to the SDK's version), the `-devel` packages for GTK, libadwaita, GStreamer, libheif and libsecret, and meson, blueprint-compiler and gettext for the meson build. RPM Fusion Free adds the codecs Fedora leaves out and the Flatpak runtime has: `libheif-freeworld` (the HEVC decoder for HEIC photos) and the full `ffmpeg` (H.264/HEVC video). When the runtime moves to GNOME 51, move the image to the Fedora release that ships it.
+- **Display:** the host's Wayland socket, session bus and accessibility bus are mounted at their host paths, plus `/dev/dri`. There's no X11 fallback.
+- **SELinux:** the container runs with `--security-opt=label=disable`. The confined `container_t` domain may not connect to the compositor's or the bus's socket, and relabelling the sockets with `:z` would change labels on live host session sockets. The container still runs rootless, in a user namespace, and gets only the sockets listed in `devcontainer.json`.
+- **Volumes:** the cargo registry and git caches, `CARGO_TARGET_DIR`, the dev app's data (`~/.local/share`, where libraries live), its GSettings keyfile (`GSETTINGS_BACKEND=keyfile`, so settings never reach the host's dconf) and the `gh` config all survive rebuilds. Run `gh auth login` once inside.
+- **Photos:** the host's `~/Pictures` is mounted read-only at its host path, so a referenced-mode library records the same paths in the container as in the Flatpak. Keep test photos in `~/Pictures/Test`. `.devcontainer/post-create.sh` adds a "Pictures" entry and a "Test photos" bookmark to the file chooser's sidebar.
+- **GPU:** `runArgs` passes `/dev/dri` (Mesa: AMD, Intel, nouveau) and `--device=nvidia.com/gpu=all` for the proprietary NVIDIA driver, which Mesa can't use. Without the NVIDIA device GTK falls back to software rendering (Mesa's `llvmpipe` threads), which works but scrolls noticeably less smoothly than the Flatpak. The NVIDIA device needs a CDI spec on the host, and the container won't start without one, so **delete that line on a host with no NVIDIA GPU**. One-time host setup (the toolkit isn't packaged by Fedora or RPM Fusion):
+
+  ```
+  curl -fsSL https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo \
+    | sudo tee /etc/yum.repos.d/nvidia-container-toolkit.repo
+  sudo dnf install nvidia-container-toolkit
+  sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+  ```
+
+  Regenerate the spec after every NVIDIA driver update, or the container fails to start with a library version mismatch.
+
+### Running and debugging natively
+
+| Command | What it does |
+|---|---|
+| `make native-build` | Configures `_build-native/` (development profile, prefix `_install/`) if needed, then builds and installs into `_install/` |
+| `make run-native` | `native-build`, then runs `_install/bin/moments` |
+| `make clean-native` | Removes `_build-native/` and `_install/` |
+
+The app needs meson's output to start: `src/config.rs` bakes in `PKGDATADIR`, `main.rs` loads `moments.gresource` from there, and the GSettings schema is compiled under the prefix. Installing into a prefix inside the checkout covers all three, and `XDG_DATA_DIRS` points at it.
+
+`src/config.rs` is shared with SDK builds, which configure `_build/` with the default prefix. `native-build` reconfigures when `config.rs` doesn't point at `_install/`, so switching between the two is safe.
+
+The container's environment (`containerEnv` in `devcontainer.json`, matching `NATIVE_ENV` in the Makefile) adds `_install/share` to `XDG_DATA_DIRS`, so every way of launching the app finds the schema, and sets `GDK_DEBUG=no-portals`. The host's portals would answer the file chooser with host paths, which don't exist in the container, so GTK's own file chooser is used instead. The same switch makes libadwaita read the colour scheme from GSettings rather than the Settings portal, so the app starts in light mode.
+
+The app runs unsandboxed on the host's session bus:
+
+- **Keyring:** libsecret talks to the host's Secret Service directly, so the `.Devel` app's Immich token is stored in your real keyring (as its own entry).
+- **D-Bus name:** the app owns `io.github.justinf555.Moments.Devel` on the host bus. A `.Devel` Flatpak already running on the host would take the launch instead; close it first.
+
+In VS Code:
+
+- **Debug Moments (native, dev container)** (`.vscode/launch.json`) launches `_install/bin/moments` under CodeLLDB with `native-build` as its pre-launch task. Ctrl+F5 runs it without the debugger. Its environment duplicates `NATIVE_ENV` in the Makefile; keep them in step.
+- **rust-analyzer Run / Run Test / Debug** run the native cargo: `scripts/sdk-cargo.sh` execs `cargo` directly when `MOMENTS_DEVCONTAINER` is set. Before `cargo run` it runs `make native-build`, because the app can't start without the gresource and schema. rust-analyzer's **Debug** button doesn't go through the script, so run `make native-build` once (or use the launch config) before debugging the binary that way.
 
 ### Toolbox containers
 
-Development usually happens inside a Fedora toolbox, which has no `flatpak` binary, only `flatpak-spawn`. Flatpak has to run on the host anyway, because nested sandboxes don't work. The Makefile handles this itself:
+Outside the dev container, development can happen inside a Fedora toolbox, which has no `flatpak` binary, only `flatpak-spawn`. Flatpak has to run on the host anyway, because nested sandboxes don't work. The Makefile handles this itself:
 
 - `HOST_CMD` detects a container via `/run/.containerenv` and resolves to `flatpak-spawn --host` (empty on the host).
 - `$(FLATPAK)` is `$(HOST_CMD) flatpak`.
@@ -42,9 +93,26 @@ The `.Devel` app ID has its own GSettings, data dirs and keyring entries, so dev
 
 Meson generates `src/config.rs` from `src/config.rs.in` (`configure_file`, copied into the source tree by `src/meson.build`). It's gitignored, so a fresh checkout has none, and `make run` doesn't create one: it builds from a clone inside `.flatpak-builder/`. Every cargo target therefore depends on the `$(CONFIG_RS)` file target, which runs `meson setup _build`. That target also depends on `meson.build`, so a version bump refreshes a stale `VERSION`.
 
+## Test Immich server
+
+`dev/immich/compose.yml` runs a throwaway Immich for testing the Immich backend. It's Immich's own compose file with named volumes and fixed test credentials. It deliberately tracks Immich's latest release, so a release that breaks Moments shows up here before users report it. Run the targets on the host (they need `podman-compose`, and the dev container has no Podman):
+
+| Command | What it does |
+|---|---|
+| `make immich-up` | Pulls the latest images, starts the stack, waits for it, creates the admin account and prints the login |
+| `make immich-down` | Stops it; the library and database volumes are kept |
+| `make immich-reset` | Stops it and deletes the volumes, for a fresh server |
+| `make immich-logs` | Follows the server's log |
+
+Sign in as `admin@moments.test` / `moments`. The server URL is `http://localhost:2283` from a Flatpak or host build, and `http://host.containers.internal:2283` from the dev container. The port is bound to 127.0.0.1 only.
+
+- The first start pulls a few GB of images, most of it the machine-learning container. That container does face recognition, so the People view needs it.
+- The server and machine-learning images follow Immich's `release` tag. To pin one release, for example to find which one broke something, run `IMMICH_VERSION=v2.x.y make immich-up`. An existing database can't be moved back to an older release; `make immich-reset` first.
+- Valkey and Postgres can't simply follow a tag, because Immich occasionally requires a new Postgres image. `make immich-up` runs `dev/immich/check-upstream.sh` first, which compares them with the latest release's `docker-compose.yml` and prints a warning when they differ. Copy the new image lines into `compose.yml` when it does.
+
 ## Debugging
 
-Always debug the Flatpak dev build, never a binary run outside the sandbox.
+In the dev container, debug the native build (see above). On the host or in a toolbox, debug the Flatpak dev build, never a binary run outside the sandbox.
 
 - **`make dev-gdb`** starts the SDK's gdb inside the same sandbox as `make dev`. Both take their sandbox flags from `DEV_RUN_FLAGS`, so add any new sandbox permission there, not to one target. Run `make dev-build` first.
 - **`make attach [PID=…]`** attaches interactive gdb to a running `.Devel` process. The PID is auto-detected through `$(HOST_CMD) pgrep`, because a container-local `pgrep` sees a different PID namespace.

@@ -5,7 +5,9 @@
         check test test-nextest test-integration test-all sdk-cargo \
         lint fmt fmt-check typos audit coverage metrics \
         check-potfiles ci-all stack attach release config \
-        bundle bundle-nightly install-bundle uninstall-bundle
+        bundle bundle-nightly install-bundle uninstall-bundle \
+        native-setup native-build run-native clean-native \
+        immich-up immich-down immich-reset immich-logs
 
 # Flatpak always runs on the host. Inside a toolbox/distrobox/podman
 # container there is no `flatpak` binary at all — only `flatpak-spawn`,
@@ -27,6 +29,59 @@ FLATPAK  ?= $(HOST_CMD) flatpak
 # Override explicitly if you have both: make run FLATPAK_BUILDER=flatpak-builder
 HOST_FB := $(shell $(HOST_CMD) sh -c 'command -v flatpak-builder' 2>/dev/null)
 FLATPAK_BUILDER ?= $(if $(HOST_FB),$(HOST_CMD) $(HOST_FB),$(FLATPAK) run org.flatpak.Builder)
+
+# Where the cargo targets (check, test, lint, fmt, …) run. The dev container
+# (.devcontainer/) sets MOMENTS_DEVCONTAINER and ships Fedora's GNOME 50
+# libraries, so there they run natively. Everywhere else (host, toolbox) they
+# run in org.gnome.Sdk//50 (FLATPAK_RUN, below). CI doesn't use these targets:
+# it builds build-aux/…ci.json with flatpak-builder --run-tests.
+ifdef MOMENTS_DEVCONTAINER
+CARGO_SH   = bash -c
+CARGO_INIT = cd $(CURDIR)
+else
+CARGO_SH   = $(FLATPAK_RUN) -c
+CARGO_INIT = $(SDK_INIT)
+endif
+
+# ── Native build (dev container) ─────────────────────────────────────────────
+#
+# Builds and runs the app without Flatpak, for VS Code's Run and Debug
+# buttons. Meson configures the development profile with a prefix inside
+# the checkout and installs there, so the PKGDATADIR baked into config.rs
+# points at a real moments.gresource, and the GSettings schema is compiled
+# under the prefix.
+#
+#   make native-build   configure if needed, build and install (debug)
+#   make run-native     native-build, then run with RUST_LOG=moments=debug
+#
+# GDK_DEBUG=no-portals: the host's portals answer with host paths, which
+# don't exist in the container, so use GTK's own file chooser instead.
+# .vscode/launch.json sets the same environment; keep the two in step.
+NATIVE_BUILD_DIR = _build-native
+NATIVE_PREFIX    = $(CURDIR)/_install
+NATIVE_ENV = \
+	XDG_DATA_DIRS=$(NATIVE_PREFIX)/share:/usr/local/share:/usr/share \
+	GDK_DEBUG=no-portals \
+	RUST_LOG=moments=debug
+
+native-setup:
+	meson setup $(if $(wildcard $(NATIVE_BUILD_DIR)/build.ninja),--reconfigure) \
+		--prefix=$(NATIVE_PREFIX) -Dprofile=development $(NATIVE_BUILD_DIR)
+
+# src/config.rs is shared with SDK builds, which configure _build with the
+# default prefix. Reconfigure when it doesn't point at this prefix, or the
+# app panics at startup loading moments.gresource from the wrong place.
+native-build:
+	@grep -qF '"$(NATIVE_PREFIX)/' $(CONFIG_RS) 2>/dev/null \
+		&& test -f $(NATIVE_BUILD_DIR)/build.ninja \
+		|| $(MAKE) --no-print-directory native-setup
+	meson install -C $(NATIVE_BUILD_DIR) --quiet
+
+run-native: native-build
+	$(NATIVE_ENV) $(NATIVE_PREFIX)/bin/moments
+
+clean-native:
+	rm -rf $(NATIVE_BUILD_DIR) _install
 
 run:
 	$(FLATPAK_BUILDER) --user --install --force-clean flatpak-build-dir io.github.justinf555.Moments.json && \
@@ -271,10 +326,11 @@ clean-bundle:
 	rm -rf $(BUNDLE_REPO) $(BUNDLE_BUILD) moments-*.flatpak moments-*.flatpak.sha256 \
 		build-aux/.$(APP_ID).nightly.resolved.json
 
-# ── Testing (inside GNOME 50 Flatpak SDK) ────────────────────────────────────
+# ── Testing ──────────────────────────────────────────────────────────────────
 #
-# All test targets run inside the Flatpak SDK so that libadwaita 1.9
-# and other GNOME 50 dependencies are available.
+# The cargo targets run inside the GNOME 50 Flatpak SDK so that libadwaita
+# 1.9 and the other GNOME 50 dependencies are available, or natively in the
+# dev container, which has the same versions (see CARGO_SH at the top).
 
 # Flatpak SDK runner — uses an isolated CARGO_HOME to avoid rustup shims
 # in ~/.cargo/bin shadowing the SDK's toolchain. Registry and git caches
@@ -314,41 +370,55 @@ SDK_INIT = source /usr/lib/sdk/rust-stable/enable.sh && \
 #
 # Depending on meson.build means a version bump (`make release`) also
 # refreshes the stale config.rs instead of silently keeping the old VERSION.
+#
+# In the dev container it configures the native build instead, so config.rs
+# matches the binary that run-native and VS Code's debugger launch.
 
 CONFIG_RS       = src/config.rs
 MESON_BUILD_DIR = _build
 
 $(CONFIG_RS): src/config.rs.in meson.build
 	@echo "==> $(CONFIG_RS) missing or stale — running meson setup"
-	$(FLATPAK_RUN) -c '$(SDK_INIT) && \
+ifdef MOMENTS_DEVCONTAINER
+	$(MAKE) --no-print-directory native-setup
+else
+	$(CARGO_SH) '$(CARGO_INIT) && \
 		if [ -f $(MESON_BUILD_DIR)/build.ninja ]; then \
 			meson setup --reconfigure $(MESON_BUILD_DIR); \
 		else \
 			meson setup $(MESON_BUILD_DIR); \
 		fi'
+endif
 
 # Regenerate config.rs on demand.
 config: $(CONFIG_RS)
 
 check: $(CONFIG_RS)
-	$(FLATPAK_RUN) -c '$(SDK_INIT) && cargo check'
+	$(CARGO_SH) '$(CARGO_INIT) && cargo check'
 
 test: $(CONFIG_RS)
-	$(FLATPAK_RUN) -c '$(SDK_INIT) && cargo test'
+	$(CARGO_SH) '$(CARGO_INIT) && cargo test'
 
 # Any cargo command in the SDK, e.g. make sdk-cargo CARGO_ARGS="test foo".
 # rust-analyzer's Run/Run Test buttons use it via scripts/sdk-cargo.sh
 # (rust-analyzer.runnables.command), so they share target/ with `make test`
-# instead of rebuilding with the toolbox's own cargo. CARGO_ARGS is expanded
-# inside single quotes and must not contain them.
+# instead of rebuilding with the toolbox's own cargo. In the dev container
+# the script runs cargo directly instead. CARGO_ARGS is expanded inside
+# single quotes and must not contain them.
 sdk-cargo: $(CONFIG_RS)
-	@$(FLATPAK_RUN) -c '$(SDK_INIT) && cargo $(CARGO_ARGS)'
+	@$(CARGO_SH) '$(CARGO_INIT) && cargo $(CARGO_ARGS)'
 
 test-nextest: $(CONFIG_RS)
-	$(FLATPAK_RUN) -c '$(SDK_INIT) && \
+	$(CARGO_SH) '$(CARGO_INIT) && \
 		cargo install cargo-nextest --locked 2>/dev/null || true && \
 		cargo nextest run --profile ci'
 
+# Needs a Wayland session. The dev container mounts the host's socket.
+ifdef MOMENTS_DEVCONTAINER
+test-integration: $(CONFIG_RS)
+	GSK_RENDERER=cairo GTK_A11Y=none GIO_USE_VFS=local SQLX_OFFLINE=true \
+		cargo test --features integration-tests -- --test-threads=1
+else
 test-integration: $(CONFIG_RS)
 	$(FLATPAK) run --share=network \
 	  --socket=wayland \
@@ -365,22 +435,23 @@ test-integration: $(CONFIG_RS)
 	  --env=WAYLAND_DISPLAY=$(WAYLAND_DISPLAY) \
 	  --command=bash org.gnome.Sdk//50 \
 	  -c '$(SDK_INIT) && cargo test --features integration-tests -- --test-threads=1'
+endif
 
 test-all: test test-integration
 
 # ── Linting & Analysis ──────────────────────────────────────────────────────
 
 lint: $(CONFIG_RS)
-	$(FLATPAK_RUN) -c '$(SDK_INIT) && \
+	$(CARGO_SH) '$(CARGO_INIT) && \
 		cargo fmt -- --check && \
 		cargo clippy --all-targets -- -D warnings && \
 		cargo clippy --all-targets --features dhat-heap -- -D warnings'
 
 fmt: $(CONFIG_RS)
-	$(FLATPAK_RUN) -c '$(SDK_INIT) && cargo fmt'
+	$(CARGO_SH) '$(CARGO_INIT) && cargo fmt'
 
 fmt-check: $(CONFIG_RS)
-	$(FLATPAK_RUN) -c '$(SDK_INIT) && cargo fmt -- --check'
+	$(CARGO_SH) '$(CARGO_INIT) && cargo fmt -- --check'
 
 typos:
 	typos
@@ -393,7 +464,7 @@ typos:
 AUDIT_TOOLS = $(CURDIR)/target/audit-tools
 
 audit:
-	$(FLATPAK_RUN) -c '$(SDK_INIT) && \
+	$(CARGO_SH) '$(CARGO_INIT) && \
 		export CARGO_INSTALL_ROOT=$(AUDIT_TOOLS) && \
 		export PATH=$(AUDIT_TOOLS)/bin:$$PATH && \
 		{ command -v cargo-audit >/dev/null || cargo install cargo-audit --locked; } && \
@@ -402,7 +473,7 @@ audit:
 		cargo deny check'
 
 coverage: $(CONFIG_RS)
-	$(FLATPAK_RUN) -c '$(SDK_INIT) && \
+	$(CARGO_SH) '$(CARGO_INIT) && \
 		cargo install cargo-llvm-cov --locked 2>/dev/null || true && \
 		cargo llvm-cov --html && \
 		echo "Coverage report: target/llvm-cov/html/index.html"'
@@ -456,6 +527,38 @@ attach:
 	fi; \
 	echo "attaching gdb to PID $$PID — type 'continue' to resume, 'detach' to release"; \
 	$(FLATPAK) run --command=gdb org.gnome.Sdk//50 -p "$$PID"
+
+# ── Test Immich server ───────────────────────────────────────────────────────
+#
+# A local Immich (dev/immich/compose.yml, following Immich's latest release)
+# for testing the Immich backend. Needs podman-compose; run these on the
+# host, not in the dev container, which has no Podman.
+#
+#   make immich-up      pull the latest images, warn if the Valkey/Postgres
+#                       images have drifted from upstream, start it, create
+#                       the admin account and print the login
+#   make immich-down    stop it; the library and database volumes are kept
+#   make immich-reset   stop it and delete its volumes (a fresh server)
+#   make immich-logs    follow the server's log
+#
+# The first start pulls a few GB of images (most of it machine learning).
+
+IMMICH_COMPOSE = podman compose -f dev/immich/compose.yml
+
+immich-up:
+	dev/immich/check-upstream.sh
+	$(IMMICH_COMPOSE) pull
+	$(IMMICH_COMPOSE) up -d
+	dev/immich/bootstrap.sh
+
+immich-down:
+	$(IMMICH_COMPOSE) down
+
+immich-reset:
+	$(IMMICH_COMPOSE) down --volumes
+
+immich-logs:
+	podman logs -f moments-immich-server
 
 # ── i18n ────────────────────────────────────────────────────────────────────
 

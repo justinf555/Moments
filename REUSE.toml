@@ -42,6 +42,7 @@ SPDX-License-Identifier = "GPL-3.0-or-later"
 path = [
     ".gitignore",
     ".vscode/*.json",
+    ".devcontainer/devcontainer.json",
     ".claude/settings.json",
     "Cargo.lock",
     "cargo-sources.json",

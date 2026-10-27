@@ -1,0 +1,86 @@
+// Moments local development environment: native GNOME 50 GTK, libadwaita and
+// GStreamer, and rustup Rust, with the app's window shown on the host's Wayland
+// session. Built for rootless Podman on an SELinux-enforcing Fedora host.
+// CI and release builds stay on Flatpak; see docs/dev-environment.md.
+{
+    "name": "moments",
+    "build": { "dockerfile": "Containerfile" },
+
+    "runArgs": [
+        // Rootless Podman: keep-id maps the host user onto the image's vscode user (both UID 1000).
+        "--userns=keep-id",
+
+        // The host session. Individual sockets at their host paths rather than all of
+        // $XDG_RUNTIME_DIR, which also holds the keyring, gpg-agent and ssh-agent sockets.
+        // The a11y bus is there so Orca and Accerciser can see the app.
+        "--volume=${localEnv:XDG_RUNTIME_DIR}/${localEnv:WAYLAND_DISPLAY}:${localEnv:XDG_RUNTIME_DIR}/${localEnv:WAYLAND_DISPLAY}",
+        "--volume=${localEnv:XDG_RUNTIME_DIR}/bus:${localEnv:XDG_RUNTIME_DIR}/bus",
+        "--volume=${localEnv:XDG_RUNTIME_DIR}/at-spi:${localEnv:XDG_RUNTIME_DIR}/at-spi",
+        "--device=/dev/dri",
+        // The proprietary NVIDIA driver: Mesa can't drive it, so without this GTK renders
+        // in software (llvmpipe). Needs nvidia-container-toolkit's CDI spec on the host
+        // (docs/dev-environment.md, "GPU"); the container won't start without it, so
+        // delete this line on a host with no NVIDIA GPU.
+        "--device=nvidia.com/gpu=all",
+
+        // SELinux: the confined container_t domain may not connect to the compositor's or
+        // the bus's socket, and no stock container type allows only that. Relabelling the
+        // sockets with :z would change the labels of live host session sockets instead.
+        // docs/dev-environment.md, "Dev container", has the details.
+        "--security-opt=label=disable"
+    ],
+    "containerEnv": {
+        "HOME": "/home/vscode",
+        "XDG_RUNTIME_DIR": "${localEnv:XDG_RUNTIME_DIR}",
+        "WAYLAND_DISPLAY": "${localEnv:WAYLAND_DISPLAY}",
+        "DBUS_SESSION_BUS_ADDRESS": "unix:path=${localEnv:XDG_RUNTIME_DIR}/bus",
+        // Every way of launching the app (rust-analyzer Run/Debug, a terminal
+        // `cargo run`, the launch config) finds the GSettings schema and icons
+        // that `make native-build` installs under _install/, and uses GTK's own
+        // file chooser: the host's portals would answer with host paths. Matches
+        // NATIVE_ENV in the Makefile; keep them in step.
+        "XDG_DATA_DIRS": "${containerWorkspaceFolder}/_install/share:/usr/local/share:/usr/share",
+        "GDK_DEBUG": "no-portals"
+    },
+    "remoteUser": "vscode",
+    "containerUser": "vscode",
+    "updateRemoteUserUID": false,
+
+    // Shared relabel (z) so the container can read and write the repo.
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/${localWorkspaceFolderBasename},type=bind,z",
+    "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+
+    "mounts": [
+        // Downloaded crates and the build cache survive image rebuilds. The toolchain is
+        // deliberately not in a volume: see RUSTUP_HOME in the Containerfile.
+        "source=moments-cargo-registry,target=/home/vscode/.cargo/registry,type=volume",
+        "source=moments-cargo-git,target=/home/vscode/.cargo/git,type=volume",
+        "source=moments-cargo-target,target=/home/vscode/.cache/cargo-target,type=volume",
+        // The dev app's libraries (~/.local/share/moments) and GSettings keyfile.
+        "source=moments-dev-data,target=/home/vscode/.local/share,type=volume",
+        "source=moments-dev-gsettings,target=/home/vscode/.config/glib-2.0,type=volume",
+        // The host's gh token sits in its keyring, out of reach. Run `gh auth login` once
+        // inside; the volume keeps it across rebuilds.
+        "source=moments-gh,target=/home/vscode/.config/gh,type=volume",
+        // Photos to import from (test photos in ~/Pictures/Test), read-only and at the
+        // host path, so a referenced-mode library records the same paths here as in
+        // the Flatpak. No relabel needed: label=disable above.
+        "source=${localEnv:HOME}/Pictures,target=${localEnv:HOME}/Pictures,type=bind,readonly"
+    ],
+
+    // Sidebar entries for that mount in GTK's file chooser.
+    "postCreateCommand": ".devcontainer/post-create.sh '${localEnv:HOME}/Pictures'",
+
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "rust-lang.rust-analyzer",
+                "vadimcn.vscode-lldb",
+                "bodil.blueprint-gtk",
+                "mesonbuild.mesonbuild",
+                "tamasfe.even-better-toml",
+                "fill-labs.dependi"
+            ]
+        }
+    }
+}

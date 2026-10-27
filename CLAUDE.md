@@ -6,18 +6,19 @@ Moments is a GNOME photo manager in Rust (GTK4 + libadwaita), targeting GNOME Ci
 
 ## Golden rules
 
-- **Build, run, test and lint only through the Makefile.** Everything runs inside the Flatpak GNOME SDK. Never run the app binary directly, and never run `cargo` against the host/container's own GTK — its versions drift from the GNOME 50 runtime, so a clean result there proves nothing.
+- **Build, run, test and lint only through the Makefile.** In the dev container (`.devcontainer/`, `MOMENTS_DEVCONTAINER=1`) the cargo targets run natively against Fedora 44's GNOME 50 libraries; on the host or in a toolbox they run inside the Flatpak GNOME SDK. Never run `cargo` against a toolbox's or host's own GTK — its versions drift from the GNOME 50 runtime, so a clean result there proves nothing.
+- **CI is Flatpak and authoritative.** CI, the release and nightly bundles and Flathub always build with Flatpak. A native pass doesn't cover sandbox behaviour (permissions, portals, keyring, codecs); say so when a change touches those.
 - **Run `make lint` before every commit.** It is `cargo fmt --check` + `clippy --all-targets -D warnings` + clippy again with `--features dhat-heap`.
 - **Verify compile fixes with `make check` or `make lint`** — never assume a fix compiles.
 - **Branch for every change** — never commit directly to `main`.
-- To test UI behaviour, ask the user to run `make run-dev` (or GNOME Builder). Don't launch the app yourself.
+- To test UI behaviour, ask the user to run it (`make run-native` or VS Code's debugger in the dev container, `make run-dev` elsewhere). Don't launch the app yourself.
 
 ## Everyday commands
 
 | Command | What it does |
 |---|---|
 | `make lint` | fmt check + clippy (both feature sets). Required before commit. |
-| `make check` | `cargo check` in the SDK |
+| `make check` | `cargo check` (native in the dev container, SDK elsewhere) |
 | `make test` | unit tests |
 | `make test-integration` | headless GTK tests under `tests/` (needs a Wayland session) |
 | `make test-all` | unit + integration |
@@ -25,15 +26,17 @@ Moments is a GNOME photo manager in Rust (GTK4 + libadwaita), targeting GNOME Ci
 | `make typos` / `make check-potfiles` | spelling check / verify `po/POTFILES.in` paths exist |
 | `make audit` | `cargo audit` + `cargo deny check` |
 | `make ci-all` | lint + check-potfiles + test + test-integration + audit |
-| `make run-dev` | full dev Flatpak build (uncommitted changes OK) and run |
+| `make native-build` / `make run-native` | dev container only: meson build into `_install/`, then run (VS Code's debugger uses the same build) |
+| `make run-dev` | full dev Flatpak build (uncommitted changes OK) and run; not available inside the dev container |
 | `make dev-bootstrap`, then `make dev` | fast incremental dev loop (Builder-style); re-bootstrap after manifest changes |
 | `make run` | production-ID build from the **committed** tree, installed `--user` |
+| `make immich-up` / `immich-down` / `immich-reset` | local test Immich server in Podman (host only, needs `podman-compose`); login `admin@moments.test` / `moments` |
 
 There is no `make help` and no `make build`; read the Makefile for the rest (`dev-gdb`, `stack`, `attach`, `run-dhat`, `coverage`, `metrics`, `bundle`, `release`, `clean`, `clean-dev`).
 
 ## Flatpak and the toolbox container
 
-Development happens inside a Fedora toolbox, which has no `flatpak` binary — only `flatpak-spawn`. The Makefile detects the container (`/run/.containerenv`) and sets `HOST_CMD` to `flatpak-spawn --host`, so every target works unchanged on the host or in the container.
+The dev container has no Flatpak at all: Flatpak targets (`run-dev`, `dev*`, `bundle`, `run`) run from the host or a toolbox. A Fedora toolbox has no `flatpak` binary — only `flatpak-spawn`. The Makefile detects the container (`/run/.containerenv`) and sets `HOST_CMD` to `flatpak-spawn --host`, so every target works unchanged on the host or in the toolbox.
 
 - **Never write a bare `flatpak` or `flatpak-builder` in a recipe.** Use `$(FLATPAK)` and `$(FLATPAK_BUILDER)`. A bare one works when tested on the host and fails in the container with `flatpak: command not found`.
 - `flatpak-spawn --host` inherits cwd and propagates exit codes, but **does not pass environment variables**. SDK invocations pass everything via explicit `--env=` flags; a new target that needs a variable takes it as a make argument (`make bundle GPG_KEY=…`), never an exported env var.
