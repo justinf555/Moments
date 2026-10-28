@@ -82,6 +82,13 @@ template $MomentsActivityIndicator : Gtk.Widget {
           Gtk.ProgressBar import_progress {
             visible: false;
           }
+
+          Gtk.Button import_cancel_button {
+            label: _("Cancel");
+            halign: end;
+            visible: false;
+            tooltip-text: _("Cancel Import");
+          }
         }
 
         Gtk.Box error_row {

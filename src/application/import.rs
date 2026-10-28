@@ -1,15 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Justin F
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Folder import: the folder picker and GIO enumeration of its contents.
-
-use std::path::PathBuf;
+//! Folder import: the folder picker. Scanning and importing live in
+//! [`crate::client::ImportClient`].
 
 use adw::prelude::*;
-use adw::subclass::prelude::*;
 use gettextrs::gettext;
 use gtk::{gio, glib};
-use tracing::{debug, error, info, warn};
+use tracing::{error, warn};
 
 use super::MomentsApplication;
 
@@ -39,71 +37,24 @@ impl MomentsApplication {
         );
     }
 
-    /// Create the import progress dialog and kick off the import pipeline.
+    /// Hand the chosen folder to the import client, which scans and
+    /// imports it. Progress shows in the sidebar's activity indicator.
     ///
-    /// Accepts the `gio::File` directly from the file dialog rather than
-    /// extracting a path. This is critical for Flatpak: the document portal
-    /// grants access to the `gio::File` object, but the underlying path
-    /// (`/run/user/…/doc/…`) becomes inaccessible once the dialog callback
-    /// returns. Using `gio::File::enumerate_children` on the original object
-    /// respects the portal grant.
+    /// Passes on the `gio::File` from the file dialog rather than a path.
+    /// This is critical for Flatpak: the document portal grants access to
+    /// the `gio::File` object, but the underlying path (`/run/user/…/doc/…`)
+    /// is only reachable through it. `ImportClient::import_folder` walks
+    /// it with GIO for that reason.
     fn run_import(&self, folder: gio::File) {
-        let import_client = match self.imp().import_client.borrow().clone() {
-            Some(c) => c,
-            None => {
-                error!("import requested but no library is open");
-                return;
-            }
+        let Some(import_client) = self.import_client() else {
+            error!("import requested but no library is open");
+            return;
         };
-
-        let display_path = folder
-            .path()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| folder.uri().to_string());
-        info!(path = %display_path, "starting import");
-
-        // Resolve folder contents via GIO to handle Flatpak portal paths.
-        let sources = resolve_folder_via_gio(&folder);
-        if sources.is_empty() {
-            warn!(path = %display_path, "no files found in folder");
+        if import_client.is_busy() {
+            warn!("import already in progress");
+            crate::client::show_toast(&gettext("An import is already in progress"));
             return;
         }
-        debug!(count = sources.len(), "resolved import sources via GIO");
-
-        import_client.import(sources);
-    }
-}
-
-/// Recursively enumerate a folder's contents using GIO.
-///
-/// Accepts the `gio::File` directly from the file dialog so that
-/// Flatpak document portal grants are preserved. Creating a new
-/// `gio::File::for_path` from the extracted path would lose the grant.
-fn resolve_folder_via_gio(folder: &gio::File) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    gio_walk(folder, &mut files);
-    files
-}
-
-fn gio_walk(dir: &gio::File, out: &mut Vec<PathBuf>) {
-    let enumerator = match dir.enumerate_children(
-        "standard::name,standard::type",
-        gio::FileQueryInfoFlags::NONE,
-        gio::Cancellable::NONE,
-    ) {
-        Ok(e) => e,
-        Err(e) => {
-            warn!(path = ?dir.path(), error = %e, "could not enumerate directory via GIO");
-            return;
-        }
-    };
-
-    while let Some(info) = enumerator.next_file(gio::Cancellable::NONE).ok().flatten() {
-        let child = enumerator.child(&info);
-        if info.file_type() == gio::FileType::Directory {
-            gio_walk(&child, out);
-        } else if let Some(path) = child.path() {
-            out.push(path);
-        }
+        import_client.import_folder(folder);
     }
 }

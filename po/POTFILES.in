@@ -16,7 +16,6 @@ src/ui/album_grid/card/mod.rs
 src/ui/album_grid/factory.rs
 src/ui/album_grid/mod.rs
 src/ui/album_grid/selection.rs
-src/ui/import_dialog/import_dialog.blp
 src/ui/people_grid/actions.rs
 src/ui/people_grid/cell.rs
 src/ui/people_grid/people_grid.blp
@@ -37,6 +36,7 @@ src/ui/sidebar/sidebar.blp
 src/ui/video_viewer/video_viewer.blp
 src/ui/viewer/edit_panel/edit_panel.blp
 src/ui/viewer/viewer.blp
+src/ui/widgets/activity_indicator/activity_indicator.blp
 src/ui/widgets/activity_indicator/mod.rs
 src/ui/widgets/mod.rs
 src/ui/window/window.blp

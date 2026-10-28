@@ -8,7 +8,6 @@ blueprints = custom_target(
   'blueprints',
   input: files(
     'ui/window/window.blp',
-    'ui/import_dialog/import_dialog.blp',
     'ui/setup_window/setup_window.blp',
     'ui/setup_window/backend_picker_page.blp',
     'ui/setup_window/local_setup_page.blp',

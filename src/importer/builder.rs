@@ -4,6 +4,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use tokio_util::sync::CancellationToken;
+
 use super::error::ImportError;
 use super::pipeline::ProgressFn;
 use super::ImportPipeline;
@@ -22,6 +24,7 @@ pub struct ImportPipelineBuilder {
     render_pipeline: Option<Arc<RenderPipeline>>,
     mode: Option<LocalStorageMode>,
     on_progress: Option<ProgressFn>,
+    cancel: Option<CancellationToken>,
 }
 
 impl ImportPipelineBuilder {
@@ -33,6 +36,7 @@ impl ImportPipelineBuilder {
             render_pipeline: None,
             mode: None,
             on_progress: None,
+            cancel: None,
         }
     }
 
@@ -71,6 +75,15 @@ impl ImportPipelineBuilder {
         self
     }
 
+    /// Set a token that stops the run early when cancelled.
+    ///
+    /// Checked once per file, before the file starts; the file in flight
+    /// always finishes. Optional — without it the run can't be cancelled.
+    pub fn cancellation_token(mut self, token: CancellationToken) -> Self {
+        self.cancel = Some(token);
+        self
+    }
+
     /// Build the [`ImportPipeline`].
     ///
     /// Returns an error if any required dependency is missing.
@@ -89,6 +102,7 @@ impl ImportPipelineBuilder {
                 .ok_or_else(|| missing("render_pipeline"))?,
             mode: self.mode.ok_or_else(|| missing("mode"))?,
             on_progress: self.on_progress,
+            cancel: self.cancel.unwrap_or_default(),
         })
     }
 }

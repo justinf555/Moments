@@ -10,7 +10,7 @@
 use std::cell::Cell;
 use std::cell::RefCell;
 
-use gettextrs::gettext;
+use gettextrs::{gettext, ngettext};
 use gtk::{glib, prelude::*, subclass::prelude::*};
 use tracing::debug;
 
@@ -57,6 +57,8 @@ mod imp {
         #[template_child]
         pub(super) import_progress: TemplateChild<gtk::ProgressBar>,
         #[template_child]
+        pub(super) import_cancel_button: TemplateChild<gtk::Button>,
+        #[template_child]
         pub(super) error_row: TemplateChild<gtk::Box>,
         #[template_child]
         pub(super) error_icon: TemplateChild<gtk::Image>,
@@ -70,6 +72,8 @@ mod imp {
         pub(super) import_handlers: RefCell<Vec<glib::SignalHandlerId>>,
         /// Whether we have an active error/offline state that persists.
         pub(super) has_persistent_error: Cell<bool>,
+        /// Cancel was pressed; waiting for the import's final summary.
+        pub(super) import_cancelling: Cell<bool>,
     }
 
     #[glib::object_subclass]
@@ -89,6 +93,16 @@ mod imp {
     }
 
     impl ObjectImpl for ActivityIndicator {
+        fn constructed(&self) {
+            self.parent_constructed();
+            let obj = self.obj();
+            self.import_cancel_button.connect_clicked(glib::clone!(
+                #[weak]
+                obj,
+                move |_| obj.cancel_import()
+            ));
+        }
+
         fn dispose(&self) {
             if let Some(id) = self.tick_timer.borrow_mut().take() {
                 id.remove();
@@ -253,6 +267,34 @@ impl ActivityIndicator {
                 }
             }),
         );
+
+        // Folder scan count.
+        let weak = self.downgrade();
+        handlers.push(
+            client.connect_notify_local(Some("scanned"), move |client, _| {
+                let Some(this) = weak.upgrade() else { return };
+                if client.state() == ImportState::Scanning {
+                    this.update_scan_progress(client);
+                }
+            }),
+        );
+    }
+
+    /// Cancel button in the popover: ask the client to stop. The final
+    /// summary (marked cancelled) arrives through the usual state change.
+    fn cancel_import(&self) {
+        let app = crate::application::MomentsApplication::default();
+        let Some(client) = app.import_client() else {
+            return;
+        };
+        if !client.is_busy() {
+            return;
+        }
+        client.cancel();
+        let imp = self.imp();
+        imp.import_cancelling.set(true);
+        imp.import_cancel_button.set_sensitive(false);
+        imp.import_label.set_text(&gettext("Cancelling\u{2026}"));
     }
 
     // ── Sync state transitions ──────────────────────────────────────
@@ -335,17 +377,34 @@ impl ActivityIndicator {
 
         match state {
             ImportState::Idle => {
+                imp.import_cancelling.set(false);
+                imp.import_cancel_button.set_visible(false);
                 imp.import_row.set_visible(false);
                 imp.import_progress.set_visible(false);
                 self.update_visibility();
             }
+            ImportState::Scanning => {
+                // A new import starts here.
+                imp.import_cancelling.set(false);
+                imp.import_cancel_button.set_sensitive(true);
+                imp.import_cancel_button.set_visible(true);
+                self.update_scan_progress(client);
+                imp.import_icon
+                    .set_icon_name(Some("document-open-symbolic"));
+                imp.import_progress.set_visible(false);
+                imp.import_row.set_visible(true);
+                self.show_spinner();
+            }
             ImportState::Running => {
+                imp.import_cancel_button.set_visible(true);
                 self.update_import_progress(client);
                 imp.import_progress.set_visible(true);
                 imp.import_row.set_visible(true);
                 self.show_spinner();
             }
             ImportState::Complete => {
+                imp.import_cancelling.set(false);
+                imp.import_cancel_button.set_visible(false);
                 let imported = client.imported();
                 let skipped = client.skipped();
                 let failed = client.failed();
@@ -355,6 +414,19 @@ impl ActivityIndicator {
                 }
                 if failed > 0 {
                     text.push_str(&format!(", {} {}", failed, gettext("failed")));
+                }
+                let unreadable = client.unreadable();
+                if unreadable > 0 {
+                    let unread = ngettext(
+                        "{} item could not be read",
+                        "{} items could not be read",
+                        unreadable,
+                    )
+                    .replace("{}", &unreadable.to_string());
+                    text.push_str(&format!(", {unread}"));
+                }
+                if client.cancelled() {
+                    text.push_str(&format!(" ({})", gettext("cancelled")));
                 }
                 imp.import_label.set_text(&text);
                 imp.import_icon
@@ -366,18 +438,33 @@ impl ActivityIndicator {
         }
     }
 
+    fn update_scan_progress(&self, client: &ImportClient) {
+        let imp = self.imp();
+        if imp.import_cancelling.get() {
+            return; // Keep "Cancelling…".
+        }
+        let found = client.scanned();
+        let count =
+            ngettext("{} file found", "{} files found", found).replace("{}", &found.to_string());
+        imp.import_label
+            .set_text(&format!("{} {}", gettext("Scanning\u{2026}"), count));
+    }
+
     fn update_import_progress(&self, client: &ImportClient) {
         let imp = self.imp();
         let current = client.current();
         let total = client.total();
-        imp.import_label
-            .set_text(&format!("{} {}/{}", gettext("Importing"), current, total));
-        imp.import_icon
-            .set_icon_name(Some("document-open-symbolic"));
         if total > 0 {
             imp.import_progress
                 .set_fraction(current as f64 / total as f64);
         }
+        if imp.import_cancelling.get() {
+            return; // The file in flight is finishing; keep "Cancelling…".
+        }
+        imp.import_label
+            .set_text(&format!("{} {}/{}", gettext("Importing"), current, total));
+        imp.import_icon
+            .set_icon_name(Some("document-open-symbolic"));
     }
 
     // ── Visual state helpers ────────────────────────────────────────
@@ -471,9 +558,7 @@ impl ActivityIndicator {
         let sync_active = app
             .sync_client()
             .is_some_and(|c| c.state() == SyncState::Syncing);
-        let import_active = app
-            .import_client()
-            .is_some_and(|c| c.state() == ImportState::Running);
+        let import_active = app.import_client().is_some_and(|c| c.is_busy());
         sync_active || import_active
     }
 
