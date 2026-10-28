@@ -97,7 +97,7 @@ jobs:
 
     steps:
       - name: Post PR comment
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: security-audit
           message: |
