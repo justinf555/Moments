@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
+use tracing::debug;
+
 use super::super::error::RenderError;
 use crate::library::media::MediaType;
 
@@ -101,40 +103,72 @@ impl FormatRegistry {
         }
     }
 
-    /// Decode the file at `path` using the handler registered for its extension.
+    /// Decode the file at `path`.
     ///
-    /// Returns [`RenderError::DecodeFailed`] if no handler is registered or
-    /// decoding fails.
+    /// Dispatch order:
+    /// 1. Magic-byte detection (works for extensionless library originals).
+    ///    If the detected handler fails, every other fallback-safe handler
+    ///    is tried (e.g. a TIFF-headered CR2). If none succeeds, the
+    ///    *detected* handler's error is returned as
+    ///    [`RenderError::DecodeFailed`], prefixed with the detected format,
+    ///    so the real cause (missing codec, truncated file, ...) is kept.
+    /// 2. Lookup by file extension, when detection found nothing. The
+    ///    handler's own error is returned if it fails.
+    ///
+    /// Returns [`RenderError::FormatNotRecognised`] only when detection
+    /// found nothing and no handler is registered for the extension.
     pub fn decode(
         &self,
         path: &Path,
         hint: DecodeHint,
     ) -> Result<image::DynamicImage, RenderError> {
         // Try magic-byte detection first (works for extensionless files).
-        if let Some(handler) = self.handler_by_magic(path) {
-            match handler.decode(path, hint) {
+        if let Some((label, handler)) = self.handler_by_magic(path) {
+            let detected_err = match handler.decode(path, hint) {
                 Ok(img) => return Ok(img),
-                Err(_) => {
-                    // Magic-byte match failed (e.g. TIFF header but the
-                    // file is actually a CR2 — Canon's TIFF-derived RAW
-                    // format). Try every other *fallback-safe* handler
-                    // until one succeeds. We deliberately exclude
-                    // handlers whose decode path can hang on
-                    // unidentified input — see `fallback_safe` and
-                    // `VideoHandler` for context.
-                    for other in self.handlers.values() {
-                        if !other.fallback_safe() {
-                            continue;
-                        }
-                        if let Ok(img) = other.decode(path, hint) {
-                            return Ok(img);
-                        }
+                Err(e) => e,
+            };
+            debug!(format = label, error = %detected_err, "detected handler failed, trying fallbacks");
+            // Magic-byte match failed (e.g. TIFF header but the file is
+            // actually a CR2 — Canon's TIFF-derived RAW format). Try every
+            // other *fallback-safe* handler until one succeeds. We
+            // deliberately exclude handlers whose decode path can hang on
+            // unidentified input — see `fallback_safe` and `VideoHandler`.
+            // `handlers` has one entry per extension, so a multi-extension
+            // handler appears several times: dedupe by data pointer and skip
+            // the detected handler, which has already been tried.
+            let mut tried: Vec<*const ()> = vec![Arc::as_ptr(&handler) as *const ()];
+            for other in self.handlers.values() {
+                if !other.fallback_safe() {
+                    continue;
+                }
+                let addr = Arc::as_ptr(other) as *const ();
+                if tried.contains(&addr) {
+                    continue;
+                }
+                tried.push(addr);
+                match other.decode(path, hint) {
+                    Ok(img) => return Ok(img),
+                    Err(e) => {
+                        debug!(
+                            handler = ?other.extensions(),
+                            error = %e,
+                            "fallback handler failed"
+                        );
                     }
                 }
             }
+            let msg = match detected_err {
+                RenderError::DecodeFailed(msg) => msg,
+                // Deliberate: flattening a non-DecodeFailed error (e.g. Io) into
+                // the message drops its `source()`, but keeps the detected
+                // format label in a single string.
+                other => other.to_string(),
+            };
+            return Err(RenderError::DecodeFailed(format!("{label}: {msg}")));
         }
 
-        // Fall back to extension-based lookup.
+        // Detection found nothing: fall back to extension-based lookup.
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
@@ -150,24 +184,26 @@ impl FormatRegistry {
     }
 
     /// Try to find a handler by reading magic bytes from the file.
-    fn handler_by_magic(&self, path: &Path) -> Option<Arc<dyn FormatHandler>> {
+    ///
+    /// Returns the detected format's display name alongside the handler.
+    fn handler_by_magic(&self, path: &Path) -> Option<(&'static str, Arc<dyn FormatHandler>)> {
         use super::detect::{detect_format, DetectedFormat, ImageFormat, VideoFormat};
 
         let detected = detect_format(path).ok()?;
-        let ext = match detected {
-            DetectedFormat::Image(ImageFormat::Jpeg) => "jpg",
-            DetectedFormat::Image(ImageFormat::Png) => "png",
-            DetectedFormat::Image(ImageFormat::WebP) => "webp",
-            DetectedFormat::Image(ImageFormat::Gif) => "gif",
-            DetectedFormat::Image(ImageFormat::Tiff) => "tiff",
-            DetectedFormat::Image(ImageFormat::Heif) => "heic",
-            DetectedFormat::Video(VideoFormat::Mp4) => "mp4",
-            DetectedFormat::Video(VideoFormat::Mov) => "mov",
-            DetectedFormat::Video(VideoFormat::Mkv) => "mkv",
-            DetectedFormat::Video(VideoFormat::Avi) => "avi",
+        let (label, ext) = match detected {
+            DetectedFormat::Image(ImageFormat::Jpeg) => ("JPEG", "jpg"),
+            DetectedFormat::Image(ImageFormat::Png) => ("PNG", "png"),
+            DetectedFormat::Image(ImageFormat::WebP) => ("WebP", "webp"),
+            DetectedFormat::Image(ImageFormat::Gif) => ("GIF", "gif"),
+            DetectedFormat::Image(ImageFormat::Tiff) => ("TIFF", "tiff"),
+            DetectedFormat::Image(ImageFormat::Heif) => ("HEIC", "heic"),
+            DetectedFormat::Video(VideoFormat::Mp4) => ("MP4", "mp4"),
+            DetectedFormat::Video(VideoFormat::Mov) => ("MOV", "mov"),
+            DetectedFormat::Video(VideoFormat::Mkv) => ("MKV", "mkv"),
+            DetectedFormat::Video(VideoFormat::Avi) => ("AVI", "avi"),
             DetectedFormat::Unknown => return None,
         };
-        self.handlers.get(ext).cloned()
+        self.handlers.get(ext).cloned().map(|h| (label, h))
     }
 
     /// Returns `true` if `ext` is a recognised video format (case-insensitive).
@@ -434,6 +470,125 @@ mod tests {
             !*invoked.lock().unwrap(),
             "fallback-unsafe handler must not be invoked during blind retry"
         );
+    }
+
+    /// Handler claiming `ext` that always fails with a fixed message.
+    struct FailingHandler {
+        ext: &'static str,
+        msg: &'static str,
+    }
+    impl FormatHandler for FailingHandler {
+        fn extensions(&self) -> &[&str] {
+            std::slice::from_ref(&self.ext)
+        }
+        fn decode(
+            &self,
+            _path: &Path,
+            _hint: DecodeHint,
+        ) -> Result<image::DynamicImage, RenderError> {
+            Err(RenderError::DecodeFailed(self.msg.into()))
+        }
+    }
+
+    /// Multi-extension handler that counts decode calls and always fails.
+    struct CountingHandler {
+        exts: &'static [&'static str],
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+    impl FormatHandler for CountingHandler {
+        fn extensions(&self) -> &[&str] {
+            self.exts
+        }
+        fn decode(
+            &self,
+            _path: &Path,
+            _hint: DecodeHint,
+        ) -> Result<image::DynamicImage, RenderError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(RenderError::DecodeFailed("nope".into()))
+        }
+    }
+
+    #[test]
+    fn fallback_tries_each_handler_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let detected_calls = Arc::new(AtomicUsize::new(0));
+        let fallback_calls = Arc::new(AtomicUsize::new(0));
+        let mut reg = FormatRegistry::new();
+        reg.register(Arc::new(CountingHandler {
+            exts: &["heic", "heif"],
+            calls: Arc::clone(&detected_calls),
+        }));
+        reg.register(Arc::new(CountingHandler {
+            exts: &["jpg", "jpeg", "jpe"],
+            calls: Arc::clone(&fallback_calls),
+        }));
+        let f = temp_file_with(b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00junk", "");
+
+        assert!(reg.decode(f.path(), DecodeHint::Thumbnail).is_err());
+        assert_eq!(detected_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(fallback_calls.load(Ordering::SeqCst), 1);
+    }
+
+    fn temp_file_with(bytes: &[u8], suffix: &str) -> tempfile::NamedTempFile {
+        use std::io::Write;
+        let mut f = tempfile::NamedTempFile::with_suffix(suffix).unwrap();
+        f.write_all(bytes).unwrap();
+        f.flush().unwrap();
+        f
+    }
+
+    #[test]
+    fn heic_decode_failure_is_reported_not_format_not_recognised() {
+        let mut reg = FormatRegistry::new();
+        reg.register(Arc::new(FailingHandler {
+            ext: "heic",
+            msg: "no HEVC decoder",
+        }));
+        // Valid ftypheic header, no extension (like a library original).
+        let f = temp_file_with(b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00junk", "");
+
+        let err = reg.decode(f.path(), DecodeHint::Thumbnail).unwrap_err();
+        match &err {
+            RenderError::DecodeFailed(msg) => {
+                assert!(msg.contains("HEIC"), "{msg}");
+                assert!(msg.contains("no HEVC decoder"), "{msg}");
+            }
+            other => panic!("expected DecodeFailed, got {other:?}"),
+        }
+        assert!(err.to_string().contains("HEIC"));
+    }
+
+    #[test]
+    fn unrecognised_bytes_without_extension_is_format_not_recognised() {
+        let mut reg = FormatRegistry::new();
+        reg.register(Arc::new(FailingHandler {
+            ext: "jpg",
+            msg: "bad jpeg",
+        }));
+        let f = temp_file_with(&[0x13, 0x37, 0xAB, 0xCD, 0x99, 0x01, 0x02, 0x03], "");
+
+        let err = reg.decode(f.path(), DecodeHint::Full).unwrap_err();
+        assert!(
+            matches!(err, RenderError::FormatNotRecognised(_)),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn unrecognised_bytes_with_known_extension_return_handler_error() {
+        let mut reg = FormatRegistry::new();
+        reg.register(Arc::new(FailingHandler {
+            ext: "jpg",
+            msg: "bad jpeg",
+        }));
+        let f = temp_file_with(&[0x13, 0x37, 0xAB, 0xCD, 0x99, 0x01, 0x02, 0x03], ".jpg");
+
+        let err = reg.decode(f.path(), DecodeHint::Full).unwrap_err();
+        match err {
+            RenderError::DecodeFailed(msg) => assert_eq!(msg, "bad jpeg"),
+            other => panic!("expected DecodeFailed, got {other:?}"),
+        }
     }
 
     #[test]
