@@ -11,8 +11,43 @@
 //! service or an unlock prompt never blocks the GTK main thread (#704).
 //! The futures are `!Send` and must be awaited on the GTK main context
 //! (`glib::MainContext::spawn_local`); they need no Tokio runtime.
+//!
+//! Each call is also bounded by a 30 s timeout: if the secret service never
+//! answers (or an unlock prompt is dismissed without an error) the call
+//! returns `Err` instead of leaving the UI waiting forever.
 
-use tracing::{debug, instrument};
+use std::future::Future;
+use std::time::Duration;
+
+use futures_util::future::{select, Either};
+use tracing::{debug, instrument, warn};
+
+/// How long a keyring call may take before it is abandoned.
+const KEYRING_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Race `fut` against [`KEYRING_TIMEOUT`].
+async fn with_timeout<T>(
+    fut: impl Future<Output = Result<T, String>>,
+    op: &'static str,
+) -> Result<T, String> {
+    with_timeout_for(fut, op, KEYRING_TIMEOUT).await
+}
+
+async fn with_timeout_for<T>(
+    fut: impl Future<Output = Result<T, String>>,
+    op: &'static str,
+    timeout: Duration,
+) -> Result<T, String> {
+    let fut = std::pin::pin!(fut);
+    let timer = std::pin::pin!(gtk::glib::timeout_future(timeout));
+    match select(fut, timer).await {
+        Either::Left((result, _)) => result,
+        Either::Right(_) => {
+            warn!(op, "keyring call timed out");
+            Err(format!("{op} timed out after {}s", timeout.as_secs()))
+        }
+    }
+}
 
 /// Store an Immich session token in the GNOME Keyring.
 ///
@@ -24,15 +59,21 @@ pub async fn store_access_token(server_url: &str, access_token: &str) -> Result<
     let attributes = std::collections::HashMap::from([("server_url", server_url)]);
     let label = format!("Moments — Immich session for {server_url}");
 
-    libsecret::password_store_future(
-        Some(&schema),
-        attributes,
-        Some(libsecret::COLLECTION_DEFAULT),
-        &label,
-        access_token,
+    with_timeout(
+        async {
+            libsecret::password_store_future(
+                Some(&schema),
+                attributes,
+                Some(libsecret::COLLECTION_DEFAULT),
+                &label,
+                access_token,
+            )
+            .await
+            .map_err(|e| format!("failed to store token in keyring: {e}"))
+        },
+        "storing token in keyring",
     )
-    .await
-    .map_err(|e| format!("failed to store token in keyring: {e}"))?;
+    .await?;
 
     debug!("access token stored in keyring");
     Ok(())
@@ -46,9 +87,15 @@ pub async fn lookup_access_token(server_url: &str) -> Result<Option<String>, Str
     let schema = schema();
     let attributes = std::collections::HashMap::from([("server_url", server_url)]);
 
-    let secret = libsecret::password_lookup_future(Some(&schema), attributes)
-        .await
-        .map_err(|e| format!("failed to lookup token in keyring: {e}"))?;
+    let secret = with_timeout(
+        async {
+            libsecret::password_lookup_future(Some(&schema), attributes)
+                .await
+                .map_err(|e| format!("failed to lookup token in keyring: {e}"))
+        },
+        "token lookup in keyring",
+    )
+    .await?;
 
     if secret.is_some() {
         debug!("access token found in keyring");
@@ -100,9 +147,15 @@ pub async fn delete_access_token(server_url: &str) -> Result<(), String> {
     let schema = schema();
     let attributes = std::collections::HashMap::from([("server_url", server_url)]);
 
-    libsecret::password_clear_future(Some(&schema), attributes)
-        .await
-        .map_err(|e| format!("failed to delete token from keyring: {e}"))?;
+    with_timeout(
+        async {
+            libsecret::password_clear_future(Some(&schema), attributes)
+                .await
+                .map_err(|e| format!("failed to delete token from keyring: {e}"))
+        },
+        "deleting token from keyring",
+    )
+    .await?;
 
     debug!("access token deleted from keyring");
     Ok(())
@@ -120,6 +173,28 @@ fn schema() -> libsecret::Schema {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn with_timeout_returns_inner_result_when_first() {
+        let ctx = gtk::glib::MainContext::new();
+        let r = ctx.block_on(with_timeout_for(
+            async { Ok::<_, String>(7) },
+            "test op",
+            Duration::from_secs(5),
+        ));
+        assert_eq!(r, Ok(7));
+    }
+
+    #[test]
+    fn with_timeout_errors_on_never_resolving_future() {
+        let ctx = gtk::glib::MainContext::new();
+        let r: Result<(), String> = ctx.block_on(with_timeout_for(
+            std::future::pending(),
+            "test op",
+            Duration::from_millis(10),
+        ));
+        assert_eq!(r, Err("test op timed out after 0s".to_string()));
+    }
 
     #[test]
     fn schema_constructs_without_panic() {
