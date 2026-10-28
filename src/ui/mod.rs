@@ -6,7 +6,6 @@ pub mod album_grid;
 pub mod album_picker_dialog;
 pub mod coordinator;
 pub mod empty_library;
-pub mod import_dialog;
 pub mod people_grid;
 pub mod photo_grid;
 pub mod preferences_dialog;

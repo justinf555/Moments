@@ -95,7 +95,7 @@ src/
     album_grid/  people_grid/
     viewer/             Photo viewer: loading, overflow menu, info_panel/, edit_panel/
     video_viewer/       GStreamer video viewer
-    album_picker_dialog/  album_dialogs/  import_dialog/  preferences_dialog/
+    album_picker_dialog/  album_dialogs/  preferences_dialog/
     shortcuts_dialog/
     setup_window/       First-run wizard (backend picker, local setup, Immich setup)
     empty_library/

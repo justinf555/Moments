@@ -16,7 +16,6 @@ src/ui/album_grid/card/mod.rs
 src/ui/album_grid/factory.rs
 src/ui/album_grid/mod.rs
 src/ui/album_grid/selection.rs
-src/ui/import_dialog/import_dialog.blp
 src/ui/people_grid/actions.rs
 src/ui/people_grid/cell.rs
 src/ui/people_grid/people_grid.blp
