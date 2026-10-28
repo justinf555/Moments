@@ -44,7 +44,7 @@ async fn with_timeout_for<T>(
         Either::Left((result, _)) => result,
         Either::Right(_) => {
             warn!(op, "keyring call timed out");
-            Err(format!("{op} timed out after {}s", timeout.as_secs()))
+            Err(format!("{op} timed out after {timeout:?}"))
         }
     }
 }
@@ -141,6 +141,11 @@ fn map_lookup_result(result: Result<Option<String>, String>) -> Result<String, T
 }
 
 /// Delete a stored Immich session token from the GNOME Keyring.
+///
+/// A timeout error does not mean the token was left untouched or removed:
+/// the dropped libsecret future may still complete in the background. Callers
+/// must not read `Err` from a timeout as either "still stored" or "deleted";
+/// re-check with [`lookup_access_token`] if the outcome matters.
 #[allow(dead_code)] // Will be called by logout flow (not yet implemented)
 #[instrument(fields(server_url = %server_url))]
 pub async fn delete_access_token(server_url: &str) -> Result<(), String> {
@@ -193,7 +198,7 @@ mod tests {
             "test op",
             Duration::from_millis(10),
         ));
-        assert_eq!(r, Err("test op timed out after 0s".to_string()));
+        assert_eq!(r, Err("test op timed out after 10ms".to_string()));
     }
 
     #[test]
