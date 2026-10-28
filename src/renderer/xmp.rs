@@ -193,9 +193,7 @@ pub fn decode(xml: &str) -> Result<EmbeddedEdit, XmpError> {
             Ok(Event::Eof) => break,
             Ok(Event::Start(e)) => {
                 let name = e.name();
-                let local = std::str::from_utf8(name.local_name().as_ref())
-                    .unwrap_or("")
-                    .to_string();
+                let local = name.local_name().as_ref().to_string();
                 let new_field = match local.as_str() {
                     "originalAssetId" => Some("originalAssetId"),
                     "originalContentHash" => Some("originalContentHash"),
@@ -239,16 +237,13 @@ pub fn decode(xml: &str) -> Result<EmbeddedEdit, XmpError> {
                 }
             }
             Ok(Event::Text(t)) if current_field.is_some() => {
-                let decoded = t.decode().map_err(|e| XmpError::Xml(e.to_string()))?;
-                let unescaped = quick_xml::escape::unescape(&decoded)
-                    .map_err(|e| XmpError::Xml(e.to_string()))?;
+                let unescaped =
+                    quick_xml::escape::unescape(&t).map_err(|e| XmpError::Xml(e.to_string()))?;
                 accumulator.push_str(&unescaped);
             }
             Ok(Event::CData(t)) if current_field.is_some() => {
                 // CDATA is literal — no entity unescaping.
-                let s = std::str::from_utf8(&t)
-                    .map_err(|e| XmpError::Xml(format!("CDATA not UTF-8: {e}")))?;
-                accumulator.push_str(s);
+                accumulator.push_str(&t);
             }
             // quick-xml emits entity references (`&quot;`, `&#34;`, etc.)
             // as their own events, separate from surrounding Text. We
@@ -257,12 +252,12 @@ pub fn decode(xml: &str) -> Result<EmbeddedEdit, XmpError> {
             // recognise is kept as `&name;` rather than being dropped —
             // that round-trips through the encode-side escaping.
             Ok(Event::GeneralRef(r)) if current_field.is_some() => {
-                let name = r.decode().map_err(|e| XmpError::Xml(e.to_string()))?;
-                if let Some(resolved) = resolve_xml_entity(&name) {
+                let name: &str = &r;
+                if let Some(resolved) = resolve_xml_entity(name) {
                     accumulator.push_str(&resolved);
                 } else {
                     accumulator.push('&');
-                    accumulator.push_str(&name);
+                    accumulator.push_str(name);
                     accumulator.push(';');
                 }
             }
