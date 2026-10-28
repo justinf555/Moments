@@ -74,7 +74,7 @@ libsecret = "0.9"
 # SHA-1 is sufficient for accidental-collision detection in a personal
 # photo library — `content_hash` is never the asset's identity (that's
 # a UUID), so this is not a security-sensitive use of the algorithm.
-sha1 = "0.10"
+sha1 = "0.11"
 base64 = "0.22"
 thiserror = "2"
 chrono = "0.4"

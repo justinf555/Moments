@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Justin F
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use std::io::Read;
 use std::path::Path;
 
 use base64::engine::general_purpose::STANDARD as B64;
@@ -30,7 +31,17 @@ pub async fn hash_file(path: &Path) -> Result<String, ImportError> {
         let file = std::fs::File::open(&path).map_err(ImportError::Io)?;
         let mut reader = std::io::BufReader::new(file);
         let mut hasher = Sha1::new();
-        std::io::copy(&mut reader, &mut hasher).map_err(ImportError::Io)?;
+        // sha1 0.11 no longer implements `std::io::Write`, so stream manually.
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            let n = match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(ImportError::Io(e)),
+            };
+            hasher.update(&buf[..n]);
+        }
         let digest = hasher.finalize();
         Ok(B64.encode(digest))
     })
@@ -79,6 +90,18 @@ mod tests {
         f.write_all(b"abc").unwrap();
         let hash = hash_file(f.path()).await.unwrap();
         assert_eq!(hash, "qZk+NkcGgWq6PiVxeFDCbJzQ2J0=");
+    }
+
+    /// Fixed vector for "identical content". Expected value derived
+    /// independently of this crate: `printf 'identical content' | sha1sum`
+    /// gives 35fa158495d259492bc1495b5d29e842226ed7be, hex-decoded and
+    /// base64-encoded (Python `base64.b64encode(bytes.fromhex(..))`).
+    #[tokio::test]
+    async fn fixed_vector_identical_content() {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(b"identical content").unwrap();
+        let hash = hash_file(f.path()).await.unwrap();
+        assert_eq!(hash, "NfoVhJXSWUkrwUlbXSnoQiJu174=");
     }
 
     #[tokio::test]
