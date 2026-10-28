@@ -37,8 +37,8 @@ impl MomentsApplication {
         );
     }
 
-    /// Present the import progress dialog and hand the folder to the
-    /// import client, which scans and imports it.
+    /// Hand the chosen folder to the import client, which scans and
+    /// imports it. Progress shows in the sidebar's activity indicator.
     ///
     /// Passes on the `gio::File` from the file dialog rather than a path.
     /// This is critical for Flatpak: the document portal grants access to
@@ -53,11 +53,6 @@ impl MomentsApplication {
         if import_client.is_busy() {
             warn!("import already in progress");
             return;
-        }
-
-        // Open the dialog first so the Scanning state is visible at once.
-        if let Some(window) = self.active_window() {
-            crate::ui::import_dialog::ImportDialog::new().present(Some(&window));
         }
         import_client.import_folder(folder);
     }
