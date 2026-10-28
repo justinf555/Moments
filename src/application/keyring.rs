@@ -6,8 +6,12 @@
 //! Thin wrapper around `libsecret` — the keyring is an application-level
 //! concern (read at startup, written during setup) and does not depend on
 //! the library layer.
+//!
+//! Every call uses libsecret's GIO async (`*_future`) API so a slow secret
+//! service or an unlock prompt never blocks the GTK main thread (#704).
+//! The futures are `!Send` and must be awaited on the GTK main context
+//! (`glib::MainContext::spawn_local`); they need no Tokio runtime.
 
-use gtk::gio;
 use tracing::{debug, instrument};
 
 /// Store an Immich session token in the GNOME Keyring.
@@ -15,19 +19,19 @@ use tracing::{debug, instrument};
 /// The token is associated with the server URL so multiple Immich servers
 /// can each have their own stored credential.
 #[instrument(skip(access_token), fields(server_url = %server_url))]
-pub fn store_access_token(server_url: &str, access_token: &str) -> Result<(), String> {
+pub async fn store_access_token(server_url: &str, access_token: &str) -> Result<(), String> {
     let schema = schema();
     let attributes = std::collections::HashMap::from([("server_url", server_url)]);
     let label = format!("Moments — Immich session for {server_url}");
 
-    libsecret::password_store_sync(
+    libsecret::password_store_future(
         Some(&schema),
         attributes,
         Some(libsecret::COLLECTION_DEFAULT),
         &label,
         access_token,
-        gio::Cancellable::NONE,
     )
+    .await
     .map_err(|e| format!("failed to store token in keyring: {e}"))?;
 
     debug!("access token stored in keyring");
@@ -38,11 +42,12 @@ pub fn store_access_token(server_url: &str, access_token: &str) -> Result<(), St
 ///
 /// Returns `None` if no token is stored for this server URL.
 #[instrument(fields(server_url = %server_url))]
-pub fn lookup_access_token(server_url: &str) -> Result<Option<String>, String> {
+pub async fn lookup_access_token(server_url: &str) -> Result<Option<String>, String> {
     let schema = schema();
     let attributes = std::collections::HashMap::from([("server_url", server_url)]);
 
-    let secret = libsecret::password_lookup_sync(Some(&schema), attributes, gio::Cancellable::NONE)
+    let secret = libsecret::password_lookup_future(Some(&schema), attributes)
+        .await
         .map_err(|e| format!("failed to lookup token in keyring: {e}"))?;
 
     if secret.is_some() {
@@ -76,8 +81,8 @@ pub enum TokenError {
 /// three keyring outcomes into a strict `Ok(non-empty token)` /
 /// `Err(reason)` shape so call sites cannot accidentally pass an
 /// empty string downstream.
-pub fn resolve_immich_token(server_url: &str) -> Result<String, TokenError> {
-    map_lookup_result(lookup_access_token(server_url))
+pub async fn resolve_immich_token(server_url: &str) -> Result<String, TokenError> {
+    map_lookup_result(lookup_access_token(server_url).await)
 }
 
 fn map_lookup_result(result: Result<Option<String>, String>) -> Result<String, TokenError> {
@@ -91,11 +96,12 @@ fn map_lookup_result(result: Result<Option<String>, String>) -> Result<String, T
 /// Delete a stored Immich session token from the GNOME Keyring.
 #[allow(dead_code)] // Will be called by logout flow (not yet implemented)
 #[instrument(fields(server_url = %server_url))]
-pub fn delete_access_token(server_url: &str) -> Result<(), String> {
+pub async fn delete_access_token(server_url: &str) -> Result<(), String> {
     let schema = schema();
     let attributes = std::collections::HashMap::from([("server_url", server_url)]);
 
-    libsecret::password_clear_sync(Some(&schema), attributes, gio::Cancellable::NONE)
+    libsecret::password_clear_future(Some(&schema), attributes)
+        .await
         .map_err(|e| format!("failed to delete token from keyring: {e}"))?;
 
     debug!("access token deleted from keyring");
