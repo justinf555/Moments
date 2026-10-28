@@ -222,54 +222,88 @@ impl MomentsImmichSetupPage {
             return;
         }
 
-        // Decide whether this is a fresh setup, a #605 re-sign-in (keyring
-        // missing but bundle still valid), or an unwanted overwrite of a
-        // configured library — *before* mutating any persistent state, so an
-        // error path leaves the keyring untouched.
-        let bundle_path = default_immich_library_path();
-        let had_existing_token = keyring::resolve_immich_token(&server_url).is_ok();
-        if bundle_path.exists() && had_existing_token {
-            // Bundle and keyring entry both already existed — refuse to
-            // silently overwrite. The user likely re-ran setup against a
-            // working library by mistake.
-            let msg = format!("Library already exists at {}", bundle_path.display());
-            error!("{msg}");
-            imp.status_label.set_text(&msg);
-            imp.status_label.add_css_class("error");
-            return;
-        }
+        // Keyring calls are async D-Bus round trips (#704): keep both buttons
+        // insensitive until they answer so the user can't double-submit.
+        imp.test_btn.set_sensitive(false);
+        imp.connect_btn.set_sensitive(false);
 
-        // Store session token in GNOME Keyring.
-        if let Err(e) = keyring::store_access_token(&server_url, &access_token) {
-            error!("failed to store access token: {e}");
-            imp.status_label
-                .set_text(&format!("Failed to store credentials: {e}"));
-            imp.status_label.add_css_class("error");
-            return;
-        }
+        let obj_weak = self.downgrade();
+        glib::MainContext::default().spawn_local(async move {
+            let result = connect_immich(server_url, access_token).await;
 
-        // Create (or reuse) the Immich bundle.
-        let config = LibraryConfig::Immich {
-            server_url,
-            access_token,
-        };
-        if bundle_path.exists() {
-            info!(
-                path = %bundle_path.display(),
-                "reusing existing Immich bundle (post sign-in re-setup)",
-            );
-        } else if let Err(e) = Bundle::create(&bundle_path, &config) {
-            error!("failed to create Immich bundle: {e}");
-            imp.status_label
-                .set_text(&format!("Failed to create library: {e}"));
-            imp.status_label.add_css_class("error");
-            return;
-        }
+            let Some(obj) = obj_weak.upgrade() else {
+                return;
+            };
+            let imp = obj.imp();
 
-        let path_str = bundle_path.to_string_lossy().to_string();
-        debug!(path = %path_str, "emitting create-requested for Immich bundle");
-        self.emit_by_name::<()>("create-requested", &[&path_str]);
+            match result {
+                Ok(path_str) => {
+                    debug!(path = %path_str, "emitting create-requested for Immich bundle");
+                    obj.emit_by_name::<()>("create-requested", &[&path_str]);
+                    // Safe to re-enable after the emit: signal emission is
+                    // synchronous, so `on_setup_complete` has already made
+                    // the setup window insensitive (no click can land in
+                    // between). If it then fails and makes the window
+                    // sensitive again, these buttons work for a retry
+                    // without navigating back.
+                    imp.test_btn.set_sensitive(true);
+                    imp.connect_btn.set_sensitive(true);
+                }
+                Err(msg) => {
+                    imp.test_btn.set_sensitive(true);
+                    imp.connect_btn.set_sensitive(true);
+                    imp.status_label.set_text(&msg);
+                    imp.status_label.remove_css_class("success");
+                    imp.status_label.add_css_class("error");
+                }
+            }
+        });
     }
+}
+
+/// Store the session token and create (or reuse) the Immich bundle.
+///
+/// Returns the bundle path on success, or the message to show in the
+/// status label. Must run on the GTK main context (the keyring futures are
+/// `!Send`).
+async fn connect_immich(server_url: String, access_token: String) -> Result<String, String> {
+    // Decide whether this is a fresh setup, a #605 re-sign-in (keyring
+    // missing but bundle still valid), or an unwanted overwrite of a
+    // configured library — *before* mutating any persistent state, so an
+    // error path leaves the keyring untouched.
+    let bundle_path = default_immich_library_path();
+    let had_existing_token = keyring::resolve_immich_token(&server_url).await.is_ok();
+    if bundle_path.exists() && had_existing_token {
+        // Bundle and keyring entry both already existed — refuse to
+        // silently overwrite. The user likely re-ran setup against a
+        // working library by mistake.
+        let msg = format!("Library already exists at {}", bundle_path.display());
+        error!("{msg}");
+        return Err(msg);
+    }
+
+    // Store session token in GNOME Keyring.
+    if let Err(e) = keyring::store_access_token(&server_url, &access_token).await {
+        error!("failed to store access token: {e}");
+        return Err(format!("Failed to store credentials: {e}"));
+    }
+
+    // Create (or reuse) the Immich bundle.
+    let config = LibraryConfig::Immich {
+        server_url,
+        access_token,
+    };
+    if bundle_path.exists() {
+        info!(
+            path = %bundle_path.display(),
+            "reusing existing Immich bundle (post sign-in re-setup)",
+        );
+    } else if let Err(e) = Bundle::create(&bundle_path, &config) {
+        error!("failed to create Immich bundle: {e}");
+        return Err(format!("Failed to create library: {e}"));
+    }
+
+    Ok(bundle_path.to_string_lossy().to_string())
 }
 
 impl Default for MomentsImmichSetupPage {
