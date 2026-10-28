@@ -134,10 +134,19 @@ impl FormatRegistry {
             // other *fallback-safe* handler until one succeeds. We
             // deliberately exclude handlers whose decode path can hang on
             // unidentified input — see `fallback_safe` and `VideoHandler`.
+            // `handlers` has one entry per extension, so a multi-extension
+            // handler appears several times: dedupe by data pointer and skip
+            // the detected handler, which has already been tried.
+            let mut tried: Vec<*const ()> = vec![Arc::as_ptr(&handler) as *const ()];
             for other in self.handlers.values() {
                 if !other.fallback_safe() {
                     continue;
                 }
+                let addr = Arc::as_ptr(other) as *const ();
+                if tried.contains(&addr) {
+                    continue;
+                }
+                tried.push(addr);
                 match other.decode(path, hint) {
                     Ok(img) => return Ok(img),
                     Err(e) => {
@@ -151,6 +160,9 @@ impl FormatRegistry {
             }
             let msg = match detected_err {
                 RenderError::DecodeFailed(msg) => msg,
+                // Deliberate: flattening a non-DecodeFailed error (e.g. Io) into
+                // the message drops its `source()`, but keeps the detected
+                // format label in a single string.
                 other => other.to_string(),
             };
             return Err(RenderError::DecodeFailed(format!("{label}: {msg}")));
@@ -476,6 +488,46 @@ mod tests {
         ) -> Result<image::DynamicImage, RenderError> {
             Err(RenderError::DecodeFailed(self.msg.into()))
         }
+    }
+
+    /// Multi-extension handler that counts decode calls and always fails.
+    struct CountingHandler {
+        exts: &'static [&'static str],
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+    impl FormatHandler for CountingHandler {
+        fn extensions(&self) -> &[&str] {
+            self.exts
+        }
+        fn decode(
+            &self,
+            _path: &Path,
+            _hint: DecodeHint,
+        ) -> Result<image::DynamicImage, RenderError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(RenderError::DecodeFailed("nope".into()))
+        }
+    }
+
+    #[test]
+    fn fallback_tries_each_handler_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let detected_calls = Arc::new(AtomicUsize::new(0));
+        let fallback_calls = Arc::new(AtomicUsize::new(0));
+        let mut reg = FormatRegistry::new();
+        reg.register(Arc::new(CountingHandler {
+            exts: &["heic", "heif"],
+            calls: Arc::clone(&detected_calls),
+        }));
+        reg.register(Arc::new(CountingHandler {
+            exts: &["jpg", "jpeg", "jpe"],
+            calls: Arc::clone(&fallback_calls),
+        }));
+        let f = temp_file_with(b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00junk", "");
+
+        assert!(reg.decode(f.path(), DecodeHint::Thumbnail).is_err());
+        assert_eq!(detected_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(fallback_calls.load(Ordering::SeqCst), 1);
     }
 
     fn temp_file_with(bytes: &[u8], suffix: &str) -> tempfile::NamedTempFile {
