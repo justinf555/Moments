@@ -50,15 +50,15 @@ quick-xml = "0.41"
 
 # Image processing
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "tiff"] }
-kamadak-exif = "0.5"
+kamadak-exif = "0.6"
 # `image` feature enables the image-crate integration (register_all_decoding_hooks)
 # `default-features = false` avoids the `embedded-libheif` feature (we use system libheif)
-libheif-rs = { version = "2.7.0", default-features = false, features = ["image", "v1_20"] }
+libheif-rs = { version = "3.0.0", default-features = false, features = ["image", "v1_20"] }
 
 # Video — poster-frame extraction for thumbnails
-gstreamer = "0.23"
-gstreamer-app = "0.23"
-gstreamer-video = "0.23"
+gstreamer = "0.25"
+gstreamer-app = "0.25"
+gstreamer-video = "0.25"
 
 # HTTP client (Immich backend)
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "multipart"] }
@@ -79,7 +79,7 @@ base64 = "0.22"
 thiserror = "2"
 chrono = "0.4"
 uuid = { version = "1", features = ["v4"] }
-rawler = "0.7.2"
+rawler = "0.8.0"
 lru = "0.19"
 
 # Heap profiling — only pulled in with `--features dhat-heap`. Adds
