@@ -72,6 +72,12 @@ impl MomentsApplication {
             self,
             #[weak]
             setup_win,
+            // Deliberate: if the user closed the setup window while the
+            // keyring was answering, they abandoned setup. The bundle stays on
+            // disk but `library-path` is not saved, so the next launch shows
+            // setup again (and reuses the bundle on sign-in).
+            #[upgrade_or_else]
+            || debug!("setup window closed before keyring lookup finished; abandoning setup"),
             async move {
                 let token_result = with_immich_token(config).await;
                 setup_win.set_sensitive(true);
@@ -192,11 +198,13 @@ impl MomentsApplication {
                         //
                         // Show setup before closing the main window so the app
                         // is never windowless.
+                        if matches!(err, keyring::TokenError::Missing) {
+                            app.clear_library_path();
+                        }
                         let setup_win = app.show_setup_window();
                         window.close();
                         let (heading, body) = match err {
                             keyring::TokenError::Missing => {
-                                app.clear_library_path();
                                 (
                                     gettext("Sign in required"),
                                     gettext(
@@ -256,7 +264,6 @@ pub(super) fn with_details(message: &str, err: &impl std::fmt::Display) -> Strin
 ///
 /// The bundle's `library.toml` doesn't hold the token, so the config read
 /// from it has an empty `access_token`. Local configs pass through.
-/// Must be awaited on the GTK main context (the keyring future is `!Send`).
 async fn with_immich_token(config: LibraryConfig) -> Result<LibraryConfig, keyring::TokenError> {
     match config {
         LibraryConfig::Immich { server_url, .. } => {

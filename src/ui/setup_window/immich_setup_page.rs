@@ -235,15 +235,18 @@ impl MomentsImmichSetupPage {
                 return;
             };
             let imp = obj.imp();
-            imp.test_btn.set_sensitive(true);
-            imp.connect_btn.set_sensitive(true);
 
             match result {
                 Ok(path_str) => {
+                    // Leave the buttons insensitive: `on_setup_complete` takes
+                    // over (setup window insensitive, then closed), and this
+                    // page is not reused after a successful submit.
                     debug!(path = %path_str, "emitting create-requested for Immich bundle");
                     obj.emit_by_name::<()>("create-requested", &[&path_str]);
                 }
                 Err(msg) => {
+                    imp.test_btn.set_sensitive(true);
+                    imp.connect_btn.set_sensitive(true);
                     imp.status_label.set_text(&msg);
                     imp.status_label.remove_css_class("success");
                     imp.status_label.add_css_class("error");
