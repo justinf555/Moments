@@ -3,7 +3,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
@@ -14,7 +14,7 @@ use tracing::{debug, error, info, warn};
 
 use super::event::ImportEvent;
 use super::scan::scan_folder;
-use crate::importer::{ImportPipeline, ImportSummary};
+use crate::importer::{ImportPipeline, ImportProgress, ImportSummary};
 use crate::library::config::LocalStorageMode;
 use crate::library::Library;
 use crate::renderer::pipeline::RenderPipeline;
@@ -485,6 +485,9 @@ impl ImportClient {
 
         let total = files.len();
         let progress_tx = events_tx.clone();
+        // Last progress seen, so a panicked run can still be summarised.
+        let last_progress: Arc<Mutex<Option<ImportProgress>>> = Arc::default();
+        let progress_slot = Arc::clone(&last_progress);
         let pipeline = match ImportPipeline::builder()
             .originals_dir(originals_dir)
             .thumbnails_dir(thumbnails_dir)
@@ -493,18 +496,22 @@ impl ImportClient {
             .mode(mode)
             .cancellation_token(token)
             .on_progress(move |p| {
+                if let Ok(mut slot) = progress_slot.lock() {
+                    *slot = Some(p.clone());
+                }
                 let _ = progress_tx.send(ImportEvent::Progress(p));
             })
             .build()
         {
             Ok(p) => p,
             Err(e) => {
-                error!("failed to build import pipeline: {e}");
-                self.send_complete(ImportSummary {
-                    failed: total,
-                    unreadable,
-                    ..ImportSummary::default()
-                });
+                // Nothing was attempted, so report the error rather than
+                // a summary of "failed" files, and go back to Idle.
+                error!(error = %e, "failed to build import pipeline");
+                crate::client::show_error_toast(&e);
+                self.imp().cancel_token.take();
+                self.imp().scan_cancellable.take();
+                self.set_state(ImportState::Idle);
                 return;
             }
         };
@@ -513,11 +520,41 @@ impl ImportClient {
         self.set_state(ImportState::Running);
 
         info!(count = total, "starting import");
+        let run = tokio.spawn(pipeline.run_files(files));
         tokio.spawn(async move {
-            let mut summary = pipeline.run_files(files).await;
+            let mut summary = await_pipeline(run, &last_progress, total).await;
             summary.unreadable += unreadable;
             let _ = events_tx.send(ImportEvent::Complete(summary));
         });
+    }
+}
+
+/// Await the pipeline task, turning a panic into a summary.
+///
+/// Without this a panicking run would never send `Complete`, leaving the
+/// client `Running` (busy) for the rest of the session and refusing every
+/// later import. On a panic the counts come from the last progress update
+/// and every file not accounted for is reported as failed.
+async fn await_pipeline(
+    run: tokio::task::JoinHandle<ImportSummary>,
+    last_progress: &Mutex<Option<ImportProgress>>,
+    total: usize,
+) -> ImportSummary {
+    match run.await {
+        Ok(summary) => summary,
+        Err(e) => {
+            error!(error = %e, "import pipeline task failed");
+            let last = last_progress.lock().ok().and_then(|p| p.clone());
+            let (imported, skipped, failed, done) = last
+                .map(|p| (p.imported, p.skipped, p.failed, p.current))
+                .unwrap_or_default();
+            ImportSummary {
+                imported,
+                skipped_duplicates: skipped,
+                failed: failed + total.saturating_sub(done),
+                ..ImportSummary::default()
+            }
+        }
     }
 }
 
@@ -721,6 +758,62 @@ mod tests {
         assert_eq!(client.unreadable(), 0);
         assert_eq!(client.scanned(), 0);
         assert_eq!(client.imported(), 0);
+    }
+
+    #[test]
+    fn second_import_after_complete_enters_scanning() {
+        crate::client::test_support::ensure_gobject_types();
+        let client = ImportClient::new();
+        client.begin().unwrap();
+        client.apply_event(ImportEvent::Complete(summary(2, false, 0)));
+        assert_eq!(client.state(), ImportState::Complete);
+
+        let states = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let log = states.clone();
+        client.connect_notify_local(Some("state"), move |c, _| {
+            log.borrow_mut().push(c.state());
+        });
+        assert!(client.begin().is_some());
+        assert_eq!(*states.borrow(), vec![ImportState::Scanning]);
+        assert!(client.is_busy());
+    }
+
+    #[tokio::test]
+    async fn panicked_pipeline_still_yields_summary() {
+        let last = Mutex::new(Some(ImportProgress {
+            current: 3,
+            total: 10,
+            imported: 2,
+            skipped: 1,
+            failed: 0,
+            imported_id: None,
+        }));
+        let run = tokio::spawn(async {
+            if true {
+                panic!("pipeline blew up");
+            }
+            ImportSummary::default()
+        });
+
+        let summary = await_pipeline(run, &last, 10).await;
+        assert_eq!(summary.imported, 2);
+        assert_eq!(summary.skipped_duplicates, 1);
+        assert_eq!(summary.failed, 7, "the 7 unprocessed files count as failed");
+        assert!(!summary.cancelled);
+    }
+
+    #[tokio::test]
+    async fn panic_before_any_progress_fails_every_file() {
+        let last = Mutex::new(None);
+        let run = tokio::spawn(async {
+            if true {
+                panic!("pipeline blew up");
+            }
+            ImportSummary::default()
+        });
+        let summary = await_pipeline(run, &last, 4).await;
+        assert_eq!(summary.failed, 4);
+        assert_eq!(summary.imported, 0);
     }
 
     #[test]

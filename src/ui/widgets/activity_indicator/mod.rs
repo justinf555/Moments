@@ -417,7 +417,13 @@ impl ActivityIndicator {
                 }
                 let unreadable = client.unreadable();
                 if unreadable > 0 {
-                    text.push_str(&format!(", {} {}", unreadable, gettext("unreadable")));
+                    let unread = ngettext(
+                        "{} item could not be read",
+                        "{} items could not be read",
+                        unreadable,
+                    )
+                    .replace("{}", &unreadable.to_string());
+                    text.push_str(&format!(", {unread}"));
                 }
                 if client.cancelled() {
                     text.push_str(&format!(" ({})", gettext("cancelled")));

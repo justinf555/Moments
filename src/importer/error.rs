@@ -1,8 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Justin F
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use gettextrs::gettext;
+
 use crate::library::error::LibraryError;
 use crate::renderer::error::RenderError;
+use crate::UserFacingError;
 
 /// Errors that can arise during the import pipeline.
 #[derive(Debug, thiserror::Error)]
@@ -34,6 +37,18 @@ pub enum ImportError {
     /// A library service call failed (DB insert, duplicate check, etc.).
     #[error("library error: {0}")]
     Library(#[from] LibraryError),
+}
+
+impl UserFacingError for ImportError {
+    fn to_user_facing(&self) -> String {
+        match self {
+            Self::Library(e) => e.to_user_facing(),
+            Self::Render(e) => e.to_user_facing(),
+            Self::Io(_) => gettext("Could not read or write file"),
+            Self::Builder(_) => gettext("Could not start the import"),
+            _ => gettext("An unexpected error occurred"),
+        }
+    }
 }
 
 #[cfg(test)]

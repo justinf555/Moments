@@ -34,6 +34,10 @@ const ATTRIBUTES: &str = "standard::name,standard::type,id::file";
 #[derive(Debug, Default)]
 pub struct ScanResult {
     /// Regular (non-directory) files found, in discovery order.
+    ///
+    /// Held in memory in full, not streamed to the pipeline: the scan's
+    /// footprint is bounded by memory (one `PathBuf` per file, a few MB
+    /// at 50k+ files), and the pipeline only starts once the scan ends.
     pub files: Vec<PathBuf>,
     /// Directories that could not be enumerated, failed enumeration
     /// batches, and entries with no local path.

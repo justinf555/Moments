@@ -52,6 +52,7 @@ impl MomentsApplication {
         };
         if import_client.is_busy() {
             warn!("import already in progress");
+            crate::client::show_toast(&gettext("An import is already in progress"));
             return;
         }
         import_client.import_folder(folder);

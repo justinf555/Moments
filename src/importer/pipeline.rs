@@ -236,7 +236,7 @@ mod tests {
         (Arc::new(library), dirs)
     }
 
-    /// Write `n` distinct 2x2 PNGs (distinct content hashes) to `dir`.
+    /// Write `n` distinct 2x2 PNG files (distinct content hashes) to `dir`.
     fn write_pngs(dir: &Path, n: usize) -> Vec<PathBuf> {
         (0..n)
             .map(|i| {
