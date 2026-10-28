@@ -30,7 +30,7 @@ pub struct ImportProgress {
     pub imported_id: Option<MediaId>,
 }
 
-/// Summary of a completed import run, returned by [`super::ImportPipeline::run`].
+/// Summary of a finished import run, returned by [`super::ImportPipeline::run`].
 #[derive(Debug, Clone, Default)]
 pub struct ImportSummary {
     /// Number of files successfully imported into the library.
@@ -41,6 +41,13 @@ pub struct ImportSummary {
     pub skipped_unsupported: usize,
     /// Files that failed with a non-fatal I/O error.
     pub failed: usize,
+    /// Directories or directory batches that could not be read, plus
+    /// entries with no local path. Their contents were never seen, so
+    /// they are not part of any other count.
+    pub unreadable: usize,
+    /// True when the run was cancelled before every file was processed.
+    /// The counts then cover only the files handled before the cancel.
+    pub cancelled: bool,
     /// Wall-clock seconds the import took.
     pub elapsed_secs: f64,
 }
@@ -56,6 +63,8 @@ mod tests {
         assert_eq!(s.skipped_duplicates, 0);
         assert_eq!(s.skipped_unsupported, 0);
         assert_eq!(s.failed, 0);
+        assert_eq!(s.unreadable, 0);
+        assert!(!s.cancelled);
     }
 
     #[test]

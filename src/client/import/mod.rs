@@ -3,5 +3,6 @@
 
 mod client;
 mod event;
+pub mod scan;
 
 pub use client::{ImportClient, ImportState};

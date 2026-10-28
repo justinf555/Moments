@@ -339,6 +339,15 @@ impl ActivityIndicator {
                 imp.import_progress.set_visible(false);
                 self.update_visibility();
             }
+            ImportState::Scanning => {
+                imp.import_label
+                    .set_text(&gettext("Scanning folder\u{2026}"));
+                imp.import_icon
+                    .set_icon_name(Some("document-open-symbolic"));
+                imp.import_progress.set_visible(false);
+                imp.import_row.set_visible(true);
+                self.show_spinner();
+            }
             ImportState::Running => {
                 self.update_import_progress(client);
                 imp.import_progress.set_visible(true);
@@ -355,6 +364,13 @@ impl ActivityIndicator {
                 }
                 if failed > 0 {
                     text.push_str(&format!(", {} {}", failed, gettext("failed")));
+                }
+                let unreadable = client.unreadable();
+                if unreadable > 0 {
+                    text.push_str(&format!(", {} {}", unreadable, gettext("unreadable")));
+                }
+                if client.cancelled() {
+                    text.push_str(&format!(" ({})", gettext("cancelled")));
                 }
                 imp.import_label.set_text(&text);
                 imp.import_icon
@@ -471,9 +487,7 @@ impl ActivityIndicator {
         let sync_active = app
             .sync_client()
             .is_some_and(|c| c.state() == SyncState::Syncing);
-        let import_active = app
-            .import_client()
-            .is_some_and(|c| c.state() == ImportState::Running);
+        let import_active = app.import_client().is_some_and(|c| c.is_busy());
         sync_active || import_active
     }
 

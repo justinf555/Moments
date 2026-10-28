@@ -47,7 +47,7 @@ src/
     actions.rs          App GActions: about, preferences, shortcuts, import
     open.rs             Setup completion, reopen saved library, keyring token injection
     load.rs             Library::open on Tokio, client construction, purge + sync start
-    import.rs           Folder picker and GIO folder enumeration
+    import.rs           Folder picker; hands the chosen folder to ImportClient
     keyring.rs          Immich session token in the system keyring
 
   library/              Library façade + feature services
@@ -225,7 +225,7 @@ MomentsWindow (adw::ApplicationWindow)
 5. **persistence**: copy into the bundle in managed mode, then insert the rows
 6. **thumbnail**: 360 px WebP in a two-level sharded directory
 
-The pipeline emits `ImportProgress` and returns an `ImportSummary`. `ImportClient` runs it and reports progress to the activity indicator. For the Immich backend, `MediaService` records an `AssetImported` change in the outbox, and push sync uploads the file.
+The pipeline emits `ImportProgress` and returns an `ImportSummary`. `ImportClient::import_folder` first scans the chosen folder over GIO's async API on the GTK main context (the `gio::File` from the portal must be kept for Flatpak, so the walk can't move to Tokio with `std::fs`), then hands the file list to `ImportPipeline::run_files()` on Tokio. Its state runs `Idle → Scanning → Running → Complete`; `ImportClient::cancel()` stops the scan or stops the pipeline before its next file (the file in flight finishes) and the summary arrives with `cancelled` set. Progress shows in the import dialog and the activity indicator. For the Immich backend, `MediaService` records an `AssetImported` change in the outbox, and push sync uploads the file.
 
 ## Renderer
 
