@@ -238,11 +238,16 @@ impl MomentsImmichSetupPage {
 
             match result {
                 Ok(path_str) => {
-                    // Leave the buttons insensitive: `on_setup_complete` takes
-                    // over (setup window insensitive, then closed), and this
-                    // page is not reused after a successful submit.
                     debug!(path = %path_str, "emitting create-requested for Immich bundle");
                     obj.emit_by_name::<()>("create-requested", &[&path_str]);
+                    // Safe to re-enable after the emit: signal emission is
+                    // synchronous, so `on_setup_complete` has already made
+                    // the setup window insensitive (no click can land in
+                    // between). If it then fails and makes the window
+                    // sensitive again, these buttons work for a retry
+                    // without navigating back.
+                    imp.test_btn.set_sensitive(true);
+                    imp.connect_btn.set_sensitive(true);
                 }
                 Err(msg) => {
                     imp.test_btn.set_sensitive(true);
