@@ -42,7 +42,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Serialisation
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
+toml = "1.0"
 # XMP read-back robustness — embedded edits in rendered JPEGs need to
 # survive Immich's media pipeline rewriting attributes/whitespace.
 # Encode is still hand-rolled for deterministic output.
